@@ -1231,8 +1231,112 @@ export class Rule extends Schema.Class<Rule>("PermissionRule")({
 
 **Task 9：多前端架构（长期目标）**
 - **目标**：拆分核心库为独立 crate，支持 Web/Desktop 前端
-- **关键文件**：新建 `crates/priority-core/` 等
-- **状态**：未开始
+- **关键文件**：新建 `priority-core/` 和 `priority-cli/`
+- **状态**：🔄 Phase 1 完成（workspace 已建立）
+
+#### 目标 crate 结构
+
+```
+priority-agent/ (workspace)
+├── Cargo.toml (workspace)
+├── priority-core/ (library crate - 核心逻辑)
+│   └── src/
+│       ├── engine/      # 28 files - 核心引擎
+│       ├── tools/       # 47 tool modules
+│       ├── agent/      # 6 files - Agent 系统
+│       ├── services/    # api/ (LLM providers)
+│       ├── permissions/
+│       ├── state/
+│       ├── task_manager/
+│       ├── memory/
+│       ├── session_store/
+│       └── bootstrap.rs
+│
+├── priority-cli/ (binary crate - TUI/CLI 前端)
+│   └── src/
+│       ├── main.rs
+│       ├── tui/         # TUI 模块
+│       └── cli/         # CLI 模块
+│
+└── src/ (minimal binary - 路由入口)
+    └── main.rs (简化为路由)
+```
+
+#### 迁移顺序（按依赖关系）
+
+**Phase 1-1：迁移无依赖模块**
+1. `errors.rs` → priority-core (无依赖)
+2. `permissions/` → priority-core
+3. `diagnostics/` → priority-core
+
+**Phase 1-2：迁移基础服务**
+4. `services/api/` → priority-core (provider trait + implementations)
+5. `state/` → priority-core
+
+**Phase 1-3：迁移核心系统**
+6. `engine/` → priority-core
+7. `agent/` → priority-core
+8. `tools/mod.rs` (Tool trait) → priority-core
+9. `tools/*.rs` (所有工具) → priority-core
+
+**Phase 1-4：迁移管理模块**
+10. `task_manager/` → priority-core
+11. `memory/` → priority-core
+12. `session_store/` → priority-core
+13. `cost_tracker/` → priority-core
+14. `skills/` → priority-core
+15. `bootstrap.rs` → priority-core
+
+**Phase 1-5：迁移支持模块**
+16. `context_manager/` → priority-core
+17. `bridge/` → priority-core
+18. `priority/` → priority-core
+19. `remote/` → priority-core
+20. `team/` → priority-core
+21. `instructions/` → priority-core
+22. `github/` → priority-core
+23. `telemetry/` → priority-core
+24. `voice/` → priority-core
+25. `ide/` → priority-core
+26. `migrations/` → priority-core
+27. `plugins/` → priority-core
+
+**Phase 2：迁移前端**
+28. `tui/` → priority-cli
+29. `cli/` → priority-cli
+
+**Phase 3：简化根 main.rs**
+30. `src/main.rs` 简化为路由入口
+
+#### 依赖分离规则
+
+**priority-core 不依赖**：
+- ratatui, crossterm, clap (TUI/CLI 特定)
+- axum (如果只是核心库不需要)
+
+**priority-cli 依赖**：
+- priority-core
+- ratatui, crossterm, clap
+
+#### 关键风险与解决方案
+
+**风险 1：循环依赖**
+- 问题：`engine` 导入 `tools`，`tools` 导入 `services`
+- 解决：按依赖层级迁移，先迁出被依赖的模块
+
+**风险 2：导入路径变更**
+- 问题：`crate::engine` → `priority_core::engine`
+- 解决：每个模块迁移后，批量更新所有引用
+
+**风险 3：bootstrap.rs 耦合 TUI**
+- 问题：`bootstrap.rs` 引用了 `tui::`
+- 解决：将 TUI 相关初始化移至 `priority-cli`
+
+#### 验证方式
+
+1. `cargo build --workspace` - 编译成功
+2. `cargo test --workspace` - 所有测试通过
+3. 每个模块迁移后验证不受影响
 
 ---
 
@@ -1248,13 +1352,13 @@ export class Rule extends Schema.Class<Rule>("PermissionRule")({
   - ✅ Task 6（MCP OAuth）：已完成
   - ✅ Task 7（Provider Hook）：已完成
   - ✅ Task 8（Config Hook）：已完成
-  - ⬜ Task 9（多前端架构）：未开始
+  - 🔄 Task 9（多前端架构）：Phase 1 完成（workspace 已建立）
 
 ---
 
 ### 验证方式
 
 每个 task 完成后：
-1. 运行 `cargo test` 确保不破坏现有测试
+1. 运行 `cargo test --workspace` 确保不破坏现有测试
 2. 手动测试对应功能
 3. 确认测试数量不减少

@@ -1978,6 +1978,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "priority-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-openai",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "colored",
+ "config",
+ "crossterm",
+ "dirs",
+ "dotenvy",
+ "ed25519-dalek",
+ "futures",
+ "glob",
+ "ignore",
+ "libc",
+ "once_cell",
+ "priority-core",
+ "pulldown-cmark",
+ "rand 0.8.6",
+ "ratatui",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "schemars",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "uuid",
+]
+
+[[package]]
+name = "priority-core"
+version = "0.1.0"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
