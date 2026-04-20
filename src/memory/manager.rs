@@ -224,8 +224,24 @@ impl MemoryManager {
 
             let heuristic = extract_learnings_from_turn(&user, &assistant);
 
-            // 在 forked 模式下，我们总是尝试 LLM 提取（作为增强）
+            // 在 forked 模式下，先写启发式结果作为 cache hit，再调用 LLM 增强
             // 在默认模式下，只有启发式无结果时才调用 LLM
+            if forked_mode && !heuristic.is_empty() {
+                // Forked 模式：先写启发式结果（作为 cache hit）
+                for learning in &heuristic {
+                    let entry = format!(
+                        "- [{}] {}\n",
+                        chrono::Local::now().format("%Y-%m-%d %H:%M"),
+                        learning
+                    );
+                    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+                    let new_content = format!("{}{}", existing, entry);
+                    let _ = std::fs::write(&path, new_content);
+                }
+                debug!("Forked mode: wrote {} heuristic memory bullets as cache hit", heuristic.len());
+            }
+
+            // 然后调用 LLM 进行增强提取（forked 模式）或备用提取（默认模式）
             let should_llm_extract = heuristic.is_empty() || forked_mode;
 
             if should_llm_extract {
