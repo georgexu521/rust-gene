@@ -71,7 +71,7 @@ impl ChatRequest {
 }
 
 /// 消息
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, std::hash::Hash)]
 pub enum Message {
     System {
         content: String,
@@ -159,7 +159,7 @@ impl Tool {
 }
 
 /// 工具调用
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, std::hash::Hash)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,

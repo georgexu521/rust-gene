@@ -6,6 +6,7 @@
 pub mod auto_verify;
 pub mod code_review;
 pub mod context_compressor;
+pub mod context_collapse;
 pub mod symbol_index;
 pub mod context_manager;
 pub mod conversation_loop;

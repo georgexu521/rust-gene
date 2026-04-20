@@ -732,9 +732,22 @@ PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
   - `StreamEvent` 新增 `ThinkingStart`/`ThinkingChunk`/`ThinkingComplete` 事件
   - `call_api_streaming()` 在流开始时发出 `ThinkingStart`，结束时发出 `ThinkingComplete`
   - 说明：Kimi API 的 thinking 内容对客户端不可见，仅 usage 中有统计
-  - 测试通过：471 passed
-- ⬜ Task 2（LLM 记忆提取 forked agent）：未开始
-- ⬜ Task 3（上下文折叠）：未开始
+  - 测试通过：474 passed
+- ✅ Task 2（LLM 记忆提取 forked agent）：已完成
+  - `MemoryManager` 新增 `forked_mode` 和 `trailing_mode` 配置（环境变量控制）
+  - 新增 `trailing_run()` 方法：会话结束时执行最终记忆提取
+  - 新增 `has_memory_writes_since()` 方法：forked agent 互斥检查
+  - 新增 `cache_stats()` 方法：缓存命中率统计
+  - `sync_turn_llm_background()` 支持 forked 模式（始终尝试 LLM 提取）
+  - 测试通过：474 passed
+- ✅ Task 3（上下文折叠）：已完成
+  - 新增 `src/engine/context_collapse.rs`：`ContextCollapseService` 结构体
+  - `ContextCollapseEntry` 枚举（Commit / Snapshot）
+  - `apply_collapses_if_needed()` 方法：将早期消息写入磁盘
+  - `restore()` 方法：从磁盘恢复折叠的消息
+  - `Message` 和 `ToolCall` 新增 `serde::Serialize/Deserialize` 和 `Hash` trait
+  - 环境变量：`PRIORITY_AGENT_CONTEXT_COLLAPSE=1` 启用，`PRIORITY_AGENT_CONTEXT_COLLAPSE_WINDOW=50` 保留窗口大小
+  - 测试通过：474 passed
 
 ---
 

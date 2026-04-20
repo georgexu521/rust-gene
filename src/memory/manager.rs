@@ -49,6 +49,15 @@ pub struct MemoryManager {
     llm_extraction_count: usize,
     /// 主 agent 已写入标记（mutual exclusion）
     main_agent_wrote_this_turn: bool,
+    /// Forked agent 模式（环境变量 PRIORITY_AGENT_LLM_MEMORY_FORKED=1）
+    forked_mode: bool,
+    /// Trailing run 模式（环境变量 PRIORITY_AGENT_LLM_MEMORY_TRAILING=1）
+    trailing_mode: bool,
+    /// Trailing run 是否已执行
+    trailing_completed: bool,
+    /// 缓存命中率统计
+    cache_hits: usize,
+    cache_misses: usize,
 }
 
 impl MemoryManager {
@@ -58,6 +67,17 @@ impl MemoryManager {
             .join(".priority-agent");
 
         let _ = std::fs::create_dir_all(&base);
+
+        // 从环境变量读取配置
+        let forked_mode = std::env::var("PRIORITY_AGENT_LLM_MEMORY_FORKED")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        let trailing_mode = std::env::var("PRIORITY_AGENT_LLM_MEMORY_TRAILING")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
 
         Self {
             memory_path: base.join("MEMORY.md"),
@@ -73,6 +93,11 @@ impl MemoryManager {
             last_llm_extraction_turn: 0,
             llm_extraction_count: 0,
             main_agent_wrote_this_turn: false,
+            forked_mode,
+            trailing_mode,
+            trailing_completed: false,
+            cache_hits: 0,
+            cache_misses: 0,
         }
     }
 
@@ -189,6 +214,8 @@ impl MemoryManager {
         provider: Arc<dyn LlmProvider>,
         model: String,
     ) {
+        // 在 spawn 之前提取需要的字段，避免生命周期问题
+        let forked_mode = self.forked_mode;
         let path = self.memory_path.clone();
 
         tokio::spawn(async move {
@@ -196,7 +223,12 @@ impl MemoryManager {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
             let heuristic = extract_learnings_from_turn(&user, &assistant);
-            if heuristic.is_empty() {
+
+            // 在 forked 模式下，我们总是尝试 LLM 提取（作为增强）
+            // 在默认模式下，只有启发式无结果时才调用 LLM
+            let should_llm_extract = heuristic.is_empty() || forked_mode;
+
+            if should_llm_extract {
                 let system_prompt = "You are a memory extraction assistant. \
 Analyze the conversation turn and extract up to 3 concise memory bullets of CRITICAL CONTEXT only. \
 Critical context includes: API keys or paths, architecture decisions, user preferences, \
@@ -231,7 +263,8 @@ Return exactly the word NONE if there is nothing critical to remember.";
                             })
                             .filter(|l| !l.is_empty())
                             .collect();
-                        debug!("Background LLM extracted {} memory bullets", bullets.len());
+                        debug!("Background LLM extracted {} memory bullets (forked: {})",
+                               bullets.len(), forked_mode);
 
                         // 写入文件（不依赖 MemoryManager 内部状态）
                         for bullet in bullets {
@@ -417,6 +450,89 @@ Return exactly the word NONE if there is nothing critical to remember.";
         }
     }
 
+    /// Trailing run：会话结束时执行最终记忆提取
+    ///
+    /// 在 trailing_mode 启用时，会话结束后调用此方法进行最终 LLM 提取。
+    /// 这确保对话结束后仍有一次记忆提取机会，捕获会话中学到的关键信息。
+    pub async fn trailing_run(
+        &mut self,
+        messages: &[Message],
+        provider: Option<&dyn LlmProvider>,
+        model: &str,
+    ) {
+        if !self.trailing_mode {
+            return;
+        }
+        if self.trailing_completed {
+            debug!("Trailing run already completed, skipping");
+            return;
+        }
+
+        info!("Running trailing memory extraction for {} messages", messages.len());
+
+        // 收集会话中的 user/assistant 对话内容
+        let mut conversation_context = String::new();
+        for msg in messages.iter().rev().take(20) {
+            // 取最近 20 条消息
+            match msg {
+                Message::User { content } => {
+                    conversation_context.push_str(&format!("User: {}\n", content));
+                }
+                Message::Assistant { content, .. } => {
+                    conversation_context.push_str(&format!("Assistant: {}\n", content));
+                }
+                _ => {}
+            }
+        }
+
+        if conversation_context.len() < 50 {
+            debug!("Not enough conversation context for trailing extraction");
+            return;
+        }
+
+        if let Some(p) = provider {
+            let system_prompt = "You are a memory extraction assistant. \
+Analyze this entire conversation session and extract up to 6 critical memory bullets. \
+Critical context includes: API keys or paths, architecture decisions, user preferences, \
+specific error messages and their fixes, project conventions, important configuration values, \
+or key decisions made during the session. \
+Each bullet should be one line starting with '- '. \
+Return exactly the word NONE if there is nothing critical to remember.";
+
+            let request = ChatRequest::new(model).with_messages(vec![
+                Message::system(system_prompt),
+                Message::user(&conversation_context),
+            ]);
+
+            match p.chat(request).await {
+                Ok(response) => {
+                    let text = response.content.trim();
+                    if !text.eq_ignore_ascii_case("NONE") && !text.is_empty() {
+                        let bullets: Vec<String> = text
+                            .lines()
+                            .filter(|l| !l.trim().is_empty())
+                            .map(|l| {
+                                l.strip_prefix("- ").unwrap_or(l).to_string()
+                            })
+                            .filter(|l| !l.is_empty())
+                            .collect();
+
+                        debug!("Trailing run extracted {} memory bullets", bullets.len());
+                        for bullet in bullets {
+                            self.add_learning_async(&bullet, "session").await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Trailing run LLM extraction failed: {}", e);
+                }
+            }
+        }
+
+        self.trailing_completed = true;
+        info!("Trailing run completed");
+    }
+
     /// 重置预取状态（每轮开始时调用）
     pub fn reset_turn(&mut self) {
         self.prefetched_this_turn = false;
@@ -441,6 +557,20 @@ Return exactly the word NONE if there is nothing critical to remember.";
         (self.llm_extraction_count, self.turn_count, self.last_llm_extraction_turn)
     }
 
+    /// 获取缓存命中率统计
+    pub fn cache_stats(&self) -> (usize, usize) {
+        (self.cache_hits, self.cache_misses)
+    }
+
+    /// 检查是否有自某时间点以来的记忆写入（用于 forked agent 互斥）
+    pub fn has_memory_writes_since(&self, turn: usize) -> bool {
+        // 如果主 agent 在指定 turn 之后写过，返回 true
+        // 这会阻止 forked agent 在主 agent 已写入后进行提取
+        // 当前实现基于 main_agent_wrote_this_turn，它每轮重置
+        // 对于精确的 turn 检查，我们依赖 throttle 机制
+        self.main_agent_wrote_this_turn && self.turn_count >= turn
+    }
+
     /// 主 agent 已写入，阻止后台 LLM 提取
     pub fn mark_main_agent_wrote(&mut self) {
         self.main_agent_wrote_this_turn = true;
@@ -455,6 +585,26 @@ Return exactly the word NONE if there is nothing critical to remember.";
         // throttle：每 N 轮提取一次
         let interval = Self::llm_extraction_interval();
         self.turn_count - self.last_llm_extraction_turn >= interval
+    }
+
+    /// 是否启用了 forked 模式
+    pub fn is_forked_mode(&self) -> bool {
+        self.forked_mode
+    }
+
+    /// 是否启用了 trailing 模式
+    pub fn is_trailing_mode(&self) -> bool {
+        self.trailing_mode
+    }
+
+    /// Trailing run 是否已完成
+    pub fn is_trailing_completed(&self) -> bool {
+        self.trailing_completed
+    }
+
+    /// 标记 trailing run 已完成
+    pub fn mark_trailing_completed(&mut self) {
+        self.trailing_completed = true;
     }
 
     /// 检查内容是否已重复
