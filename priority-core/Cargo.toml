@@ -1,0 +1,58 @@
+[package]
+name = "priority-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core library for Priority Agent - Engine, Tools, Agent, Memory"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+async-openai = { workspace = true }
+secrecy = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+config = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+schemars = { workspace = true }
+async-trait = { workspace = true }
+glob = { workspace = true }
+regex = { workspace = true }
+ignore = { workspace = true }
+rusqlite = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+once_cell = { workspace = true }
+pulldown-cmark = { workspace = true }
+libc = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-python = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rand = { workspace = true }
+tower = { workspace = true }
+
+[features]
+default = []
+experimental-api-server = []
+experimental-priority = []
+experimental-task-analyzer = []
+experimental-platform = []
+legacy-cli = []
+voice = []
