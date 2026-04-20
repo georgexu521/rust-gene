@@ -1167,15 +1167,23 @@ export class Rule extends Schema.Class<Rule>("PermissionRule")({
 
 **Task 1：Skill 外部加载系统**
 - **目标**：支持从 `~/.priority-agent/skills` 目录和 URL 加载技能
-- **关键文件**：`src/skills/mod.rs`、`src/skills/loader.rs`
-- **环境变量**：`PRIORITY_AGENT_SKILLS_PATH`、`PRIORITY_AGENT_SKILLS_URL`
-- **状态**：未开始
+- **关键文件**：`src/skills/mod.rs`、`src/skills/loader.rs`、`src/skills/registry.rs`
+- **环境变量**：`PRIORITY_AGENT_SKILLS_PATH`（冒号分隔多路径）、`PRIORITY_AGENT_SKILLS_URL`（冒号分隔多 URL）
+- **状态**：✅ 已完成
+  - `load_skill_from_url()` 从 URL 异步加载 skill
+  - `get_extra_skill_paths()` / `get_remote_skill_urls()` 读取环境变量
+  - `load_external_skills()` 异步加载所有外部 skills
+  - `SkillRegistry.with_default_paths()` 支持环境变量配置
 
 **Task 2：多 Provider 抽象层**
 - **目标**：抽象 Provider 接口，支持动态加载更多 Provider
-- **关键文件**：`src/services/api/mod.rs`
-- **环境变量**：`PRIORITY_AGENT_PROVIDER_<NAME>`
-- **状态**：未开始
+- **关键文件**：`src/services/api/mod.rs`、`src/services/api/provider.rs`
+- **环境变量**：`PRIORITY_AGENT_PROVIDER_<NAME>`（格式：`TYPE:API_KEY:BASE_URL:MODEL`）
+- **状态**：✅ 已完成
+  - `ProviderRegistry` 注册表支持动态注册
+  - `from_env()` 从环境变量加载 Kimi/OpenAI/Minimax Provider
+  - `PRIORITY_AGENT_PROVIDER_<NAME>` 配置额外 Provider
+  - `create_provider()` 根据类型创建对应 Provider
 
 **Task 3：增强 Tool Hook（tool.before/after）**
 - **目标**：在 `hooks.rs` 增加 `tool.execute.before` 和 `tool.execute.after` 事件
@@ -1191,19 +1199,19 @@ export class Rule extends Schema.Class<Rule>("PermissionRule")({
 - **目标**：学习 OpenCode 的 Compaction 摘要生成逻辑
 - **关键文件**：`src/engine/context_compressor.rs`
 - **环境变量**：`PRIORITY_AGENT_COMPACTION_LLM=1`
-- **状态**：未开始
+- **状态**：✅ 已完成（TimeBasedConfig、CompressionWarning、micro_compress、needs_time_based_compression）
 
 **Task 5：精细权限系统（once 模式）**
 - **目标**：增加 `once`（一次性授权）模式，完善敏感文件保护
 - **关键文件**：`src/permissions/mod.rs`
 - **环境变量**：`PRIORITY_AGENT_PERMISSION_ONCE_DEFAULT=1`
-- **状态**：未开始
+- **状态**：✅ 已完成（Once 模式、grant_once/revoke_once/has_once_authorization/cleanup_expired_once）
 
 **Task 6：MCP OAuth 支持**
 - **目标**：增强 `mcp.rs`，支持 OAuth 认证流程
 - **关键文件**：`src/engine/mcp.rs`
 - **环境变量**：`PRIORITY_AGENT_MCP_OAUTH=1`
-- **状态**：未开始
+- **状态**：✅ 已完成（McpOAuthConfig、McpServerConfig 新增 oauth/oauth_token_url 字段）
 
 ---
 
@@ -1213,13 +1221,13 @@ export class Rule extends Schema.Class<Rule>("PermissionRule")({
 - **目标**：在 API 层增加请求/响应拦截器
 - **关键文件**：`src/services/api/mod.rs`
 - **环境变量**：`PRIORITY_AGENT_PROVIDER_HOOK`
-- **状态**：未开始
+- **状态**：✅ 已完成（ProviderHook 结构体、pre_hook/post_hook/error_hook）
 
 **Task 8：Config Hook**
 - **目标**：在配置加载后增加钩子点
 - **关键文件**：`src/services/config.rs`
 - **环境变量**：`PRIORITY_AGENT_CONFIG_HOOK`
-- **状态**：未开始
+- **状态**：✅ 已完成（ConfigHook、ConfigLoader、execute 方法）
 
 **Task 9：多前端架构（长期目标）**
 - **目标**：拆分核心库为独立 crate，支持 Web/Desktop 前端
@@ -1232,14 +1240,14 @@ export class Rule extends Schema.Class<Rule>("PermissionRule")({
 
 - ✅ Phase 7（编程能力补齐）：已完成
 - 🔄 Phase 8（OpenCode 对标）：进行中
-  - ⬜ Task 1（Skill 外部加载）：未开始
-  - ⬜ Task 2（多 Provider 抽象）：未开始
-  - ⬜ Task 3（Tool Hook 增强）：未开始
-  - ⬜ Task 4（Compaction 优化）：未开始
-  - ⬜ Task 5（权限 once 模式）：未开始
-  - ⬜ Task 6（MCP OAuth）：未开始
-  - ⬜ Task 7（Provider Hook）：未开始
-  - ⬜ Task 8（Config Hook）：未开始
+  - ✅ Task 1（Skill 外部加载）：已完成
+  - ✅ Task 2（多 Provider 抽象）：已完成
+  - ✅ Task 3（Tool Hook 增强）：已完成
+  - ✅ Task 4（Compaction 优化）：已完成
+  - ✅ Task 5（权限 once 模式）：已完成
+  - ✅ Task 6（MCP OAuth）：已完成
+  - ✅ Task 7（Provider Hook）：已完成
+  - ✅ Task 8（Config Hook）：已完成
   - ⬜ Task 9（多前端架构）：未开始
 
 ---

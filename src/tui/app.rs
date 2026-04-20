@@ -22,6 +22,7 @@ pub(crate) fn permission_mode_name(mode: PermissionMode) -> &'static str {
         PermissionMode::AutoLowRisk => "auto_low_risk",
         PermissionMode::AutoAll => "auto_all",
         PermissionMode::ReadOnly => "read_only",
+        PermissionMode::Once => "once",
     }
 }
 
@@ -31,6 +32,7 @@ pub(crate) fn parse_permission_mode(mode: &str) -> Option<PermissionMode> {
         "auto_low_risk" | "autolowrisk" | "low_risk" => Some(PermissionMode::AutoLowRisk),
         "auto_all" | "autoall" => Some(PermissionMode::AutoAll),
         "read_only" | "readonly" => Some(PermissionMode::ReadOnly),
+        "once" => Some(PermissionMode::Once),
         _ => None,
     }
 }

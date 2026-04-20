@@ -58,6 +58,8 @@ pub enum PermissionMode {
     AutoAll,
     /// 只读模式
     ReadOnly,
+    /// 一次性授权模式 - 允许一次后自动拒绝
+    Once,
 }
 
 /// 风险级别
@@ -231,6 +233,8 @@ pub struct PermissionContext {
     pub rules: PermissionRules,
     pub working_dir: std::path::PathBuf,
     pub is_bypass_available: bool,
+    /// 一次性授权记录 (tool_call_id -> expiration time)
+    once_authorizations: std::collections::HashMap<String, std::time::Instant>,
 }
 
 impl PermissionContext {
@@ -241,6 +245,7 @@ impl PermissionContext {
             rules: Self::load_merged_rules(working_dir.clone()),
             working_dir,
             is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
         }
     }
 
@@ -380,6 +385,17 @@ impl PermissionContext {
                 }
                 Self::risk_level(tool_name, params) >= RiskLevel::Medium
             }
+            PermissionMode::Once => {
+                // Once 模式：先检查是否已有有效的一次性授权
+                if let Some(expired) = self.once_authorizations.get(tool_name) {
+                    if expired.elapsed().as_secs() < 300 {
+                        // 5分钟内有效，直接拒绝
+                        return false;
+                    }
+                }
+                // 没有授权或已过期，需要询问
+                true
+            }
             PermissionMode::Default => {
                 // 根据规则决定
                 matches!(self.rules.check(&effective_tool_name), PermissionDecision::Ask)
@@ -396,6 +412,32 @@ impl PermissionContext {
             .map(|(d, r)| format!("{:?} from {:?}: {}", d, r.source, r.pattern))
             .collect();
         (decision, details)
+    }
+
+    /// 授予一次性授权（用于 Once 模式）
+    pub fn grant_once(&mut self, tool_name: &str) {
+        self.once_authorizations.insert(
+            tool_name.to_string(),
+            std::time::Instant::now(),
+        );
+    }
+
+    /// 撤销一次性授权
+    pub fn revoke_once(&mut self, tool_name: &str) {
+        self.once_authorizations.remove(tool_name);
+    }
+
+    /// 检查工具是否拥有有效的一次性授权
+    pub fn has_once_authorization(&self, tool_name: &str) -> bool {
+        self.once_authorizations
+            .get(tool_name)
+            .map(|exp| exp.elapsed().as_secs() < 300)
+            .unwrap_or(false)
+    }
+
+    /// 清理过期的一次性授权
+    pub fn cleanup_expired_once(&mut self) {
+        self.once_authorizations.retain(|_, exp| exp.elapsed().as_secs() < 300);
     }
 
     fn risk_level(tool_name: &str, params: &serde_json::Value) -> RiskLevel {
@@ -570,6 +612,7 @@ mod tests {
             rules: PermissionRules::new(),
             working_dir: std::path::PathBuf::from("."),
             is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
         };
 
         assert!(ctx.requires_confirmation("file_write", &serde_json::Value::Null));
@@ -585,6 +628,7 @@ mod tests {
             rules: PermissionRules::new(),
             working_dir: std::path::PathBuf::from("."),
             is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
         };
 
         let bash_params = serde_json::json!({"command": "ls -la"});
@@ -602,6 +646,7 @@ mod tests {
             rules: PermissionRules::new().allow("bash"),
             working_dir: std::path::PathBuf::from("."),
             is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
         };
         let bash_params = serde_json::json!({"command": "rm -rf /tmp/demo"});
         assert!(!ctx.requires_confirmation("bash", &bash_params));
@@ -614,6 +659,7 @@ mod tests {
             rules: PermissionRules::new().allow("mcp/filesystem/read_file"),
             working_dir: std::path::PathBuf::from("."),
             is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
         };
         let allowed = serde_json::json!({
             "server_name": "filesystem",
@@ -635,9 +681,33 @@ mod tests {
             rules: PermissionRules::new(),
             working_dir: std::path::PathBuf::from("."),
             is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
         };
 
         assert!(!ctx.requires_confirmation("bash", &serde_json::Value::Null));
         assert!(!ctx.requires_confirmation("file_write", &serde_json::Value::Null));
+    }
+
+    #[test]
+    fn test_permission_mode_once() {
+        let mut ctx = PermissionContext {
+            mode: PermissionMode::Once,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("."),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        // Initially requires confirmation
+        assert!(ctx.requires_confirmation("file_write", &serde_json::Value::Null));
+
+        // Grant once authorization
+        ctx.grant_once("file_write");
+
+        // Now should NOT require confirmation (allowed for 5 minutes)
+        assert!(!ctx.requires_confirmation("file_write", &serde_json::Value::Null));
+
+        // Other tools still require confirmation
+        assert!(ctx.requires_confirmation("bash", &serde_json::Value::Null));
     }
 }

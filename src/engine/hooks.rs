@@ -2,15 +2,20 @@
 //!
 //! Minimal implementation inspired by Claude Code's hook model.
 //! Hooks are optional and configured by environment variables:
-//! - PRIORITY_AGENT_PRE_TOOL_HOOK
-//! - PRIORITY_AGENT_POST_TOOL_HOOK
+//! - PRIORITY_AGENT_PRE_TOOL_HOOK (全局 pre-tool hook)
+//! - PRIORITY_AGENT_POST_TOOL_HOOK (全局 post-tool hook)
 //! - PRIORITY_AGENT_HOOK_TIMEOUT_MS (optional, default 5000)
 //! - PRIORITY_AGENT_HOOK_FAIL_CLOSED (optional, default false)
+//!
+//! 细粒度工具钩子（按工具名称）：
+//! - PRIORITY_AGENT_TOOL_HOOK_BEFORE_<NAME> (特定工具的 pre hook)
+//! - PRIORITY_AGENT_TOOL_HOOK_AFTER_<NAME> (特定工具的 post hook)
 
 use crate::services::api::ToolCall;
 use crate::tools::{ToolContext, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -29,8 +34,14 @@ struct CommandHook {
 
 #[derive(Debug, Clone, Default)]
 pub struct ToolHookManager {
+    /// 全局 pre-tool hooks
     pre_tool_hooks: Vec<CommandHook>,
+    /// 全局 post-tool hooks
     post_tool_hooks: Vec<CommandHook>,
+    /// 特定工具的 pre hooks (tool_name -> hooks)
+    tool_specific_pre_hooks: HashMap<String, Vec<CommandHook>>,
+    /// 特定工具的 post hooks (tool_name -> hooks)
+    tool_specific_post_hooks: HashMap<String, Vec<CommandHook>>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,9 +89,22 @@ impl ToolHookManager {
         let pre = std::env::var("PRIORITY_AGENT_PRE_TOOL_HOOK").ok();
         let post = std::env::var("PRIORITY_AGENT_POST_TOOL_HOOK").ok();
 
-        if pre.as_ref().is_none_or(|v| v.trim().is_empty())
-            && post.as_ref().is_none_or(|v| v.trim().is_empty())
-        {
+        // 检查是否有任何钩子配置
+        let has_any_hook = pre.as_ref().map_or(false, |v| !v.trim().is_empty())
+            || post.as_ref().map_or(false, |v| !v.trim().is_empty());
+
+        // 检查细粒度钩子
+        let mut tool_specific_hooks = false;
+        for (key, _) in std::env::vars() {
+            if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_")
+                || key.starts_with("PRIORITY_AGENT_TOOL_HOOK_AFTER_")
+            {
+                tool_specific_hooks = true;
+                break;
+            }
+        }
+
+        if !has_any_hook && !tool_specific_hooks {
             return None;
         }
 
@@ -124,11 +148,50 @@ impl ToolHookManager {
             }
         }
 
+        // 解析细粒度工具钩子: PRIORITY_AGENT_TOOL_HOOK_BEFORE_<NAME>
+        for (key, value) in std::env::vars() {
+            if let Some(raw_tool_name) = key.strip_prefix("PRIORITY_AGENT_TOOL_HOOK_BEFORE_") {
+                let tool_name = raw_tool_name.to_lowercase();
+                if !value.trim().is_empty() {
+                    debug!("Registering tool-specific pre hook for '{}'", tool_name);
+                    let entry = mgr.tool_specific_pre_hooks.entry(tool_name.clone());
+                    entry.or_default().push(CommandHook {
+                        name: format!("env_pre_tool_hook_{}", tool_name),
+                        command: value.trim().to_string(),
+                        timeout_ms,
+                        block_on_error: fail_closed,
+                    });
+                }
+            }
+        }
+
+        // 解析细粒度工具钩子: PRIORITY_AGENT_TOOL_HOOK_AFTER_<NAME>
+        for (key, value) in std::env::vars() {
+            if let Some(raw_tool_name) = key.strip_prefix("PRIORITY_AGENT_TOOL_HOOK_AFTER_") {
+                let tool_name = raw_tool_name.to_lowercase();
+                if !value.trim().is_empty() {
+                    debug!("Registering tool-specific post hook for '{}'", tool_name);
+                    let entry = mgr.tool_specific_post_hooks.entry(tool_name.clone());
+                    entry.or_default().push(CommandHook {
+                        name: format!("env_post_tool_hook_{}", tool_name),
+                        command: value.trim().to_string(),
+                        timeout_ms,
+                        block_on_error: fail_closed,
+                    });
+                }
+            }
+        }
+
         Some(mgr)
     }
 
     pub async fn run_pre_tool(&self, tool_call: &ToolCall, context: &ToolContext) -> HookDecision {
-        if self.pre_tool_hooks.is_empty() {
+        let mut all_empty = self.pre_tool_hooks.is_empty();
+        if let Some(specific_hooks) = self.tool_specific_pre_hooks.get(&tool_call.name.to_lowercase()) {
+            all_empty = all_empty && specific_hooks.is_empty();
+        }
+
+        if all_empty {
             return HookDecision::allow();
         }
 
@@ -143,6 +206,7 @@ impl ToolHookManager {
             result_content: None,
         };
 
+        // 先运行全局钩子
         for hook in &self.pre_tool_hooks {
             debug!(
                 "Running pre-tool hook '{}' for tool '{}'",
@@ -163,6 +227,29 @@ impl ToolHookManager {
             }
         }
 
+        // 再运行特定工具钩子
+        if let Some(specific_hooks) = self.tool_specific_pre_hooks.get(&tool_call.name.to_lowercase()) {
+            for hook in specific_hooks {
+                debug!(
+                    "Running tool-specific pre-hook '{}' for tool '{}'",
+                    hook.name, tool_call.name
+                );
+                match self.execute_hook(hook, &payload).await {
+                    Ok(Some(decision)) if !decision.allow => return decision,
+                    Ok(_) => {}
+                    Err(err) => {
+                        warn!("Tool-specific pre-hook '{}' failed: {}", hook.name, err);
+                        if hook.block_on_error {
+                            return HookDecision::deny(format!(
+                                "blocked by failing tool-specific pre-hook '{}': {}",
+                                hook.name, err
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         HookDecision::allow()
     }
 
@@ -172,7 +259,12 @@ impl ToolHookManager {
         result: &ToolResult,
         context: &ToolContext,
     ) {
-        if self.post_tool_hooks.is_empty() {
+        let mut all_empty = self.post_tool_hooks.is_empty();
+        if let Some(specific_hooks) = self.tool_specific_post_hooks.get(&tool_call.name.to_lowercase()) {
+            all_empty = all_empty && specific_hooks.is_empty();
+        }
+
+        if all_empty {
             return;
         }
 
@@ -187,6 +279,7 @@ impl ToolHookManager {
             result_content: Some(&result.content),
         };
 
+        // 先运行全局钩子
         for hook in &self.post_tool_hooks {
             debug!(
                 "Running post-tool hook '{}' for tool '{}'",
@@ -194,6 +287,19 @@ impl ToolHookManager {
             );
             if let Err(err) = self.execute_hook(hook, &payload).await {
                 warn!("Post-tool hook '{}' failed: {}", hook.name, err);
+            }
+        }
+
+        // 再运行特定工具钩子
+        if let Some(specific_hooks) = self.tool_specific_post_hooks.get(&tool_call.name.to_lowercase()) {
+            for hook in specific_hooks {
+                debug!(
+                    "Running tool-specific post-hook '{}' for tool '{}'",
+                    hook.name, tool_call.name
+                );
+                if let Err(err) = self.execute_hook(hook, &payload).await {
+                    warn!("Tool-specific post-hook '{}' failed: {}", hook.name, err);
+                }
             }
         }
     }
@@ -311,6 +417,8 @@ mod tests {
                 block_on_error,
             }],
             post_tool_hooks: Vec::new(),
+            tool_specific_pre_hooks: HashMap::new(),
+            tool_specific_post_hooks: HashMap::new(),
         }
     }
 
@@ -319,6 +427,14 @@ mod tests {
         unsafe {
             std::env::remove_var("PRIORITY_AGENT_PRE_TOOL_HOOK");
             std::env::remove_var("PRIORITY_AGENT_POST_TOOL_HOOK");
+            // 清理可能的细粒度钩子环境变量
+            for (key, _) in std::env::vars() {
+                if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_")
+                    || key.starts_with("PRIORITY_AGENT_TOOL_HOOK_AFTER_")
+                {
+                    std::env::remove_var(&key);
+                }
+            }
         }
         assert!(ToolHookManager::from_env().is_none());
     }

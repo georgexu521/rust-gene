@@ -6,6 +6,7 @@ pub mod kimi;
 pub mod minimax;
 pub mod openai;
 pub mod openai_compat;
+pub mod provider;
 
 use async_openai::types::ChatCompletionResponseStream;
 use async_trait::async_trait;
@@ -27,6 +28,70 @@ pub trait LlmProvider: Send + Sync {
 
     /// 获取默认模型
     fn default_model(&self) -> &str;
+}
+
+/// Provider Hook - 请求/响应拦截器
+pub struct ProviderHook {
+    /// Hook 名称
+    pub name: String,
+    /// 请求前 Hook（可修改请求）
+    pub pre_hook: Option<Box<dyn Fn(ChatRequest) -> ChatRequest + Send + Sync>>,
+    /// 响应后 Hook（可处理/记录响应）
+    pub post_hook: Option<Box<dyn Fn(&ChatRequest, &ChatResponse) + Send + Sync>>,
+    /// 错误 Hook
+    pub error_hook: Option<Box<dyn Fn(&str) + Send + Sync>>,
+}
+
+impl Clone for ProviderHook {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            pre_hook: None, // Cannot clone closures
+            post_hook: None,
+            error_hook: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for ProviderHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderHook")
+            .field("name", &self.name)
+            .field("pre_hook", &self.pre_hook.is_some())
+            .field("post_hook", &self.post_hook.is_some())
+            .field("error_hook", &self.error_hook.is_some())
+            .finish()
+    }
+}
+
+impl ProviderHook {
+    /// 创建 ProviderHook
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            pre_hook: None,
+            post_hook: None,
+            error_hook: None,
+        }
+    }
+
+    /// 设置请求前 Hook
+    pub fn with_pre_hook(mut self, hook: impl Fn(ChatRequest) -> ChatRequest + Send + Sync + 'static) -> Self {
+        self.pre_hook = Some(Box::new(hook));
+        self
+    }
+
+    /// 设置响应后 Hook
+    pub fn with_post_hook(mut self, hook: impl Fn(&ChatRequest, &ChatResponse) + Send + Sync + 'static) -> Self {
+        self.post_hook = Some(Box::new(hook));
+        self
+    }
+
+    /// 设置错误 Hook
+    pub fn with_error_hook(mut self, hook: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.error_hook = Some(Box::new(hook));
+        self
+    }
 }
 
 /// 聊天请求

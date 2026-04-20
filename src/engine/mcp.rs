@@ -51,6 +51,29 @@ pub struct McpServerConfig {
     /// WebSocket 请求头（用于 websocket transport）
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// OAuth 配置（用于需要 OAuth 认证的服务器）
+    #[serde(default)]
+    pub oauth: Option<McpOAuthConfig>,
+    /// OAuth token URL（用于获取/刷新 token）
+    #[serde(default)]
+    pub oauth_token_url: Option<String>,
+}
+
+/// MCP OAuth 配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpOAuthConfig {
+    /// OAuth 客户端 ID
+    pub client_id: String,
+    /// OAuth 客户端密钥
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// OAuth 授权 URL
+    pub auth_url: Option<String>,
+    /// OAuth token URL
+    pub token_url: Option<String>,
+    /// OAuth scopes
+    #[serde(default)]
+    pub scopes: Vec<String>,
 }
 
 /// MCP 工具定义
@@ -1188,6 +1211,8 @@ mod tests {
             env: HashMap::new(),
             websocket_url: None,
             headers: HashMap::new(),
+            oauth: None,
+            oauth_token_url: None,
         };
         assert_eq!(config.name, "test-server");
         assert_eq!(config.command, "npx");
@@ -1269,6 +1294,8 @@ mod tests {
             env: HashMap::new(),
             websocket_url: Some("ws://localhost:9999".to_string()),
             headers: HashMap::new(),
+            oauth: None,
+            oauth_token_url: None,
         };
         let client = McpClient::new(config);
 

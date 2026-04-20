@@ -14,6 +14,8 @@ pub struct SkillRegistry {
     skills: HashMap<String, Skill>,
     /// skills 搜索路径
     search_paths: Vec<PathBuf>,
+    /// 远程 skill URL 列表
+    remote_urls: Vec<String>,
 }
 
 impl SkillRegistry {
@@ -22,6 +24,7 @@ impl SkillRegistry {
         Self {
             skills: HashMap::new(),
             search_paths: Vec::new(),
+            remote_urls: Vec::new(),
         }
     }
 
@@ -40,6 +43,29 @@ impl SkillRegistry {
         // 用户级 skills 目录
         if let Some(home) = dirs::home_dir() {
             self.add_search_path(home.join(".priority-agent").join("skills"));
+        }
+
+        // 支持 PRIORITY_AGENT_SKILLS_PATH 环境变量（冒号分隔多路径）
+        if let Ok(extra_paths) = std::env::var("PRIORITY_AGENT_SKILLS_PATH") {
+            for path in extra_paths.split(':') {
+                if !path.is_empty() {
+                    let p = PathBuf::from(path);
+                    if !self.search_paths.contains(&p) {
+                        info!("Adding skill search path from PRIORITY_AGENT_SKILLS_PATH: {}", path);
+                        self.add_search_path(p);
+                    }
+                }
+            }
+        }
+
+        // 支持 PRIORITY_AGENT_SKILLS_URL 环境变量（冒号分隔多 URL）
+        if let Ok(urls) = std::env::var("PRIORITY_AGENT_SKILLS_URL") {
+            for url in urls.split(':') {
+                if !url.is_empty() {
+                    info!("Adding remote skill URL from PRIORITY_AGENT_SKILLS_URL: {}", url);
+                    self.remote_urls.push(url.to_string());
+                }
+            }
         }
 
         self
@@ -164,6 +190,119 @@ impl SkillRegistry {
             self.register(skill);
         }
         count
+    }
+
+    /// 获取配置的远程 skill URLs
+    pub fn get_remote_urls(&self) -> &[String] {
+        &self.remote_urls
+    }
+
+    /// 添加远程 skill URL
+    pub fn add_remote_url(&mut self, url: String) {
+        if !self.remote_urls.contains(&url) {
+            self.remote_urls.push(url);
+        }
+    }
+
+    /// 异步加载远程 skills（从配置的 URL）
+    pub async fn load_remote_skills(&mut self) -> usize {
+        use super::loader::load_skill_from_url;
+
+        let mut loaded = 0;
+        let urls = self.remote_urls.clone();
+        for url in &urls {
+            match load_skill_from_url(url).await {
+                Ok(skill) => {
+                    info!("Loaded remote skill from URL: {}", url);
+                    self.register(skill);
+                    loaded += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to load remote skill from {}: {}", url, e);
+                }
+            }
+        }
+        loaded
+    }
+
+    /// 异步加载所有外部 skills（文件路径 + 远程 URL）
+    pub async fn load_external_skills(&mut self) -> usize {
+        use super::loader::{get_extra_skill_paths, load_skill_from_url};
+
+        let mut loaded = 0;
+
+        // 从文件路径加载
+        for path in get_extra_skill_paths() {
+            if path.is_dir() {
+                match Self::load_skills_from_dir_sync(&path).await {
+                    Ok(skills) => {
+                        for skill in skills {
+                            self.register(skill);
+                            loaded += 1;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to load skills from {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+
+        // 从 URL 加载
+        let urls = self.remote_urls.clone();
+        for url in &urls {
+            match load_skill_from_url(url).await {
+                Ok(skill) => {
+                    info!("Loaded remote skill from URL: {}", url);
+                    self.register(skill);
+                    loaded += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to load remote skill from {}: {}", url, e);
+                }
+            }
+        }
+
+        loaded
+    }
+
+    /// 同步从目录加载 skills（内部使用）
+    async fn load_skills_from_dir_sync(dir: &PathBuf) -> anyhow::Result<Vec<Skill>> {
+        let mut skills = Vec::new();
+        let mut entries = tokio::fs::read_dir(dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_dir() {
+                let skill_md = path.join("SKILL.md");
+                if skill_md.is_file() {
+                    match Self::load_skill_file_sync(&skill_md).await {
+                        Ok(skill) => skills.push(skill),
+                        Err(e) => warn!("Failed to load skill from {}: {}", skill_md.display(), e),
+                    }
+                }
+            }
+        }
+
+        Ok(skills)
+    }
+
+    /// 同步加载单个 skill 文件
+    async fn load_skill_file_sync(path: &Path) -> anyhow::Result<Skill> {
+        use super::parser::parse_skill_md;
+
+        let raw_content = tokio::fs::read_to_string(path).await?;
+        let (meta, content) = parse_skill_md(&raw_content)?;
+        let skill_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let modified = tokio::fs::metadata(path).await.ok().and_then(|m| m.modified().ok());
+
+        Ok(Skill {
+            meta,
+            content,
+            raw_content,
+            skill_dir,
+            modified,
+        })
     }
 
     /// 预发现：根据用户消息关键词预取可能相关的 skills
