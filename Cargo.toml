@@ -13,6 +13,15 @@ categories = ["command-line-utilities", "development-tools"]
 name = "priority-agent"
 path = "src/main.rs"
 
+[features]
+default = []
+experimental-api-server = []
+experimental-priority = []
+experimental-task-analyzer = []
+experimental-platform = []
+legacy-cli = []
+voice = []
+
 [dependencies]
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
@@ -23,32 +32,77 @@ toml = "0.8"
 thiserror = "1.0"
 anyhow = "1.0"
 
-# 异步运行时（未来扩展）
-# tokio = { version = "1.0", features = ["full"], optional = true }
+# 异步运行时
+tokio = { version = "1.40", features = ["full"] }
+
+# HTTP 客户端
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# HTTP 服务器 (API 层)
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors"] }
+tokio-tungstenite = "0.24"
+
+# OpenAI 兼容 API 客户端（用于 Kimi）
+async-openai = "0.28"
+
+# 环境变量
+dotenvy = "0.15"
+
+# 命令行解析
+clap = { version = "4.5", features = ["derive"] }
+
+# 终端 UI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# 颜色输出
+colored = "2.1"
 
 # 日志
-log = "0.4"
-env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # 系统目录
 dirs = "5.0"
 
-# 配置文件
-# config = "0.14"
+# 配置管理
+config = "0.14"
 
-# 命令行增强（未来版本）
-# clap = { version = "4.0", features = ["derive"] }
-# colored = "2.0"
-# dialoguer = "0.11"
-# indicatif = "0.17"
+# 事件系统（观察者模式）
+tokio-util = { version = "0.7", features = ["full"] }
+tokio-stream = "0.1"
+
+# 用于工具系统
+schemars = "0.8"
+async-trait = "0.1"
+glob = "0.3"
+regex = "1.11"
+ignore = "0.4"
+
+# SQLite 持久化
+rusqlite = { version = "0.31", features = ["bundled", "serde_json"] }
+
+# 其他实用工具
+futures = "0.3"
+serde_yaml = "0.9"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+once_cell = "1.20"
+pulldown-cmark = "0.12"
+libc = "0.2"
+ed25519-dalek = "2.1"
+rand = "0.8"
+base64 = "0.22"
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
 
 [dev-dependencies]
 tempfile = "3.0"
-
-[features]
-default = []
-# async = ["tokio"]
-# interactive = ["clap", "colored", "dialoguer", "indicatif"]
+rand = "0.8"
+tower = "0.5"
 
 [profile.release]
 opt-level = 3

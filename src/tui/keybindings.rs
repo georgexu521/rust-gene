@@ -1,0 +1,570 @@
+//! 可配置键位系统
+//!
+//! 支持从 TOML 文件加载自定义键位，并提供默认键位映射
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use serde::{Deserialize, Serialize};
+
+/// 单键位定义
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyBinding {
+    pub modifiers: KeyModifiers,
+    pub code: KeyCode,
+}
+
+impl KeyBinding {
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err("Empty keybinding".to_string());
+        }
+
+        let parts: Vec<&str> = trimmed.split('+').collect();
+        let mut modifiers = KeyModifiers::empty();
+        let key_part = if parts.len() > 1 {
+            for part in &parts[..parts.len() - 1] {
+                match part.trim().to_ascii_lowercase().as_str() {
+                    "ctrl" | "control" => modifiers |= KeyModifiers::CONTROL,
+                    "shift" => modifiers |= KeyModifiers::SHIFT,
+                    "alt" => modifiers |= KeyModifiers::ALT,
+                    _ => return Err(format!("Unknown modifier: {}", part)),
+                }
+            }
+            parts.last().unwrap().trim()
+        } else {
+            parts[0].trim()
+        };
+
+        let code = if key_part.len() == 1 && key_part.chars().next().unwrap().is_ascii_graphic() {
+            KeyCode::Char(key_part.chars().next().unwrap())
+        } else {
+            match key_part.to_ascii_lowercase().as_str() {
+                "enter" | "return" => KeyCode::Enter,
+                "esc" | "escape" => KeyCode::Esc,
+                "tab" => KeyCode::Tab,
+                "backspace" => KeyCode::Backspace,
+                "delete" | "del" => KeyCode::Delete,
+                "up" => KeyCode::Up,
+                "down" => KeyCode::Down,
+                "left" => KeyCode::Left,
+                "right" => KeyCode::Right,
+                "home" => KeyCode::Home,
+                "end" => KeyCode::End,
+                "space" => KeyCode::Char(' '),
+                "pageup" => KeyCode::PageUp,
+                "pagedown" => KeyCode::PageDown,
+                _ => return Err(format!("Unknown key: {}", key_part)),
+            }
+        };
+
+        Ok(KeyBinding { modifiers, code })
+    }
+
+    pub fn matches(&self, event: KeyEvent) -> bool {
+        self.modifiers == event.modifiers && self.code == event.code
+    }
+}
+
+impl std::fmt::Display for KeyBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut prefix = String::new();
+        if self.modifiers.contains(KeyModifiers::CONTROL) {
+            prefix.push_str("ctrl+");
+        }
+        if self.modifiers.contains(KeyModifiers::SHIFT) {
+            prefix.push_str("shift+");
+        }
+        if self.modifiers.contains(KeyModifiers::ALT) {
+            prefix.push_str("alt+");
+        }
+        let key_str = match self.code {
+            KeyCode::Enter => "enter",
+            KeyCode::Esc => "esc",
+            KeyCode::Tab => "tab",
+            KeyCode::Backspace => "backspace",
+            KeyCode::Delete => "delete",
+            KeyCode::Up => "up",
+            KeyCode::Down => "down",
+            KeyCode::Left => "left",
+            KeyCode::Right => "right",
+            KeyCode::Home => "home",
+            KeyCode::End => "end",
+            KeyCode::PageUp => "pageup",
+            KeyCode::PageDown => "pagedown",
+            KeyCode::Char(' ') => "space",
+            KeyCode::Char(c) => return write!(f, "{}{}", prefix, c),
+            _ => "unknown",
+        };
+        write!(f, "{}{}", prefix, key_str)
+    }
+}
+
+/// 应用动作（抽象键位语义）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppAction {
+    None,
+    Quit,
+    Submit,
+    InsertNewline,
+    Cancel,
+    ToggleVimMode,
+    ScrollUp,
+    ScrollDown,
+    ScrollTop,
+    ScrollBottom,
+    VimInsert,
+    VimCommand,
+    PlanApprove,
+    PlanReject,
+    PlanModify,
+    PermissionApprove,
+    PermissionReject,
+    PermissionViewDiff,
+    SettingsSave,
+    SettingsNextPage,
+    SettingsPrevPage,
+    SettingsNextItem,
+    SettingsPrevItem,
+    SettingsEdit,
+    SettingsToggleBool,
+}
+
+/// TOML 配置结构（字符串形式）
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct KeybindingsFile {
+    #[serde(default)]
+    pub global_quit: Option<String>,
+    #[serde(default)]
+    pub global_quit_alt: Option<String>,
+    #[serde(default)]
+    pub chat_submit: Option<String>,
+    #[serde(default)]
+    pub chat_newline: Option<String>,
+    #[serde(default)]
+    pub toggle_vim_mode: Option<String>,
+    #[serde(default)]
+    pub vim_scroll_up: Option<String>,
+    #[serde(default)]
+    pub vim_scroll_down: Option<String>,
+    #[serde(default)]
+    pub vim_scroll_top: Option<String>,
+    #[serde(default)]
+    pub vim_scroll_bottom: Option<String>,
+    #[serde(default)]
+    pub vim_insert: Option<String>,
+    #[serde(default)]
+    pub vim_command: Option<String>,
+    #[serde(default)]
+    pub plan_approve: Option<String>,
+    #[serde(default)]
+    pub plan_reject: Option<String>,
+    #[serde(default)]
+    pub plan_modify: Option<String>,
+    #[serde(default)]
+    pub permission_approve: Option<String>,
+    #[serde(default)]
+    pub permission_reject: Option<String>,
+    #[serde(default)]
+    pub permission_view_diff: Option<String>,
+    #[serde(default)]
+    pub settings_save: Option<String>,
+    #[serde(default)]
+    pub settings_next_page: Option<String>,
+    #[serde(default)]
+    pub settings_prev_page: Option<String>,
+    #[serde(default)]
+    pub settings_next_item: Option<String>,
+    #[serde(default)]
+    pub settings_prev_item: Option<String>,
+    #[serde(default)]
+    pub settings_edit: Option<String>,
+    #[serde(default)]
+    pub settings_toggle_bool: Option<String>,
+}
+
+/// 键位映射表
+#[derive(Debug, Clone)]
+pub struct Keybindings {
+    pub global_quit: KeyBinding,
+    pub global_quit_alt: KeyBinding,
+    pub chat_submit: KeyBinding,
+    pub chat_newline: KeyBinding,
+    pub toggle_vim_mode: KeyBinding,
+    pub vim_scroll_up: KeyBinding,
+    pub vim_scroll_down: KeyBinding,
+    pub vim_scroll_top: KeyBinding,
+    pub vim_scroll_bottom: KeyBinding,
+    pub vim_insert: KeyBinding,
+    pub vim_command: KeyBinding,
+    pub plan_approve: KeyBinding,
+    pub plan_reject: KeyBinding,
+    pub plan_modify: KeyBinding,
+    pub permission_approve: KeyBinding,
+    pub permission_reject: KeyBinding,
+    pub permission_view_diff: KeyBinding,
+    pub settings_save: KeyBinding,
+    pub settings_next_page: KeyBinding,
+    pub settings_prev_page: KeyBinding,
+    pub settings_next_item: KeyBinding,
+    pub settings_prev_item: KeyBinding,
+    pub settings_edit: KeyBinding,
+    pub settings_toggle_bool: KeyBinding,
+}
+
+impl Default for Keybindings {
+    fn default() -> Self {
+        Self {
+            global_quit: KeyBinding::from_str("ctrl+c").unwrap(),
+            global_quit_alt: KeyBinding::from_str("ctrl+q").unwrap(),
+            chat_submit: KeyBinding::from_str("enter").unwrap(),
+            chat_newline: KeyBinding::from_str("shift+enter").unwrap(),
+            toggle_vim_mode: KeyBinding::from_str("ctrl+v").unwrap(),
+            vim_scroll_up: KeyBinding::from_str("k").unwrap(),
+            vim_scroll_down: KeyBinding::from_str("j").unwrap(),
+            vim_scroll_top: KeyBinding::from_str("g").unwrap(),
+            vim_scroll_bottom: KeyBinding::from_str("G").unwrap(),
+            vim_insert: KeyBinding::from_str("i").unwrap(),
+            vim_command: KeyBinding::from_str(":").unwrap(),
+            plan_approve: KeyBinding::from_str("y").unwrap(),
+            plan_reject: KeyBinding::from_str("n").unwrap(),
+            plan_modify: KeyBinding::from_str("m").unwrap(),
+            permission_approve: KeyBinding::from_str("y").unwrap(),
+            permission_reject: KeyBinding::from_str("n").unwrap(),
+            permission_view_diff: KeyBinding::from_str("d").unwrap(),
+            settings_save: KeyBinding::from_str("s").unwrap(),
+            settings_next_page: KeyBinding::from_str("l").unwrap(),
+            settings_prev_page: KeyBinding::from_str("h").unwrap(),
+            settings_next_item: KeyBinding::from_str("j").unwrap(),
+            settings_prev_item: KeyBinding::from_str("k").unwrap(),
+            settings_edit: KeyBinding::from_str("enter").unwrap(),
+            settings_toggle_bool: KeyBinding::from_str("space").unwrap(),
+        }
+    }
+}
+
+impl Keybindings {
+    pub fn default_bindings() -> Self {
+        Self::default()
+    }
+
+    pub fn load() -> Self {
+        let path = dirs::config_dir()
+            .map(|d| d.join("priority-agent").join("keybindings.toml"))
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(".priority-agent").join("keybindings.toml")
+            });
+
+        if !path.exists() {
+            return Self::default();
+        }
+
+        match std::fs::read_to_string(&path) {
+            Ok(content) => Self::from_toml(&content),
+            Err(e) => {
+                tracing::warn!("Failed to read keybindings file: {}", e);
+                Self::default()
+            }
+        }
+    }
+
+    pub fn from_toml(content: &str) -> Self {
+        let file: KeybindingsFile = match toml::from_str(content) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("Failed to parse keybindings file: {}", e);
+                return Self::default();
+            }
+        };
+
+        let defaults = Self::default();
+
+        macro_rules! override_binding {
+            ($field:ident) => {
+                match file.$field.as_deref() {
+                    Some(s) => match KeyBinding::from_str(s) {
+                        Ok(kb) => kb,
+                        Err(e) => {
+                            tracing::warn!("Invalid keybinding for {}: {}", stringify!($field), e);
+                            defaults.$field
+                        }
+                    },
+                    None => defaults.$field,
+                }
+            };
+        }
+
+        Self {
+            global_quit: override_binding!(global_quit),
+            global_quit_alt: override_binding!(global_quit_alt),
+            chat_submit: override_binding!(chat_submit),
+            chat_newline: override_binding!(chat_newline),
+            toggle_vim_mode: override_binding!(toggle_vim_mode),
+            vim_scroll_up: override_binding!(vim_scroll_up),
+            vim_scroll_down: override_binding!(vim_scroll_down),
+            vim_scroll_top: override_binding!(vim_scroll_top),
+            vim_scroll_bottom: override_binding!(vim_scroll_bottom),
+            vim_insert: override_binding!(vim_insert),
+            vim_command: override_binding!(vim_command),
+            plan_approve: override_binding!(plan_approve),
+            plan_reject: override_binding!(plan_reject),
+            plan_modify: override_binding!(plan_modify),
+            permission_approve: override_binding!(permission_approve),
+            permission_reject: override_binding!(permission_reject),
+            permission_view_diff: override_binding!(permission_view_diff),
+            settings_save: override_binding!(settings_save),
+            settings_next_page: override_binding!(settings_next_page),
+            settings_prev_page: override_binding!(settings_prev_page),
+            settings_next_item: override_binding!(settings_next_item),
+            settings_prev_item: override_binding!(settings_prev_item),
+            settings_edit: override_binding!(settings_edit),
+            settings_toggle_bool: override_binding!(settings_toggle_bool),
+        }
+    }
+
+    pub fn action_for(&self, key: KeyEvent, mode: crate::tui::app::AppMode) -> AppAction {
+        match mode {
+            crate::tui::app::AppMode::PlanApproval => {
+                if self.plan_approve.matches(key) || self.chat_submit.matches(key) {
+                    return AppAction::PlanApprove;
+                }
+                if self.plan_reject.matches(key) {
+                    return AppAction::PlanReject;
+                }
+                if self.plan_modify.matches(key) {
+                    return AppAction::PlanModify;
+                }
+                if self.global_quit.matches(key) || self.global_quit_alt.matches(key) {
+                    return AppAction::Quit;
+                }
+            }
+            crate::tui::app::AppMode::PermissionApproval => {
+                if self.permission_approve.matches(key) || self.chat_submit.matches(key) {
+                    return AppAction::PermissionApprove;
+                }
+                if self.permission_reject.matches(key) {
+                    return AppAction::PermissionReject;
+                }
+                if self.permission_view_diff.matches(key) {
+                    return AppAction::PermissionViewDiff;
+                }
+                if self.global_quit.matches(key) || self.global_quit_alt.matches(key) {
+                    return AppAction::Quit;
+                }
+            }
+            crate::tui::app::AppMode::Settings => {
+                if self.global_quit.matches(key) || self.global_quit_alt.matches(key) {
+                    return AppAction::Quit;
+                }
+                if self.settings_save.matches(key) {
+                    return AppAction::SettingsSave;
+                }
+                if self.settings_next_page.matches(key) {
+                    return AppAction::SettingsNextPage;
+                }
+                if self.settings_prev_page.matches(key) {
+                    return AppAction::SettingsPrevPage;
+                }
+                if self.settings_next_item.matches(key) {
+                    return AppAction::SettingsNextItem;
+                }
+                if self.settings_prev_item.matches(key) {
+                    return AppAction::SettingsPrevItem;
+                }
+                if self.settings_edit.matches(key) || self.chat_submit.matches(key) {
+                    return AppAction::SettingsEdit;
+                }
+                if self.settings_toggle_bool.matches(key)
+                    || (KeyBinding {
+                        modifiers: KeyModifiers::NONE,
+                        code: KeyCode::Char(' '),
+                    })
+                    .matches(key)
+                {
+                    return AppAction::SettingsToggleBool;
+                }
+            }
+            crate::tui::app::AppMode::VimNormal => {
+                if self.global_quit.matches(key) || self.global_quit_alt.matches(key) {
+                    return AppAction::Quit;
+                }
+                if self.toggle_vim_mode.matches(key) {
+                    return AppAction::ToggleVimMode;
+                }
+                if self.vim_insert.matches(key) {
+                    return AppAction::VimInsert;
+                }
+                if self.vim_command.matches(key) {
+                    return AppAction::VimCommand;
+                }
+                if self.vim_scroll_up.matches(key) {
+                    return AppAction::ScrollUp;
+                }
+                if self.vim_scroll_down.matches(key) {
+                    return AppAction::ScrollDown;
+                }
+                if self.vim_scroll_top.matches(key) {
+                    return AppAction::ScrollTop;
+                }
+                if self.vim_scroll_bottom.matches(key) {
+                    return AppAction::ScrollBottom;
+                }
+            }
+            crate::tui::app::AppMode::Chat | crate::tui::app::AppMode::DiffViewer => {
+                if self.global_quit.matches(key) || self.global_quit_alt.matches(key) {
+                    return AppAction::Quit;
+                }
+                if self.toggle_vim_mode.matches(key) {
+                    return AppAction::ToggleVimMode;
+                }
+                if self.chat_newline.matches(key) {
+                    return AppAction::InsertNewline;
+                }
+                if self.chat_submit.matches(key) {
+                    return AppAction::Submit;
+                }
+            }
+            crate::tui::app::AppMode::AskUser | crate::tui::app::AppMode::Onboarding => {
+                // AskUser 和 Onboarding 模式的键盘事件在 handle_key_event 中单独处理
+            }
+        }
+        AppAction::None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keybinding_parsing() {
+        let kb = KeyBinding::from_str("ctrl+c").unwrap();
+        assert_eq!(kb.modifiers, KeyModifiers::CONTROL);
+        assert_eq!(kb.code, KeyCode::Char('c'));
+
+        let kb = KeyBinding::from_str("shift+enter").unwrap();
+        assert_eq!(kb.modifiers, KeyModifiers::SHIFT);
+        assert_eq!(kb.code, KeyCode::Enter);
+
+        let kb = KeyBinding::from_str("esc").unwrap();
+        assert_eq!(kb.modifiers, KeyModifiers::NONE);
+        assert_eq!(kb.code, KeyCode::Esc);
+
+        let kb = KeyBinding::from_str("G").unwrap();
+        assert_eq!(kb.code, KeyCode::Char('G'));
+    }
+
+    #[test]
+    fn test_keybinding_display() {
+        let kb = KeyBinding::from_str("ctrl+shift+j").unwrap();
+        assert_eq!(kb.to_string(), "ctrl+shift+j");
+
+        let kb = KeyBinding::from_str("enter").unwrap();
+        assert_eq!(kb.to_string(), "enter");
+
+        let kb = KeyBinding::from_str("space").unwrap();
+        assert_eq!(kb.to_string(), "space");
+    }
+
+    fn ke(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn test_default_keybindings() {
+        let kb = Keybindings::default();
+        assert!(kb
+            .global_quit
+            .matches(ke(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+        assert!(kb
+            .chat_submit
+            .matches(ke(KeyCode::Enter, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn test_action_for_chat_mode() {
+        let kb = Keybindings::default();
+        assert_eq!(
+            kb.action_for(
+                ke(KeyCode::Enter, KeyModifiers::NONE),
+                crate::tui::app::AppMode::Chat
+            ),
+            AppAction::Submit
+        );
+        assert_eq!(
+            kb.action_for(
+                ke(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                crate::tui::app::AppMode::Chat
+            ),
+            AppAction::Quit
+        );
+    }
+
+    #[test]
+    fn test_action_for_permission_approval_mode() {
+        let kb = Keybindings::default();
+        assert_eq!(
+            kb.action_for(
+                ke(KeyCode::Char('y'), KeyModifiers::NONE),
+                crate::tui::app::AppMode::PermissionApproval
+            ),
+            AppAction::PermissionApprove
+        );
+        assert_eq!(
+            kb.action_for(
+                ke(KeyCode::Char('n'), KeyModifiers::NONE),
+                crate::tui::app::AppMode::PermissionApproval
+            ),
+            AppAction::PermissionReject
+        );
+        assert_eq!(
+            kb.action_for(
+                ke(KeyCode::Char('d'), KeyModifiers::NONE),
+                crate::tui::app::AppMode::PermissionApproval
+            ),
+            AppAction::PermissionViewDiff
+        );
+        assert_eq!(
+            kb.action_for(
+                ke(KeyCode::Enter, KeyModifiers::NONE),
+                crate::tui::app::AppMode::PermissionApproval
+            ),
+            AppAction::PermissionApprove
+        );
+    }
+
+    #[test]
+    fn test_load_from_toml() {
+        let toml = r#"
+global_quit = "ctrl+x"
+chat_submit = "alt+enter"
+"#;
+        let kb = Keybindings::from_toml(toml);
+        assert!(kb
+            .global_quit
+            .matches(ke(KeyCode::Char('x'), KeyModifiers::CONTROL)));
+        assert!(kb
+            .chat_submit
+            .matches(ke(KeyCode::Enter, KeyModifiers::ALT)));
+        // Unspecified fields keep defaults
+        assert!(kb
+            .chat_newline
+            .matches(ke(KeyCode::Enter, KeyModifiers::SHIFT)));
+    }
+
+    #[test]
+    fn test_invalid_keybinding_ignored() {
+        let toml = r#"
+global_quit = "unknown+key"
+"#;
+        let kb = Keybindings::from_toml(toml);
+        // Falls back to default
+        assert!(kb
+            .global_quit
+            .matches(ke(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+    }
+}

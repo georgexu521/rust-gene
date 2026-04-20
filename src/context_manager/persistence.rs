@@ -1,7 +1,6 @@
 //! 持久化管理
 
 use crate::context_manager::state::{ContextSnapshot, SessionState};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -187,7 +186,6 @@ impl PersistenceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     // 内存存储后端（用于测试）
     struct MemoryStorage {

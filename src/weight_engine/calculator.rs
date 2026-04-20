@@ -153,7 +153,9 @@ impl WeightCalculator {
 
         // 按优先级排序
         executable.sort_by(|a, b| {
-            b.priority_score.partial_cmp(&a.priority_score).unwrap()
+            b.priority_score
+                .partial_cmp(&a.priority_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         executable

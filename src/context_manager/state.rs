@@ -1,6 +1,6 @@
 //! 会话状态管理
 
-use crate::weight_engine::types::{Project, Task, TaskId, TaskStatus};
+use crate::weight_engine::types::{Project, TaskId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
