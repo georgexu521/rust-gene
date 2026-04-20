@@ -4,9 +4,12 @@
 //! 对应 Claude Code 中的 QueryEngine.ts
 
 pub mod auto_verify;
+pub mod batch_refactor;
 pub mod code_review;
 pub mod context_compressor;
 pub mod context_collapse;
+pub mod diagnostic_tracker;
+pub mod diff;
 pub mod symbol_index;
 pub mod context_manager;
 pub mod conversation_loop;
@@ -22,6 +25,7 @@ pub mod socratic;
 pub mod socratic_executor;
 pub mod streaming;
 pub mod swarm;
+pub mod tool_orchestration;
 pub mod turn_state;
 pub mod worktree;
 

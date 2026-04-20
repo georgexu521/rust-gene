@@ -4,8 +4,13 @@
 
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use serde_json::json;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 const MAX_EDITABLE_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
@@ -33,6 +38,96 @@ fn check_file_size_limit(path: &Path, operation: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// 智能引号归一化（Claude Code 模式）
+/// 处理文件中的智能引号 vs 模型输出的直引号差异
+fn normalize_quotes(input: &str) -> String {
+    input
+        .replace('\u{2018}', "'")  // LEFT SINGLE QUOTATION MARK → '
+        .replace('\u{2019}', "'")  // RIGHT SINGLE QUOTATION MARK → '
+        .replace('\u{201C}', "\"") // LEFT DOUBLE QUOTATION MARK → "
+        .replace('\u{201D}', "\"") // RIGHT DOUBLE QUOTATION MARK → "
+        .replace('\u{201A}', "'")  // SINGLE LOW-9 QUOTATION MARK → '
+        .replace('\u{201B}', "'")  // SINGLE HIGH-REVERSED-9 QUOTATION MARK → '
+}
+
+/// 反转义处理（Claude Code 使用 &lt;fnr&gt; 等转义）
+fn desanitize(input: &str) -> String {
+    input
+        .replace("<fnr>", "")
+        .replace("<n>", "\n")
+        .replace("<TAB>", "\t")
+        .replace("<NEWLINE>", "\n")
+}
+
+/// 文件读取状态跟踪（用于 must-read-before-edit 检查）
+/// 全局读取文件状态跟踪（按会话）
+static READ_FILES: Lazy<Mutex<HashMap<String, HashSet<String>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// 标记文件已被读取（用于 must-read-before-edit 检查）
+pub fn mark_file_read(session_id: &str, file_path: &str) {
+    let mut tracker = READ_FILES.lock().unwrap();
+    let session_files = tracker.entry(session_id.to_string()).or_insert_with(HashSet::new);
+    session_files.insert(file_path.to_string());
+}
+
+/// 检查文件是否已被读取
+pub fn is_file_read(session_id: &str, file_path: &str) -> bool {
+    let tracker = READ_FILES.lock().unwrap();
+    tracker
+        .get(session_id)
+        .map(|s: &HashSet<String>| s.contains(file_path))
+        .unwrap_or(false)
+}
+
+/// 清除会话的读取状态
+pub fn clear_read_files(session_id: &str) {
+    let mut tracker = READ_FILES.lock().unwrap();
+    tracker.remove(session_id);
+}
+
+/// 文件修改状态跟踪（用于检测外部修改）
+#[derive(Clone)]
+struct FileState {
+    mtime: std::time::SystemTime,
+    content_hash: u64,
+}
+
+static FILE_STATES: Lazy<Mutex<HashMap<String, FileState>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn compute_content_hash(content: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 标记文件已被读取并记录状态（用于变更检测）
+pub fn mark_file_read_with_state(session_id: &str, file_path: &str, content: &str, mtime: std::time::SystemTime) {
+    mark_file_read(session_id, file_path);
+    let mut states = FILE_STATES.lock().unwrap();
+    let key = format!("{}:{}", session_id, file_path);
+    states.insert(key, FileState {
+        mtime,
+        content_hash: compute_content_hash(content),
+    });
+}
+
+/// 检查文件是否在读取后被外部修改
+pub fn is_file_modified_since_read(session_id: &str, file_path: &str, current_content: &str, current_mtime: std::time::SystemTime) -> bool {
+    let states = FILE_STATES.lock().unwrap();
+    let key = format!("{}:{}", session_id, file_path);
+    if let Some(state) = states.get(&key) {
+        // 检查 mtime 是否变化
+        if current_mtime != state.mtime {
+            return true;
+        }
+        // 检查内容 hash 是否变化
+        if compute_content_hash(current_content) != state.content_hash {
+            return true;
+        }
+    }
+    false
 }
 
 /// 文件读取工具
@@ -132,6 +227,12 @@ impl Tool for FileReadTool {
             }
             cache.mark_read(&path);
         }
+
+        // 标记文件已被读取（用于 must-read-before-edit 检查）
+        let mtime = std::fs::metadata(&path)
+            .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        mark_file_read_with_state(&context.session_id, path_str, &content, mtime);
 
         // 应用 limit 和 offset
         let lines: Vec<&str> = content.lines().collect();
@@ -609,6 +710,38 @@ impl Tool for FileEditTool {
             }
         };
 
+        // ── Smart Edit 检查 ───────────────────────────────────────────
+        // 1. Must-read-before-edit: 检查文件是否已被读取
+        // 仅在 PRIORITY_AGENT_SMART_EDIT=1 时启用此检查
+        if std::env::var("PRIORITY_AGENT_SMART_EDIT").as_ref().map(|v| v.as_str()) == Ok("1")
+           && !is_file_read(&context.session_id, path_str) {
+            return ToolResult::error(
+                format!(
+                    "File '{}' has not been read yet. You must read a file before editing it. Use file_read tool first.",
+                    path_str
+                )
+            );
+        }
+
+        // 2. 文件修改检测：检查文件是否在读取后被外部修改
+        let current_mtime = std::fs::metadata(&path)
+            .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if is_file_modified_since_read(&context.session_id, path_str, &content, current_mtime) {
+            warn!("File '{}' was modified since it was read", path_str);
+            // 注意：我们仍然允许编辑，只是记录警告
+        }
+
+        // 2. 对 old_string 和 new_string 应用 desanitize 和 quote normalization（仅在 PRIORITY_AGENT_SMART_EDIT=1 时）
+        let (old_string, new_string) = if std::env::var("PRIORITY_AGENT_SMART_EDIT").as_ref().map(|v| v.as_str()) == Ok("1") {
+            (
+                desanitize(&normalize_quotes(old_string)),
+                desanitize(&normalize_quotes(new_string)),
+            )
+        } else {
+            (old_string.to_string(), new_string.to_string())
+        };
+
         // 保存快照
         let snapshot_path = match save_snapshot(&path, &context.session_id, &content, "file_edit").await {
             Ok(p) => Some(p),
@@ -620,11 +753,11 @@ impl Tool for FileEditTool {
 
         // 确定操作模式
         let result = if let (Some(start), Some(end)) = (line_start, line_end) {
-            Self::do_replace_lines(content, start, end, new_string)
+            Self::do_replace_lines(content, start, end, &new_string)
         } else if let Some(after) = insert_after {
-            Self::do_insert(content, after, new_string, InsertMode::After)
+            Self::do_insert(content, after, &new_string, InsertMode::After)
         } else if let Some(before) = insert_before {
-            Self::do_insert(content, before, new_string, InsertMode::Before)
+            Self::do_insert(content, before, &new_string, InsertMode::Before)
         } else {
             if old_string.is_empty() {
                 return ToolResult::error(
@@ -632,7 +765,7 @@ impl Tool for FileEditTool {
                         .to_string(),
                 );
             }
-            Self::do_replace(content, old_string, new_string, expected_replacements, normalize_ws)
+            Self::do_replace(content, &old_string, &new_string, expected_replacements, normalize_ws)
         };
 
         match result {

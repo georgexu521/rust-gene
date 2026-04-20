@@ -10,5 +10,6 @@ pub mod manager;
 pub mod memory;
 pub mod roles;
 pub mod types;
+pub mod verification_agent;
 
 pub use manager::AgentManager;

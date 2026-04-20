@@ -1029,12 +1029,218 @@ PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
 
 ### Phase 7 当前状态
 
-- ⬜ Task 1（Smart Edit）：未开始
-- ⬜ Task 2（Diagnostic Tracking）：未开始
-- ⬜ Task 3（Verification Agent）：未开始
-- ⬜ Task 4（Batch Refactor）：未开始
-- ⬜ Task 5（Multi-Edit 并行协调）：未开始
-- ⬜ Task 6（Diff/Patch 输出）：未开始
+- ✅ Task 1（Smart Edit）：已完成
+  - `normalize_quotes()` / `desanitize()` 字符串规范化
+  - must-read-before-edit 检查（`PRIORITY_AGENT_SMART_EDIT=1` 启用）
+  - 文件修改检测（基于 inode）
+- ✅ Task 2（Diagnostic Tracking）：已完成
+  - `DiagnosticTracker` 捕获 baseline diagnostics
+  - `before_edit()` / `get_new_diagnostics()` 对比分析
+  - `PRIORITY_AGENT_DIAGNOSTIC_TRACKING=1` 启用
+- ✅ Task 3（Verification Agent）：已完成
+  - `VerificationAgent` 对抗性验证专家
+  - Build/Test/Lint/Concurrency/Boundary/Idempotency 探针
+  - Verdict::Pass/Fail/Partial 判决
+- ✅ Task 4（Batch Refactor）：已完成
+  - `BatchRefactor` 批量重构器
+  - 任务分解为 5-30 个并行 worktree agent
+  - `PRIORITY_AGENT_BATCH_REFACTOR=1` 启用
+- ✅ Task 5（Multi-Edit 并行协调）：已完成
+  - `ToolOrchestrator` 工具编排器
+  - 读工具并行（`buffer_unordered`）、写工具串行
+  - `PRIORITY_AGENT_TOOL_CONCURRENCY=1` 启用
+- ✅ Task 6（Diff/Patch 输出）：已完成
+  - `diff.rs` 结构化 hunk 输出
+  - `simple_diff()` / `get_patch_for_display()` / `get_patch_from_contents()`
+  - `PRIORITY_AGENT_DIFF_OUTPUT=1` 启用
+
+---
+
+### 验证方式
+
+每个 task 完成后：
+1. 运行 `cargo test` 确保不破坏现有测试
+2. 手动测试对应功能
+3. 确认测试数量不减少
+
+---
+
+## OpenCode 对标分析与改进计划（2026-04-20）
+
+### OpenCode 项目概述
+
+OpenCode 是一个开源 AI 编程代理（TypeScript/Bun），采用 Effect Framework 函数式架构，支持 20+ LLM Provider、多前端（CLI/TUI/Web/Desktop）、精细权限系统、MCP 协议集成。
+
+**项目结构**：
+```
+opencode-dev/
+├── packages/
+│   ├── opencode/          # 核心 CLI 主体
+│   ├── app/               # Web 应用
+│   ├── console/           # 控制台应用
+│   ├── desktop/           # 桌面应用
+│   ├── desktop-electron/  # Electron 实现
+│   ├── web/               # Web 界面
+│   ├── ui/                # UI 组件库
+│   ├── shared/            # 共享工具库
+│   ├── plugin/            # 插件系统
+│   ├── sdk/               # SDK 实现
+│   ├── identity/          # 身份认证
+│   └── enterprise/        # 企业版功能
+└── specs/                 # 规范文档
+```
+
+---
+
+### OpenCode 架构亮点
+
+#### 1. Effect Framework 架构
+所有核心服务采用 Effect Framework 的 Layer 模式，便于测试和组合：
+```typescript
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    return Service.of({ publish, subscribe, ... })
+  }),
+)
+```
+
+#### 2. 多 Provider 抽象
+内置 20+ LLM Provider：
+```typescript
+const BUNDLED_PROVIDERS: Record<string, () => Promise<...>> = {
+  "@ai-sdk/anthropic": () => import("@ai-sdk/anthropic").then((m) => m.createAnthropic),
+  "@ai-sdk/openai": () => import("@ai-sdk/openai").then((m) => m.createOpenAI),
+  "@ai-sdk/google": () => import("@ai-sdk/google").then((m) => m.createGoogleGenerativeAI),
+  // ... 20+ providers
+}
+```
+
+#### 3. 精细权限系统
+```typescript
+export class Rule extends Schema.Class<Rule>("PermissionRule")({
+  permission: Schema.String,
+  pattern: Schema.String,
+  action: Action,  // allow | deny | ask
+})
+```
+- 支持 `always/once/reject` 回复选项
+- 内置敏感文件保护（如 `.env` 文件默认 ask）
+
+#### 4. Tool Hook System
+```typescript
+"tool.execute.before"?: (input: { tool: string, args: any }) => Promise<void>
+"tool.execute.after"?: (input: { tool: string, args: any, result: any }) => Promise<void>
+```
+
+#### 5. Skill 外部加载
+- 从 `~/.claude/skills`、`~/.agents` 目录加载技能
+- 支持从 URL 拉取技能
+- 技能定义使用 Markdown 格式
+
+#### 6. MCP OAuth 支持
+支持 MCP OAuth 认证流程，多种传输方式（Stdio/StreamableHTTP/SSE）。
+
+#### 7. Provider Hook
+可以在请求/响应层拦截和修改数据。
+
+---
+
+### OpenCode vs rust-agent 对比
+
+| 维度 | OpenCode | rust-agent |
+|------|----------|------------|
+| **语言** | TypeScript/Bun | Rust |
+| **架构** | Effect Framework (函数式) | 传统 OOP + Trait |
+| **LLM Provider** | 20+ 内置 | Moonshot/OpenAI |
+| **插件系统** | Hook + 工具注入 | Manifest + 动态工具 |
+| **权限系统** | 规则引擎 + 文件模式 | Glob pattern 规则 |
+| **会话管理** | SQLite + Drizzle ORM | SQLite 直接 |
+| **前端** | CLI/TUI/Web/Desktop | CLI/TUI |
+| **Hook 系统** | 细粒度事件钩子 | 基础 Pre/Post Hook |
+
+---
+
+### 改进计划
+
+#### Phase 1：Skill 与 Provider 增强（1-2周）
+
+**Task 1：Skill 外部加载系统**
+- **目标**：支持从 `~/.priority-agent/skills` 目录和 URL 加载技能
+- **关键文件**：`src/skills/mod.rs`、`src/skills/loader.rs`
+- **环境变量**：`PRIORITY_AGENT_SKILLS_PATH`、`PRIORITY_AGENT_SKILLS_URL`
+- **状态**：未开始
+
+**Task 2：多 Provider 抽象层**
+- **目标**：抽象 Provider 接口，支持动态加载更多 Provider
+- **关键文件**：`src/services/api/mod.rs`
+- **环境变量**：`PRIORITY_AGENT_PROVIDER_<NAME>`
+- **状态**：未开始
+
+**Task 3：增强 Tool Hook（tool.before/after）**
+- **目标**：在 `hooks.rs` 增加 `tool.execute.before` 和 `tool.execute.after` 事件
+- **关键文件**：`src/engine/hooks.rs`
+- **环境变量**：`PRIORITY_AGENT_TOOL_HOOK_BEFORE`、`PRIORITY_AGENT_TOOL_HOOK_AFTER`
+- **状态**：未开始
+
+---
+
+#### Phase 2：Compaction 与权限增强（3-4周）
+
+**Task 4：Compaction 压缩优化**
+- **目标**：学习 OpenCode 的 Compaction 摘要生成逻辑
+- **关键文件**：`src/engine/context_compressor.rs`
+- **环境变量**：`PRIORITY_AGENT_COMPACTION_LLM=1`
+- **状态**：未开始
+
+**Task 5：精细权限系统（once 模式）**
+- **目标**：增加 `once`（一次性授权）模式，完善敏感文件保护
+- **关键文件**：`src/permissions/mod.rs`
+- **环境变量**：`PRIORITY_AGENT_PERMISSION_ONCE_DEFAULT=1`
+- **状态**：未开始
+
+**Task 6：MCP OAuth 支持**
+- **目标**：增强 `mcp.rs`，支持 OAuth 认证流程
+- **关键文件**：`src/engine/mcp.rs`
+- **环境变量**：`PRIORITY_AGENT_MCP_OAUTH=1`
+- **状态**：未开始
+
+---
+
+#### Phase 3：高级特性（长期）
+
+**Task 7：Provider Hook 系统**
+- **目标**：在 API 层增加请求/响应拦截器
+- **关键文件**：`src/services/api/mod.rs`
+- **环境变量**：`PRIORITY_AGENT_PROVIDER_HOOK`
+- **状态**：未开始
+
+**Task 8：Config Hook**
+- **目标**：在配置加载后增加钩子点
+- **关键文件**：`src/services/config.rs`
+- **环境变量**：`PRIORITY_AGENT_CONFIG_HOOK`
+- **状态**：未开始
+
+**Task 9：多前端架构（长期目标）**
+- **目标**：拆分核心库为独立 crate，支持 Web/Desktop 前端
+- **关键文件**：新建 `crates/priority-core/` 等
+- **状态**：未开始
+
+---
+
+### 当前状态
+
+- ✅ Phase 7（编程能力补齐）：已完成
+- 🔄 Phase 8（OpenCode 对标）：进行中
+  - ⬜ Task 1（Skill 外部加载）：未开始
+  - ⬜ Task 2（多 Provider 抽象）：未开始
+  - ⬜ Task 3（Tool Hook 增强）：未开始
+  - ⬜ Task 4（Compaction 优化）：未开始
+  - ⬜ Task 5（权限 once 模式）：未开始
+  - ⬜ Task 6（MCP OAuth）：未开始
+  - ⬜ Task 7（Provider Hook）：未开始
+  - ⬜ Task 8（Config Hook）：未开始
+  - ⬜ Task 9（多前端架构）：未开始
 
 ---
 
