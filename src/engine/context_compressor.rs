@@ -508,6 +508,10 @@ pub struct ContextCompressor {
     llm_compression_attempts: u32,
     /// LLM 压缩失败次数
     llm_compression_failures: u32,
+    /// 连续 LLM 压缩失败次数（用于快速熔断）
+    consecutive_llm_failures: u32,
+    /// 连续失败熔断阈值
+    max_consecutive_llm_failures: u32,
 }
 
 impl ContextCompressor {
@@ -524,6 +528,8 @@ impl ContextCompressor {
             total_tokens_after: 0,
             llm_compression_attempts: 0,
             llm_compression_failures: 0,
+            consecutive_llm_failures: 0,
+            max_consecutive_llm_failures: 3,
         }
     }
 
@@ -590,10 +596,14 @@ impl ContextCompressor {
         let tokens_before = estimate_messages_tokens(messages);
         self.total_tokens_before += tokens_before;
 
-        let result = if has_provider && !self.is_in_cooldown() {
+        let result = if has_provider
+            && !self.is_in_cooldown()
+            && self.consecutive_llm_failures < self.max_consecutive_llm_failures
+        {
             self.llm_compression_attempts += 1;
             match self.llm_summarize_middle(messages).await {
                 Some(summary_text) => {
+                    self.consecutive_llm_failures = 0;
                     let compressed = self.compress_with_summary(messages, Some(&summary_text));
                     let tokens_after = estimate_messages_tokens(&compressed);
                     self.total_tokens_after += tokens_after;
@@ -611,6 +621,7 @@ impl ContextCompressor {
                 }
                 None => {
                     self.llm_compression_failures += 1;
+                    self.consecutive_llm_failures += 1;
                     self.record_failure();
                     let compressed = self.compress(messages);
                     let tokens_after = estimate_messages_tokens(&compressed);
@@ -623,6 +634,12 @@ impl ContextCompressor {
                 }
             }
         } else {
+            if self.consecutive_llm_failures >= self.max_consecutive_llm_failures {
+                warn!(
+                    "LLM compression temporarily disabled after {} consecutive failures; using heuristic compression.",
+                    self.consecutive_llm_failures
+                );
+            }
             let compressed = self.compress(messages);
             let tokens_after = estimate_messages_tokens(&compressed);
             self.total_tokens_after += tokens_after;

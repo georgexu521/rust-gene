@@ -820,14 +820,20 @@ impl McpManager {
 
     /// 批准指定 MCP 服务器
     pub fn approve_server(&self, name: &str) {
-        let mut set = self.approved_servers.lock().unwrap();
+        let mut set = self
+            .approved_servers
+            .lock()
+            .expect("approved_servers mutex poisoned while approving server");
         set.insert(name.to_string());
         info!("MCP server '{}' approved", name);
     }
 
     /// 撤销指定 MCP 服务器的批准
     pub fn revoke_server(&self, name: &str) {
-        let mut set = self.approved_servers.lock().unwrap();
+        let mut set = self
+            .approved_servers
+            .lock()
+            .expect("approved_servers mutex poisoned while revoking server");
         set.remove(name);
         info!("MCP server '{}' approval revoked", name);
     }
@@ -835,7 +841,11 @@ impl McpManager {
     /// 检查服务器是否已批准
     pub fn is_server_approved(&self, name: &str) -> bool {
         !self.require_server_approval.load(std::sync::atomic::Ordering::SeqCst)
-            || self.approved_servers.lock().unwrap().contains(name)
+            || self
+                .approved_servers
+                .lock()
+                .expect("approved_servers mutex poisoned while checking approval")
+                .contains(name)
     }
 
     /// 设置是否需要服务器批准
@@ -848,7 +858,7 @@ impl McpManager {
     pub fn approved_server_names(&self) -> Vec<String> {
         self.approved_servers
             .lock()
-            .unwrap()
+            .expect("approved_servers mutex poisoned while listing approvals")
             .iter()
             .cloned()
             .collect()

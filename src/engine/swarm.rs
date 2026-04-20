@@ -446,13 +446,17 @@ impl crate::tools::Tool for SwarmTool {
 
         match action {
             "spawn" => {
-                let tasks_array = params["tasks"].as_array();
-                if tasks_array.is_none() || tasks_array.unwrap().is_empty() {
-                    return crate::tools::ToolResult::error("Tasks required for 'spawn' action");
-                }
+                let tasks_array = match params["tasks"].as_array() {
+                    Some(arr) if !arr.is_empty() => arr,
+                    _ => {
+                        return crate::tools::ToolResult::error(
+                            "Tasks required for 'spawn' action",
+                        )
+                    }
+                };
 
                 let mut tasks = Vec::new();
-                for t in tasks_array.unwrap() {
+                for t in tasks_array {
                     tasks.push(AgentTask {
                         id: t["id"].as_str().unwrap_or("unnamed").to_string(),
                         description: t["description"].as_str().unwrap_or("").to_string(),
@@ -465,7 +469,11 @@ impl crate::tools::Tool for SwarmTool {
                 // Spawn + 立即执行
                 let ids = {
                     let map = coordinators.read().await;
-                    let coord = map.get(&session_key).unwrap();
+                    let Some(coord) = map.get(&session_key) else {
+                        return crate::tools::ToolResult::error(
+                            "Swarm coordinator missing for current session",
+                        );
+                    };
                     let ids = coord.spawn_parallel(tasks).await;
                     let _results = coord.execute_all().await;
                     ids
@@ -474,7 +482,11 @@ impl crate::tools::Tool for SwarmTool {
                 // 获取结果
                 let report = {
                     let map = coordinators.read().await;
-                    let coord = map.get(&session_key).unwrap();
+                    let Some(coord) = map.get(&session_key) else {
+                        return crate::tools::ToolResult::error(
+                            "Swarm coordinator missing for current session",
+                        );
+                    };
                     coord.synthesize_results().await
                 };
 
@@ -487,7 +499,11 @@ impl crate::tools::Tool for SwarmTool {
 
             "status" => {
                 let map = coordinators.read().await;
-                let coord = map.get(&session_key).unwrap();
+                let Some(coord) = map.get(&session_key) else {
+                    return crate::tools::ToolResult::error(
+                        "Swarm coordinator missing for current session",
+                    );
+                };
                 let states = coord.get_states().await;
                 if states.is_empty() {
                     crate::tools::ToolResult::success(
@@ -507,14 +523,22 @@ impl crate::tools::Tool for SwarmTool {
 
             "results" => {
                 let map = coordinators.read().await;
-                let coord = map.get(&session_key).unwrap();
+                let Some(coord) = map.get(&session_key) else {
+                    return crate::tools::ToolResult::error(
+                        "Swarm coordinator missing for current session",
+                    );
+                };
                 let report = coord.synthesize_results().await;
                 crate::tools::ToolResult::success(report)
             }
 
             "clear" => {
                 let map = coordinators.read().await;
-                let coord = map.get(&session_key).unwrap();
+                let Some(coord) = map.get(&session_key) else {
+                    return crate::tools::ToolResult::error(
+                        "Swarm coordinator missing for current session",
+                    );
+                };
                 coord.clear_completed().await;
                 crate::tools::ToolResult::success("Cleared completed agents.".to_string())
             }

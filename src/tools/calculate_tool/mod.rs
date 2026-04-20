@@ -110,10 +110,10 @@ fn parse_and_eval(expr: &str, depth: usize) -> anyhow::Result<f64> {
     if let Some(pos) = find_operator(expr, &['+', '-']) {
         let left = parse_and_eval(&expr[..pos], depth + 1)?;
         let right = parse_and_eval(&expr[pos + 1..], depth + 1)?;
-        return match expr.chars().nth(pos).unwrap() {
-            '+' => Ok(left + right),
-            '-' => Ok(left - right),
-            _ => unreachable!(),
+        return match expr.as_bytes().get(pos).copied().map(char::from) {
+            Some('+') => Ok(left + right),
+            Some('-') => Ok(left - right),
+            _ => Err(anyhow::anyhow!("Invalid operator position in expression")),
         };
     }
 
@@ -121,15 +121,15 @@ fn parse_and_eval(expr: &str, depth: usize) -> anyhow::Result<f64> {
     if let Some(pos) = find_operator(expr, &['*', '/']) {
         let left = parse_and_eval(&expr[..pos], depth + 1)?;
         let right = parse_and_eval(&expr[pos + 1..], depth + 1)?;
-        return match expr.chars().nth(pos).unwrap() {
-            '*' => Ok(left * right),
-            '/' => {
+        return match expr.as_bytes().get(pos).copied().map(char::from) {
+            Some('*') => Ok(left * right),
+            Some('/') => {
                 if right == 0.0 {
                     return Err(anyhow::anyhow!("Division by zero"));
                 }
                 Ok(left / right)
             }
-            _ => unreachable!(),
+            _ => Err(anyhow::anyhow!("Invalid operator position in expression")),
         };
     }
 
@@ -193,7 +193,7 @@ fn find_matching_paren(expr: &str, open_pos: usize) -> Option<usize> {
 
 fn find_operator(expr: &str, ops: &[char]) -> Option<usize> {
     let mut depth = 0;
-    for (i, c) in expr.chars().enumerate() {
+    for (i, c) in expr.char_indices() {
         match c {
             '(' => depth += 1,
             ')' => depth -= 1,

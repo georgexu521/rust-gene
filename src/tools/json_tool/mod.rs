@@ -183,12 +183,16 @@ fn set_value_by_path(data: &mut Value, path: &str, value: Value) -> bool {
                 }
                 // Create nested object if missing
                 if !current.get(key).is_some_and(|_| true) {
-                    current
-                        .as_object_mut()
-                        .unwrap()
-                        .insert(key.to_string(), json!({}));
+                    if let Some(obj) = current.as_object_mut() {
+                        obj.insert(key.to_string(), json!({}));
+                    } else {
+                        return false;
+                    }
                 }
-                current = current.get_mut(key).unwrap();
+                current = match current.get_mut(key) {
+                    Some(v) => v,
+                    None => return false,
+                };
             }
 
             if is_last {
@@ -217,12 +221,16 @@ fn set_value_by_path(data: &mut Value, path: &str, value: Value) -> bool {
             }
             // Create nested object if missing
             if !current.get(*segment).is_some_and(|_| true) {
-                current
-                    .as_object_mut()
-                    .unwrap()
-                    .insert(segment.to_string(), json!({}));
+                if let Some(obj) = current.as_object_mut() {
+                    obj.insert(segment.to_string(), json!({}));
+                } else {
+                    return false;
+                }
             }
-            current = current.get_mut(*segment).unwrap();
+            current = match current.get_mut(*segment) {
+                Some(v) => v,
+                None => return false,
+            };
         }
     }
 

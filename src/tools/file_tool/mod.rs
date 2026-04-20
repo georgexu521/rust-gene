@@ -8,6 +8,33 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 
+const MAX_EDITABLE_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
+
+fn is_unc_or_network_path(path: &str) -> bool {
+    path.starts_with("\\\\") || path.starts_with("//")
+}
+
+fn check_file_size_limit(path: &Path, operation: &str) -> Result<(), String> {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        format!(
+            "Failed to read file metadata for {} '{}': {}",
+            operation,
+            path.display(),
+            e
+        )
+    })?;
+    if metadata.len() > MAX_EDITABLE_FILE_SIZE_BYTES {
+        return Err(format!(
+            "Refusing to {} file '{}': {} bytes exceeds limit {} bytes",
+            operation,
+            path.display(),
+            metadata.len(),
+            MAX_EDITABLE_FILE_SIZE_BYTES
+        ));
+    }
+    Ok(())
+}
+
 /// 文件读取工具
 pub struct FileReadTool;
 
@@ -51,6 +78,12 @@ impl Tool for FileReadTool {
         if path_str.is_empty() {
             return ToolResult::error("Path cannot be empty");
         }
+        if is_unc_or_network_path(path_str) {
+            return ToolResult::error(format!(
+                "Refusing to read UNC/network path '{}'. Use a local path instead.",
+                path_str
+            ));
+        }
 
         let limit = params["limit"].as_u64().map(|u| u as usize);
         let offset = params["offset"]
@@ -71,6 +104,9 @@ impl Tool for FileReadTool {
         // 检查是否是文件
         if !path.is_file() {
             return ToolResult::error(format!("Path is not a file: {}", path_str));
+        }
+        if let Err(msg) = check_file_size_limit(&path, "read") {
+            return ToolResult::error(msg);
         }
 
         // 读取文件内容
@@ -198,6 +234,18 @@ impl Tool for FileWriteTool {
 
         if path_str.is_empty() {
             return ToolResult::error("Path cannot be empty");
+        }
+        if is_unc_or_network_path(path_str) {
+            return ToolResult::error(format!(
+                "Refusing to write UNC/network path '{}'. Use a local path instead.",
+                path_str
+            ));
+        }
+        if content.len() as u64 > MAX_EDITABLE_FILE_SIZE_BYTES {
+            return ToolResult::error(format!(
+                "Refusing to write content larger than {} bytes",
+                MAX_EDITABLE_FILE_SIZE_BYTES
+            ));
         }
 
         let path = match resolve_path(path_str, &context.working_dir) {
@@ -537,6 +585,12 @@ impl Tool for FileEditTool {
         if path_str.is_empty() {
             return ToolResult::error("Path cannot be empty");
         }
+        if is_unc_or_network_path(path_str) {
+            return ToolResult::error(format!(
+                "Refusing to edit UNC/network path '{}'. Use a local path instead.",
+                path_str
+            ));
+        }
 
         let path = match resolve_path(path_str, &context.working_dir) {
             Ok(path) => path,
@@ -545,6 +599,9 @@ impl Tool for FileEditTool {
         info!("Editing file: {:?}", path);
 
         // 读取文件内容
+        if let Err(msg) = check_file_size_limit(&path, "edit") {
+            return ToolResult::error(msg);
+        }
         let content = match tokio::fs::read_to_string(&path).await {
             Ok(content) => content,
             Err(e) => {

@@ -11,6 +11,60 @@ use tokio::process::Command;
 /// PowerShell 工具
 pub struct PowerShellTool;
 
+fn normalize_dash_variants(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{2013}' | '\u{2014}' | '\u{2015}' => '-',
+            _ => c,
+        })
+        .collect()
+}
+
+fn is_high_risk_powershell_command(cmd: &str) -> Option<&'static str> {
+    let normalized = normalize_dash_variants(cmd).to_ascii_lowercase();
+    let compact = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    let risk_checks = [
+        (
+            compact.contains("invoke-expression") || compact.contains(" iex "),
+            "uses Invoke-Expression (arbitrary code execution)",
+        ),
+        (
+            compact.contains("-encodedcommand")
+                || compact.contains(" -enc ")
+                || compact.starts_with("-enc "),
+            "uses encoded command payload",
+        ),
+        (
+            (compact.contains("invoke-webrequest")
+                || compact.contains(" iwr ")
+                || compact.contains("invoke-restmethod")
+                || compact.contains(" irm ")
+                || compact.contains("curl "))
+                && (compact.contains("| iex")
+                    || compact.contains("| invoke-expression")
+                    || compact.contains("| powershell")
+                    || compact.contains("| pwsh")),
+            "contains download-and-execute pattern",
+        ),
+        (
+            compact.contains("start-process") && compact.contains("-verb runas"),
+            "requests elevated process launch (RunAs)",
+        ),
+        (
+            compact.contains("powershell -command")
+                || compact.contains("pwsh -command")
+                || compact.contains("powershell -file")
+                || compact.contains("pwsh -file"),
+            "spawns nested PowerShell process",
+        ),
+    ];
+
+    risk_checks
+        .into_iter()
+        .find_map(|(matched, reason)| if matched { Some(reason) } else { None })
+}
+
 #[async_trait]
 impl Tool for PowerShellTool {
     fn name(&self) -> &str {
@@ -74,10 +128,59 @@ impl Tool for PowerShellTool {
                     );
                 }
 
+                if let Some(ps_cmd) = command {
+                    if let Some(reason) = is_high_risk_powershell_command(ps_cmd) {
+                        if !context.permissions.allow_all_bash {
+                            return ToolResult::error(format!(
+                                "High-risk PowerShell command blocked: {}. \
+                                 Enable explicit approval/override before running it.",
+                                reason
+                            ));
+                        }
+                    }
+                }
+
                 self.execute_ps(command, script_path, &work_dir, timeout).await
             }
             _ => ToolResult::error(format!("Unknown PowerShell action: {}", action)),
         }
+}
+
+    fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
+        match params["action"].as_str().unwrap_or("") {
+            "execute" => {
+                if params["script_path"].as_str().is_some() {
+                    return true;
+                }
+                if let Some(cmd) = params["command"].as_str() {
+                    return is_high_risk_powershell_command(cmd).is_some();
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {
+        if params["action"].as_str().unwrap_or("") != "execute" {
+            return None;
+        }
+        if let Some(script) = params["script_path"].as_str() {
+            return Some(format!(
+                "PowerShell script execution requires confirmation:\n{}\nAllow execution?",
+                script
+            ));
+        }
+        params["command"].as_str().map(|cmd| {
+            if let Some(reason) = is_high_risk_powershell_command(cmd) {
+                format!(
+                    "High-risk PowerShell command detected ({})\n{}\nAllow execution?",
+                    reason, cmd
+                )
+            } else {
+                format!("Allow PowerShell command execution?\n{}", cmd)
+            }
+        })
     }
 }
 

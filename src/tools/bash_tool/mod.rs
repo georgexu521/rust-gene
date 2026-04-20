@@ -499,9 +499,33 @@ fn kill_process_tree(child_pid: Option<i32>) {
     }
 }
 
+fn normalize_space(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn split_shell_fragments(s: &str) -> impl Iterator<Item = &str> {
+    s.split([';', '|', '&', '\n'])
+}
+
+fn has_privilege_or_shell_escalation(cmd_lower: &str) -> bool {
+    let escalation_patterns = [
+        "sudo ",
+        " doas ",
+        " pkexec ",
+        " su -c",
+        " bash -c",
+        " sh -c",
+        " zsh -c",
+        " env bash -c",
+        " env sh -c",
+    ];
+    escalation_patterns.iter().any(|p| cmd_lower.contains(p))
+}
+
 /// 检查命令是否危险
-fn is_dangerous_command(command: &str) -> bool {
+pub fn is_dangerous_command(command: &str) -> bool {
     let cmd_lower = command.to_lowercase();
+    let cmd_normalized = normalize_space(&cmd_lower);
 
     // 0. 检查命令注入模式（$()、反引号、~展开）
     // 这些可以用来绕过后续检测
@@ -513,18 +537,20 @@ fn is_dangerous_command(command: &str) -> bool {
         }
     }
     // ~ 展开到 $HOME，配合 rm -rf 非常危险
-    if cmd_lower.contains("rm")
-        && (cmd_lower.contains("~/") || cmd_lower == "rm ~" || cmd_lower.contains("~ "))
-        && (cmd_lower.contains("-r") || cmd_lower.contains("-f"))
+    if cmd_normalized.contains("rm")
+        && (cmd_normalized.contains("~/")
+            || cmd_normalized == "rm ~"
+            || cmd_normalized.contains("~ "))
+        && (cmd_normalized.contains("-r") || cmd_normalized.contains("-f"))
     {
         return true;
     }
     // $HOME、$TMPDIR 等环境变量配合 rm
-    if cmd_lower.contains("rm")
-        && cmd_lower.contains("-r")
-        && (cmd_lower.contains("$home")
-            || cmd_lower.contains("$tmpdir")
-            || cmd_lower.contains("$tmp"))
+    if cmd_normalized.contains("rm")
+        && cmd_normalized.contains("-r")
+        && (cmd_normalized.contains("$home")
+            || cmd_normalized.contains("$tmpdir")
+            || cmd_normalized.contains("$tmp"))
     {
         return true;
     }
@@ -545,34 +571,50 @@ fn is_dangerous_command(command: &str) -> bool {
     ];
 
     for pattern in &dangerous_patterns {
-        if cmd_lower.contains(pattern) {
+        if cmd_normalized.contains(pattern) {
             return true;
         }
     }
 
     // 1.5 检查常见的命令注入/绕过模式
-    if has_evasion_pattern(command, &cmd_lower) {
+    if has_evasion_pattern(command, &cmd_normalized) {
         return true;
     }
 
     // 2. 检查 rm 命令（支持各种变体）
-    if is_dangerous_rm(&cmd_lower) {
+    if is_dangerous_rm(&cmd_normalized) {
         return true;
     }
 
     // 3. 检查 mkfs 命令
-    if cmd_lower.contains("mkfs.") || cmd_lower.contains("mkfs ") {
+    if cmd_normalized.contains("mkfs.") || cmd_normalized.contains("mkfs ") {
         // 排除帮助选项
-        if !cmd_lower.contains("--help") && !cmd_lower.contains("-h") {
+        if !cmd_normalized.contains("--help") && !cmd_normalized.contains("-h") {
             return true;
         }
     }
 
     // 4. 检查格式化命令
-    if cmd_lower.contains("format")
-        && (cmd_lower.contains("/dev/sd") || cmd_lower.contains("/dev/hd"))
+    if cmd_normalized.contains("format")
+        && (cmd_normalized.contains("/dev/sd") || cmd_normalized.contains("/dev/hd"))
     {
         return true;
+    }
+
+    // 5. 提权/子 shell 级联执行（高风险）
+    if has_privilege_or_shell_escalation(&cmd_normalized) {
+        return true;
+    }
+
+    // 6. 危险命令组合在片段中出现（避免被 ;|& 拆分绕过）
+    for frag in split_shell_fragments(&cmd_normalized) {
+        let f = frag.trim();
+        if f.starts_with("chmod -r 777 /")
+            || f.starts_with("chmod -r 000 /")
+            || f.starts_with("mkfs")
+        {
+            return true;
+        }
     }
 
     false

@@ -34,6 +34,16 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "web_search",
 ];
 
+const DEFAULT_READ_ONLY_TOOL_CONCURRENCY: usize = 8;
+
+fn read_only_tool_concurrency() -> usize {
+    std::env::var("PRIORITY_AGENT_READ_ONLY_TOOL_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_READ_ONLY_TOOL_CONCURRENCY)
+}
+
 /// 工具授权请求
 #[derive(Debug, Clone)]
 pub struct ToolApprovalRequest {
@@ -267,6 +277,7 @@ impl ConversationLoop {
         // 进入循环前检查总 token（消息 + 工具 schema），超阈值提前压缩
         // 支持最多 3 轮连续压缩（Hermes 风格）
         if let Some(ref compressor_mutex) = self.compressor {
+            let mut no_gain_passes = 0u8;
             for pass in 0..3 {
                 let compressor = compressor_mutex.lock().await;
                 let tool_tokens = estimate_tool_schemas_tokens(&tools);
@@ -281,7 +292,21 @@ impl ConversationLoop {
                     tool_tokens
                 );
                 drop(compressor); // 释放锁
+                let before_tokens = estimate_messages_tokens(&messages);
                 messages = compressor_mutex.lock().await.compress_async(&messages).await;
+                let after_tokens = estimate_messages_tokens(&messages);
+                if after_tokens >= before_tokens {
+                    no_gain_passes += 1;
+                    if no_gain_passes >= 2 {
+                        warn!(
+                            "Preflight compression made no progress for 2 consecutive passes ({} -> {}). Stop retrying this turn.",
+                            before_tokens, after_tokens
+                        );
+                        break;
+                    }
+                } else {
+                    no_gain_passes = 0;
+                }
             }
         }
 
@@ -726,7 +751,7 @@ impl ConversationLoop {
         tool_calls: &[ToolCall],
         tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Vec<(ToolCall, ToolResult)> {
-        let mut read_only_handles = Vec::new();
+        let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
         let mut denied_results = Vec::new();
 
@@ -748,14 +773,21 @@ impl ConversationLoop {
             }
 
             if Self::is_read_only(&tc.name) {
+                if let Some(tx) = tx {
+                    let _ = tx
+                        .send(StreamEvent::ToolExecutionStart {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                        })
+                        .await;
+                }
                 let registry = self.tool_registry.clone();
                 let context = self.create_tool_context();
                 let tc_clone = tc.clone();
                 let tool_name = tc.name.clone();
                 let cost_tracker = self.cost_tracker.clone();
                 let hook_manager = self.hook_manager.clone();
-
-                let handle = tokio::spawn(async move {
+                read_only_jobs.push(async move {
                     let started_at = std::time::Instant::now();
                     let pre_decision = if let Some(ref hooks) = hook_manager {
                         hooks.run_pre_tool(&tc_clone, &context).await
@@ -796,7 +828,6 @@ impl ConversationLoop {
                     }
                     (tc_clone, result)
                 });
-                read_only_handles.push((tc.id.clone(), handle));
             } else {
                 read_write_calls.push(tc.clone());
             }
@@ -804,44 +835,25 @@ impl ConversationLoop {
 
         let mut results = denied_results;
 
-        // 等待所有只读工具完成
-        for (tool_id, handle) in read_only_handles {
+        // 并发执行只读工具（带上限）
+        let concurrency = read_only_tool_concurrency();
+        let mut readonly_stream = futures::stream::iter(read_only_jobs).buffer_unordered(concurrency);
+
+        while let Some((tc, result)) = readonly_stream.next().await {
             if let Some(tx) = tx {
+                let result_content = format!(
+                    "Result: {}\n{}",
+                    if result.success { "OK" } else { "ERROR" },
+                    result.content
+                );
                 let _ = tx
-                    .send(StreamEvent::ToolExecutionStart {
-                        id: tool_id.clone(),
-                        name: String::new(),
+                    .send(StreamEvent::ToolExecutionComplete {
+                        id: tc.id.clone(),
+                        result: result_content,
                     })
                     .await;
             }
-            match handle.await {
-                Ok((tc, result)) => {
-                    if let Some(tx) = tx {
-                        let result_content = format!(
-                            "Result: {}\n{}",
-                            if result.success { "OK" } else { "ERROR" },
-                            result.content
-                        );
-                        let _ = tx
-                            .send(StreamEvent::ToolExecutionComplete {
-                                id: tool_id.clone(),
-                                result: result_content,
-                            })
-                            .await;
-                    }
-                    results.push((tc, result));
-                }
-                Err(e) => {
-                    if let Some(tx) = tx {
-                        let _ = tx
-                            .send(StreamEvent::ToolExecutionComplete {
-                                id: tool_id.clone(),
-                                result: format!("Error: task panicked: {}", e),
-                            })
-                            .await;
-                    }
-                }
-            }
+            results.push((tc, result));
         }
 
         // 串行执行读写工具

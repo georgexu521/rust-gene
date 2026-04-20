@@ -35,7 +35,7 @@ impl Tool for ToolSearchTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let query = params["query"].as_str().unwrap_or("").to_lowercase();
         let max_results = params["max_results"].as_u64().unwrap_or(5) as usize;
 
@@ -85,21 +85,81 @@ impl Tool for ToolSearchTool {
         }
 
         scored.sort_by(|a, b| b.1.cmp(&a.1));
-        let matches: Vec<String> = scored
+        let mut matches: Vec<String> = scored
             .into_iter()
             .map(|(name, _)| name)
             .take(max_results)
             .collect();
+
+        let mut pending_mcp_servers: Vec<String> = Vec::new();
+        let mut mcp_matches: Vec<String> = Vec::new();
+        if let Some(mcp) = context.mcp_manager {
+            let server_names = mcp.server_names();
+            let approved = mcp.approved_server_names();
+            pending_mcp_servers = server_names
+                .into_iter()
+                .filter(|s| !approved.iter().any(|a| a == s))
+                .collect();
+            mcp_matches = search_mcp_tools(&query, max_results, &mcp).await;
+            for m in &mcp_matches {
+                if matches.len() >= max_results {
+                    break;
+                }
+                if !matches.iter().any(|x| x == m) {
+                    matches.push(m.clone());
+                }
+            }
+        }
 
         ToolResult::success_with_data(
             format!("Found {} matching tools", matches.len()),
             json!({
                 "matches": matches,
                 "query": query,
-                "total_tools": registry.tool_names().len()
+                "total_tools": registry.tool_names().len(),
+                "mcp_matches": mcp_matches,
+                "pending_mcp_servers": pending_mcp_servers
             }),
         )
     }
+}
+
+async fn search_mcp_tools(
+    query: &str,
+    max_results: usize,
+    manager: &crate::engine::mcp::McpManager,
+) -> Vec<String> {
+    let terms: Vec<&str> = query.split_whitespace().collect();
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let defs = manager.list_tools().await;
+    let mut scored: Vec<(String, i32)> = Vec::new();
+
+    for def in defs {
+        let canonical = format!("mcp/{}/{}", def.server_name, def.name).to_lowercase();
+        let desc = def.description.to_lowercase();
+        let mut score = 0;
+        for term in &terms {
+            if canonical == *term {
+                score += 30;
+            } else if canonical.contains(term) {
+                score += 12;
+            } else if desc.contains(term) {
+                score += 4;
+            }
+        }
+        if score > 0 {
+            scored.push((format!("mcp/{}/{}", def.server_name, def.name), score));
+        }
+    }
+
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored
+        .into_iter()
+        .map(|(name, _)| name)
+        .take(max_results)
+        .collect()
 }
 
 #[cfg(test)]
