@@ -587,9 +587,21 @@ PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
 ---
 
 ### Phase 5 当前状态
-- ✅ Task 1（LLM 记忆提取）：未开始
-- ✅ Task 2（Reactive Compact）：未开始
-- ✅ Task 3（模型降级增强）：未开始
+- ✅ Task 1（LLM 记忆提取）：已完成
+  - 新增 throttle 机制（每 N 轮提取一次，环境变量 `PRIORITY_AGENT_LLM_MEMORY_INTERVAL` 可配）
+  - 新增 mutual exclusion（主 agent 已写阻止后台 LLM 提取）
+  - 新增 `extraction_stats()` telemetry
+  - 测试通过：471 passed
+- ✅ Task 2（Reactive Compact）：已完成
+  - `context_compressor.rs` 已具备完整能力：LLM summarization、`micro_compress()`、time-based compression
+  - 新增 `CompressionWarning` 四级警告状态
+  - 测试通过：471 passed
+- ✅ Task 3（模型降级增强）：已完成
+  - 新增 `FallbackState` 追踪连续错误（529/401/403 等）
+  - 连续 3 次 529 错误后触发 fallback
+  - 新增 `ErrorType` 枚举分类错误类型
+  - 新增 `PRIORITY_AGENT_FALLBACK_MAX_ATTEMPTS` 环境变量
+  - 测试通过：471 passed
 
 ### 验证方式
 每个 task 完成后：
