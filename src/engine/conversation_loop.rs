@@ -659,13 +659,20 @@ impl ConversationLoop {
                 if !user_msg.is_empty() {
                     let assistant_text = format!("{} {}", final_content, tool_results_text);
                     if self.llm_memory_extraction {
-                        let provider: Option<&dyn LlmProvider> = Some(self.provider.as_ref());
-                        mem.sync_turn_llm(user_msg, &assistant_text, provider, &self.model)
-                            .await;
+                        // 先检查是否应触发 LLM 提取（throttle + mutual exclusion）
+                        if mem.should_extract_with_llm() {
+                            let provider: Option<&dyn LlmProvider> = Some(self.provider.as_ref());
+                            mem.sync_turn_llm(user_msg, &assistant_text, provider, &self.model)
+                                .await;
+                            mem.mark_main_agent_wrote();
+                        }
                     } else {
                         mem.sync_turn(user_msg, &assistant_text);
+                        mem.mark_main_agent_wrote();
                     }
                 }
+                // 每轮结束，增加轮数计数
+                mem.increment_turn();
             }
         }
 

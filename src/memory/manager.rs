@@ -41,6 +41,14 @@ pub struct MemoryManager {
     pending_learnings: Vec<String>,
     /// 已记录的学习内容哈希（去重）
     seen_hashes: HashSet<u64>,
+    /// 本会话轮数（用于 throttle LLM 提取）
+    turn_count: usize,
+    /// 上次 LLM 提取的轮数
+    last_llm_extraction_turn: usize,
+    /// LLM 提取次数（用于 telemetry）
+    llm_extraction_count: usize,
+    /// 主 agent 已写入标记（mutual exclusion）
+    main_agent_wrote_this_turn: bool,
 }
 
 impl MemoryManager {
@@ -61,6 +69,10 @@ impl MemoryManager {
             prefetched_this_turn: false,
             pending_learnings: Vec::new(),
             seen_hashes: HashSet::new(),
+            turn_count: 0,
+            last_llm_extraction_turn: 0,
+            llm_extraction_count: 0,
+            main_agent_wrote_this_turn: false,
         }
     }
 
@@ -408,6 +420,41 @@ Return exactly the word NONE if there is nothing critical to remember.";
     /// 重置预取状态（每轮开始时调用）
     pub fn reset_turn(&mut self) {
         self.prefetched_this_turn = false;
+        self.main_agent_wrote_this_turn = false;
+    }
+
+    /// 本轮结束，增加轮数计数
+    pub fn increment_turn(&mut self) {
+        self.turn_count += 1;
+    }
+
+    /// 获取 LLM 提取间隔（环境变量可配置）
+    pub fn llm_extraction_interval() -> usize {
+        std::env::var("PRIORITY_AGENT_LLM_MEMORY_INTERVAL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5)
+    }
+
+    /// 获取 telemetry 统计
+    pub fn extraction_stats(&self) -> (usize, usize, usize) {
+        (self.llm_extraction_count, self.turn_count, self.last_llm_extraction_turn)
+    }
+
+    /// 主 agent 已写入，阻止后台 LLM 提取
+    pub fn mark_main_agent_wrote(&mut self) {
+        self.main_agent_wrote_this_turn = true;
+    }
+
+    /// 检查是否应进行 LLM 提取（throttle + mutual exclusion）
+    pub fn should_extract_with_llm(&self) -> bool {
+        // mutual exclusion：主 agent 已写则跳过
+        if self.main_agent_wrote_this_turn {
+            return false;
+        }
+        // throttle：每 N 轮提取一次
+        let interval = Self::llm_extraction_interval();
+        self.turn_count - self.last_llm_extraction_turn >= interval
     }
 
     /// 检查内容是否已重复
@@ -789,5 +836,58 @@ Always check logs first.
         let mut mgr = MemoryManager::new();
         mgr.push_learning("Solution: Use cargo check before cargo test to fail fast.".to_string());
         assert_eq!(mgr.pending_count(), 1);
+    }
+
+    #[test]
+    fn test_should_extract_with_llm_throttled() {
+        let mut mgr = MemoryManager::new();
+        // 首轮不应提取（last_llm_extraction_turn = 0，turn_count = 0，interval = 5）
+        assert!(!mgr.should_extract_with_llm());
+
+        // 轮数未到 interval，不应提取
+        for i in 1..5 {
+            mgr.increment_turn();
+            assert!(!mgr.should_extract_with_llm(), "turn {} should not trigger", i);
+        }
+
+        // 第 5 轮应该触发
+        mgr.increment_turn();
+        assert!(mgr.should_extract_with_llm());
+    }
+
+    #[test]
+    fn test_mutual_exclusion_main_agent_wrote() {
+        let mut mgr = MemoryManager::new();
+
+        // 触发 throttle：需要 turn_count >= interval (5)
+        for _ in 0..5 {
+            mgr.increment_turn();
+        }
+
+        // 主 agent 未写时，throttled 提取可触发
+        assert!(mgr.should_extract_with_llm(), "should trigger when throttled");
+
+        // 主 agent 写入后，阻止后台 LLM 提取（mutual exclusion）
+        mgr.mark_main_agent_wrote();
+        assert!(!mgr.should_extract_with_llm(), "main agent wrote blocks extraction");
+    }
+
+    #[test]
+    fn test_llm_extraction_interval_env_var() {
+        // 默认是 5
+        assert_eq!(MemoryManager::llm_extraction_interval(), 5);
+    }
+
+    #[test]
+    fn test_extraction_stats() {
+        let mut mgr = MemoryManager::new();
+        mgr.increment_turn();
+        mgr.increment_turn();
+        mgr.increment_turn();
+
+        let (count, turns, last) = mgr.extraction_stats();
+        assert_eq!(count, 0); // 尚未触发 LLM 提取
+        assert_eq!(turns, 3);
+        assert_eq!(last, 0);
     }
 }

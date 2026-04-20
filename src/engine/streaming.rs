@@ -352,7 +352,7 @@ impl StreamingQueryEngine {
         let session_store = self.session_store.clone();
         let session_id = self.session_id.clone();
 
-        let engine = StreamingEngineInner {
+        let mut engine = StreamingEngineInner {
             provider: self.provider.clone(),
             tool_registry: self.tool_registry.clone(),
             model: self.model.clone(),
@@ -369,6 +369,7 @@ impl StreamingQueryEngine {
             llm_memory_extraction: self.llm_memory_extraction,
             approval_channel: self.approval_channel.clone(),
             fallback_model: self.fallback_model.clone(),
+            fallback_state: None,
         };
 
         tokio::spawn(async move {
@@ -426,13 +427,39 @@ impl StreamingQueryEngine {
                 }
                 Err(e) => {
                     let err_str = e.to_string().to_lowercase();
-                    let should_fallback = err_str.contains("rate limit")
-                        || err_str.contains("overloaded")
-                        || err_str.contains("context")
-                        || err_str.contains("timeout")
-                        || err_str.contains("model");
-                    if should_fallback && engine.fallback_model.is_some() {
-                        warn!("Primary model failed ({}), trying fallback", &engine.model);
+                    let error_type = ErrorType::from_error_str(&err_str);
+
+                    // 初始化 fallback_state（如果是第一次错误）
+                    let fb_state = engine.fallback_state.take().unwrap_or_else(FallbackState::new);
+                    let mut fb_state = fb_state;
+
+                    // 记录错误
+                    fb_state.record_error(error_type);
+
+                    // 检查是否应触发 fallback（连续 3 次 529 或特定错误类型）
+                    let should_try_fallback = if fb_state.fallback_triggered {
+                        // 已触发过 fallback，检查是否还有尝试次数
+                        !fb_state.max_attempts_reached()
+                    } else {
+                        // 检查是否应该触发 fallback
+                        fb_state.should_trigger_fallback()
+                            || error_type == ErrorType::RateLimit
+                            || error_type == ErrorType::ContextTooLong
+                            || error_type == ErrorType::ServerError
+                    };
+
+                    if should_try_fallback && engine.fallback_model.is_some() {
+                        // 如果还没触发过 fallback，标记已触发
+                        if !fb_state.fallback_triggered {
+                            fb_state.fallback_triggered = true;
+                            warn!(
+                                "Fallback triggered after {} consecutive errors (type: {:?}), trying fallback model",
+                                fb_state.consecutive_529_count,
+                                error_type
+                            );
+                        }
+                        fb_state.fallback_attempts += 1;
+
                         // Fallback: 重新执行，stream 事件会继续发送到 tx
                         let fb_model = engine.fallback_model.clone().unwrap();
                         let fb_engine = StreamingEngineInner {
@@ -452,6 +479,7 @@ impl StreamingQueryEngine {
                             llm_memory_extraction: engine.llm_memory_extraction,
                             approval_channel: engine.approval_channel.clone(),
                             fallback_model: None, // 防止无限 fallback
+                            fallback_state: Some(fb_state),
                         };
                         match fb_engine
                             .run_query_with_messages(messages_for_query.clone(), &tx)
@@ -549,6 +577,93 @@ struct StreamingEngineInner {
     llm_memory_extraction: bool,
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
     fallback_model: Option<String>,
+    /// Fallback 状态追踪（连续错误计数）
+    fallback_state: Option<FallbackState>,
+}
+
+/// Fallback 状态追踪
+#[derive(Debug, Clone)]
+struct FallbackState {
+    /// 连续 529 (Model Overloaded) 错误计数
+    pub consecutive_529_count: u32,
+    /// 上次错误类型
+    pub last_error_type: ErrorType,
+    /// 是否已触发 fallback
+    pub fallback_triggered: bool,
+    /// fallback 尝试次数
+    pub fallback_attempts: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorType {
+    RateLimit,       // 429
+    ModelOverloaded, // 529
+    ContextTooLong,  // 413
+    Timeout,
+    AuthError,       // 401/403
+    ServerError,     // 500
+    Unknown,
+}
+
+impl ErrorType {
+    fn from_error_str(err_str: &str) -> Self {
+        if err_str.contains("rate limit") || err_str.contains("429") {
+            ErrorType::RateLimit
+        } else if err_str.contains("overloaded") || err_str.contains("529") || err_str.contains("model overloaded") {
+            ErrorType::ModelOverloaded
+        } else if err_str.contains("context") || err_str.contains("413") || err_str.contains("too long") {
+            ErrorType::ContextTooLong
+        } else if err_str.contains("timeout") || err_str.contains("timed out") {
+            ErrorType::Timeout
+        } else if err_str.contains("401") || err_str.contains("403") || err_str.contains("unauthorized") || err_str.contains("forbidden") {
+            ErrorType::AuthError
+        } else if err_str.contains("500") || err_str.contains("internal server error") {
+            ErrorType::ServerError
+        } else if err_str.contains("model") {
+            ErrorType::ModelOverloaded
+        } else {
+            ErrorType::Unknown
+        }
+    }
+}
+
+impl FallbackState {
+    fn new() -> Self {
+        Self {
+            consecutive_529_count: 0,
+            last_error_type: ErrorType::Unknown,
+            fallback_triggered: false,
+            fallback_attempts: 0,
+        }
+    }
+
+    /// 记录错误并更新状态
+    fn record_error(&mut self, error_type: ErrorType) {
+        self.last_error_type = error_type;
+        if error_type == ErrorType::ModelOverloaded {
+            self.consecutive_529_count += 1;
+        } else {
+            self.consecutive_529_count = 0;
+        }
+    }
+
+    /// 检查是否应该触发 fallback（连续 3 次 529 后触发）
+    fn should_trigger_fallback(&self) -> bool {
+        self.consecutive_529_count >= 3
+    }
+
+    /// 获取最大 fallback 尝试次数
+    fn max_fallback_attempts() -> u32 {
+        std::env::var("PRIORITY_AGENT_FALLBACK_MAX_ATTEMPTS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3)
+    }
+
+    /// 检查是否达到最大尝试次数
+    fn max_attempts_reached(&self) -> bool {
+        self.fallback_attempts >= Self::max_fallback_attempts()
+    }
 }
 
 impl StreamingEngineInner {
