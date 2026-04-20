@@ -1948,6 +1948,7 @@ dependencies = [
  "ignore",
  "libc",
  "once_cell",
+ "priority-core",
  "pulldown-cmark",
  "rand 0.8.6",
  "ratatui",
@@ -2030,6 +2031,10 @@ dependencies = [
 [[package]]
 name = "priority-core"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "proc-macro2"

@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Core library for Priority Agent - Engine, Tools, Agent, Memory"
 
-# Dependencies will be added as modules are migrated
+[dependencies]
+thiserror = "1.0"
+anyhow = "1.0"
+
 [features]
 default = []
 experimental-api-server = []

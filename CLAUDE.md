@@ -1232,7 +1232,14 @@ export class Rule extends Schema.Class<Rule>("PermissionRule")({
 **Task 9：多前端架构（长期目标）**
 - **目标**：拆分核心库为独立 crate，支持 Web/Desktop 前端
 - **关键文件**：新建 `priority-core/` 和 `priority-cli/`
-- **状态**：🔄 Phase 1 完成（workspace 已建立）
+- **状态**：🔄 Phase 1-1 进行中（已完成 errors.rs 迁移）
+
+#### 当前已迁移模块
+- `errors.rs` → `priority-core/src/errors.rs` ✅
+
+#### 发现的问题
+- **permissions/**：依赖 `tools::bash_tool::is_dangerous_command`，存在循环依赖
+- **diagnostics/**：依赖 reqwest/dirs/serde_json 等外部 crate，迁移复杂度高
 
 #### 目标 crate 结构
 
@@ -1265,9 +1272,9 @@ priority-agent/ (workspace)
 #### 迁移顺序（按依赖关系）
 
 **Phase 1-1：迁移无依赖模块**
-1. `errors.rs` → priority-core (无依赖)
-2. `permissions/` → priority-core
-3. `diagnostics/` → priority-core
+1. `errors.rs` → priority-core ✅
+2. `priority/` → priority-core (待测)
+3. `weight_engine/` → priority-core (待测)
 
 **Phase 1-2：迁移基础服务**
 4. `services/api/` → priority-core (provider trait + implementations)
@@ -1352,7 +1359,7 @@ priority-agent/ (workspace)
   - ✅ Task 6（MCP OAuth）：已完成
   - ✅ Task 7（Provider Hook）：已完成
   - ✅ Task 8（Config Hook）：已完成
-  - 🔄 Task 9（多前端架构）：Phase 1 完成（workspace 已建立）
+  - 🔄 Task 9（多前端架构）：Phase 1-1 进行中（已完成 errors.rs，permissions/diagnostics 因循环依赖暂停）
 
 ---
 

@@ -112,6 +112,9 @@ legacy-cli = []
 voice = []
 
 [dependencies]
+# Internal crates
+priority-core = { path = "priority-core" }
+
 # Use workspace dependencies
 serde = { workspace = true }
 serde_json = { workspace = true }
