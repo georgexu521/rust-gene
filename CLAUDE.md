@@ -849,5 +849,198 @@ PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
 6. ✅ **工具预验证与 UI 渲染** — 提升工具质量
 7. ✅ **技能预发现** — 提升技能匹配准确度
 8. ✅ **错误恢复策略增强**
-9. **上下文折叠** — 高难度，未完成
+9. ✅ **上下文折叠** — 已完成（Phase 6 Task 3）
 10. **权限系统增强** — 可改进
+
+---
+
+## Phase 7：编程能力深度补齐计划（2026-04-20）
+
+对比 `~/Desktop/claude/src`（真实 Claude Code）中的编程相关能力，以下是 6 个最高优先级缺口，按计划逐个实现：
+
+---
+
+### 高优先级缺失（3 个）
+
+#### Task 1：Smart Edit（智能编辑）
+
+**目标**：实现 `old_string`/`new_string` 模式的智能编辑，而非整体重写
+
+**Claude Code 实现**：
+- `FileEditTool.ts` — `old_string`/`new_string`/`replace_all` 输入 schema
+- **Quote normalization** — 处理智能引号 `'` → `'`
+- **Must-read-before-edit** — 跟踪 `readFileState`，必须先 read 才能 edit
+- **File modification detection** — timestamp + content 对比检测冲突
+- **LSP 通知** — edit 后自动触发 `textDocument/didChange`/`didSave`
+- **Desanitization** — 处理 `&lt;fnr&gt;`、`&lt;n&gt;` 等转义
+
+**实现步骤**：
+1. 修改 `file_edit` 工具，支持 `old_string`/`new_string` 参数
+2. 实现 `normalize_quotes()` 函数处理智能引号
+3. 添加 `readFileState` 跟踪：edit 前必须先 read
+4. 实现文件修改检测（timestamp + content hash）
+5. edit 后自动发送 LSP `textDocument/didChange` 通知
+6. 处理 desanitization（`&lt;fnr&gt;` 等）
+
+**关键文件**：`src/tools/file_tool/mod.rs`
+
+**环境变量**：
+- `PRIORITY_AGENT_SMART_EDIT=1` — 启用智能编辑
+
+---
+
+#### Task 2：Diagnostic Tracking（自动调试）
+
+**目标**：编辑前捕获 baseline diagnostics，编辑后对比找出新增错误
+
+**Claude Code 实现**：
+- `diagnosticTracking.ts` — `DiagnosticTrackingService` 单例
+- `beforeFileEdited()` — 编辑前捕获 baseline
+- `getNewDiagnostics()` — 对比 baseline，返回新增错误
+- IDE RPC 调用 `getDiagnostics`
+- 处理 `_claude_fs_right` 协议用于 diff 视图
+
+**实现步骤**：
+1. 新增 `DiagnosticTracker` 结构体
+2. 实现 `before_edit()` 方法捕获 baseline
+3. 实现 `after_edit()` 方法对比返回新增 diagnostics
+4. 与 `lsp_manager` 集成获取 diagnostics
+5. TUI 显示新增错误（实时反馈）
+
+**关键文件**：`src/engine/diagnostic_tracker.rs`（新文件）
+
+**环境变量**：
+- `PRIORITY_AGENT_DIAGNOSTIC_TRACKING=1` — 启用
+
+---
+
+#### Task 3：Verification Agent（验证 Agent）
+
+**目标**：对抗性验证，专门尝试破坏代码而非确认能跑
+
+**Claude Code 实现**：
+- `verificationAgent.ts` — 对抗性验证专家
+- **Failure patterns**: "verification avoidance", "seduced by first 80%"
+- **Required steps**: build, test suite, linters, regressions
+- **Adversarial probes**: 并发、边界值、幂等性、孤儿操作
+- **Verdict**: `PASS` / `FAIL` / `PARTIAL`
+
+**实现步骤**：
+1. 新增 `VerificationAgent` 结构体
+2. 实现验证 prompt（对抗性测试专家）
+3. 实现 `verify()` 方法：运行 build/test/linter
+4. 实现 adversarial probes（并发测试、边界值、幂等性）
+5. 返回 `PASS`/`FAIL`/`PARTIAL` 判决
+6. 注册为 skill `/verify` 的后端
+
+**关键文件**：`src/agent/verification_agent.rs`（新文件）
+
+**环境变量**：
+- `PRIORITY_AGENT_VERIFICATION_ADVERSARIAL=1` — 启用对抗模式
+
+---
+
+### 中优先级缺失（3 个）
+
+#### Task 4：Batch Refactor（批量重构）
+
+**目标**：5-30 个并行 worktree agent 协同完成大规模重构
+
+**Claude Code 实现**：
+- `batch.ts` — 分解大改动为 5-30 个并行 agent
+- 每个 agent 运行在隔离 git worktree
+- 每个 agent 创建独立 PR
+- **Phase 1**: Research + plan in plan mode
+- **Phase 2**: Spawn workers in parallel with `isolation: "worktree"`
+- **Phase 3**: Track progress, parse PR URLs from results
+
+**实现步骤**：
+1. 新增 `BatchRefactor` 结构体
+2. 实现 `decompose()` 方法将大改动分解为小单元
+3. 实现并行 worktree agent 调度
+4. 实现 PR URL 解析和进度跟踪
+5. 与现有 `worktree_manager` 集成
+6. 注册为 skill `/batch` 或 `/refactor`
+
+**关键文件**：`src/engine/batch_refactor.rs`（新文件）
+
+**环境变量**：
+- `PRIORITY_AGENT_BATCH_REFACTOR=1` — 启用
+
+---
+
+#### Task 5：Multi-Edit 并行协调
+
+**目标**：读工具并行执行，写工具串行执行
+
+**Claude Code 实现**：
+- `toolOrchestration.ts` — `partitionToolCalls()`
+- Read-only tools（Grep, Read, Glob）并行
+- Non-read-only tools（Edit, Write）串行
+- `isConcurrencySafe` 属性分区
+
+**实现步骤**：
+1. 定义工具并发安全属性
+2. 实现 `partition_tools()` 方法分区工具
+3. 读工具并行执行（使用 `buffer_unordered`）
+4. 写工具串行执行（保持顺序）
+5. 合并结果返回
+
+**关键文件**：`src/engine/tool_orchestration.rs`（新文件）
+
+**环境变量**：
+- `PRIORITY_AGENT_TOOL_CONCURRENCY=1` — 启用工具并发
+
+---
+
+#### Task 6：Diff/Patch 输出
+
+**目标**：结构化 hunk 输出用于显示，生成可读的 git diff
+
+**Claude Code 实现**：
+- `diff.ts` — `structuredPatch` from `diff` library
+- `getPatchFromContents()` — 生成 hunks
+- `getPatchForDisplay()` — 应用编辑后生成 diff
+- Tab-to-space 转换
+- Ampersand/dollar 转义
+
+**实现步骤**：
+1. 引入 `diff` crate（添加依赖）
+2. 实现 `structured_patch()` 函数
+3. 实现 `get_patch_from_contents()` 生成 hunks
+4. 实现 `get_patch_for_display()` 显示友好 diff
+5. `file_edit` 工具返回结构化 patch 信息
+
+**关键文件**：`src/engine/diff.rs`（新文件）
+
+**环境变量**：
+- `PRIORITY_AGENT_DIFF_OUTPUT=1` — 启用 diff 输出
+
+---
+
+### Phase 7 实施顺序
+
+1. **Task 1 (Smart Edit)** — 最高优先级，直接影响代码编辑体验
+2. **Task 2 (Diagnostic Tracking)** — 实时反馈错误
+3. **Task 3 (Verification Agent)** — 确保代码质量
+4. **Task 4 (Batch Refactor)** — 大规模重构能力
+5. **Task 5 (Multi-Edit)** — 工具执行优化
+6. **Task 6 (Diff/Patch)** — 显示友好
+
+### Phase 7 当前状态
+
+- ⬜ Task 1（Smart Edit）：未开始
+- ⬜ Task 2（Diagnostic Tracking）：未开始
+- ⬜ Task 3（Verification Agent）：未开始
+- ⬜ Task 4（Batch Refactor）：未开始
+- ⬜ Task 5（Multi-Edit 并行协调）：未开始
+- ⬜ Task 6（Diff/Patch 输出）：未开始
+
+---
+
+### 验证方式
+
+每个 task 完成后：
+1. 运行 `cargo test` 确保不破坏现有测试
+2. 手动测试对应功能
+3. 确认测试数量不减少
