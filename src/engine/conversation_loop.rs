@@ -718,6 +718,13 @@ impl ConversationLoop {
                 let mut collected_tool_calls: Vec<ToolCall> = Vec::new();
                 let mut raw_args_accum: Vec<String> = Vec::new();
 
+                // ── Extended Thinking 信号 ─────────────────────────────
+                // Kimi K2.5 等支持 extended thinking 的模型会生成内部推理 tokens
+                // 这些 tokens 不显示在 content 中，仅在 usage 中可见
+                // 我们发送 ThinkingStart/Complete 信号供 UI 显示 thinking 状态
+                // 注意：实际的 thinking 内容对客户端不可见，这是统计意义上的信号
+                let _ = tx.send(StreamEvent::ThinkingStart).await;
+
                 // ── 流式只读工具并行执行 ─────────────────────────────────
                 // 当只读工具的参数开始到达时，在后台并行执行
                 // key: tool index, value: join_handle
@@ -931,6 +938,9 @@ impl ConversationLoop {
                         }
                     }
                 }
+
+                // ── Extended Thinking 完成信号 ────────────────────────
+                let _ = tx.send(StreamEvent::ThinkingComplete).await;
 
                 // 解析累积的工具调用参数
                 for (i, tc) in collected_tool_calls.iter_mut().enumerate() {
@@ -1375,6 +1385,7 @@ mod tests {
                     prompt_tokens: 10,
                     completion_tokens: 5,
                     total_tokens: 15,
+                    reasoning_tokens: None,
                 }),
             },
             ChatResponse {
@@ -1384,6 +1395,7 @@ mod tests {
                     prompt_tokens: 5,
                     completion_tokens: 3,
                     total_tokens: 8,
+                    reasoning_tokens: None,
                 }),
             },
             ChatResponse {
@@ -1400,6 +1412,7 @@ mod tests {
                     prompt_tokens: 10,
                     completion_tokens: 5,
                     total_tokens: 15,
+                    reasoning_tokens: None,
                 }),
             },
             ChatResponse {
@@ -1409,6 +1422,7 @@ mod tests {
                     prompt_tokens: 5,
                     completion_tokens: 3,
                     total_tokens: 8,
+                    reasoning_tokens: None,
                 }),
             },
         ]);
@@ -1487,6 +1501,7 @@ mod tests {
                     prompt_tokens: 10,
                     completion_tokens: 5,
                     total_tokens: 15,
+                    reasoning_tokens: None,
                 }),
             },
             ChatResponse {
@@ -1496,6 +1511,7 @@ mod tests {
                     prompt_tokens: 5,
                     completion_tokens: 3,
                     total_tokens: 8,
+                    reasoning_tokens: None,
                 }),
             },
         ]);

@@ -180,4 +180,7 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    /// Reasoning tokens (from extended thinking models like Kimi K2.5)
+    /// These tokens are used for the model's internal reasoning process
+    pub reasoning_tokens: Option<u32>,
 }

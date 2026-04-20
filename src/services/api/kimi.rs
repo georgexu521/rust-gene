@@ -262,6 +262,7 @@ impl LlmProvider for KimiClient {
             prompt_tokens: u.prompt_tokens,
             completion_tokens: u.completion_tokens,
             total_tokens: u.total_tokens,
+            reasoning_tokens: u.completion_tokens_details.as_ref().and_then(|d| d.reasoning_tokens),
         });
 
         Ok(ChatResponse {

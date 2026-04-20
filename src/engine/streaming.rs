@@ -30,12 +30,17 @@ pub enum StreamEvent {
     ToolExecutionProgress { id: String, progress: String },
     /// 工具执行完成
     ToolExecutionComplete { id: String, result: String },
-    /// 思考内容（如果模型支持）
-    Thinking(String),
+    /// 思考开始（extended thinking 模型）
+    ThinkingStart,
+    /// 思考内容块（增量）
+    ThinkingChunk(String),
+    /// 思考完成
+    ThinkingComplete,
     /// 使用量统计
     Usage {
         prompt_tokens: u32,
         completion_tokens: u32,
+        reasoning_tokens: Option<u32>,
     },
     /// 完成
     Complete,

@@ -484,8 +484,8 @@ Claude Code 在生成回复前会进行"主动思考"，这是模型自身的推
 - `StreamEvent::Thinking(String)` 已存在，可发送思考内容到 TUI 渲染
 
 **当前限制**：
-- 流式响应的 thinking content block 解析尚未接入（需要 async-openai 支持或自行解析 SSE）
-- 非流式 `chat()` 已完整支持 thinking
+- 流式响应的 thinking content block 解析受限（Kimi API 的 thinking 内容对客户端不可见，仅 usage 中有统计）
+- 流式循环中发出 `ThinkingStart`/`ThinkingComplete` 信号供 UI 显示 thinking 状态
 
 ### 环境变量
 ```bash
@@ -726,7 +726,13 @@ PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
 3. 缺口 3（上下文折叠）— 高难度，最后推进
 
 ### Phase 6 当前状态
-- ⬜ Task 1（流式 thinking 解析）：未开始
+- ✅ Task 1（流式 thinking 解析）：已完成
+  - `Usage` 结构体新增 `reasoning_tokens: Option<u32>` 字段
+  - `kimi.rs` 和 `openai_compat.rs` 从 `completion_tokens_details` 提取 `reasoning_tokens`
+  - `StreamEvent` 新增 `ThinkingStart`/`ThinkingChunk`/`ThinkingComplete` 事件
+  - `call_api_streaming()` 在流开始时发出 `ThinkingStart`，结束时发出 `ThinkingComplete`
+  - 说明：Kimi API 的 thinking 内容对客户端不可见，仅 usage 中有统计
+  - 测试通过：471 passed
 - ⬜ Task 2（LLM 记忆提取 forked agent）：未开始
 - ⬜ Task 3（上下文折叠）：未开始
 
