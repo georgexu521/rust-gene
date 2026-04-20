@@ -611,6 +611,127 @@ PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
 
 ---
 
+## Phase 6：三个高优先级缺口追赶计划
+
+### 缺口 1：流式 thinking 解析接入
+
+**目标**：在流式响应中解析 `thinking_delta` 内容块，通过 `StreamEvent::Thinking` 发送到 TUI 渲染
+
+**Claude Code 实现**：
+- `thinking_delta` 和 `redacted_thinking` 内容块
+- 完整状态机管理 thinking 开始/进行中/完成
+- `AssistantRedactedThinkingMessage` 类型和专门渲染逻辑
+
+**我们的现状**：
+- `StreamEvent::Thinking(String)` 已存在但从未触发
+- 非流式 thinking 完整（KimiConfig + beta header）
+- 流式响应解析缺失
+
+**实现步骤**：
+1. 在 `services/api/kimi.rs` 的 `chat_stream()` 返回类型中解析 SSE 格式的 thinking blocks
+2. 实现 `thinking_delta` 和 `redacted_thinking` 状态机
+3. 在 `conversation_loop.rs` 的流式处理循环中捕获 thinking 内容
+4. 通过 `StreamEvent::Thinking` 发送到 TUI
+5. TUI 渲染 thinking 内容（如折叠显示、单独面板等）
+
+**关键文件**：
+- `src/services/api/kimi.rs` — Kimi 流式响应解析
+- `src/engine/conversation_loop.rs` — thinking 内容块捕获
+- `src/engine/streaming.rs` — StreamEvent::Thinking 发送
+
+**环境变量**：
+- `PRIORITY_AGENT_THINKING=1`（默认启用）
+- `PRIORITY_AGENT_THINKING_RENDER=collapsed`（thinking 渲染模式）
+
+**当前状态**：未开始
+
+---
+
+### 缺口 2：LLM 记忆提取增强（forked agent）
+
+**目标**：实现真正的 forked agent 隔离机制，而非简单 tokio spawn
+
+**Claude Code 实现**：
+- `runForkedAgent` 在独立子会话中运行，共享父上下文 prompt cache
+- `hasMemoryWritesSince` 防止主 agent 和 forked agent 同时写入
+- Trailing run 机制（对话结束后最终提取）
+- 完整 telemetry：`cache: read=X create=Y input=Z (hitPct%)`
+- 记忆写入 `~/.claude/projects/<path>/memory/` 目录结构
+
+**我们的现状**：
+- `sync_turn_llm_background()` 使用简单 tokio spawn
+- 没有真正的 forked 隔离
+- 没有 prompt cache 共享
+- 没有 trailing run 后处理
+
+**实现步骤**：
+1. 新增 `ForkedMemoryAgent` 结构体，模拟 forked agent 行为
+2. 在 `sync_turn_llm_background()` 中使用独立 task context
+3. 实现 `trailing_run()` 方法（对话结束后调用）
+4. 实现记忆写入互斥：`hasMemoryWritesSince` 检查
+5. 增强 telemetry：`cache hit rate`、`extraction count`
+6. 支持写入 `~/.priority-agent/memory/` 目录结构
+
+**关键文件**：
+- `src/memory/manager.rs` — ForkedMemoryAgent、trailing_run、hasMemoryWritesSince
+
+**环境变量**：
+- `PRIORITY_AGENT_LLM_MEMORY_FORKED=1` — 启用 forked agent 模式（默认 0）
+- `PRIORITY_AGENT_LLM_MEMORY_TRAILING=1` — 启用 trailing run
+
+**当前状态**：未开始
+
+---
+
+### 缺口 3：上下文折叠（Context Collapse）
+
+**目标**：将历史消息持久化到文件，读取时重放，类似 Claude Code 的 `CONTEXT_COLLAPSE`
+
+**Claude Code 实现**：
+- Feature flag `CONTEXT_COLLAPSE`
+- `applyCollapsesIfNeeded()` 方法
+- Commit log 持久化到 transcript
+- `ContextCollapseCommitEntry` 和 `ContextCollapseCommitSnapshotEntry` 类型
+- 与 session restore 集成（`restoreFromEntries`）
+
+**我们的现状**：
+- CLAUDE.md 明确标记为"缺失（高难度）"
+- 没有任何 context collapse 实现
+
+**实现步骤**：
+1. 新增 `ContextCollapseService` 结构体
+2. 定义 `ContextCollapseEntry` 枚举（Commit / Snapshot）
+3. 实现 `commit(messages)` 方法：将历史消息写入 transcript 文件
+4. 实现 `restore()` 方法：从 transcript 文件恢复消息
+5. 实现 `applyCollapsesIfNeeded()` 检查是否需要折叠
+6. 与 `session_store` 集成：折叠时持久化到 DB
+7. 实现滑动窗口：保留最近 N 条消息，其余折叠
+
+**关键文件**：
+- `src/engine/context_collapse.rs` — 新文件
+- `src/engine/context_compressor.rs` — 与压缩系统集成
+- `src/session_store/mod.rs` — 与会话存储集成
+
+**环境变量**：
+- `PRIORITY_AGENT_CONTEXT_COLLAPSE=1` — 启用
+- `PRIORITY_AGENT_CONTEXT_COLLAPSE_WINDOW=50` — 保留最近消息数
+
+**当前状态**：未开始
+
+---
+
+### Phase 6 实施顺序
+1. 缺口 1（流式 thinking）— 中优先级，相对独立
+2. 缺口 2（LLM 记忆提取）— 高优先级，架构改动大
+3. 缺口 3（上下文折叠）— 高难度，最后推进
+
+### Phase 6 当前状态
+- ⬜ Task 1（流式 thinking 解析）：未开始
+- ⬜ Task 2（LLM 记忆提取 forked agent）：未开始
+- ⬜ Task 3（上下文折叠）：未开始
+
+---
+
 ## 2026-04-20 Claude Code 编程能力差距分析与追赶计划
 
 对比 `~/Desktop/claude/src`（真实 Claude Code），以下是我们项目尚存的差距及改进方向：
