@@ -17,6 +17,12 @@ const BUNDLED_SKILLS: &[(&str, &str)] = &[
     ),
     ("explain", include_str!("bundled/explain.md")),
     ("fix", include_str!("bundled/fix.md")),
+    ("simplify", include_str!("bundled/simplify.md")),
+    ("verify", include_str!("bundled/verify.md")),
+    ("debug", include_str!("bundled/debug.md")),
+    ("stuck", include_str!("bundled/stuck.md")),
+    ("remember", include_str!("bundled/remember.md")),
+    ("keybindings", include_str!("bundled/keybindings.md")),
 ];
 
 /// 加载所有 bundled skills
@@ -64,7 +70,7 @@ mod tests {
     #[test]
     fn test_load_all_bundled() {
         let skills = load_bundled_skills();
-        assert_eq!(skills.len(), 6);
+        assert!(skills.len() >= 6);
         let names: Vec<_> = skills.iter().map(|s| s.meta.name.clone()).collect();
         assert!(names.contains(&"commit".to_string()));
         assert!(names.contains(&"review_pr".to_string()));

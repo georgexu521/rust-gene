@@ -419,3 +419,52 @@ Compared to the real Claude Code (`~/Desktop/claude/`), this reimplementation is
     - 环境变量 `PRIORITY_AGENT_MCP_SERVERS_JSON`
   - `QueryEngine/StreamingQueryEngine` 接入 `mcp_manager`
   - `mcp list_servers` 输出 transport + endpoint 摘要
+
+## 2026-04-20 编程能力补齐计划
+
+对比 `~/Desktop/claude/src`（真实 Claude Code），以下 8 个编程相关能力缺失，按优先级逐个实现：
+
+### 1. simplify skill — 代码质量自动审查 pipeline
+**目标**：并行启动 3 个 subagent 审查代码复用（Reuse）、代码质量（Quality）、效率（Efficiency）
+**状态**：✅ 已完成
+**关键文件**：`src/skills/bundled/simplify.md`, `src/tui/slash_handler.rs`
+
+### 2. verify skill — 代码变更功能验证
+**目标**：不只检查编译通过，而是运行实际测试验证功能正确性
+**状态**：✅ 已完成
+**关键文件**：`src/skills/bundled/verify.md`, `src/tui/slash_handler.rs`
+
+### 3. keybindings-help skill — 键盘快捷键自定义
+**目标**：完整的 keybindings 自定义系统（上下文表、动作表、JSON schema 验证）
+**状态**：✅ 已完成
+**关键文件**：`src/skills/bundled/keybindings.md`, `src/tui/slash_handler.rs`
+
+### 4. debug skill — 会话调试
+**目标**：读取当前会话的 debug log，grep ERROR/WARN
+**状态**：✅ 已完成
+**关键文件**：`src/skills/bundled/debug.md`, `src/tui/slash_handler.rs`
+
+### 5. stuck skill — 冻结会话诊断
+**目标**：检测其他 Claude Code 进程是否冻结（CPU 高、D/T/Z 状态）
+**状态**：✅ 已完成
+**关键文件**：`src/skills/bundled/stuck.md`, `src/tui/slash_handler.rs`
+
+### 6. remember skill — 记忆分层管理
+**目标**：管理 auto-memory 条目，决定去 CLAUDE.md / CLAUDE.local.md / Team memory
+**状态**：✅ 已完成
+**关键文件**：`src/skills/bundled/remember.md`, `src/tui/slash_handler.rs`
+
+### 7. 高级上下文压缩系统
+**目标**：完善 `context_compressor.rs`，增加时间基础配置、微压缩、压缩警告状态
+**状态**：✅ 已完成
+**关键文件**：`src/engine/context_compressor.rs`
+**实现**：`TimeBasedConfig`（环境变量可配）、`CompressionWarning`（四级警告）、`micro_compress()`（轻量压缩）、`needs_time_based_compression()`、会话时长统计
+
+### 8. 完整 LSP 服务端管理
+**目标**：增加 `prepareCallHierarchy`、`incomingCalls`、`outgoingCalls`、诊断注册表、被动反馈
+**状态**：✅ 已完成
+**关键文件**：`src/engine/lsp.rs`
+**实现**：`prepare_call_hierarchy`/`incoming_calls`/`outgoing_calls` 已在 `LspClient`；`LspManager` 管理多服务器；诊断缓存；格式输出函数
+
+### 实施顺序
+1. simplify → 2. verify → 3. keybindings → 4. debug → 5. stuck → 6. remember → 7. context_compressor → 8. lsp

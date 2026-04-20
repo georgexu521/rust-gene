@@ -105,6 +105,79 @@ pub struct TokenBudget {
     pub tool_schemas_tokens: u64,
 }
 
+/// 时间基础压缩配置（新增）
+#[derive(Debug, Clone)]
+pub struct TimeBasedConfig {
+    /// 会话时长阈值（秒），超过此值即使 token 充裕也触发压缩
+    pub session_duration_threshold_secs: u64,
+    /// 消息数量阈值，超过此值触发压缩
+    pub message_count_threshold: usize,
+    /// 空闲阈值（秒），超过此值后触发微压缩
+    pub idle_threshold_secs: u64,
+    /// 是否启用时间基础压缩
+    pub enabled: bool,
+}
+
+impl Default for TimeBasedConfig {
+    fn default() -> Self {
+        Self {
+            session_duration_threshold_secs: std::env::var("PRIORITY_AGENT_SESSION_DURATION_THRESHOLD")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(3600), // 默认 1 小时
+            message_count_threshold: std::env::var("PRIORITY_AGENT_MESSAGE_COUNT_THRESHOLD")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(100),
+            idle_threshold_secs: std::env::var("PRIORITY_AGENT_IDLE_THRESHOLD")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(300), // 默认 5 分钟
+            enabled: std::env::var("PRIORITY_AGENT_TIME_BASED_COMPRESSION")
+                .map(|v| v != "false")
+                .unwrap_or(true),
+        }
+    }
+}
+
+/// 压缩警告状态（新增）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionWarning {
+    /// 正常，无警告
+    None,
+    /// 接近阈值（>60%）
+    Approaching,
+    /// 快满了（>80%）
+    Near,
+    /// 即将压缩（>90%）
+    Critical,
+}
+
+impl CompressionWarning {
+    /// 根据 token 使用率计算警告级别
+    pub fn from_usage_ratio(ratio: f64) -> Self {
+        if ratio > 0.9 {
+            CompressionWarning::Critical
+        } else if ratio > 0.8 {
+            CompressionWarning::Near
+        } else if ratio > 0.6 {
+            CompressionWarning::Approaching
+        } else {
+            CompressionWarning::None
+        }
+    }
+
+    /// 获取用户友好的提示文本
+    pub fn message(&self) -> &'static str {
+        match self {
+            CompressionWarning::None => "",
+            CompressionWarning::Approaching => "Context usage is approaching 60%. Consider wrapping up soon.",
+            CompressionWarning::Near => "Context is 80% full. Compression will happen soon.",
+            CompressionWarning::Critical => "Context is nearly full! Compression imminent.",
+        }
+    }
+}
+
 impl TokenBudget {
     pub fn new(max_context_tokens: u64) -> Self {
         Self {
@@ -488,6 +561,10 @@ impl StructuredSummary {
 /// 上下文压缩器
 pub struct ContextCompressor {
     budget: TokenBudget,
+    /// 时间基础配置（新增）
+    time_config: TimeBasedConfig,
+    /// 会话开始时间
+    session_start: std::time::Instant,
     /// 累积的摘要（跨多次压缩保持 — 迭代式摘要）
     accumulated_summary: Option<StructuredSummary>,
     /// 压缩次数
@@ -518,6 +595,8 @@ impl ContextCompressor {
     pub fn new(max_context_tokens: u64) -> Self {
         Self {
             budget: TokenBudget::new(max_context_tokens),
+            time_config: TimeBasedConfig::default(),
+            session_start: std::time::Instant::now(),
             accumulated_summary: None,
             compression_count: 0,
             last_failure_time: None,
@@ -531,6 +610,49 @@ impl ContextCompressor {
             consecutive_llm_failures: 0,
             max_consecutive_llm_failures: 3,
         }
+    }
+
+    /// 获取当前压缩警告级别
+    pub fn warning_level(&self, messages: &[Message]) -> CompressionWarning {
+        let tokens = estimate_messages_tokens(messages);
+        let total = tokens + self.budget.system_prompt_tokens + self.budget.tool_schemas_tokens;
+        let ratio = total as f64 / self.budget.max_context_tokens as f64;
+        CompressionWarning::from_usage_ratio(ratio)
+    }
+
+    /// 检查是否需要基于时间的压缩
+    pub fn needs_time_based_compression(&self, messages: &[Message]) -> bool {
+        if !self.time_config.enabled {
+            return false;
+        }
+        let elapsed = self.session_start.elapsed().as_secs();
+        let msg_count = messages.len();
+
+        elapsed > self.time_config.session_duration_threshold_secs
+            || msg_count > self.time_config.message_count_threshold
+    }
+
+    /// 微压缩：轻量级压缩，不触发 LLM，仅裁剪工具输出
+    /// 用于中等长度对话或空闲后轻量整理
+    pub fn micro_compress(&mut self, messages: &[Message]) -> Vec<Message> {
+        let tokens_before = estimate_messages_tokens(messages);
+        self.total_tokens_before += tokens_before;
+
+        // 只做 Phase 0（裁剪旧工具输出）和 Phase 5（工具对校验）
+        let pruned = Self::prune_old_tool_results(messages);
+        let result = Self::sanitize_tool_pairs(pruned);
+
+        let tokens_after = estimate_messages_tokens(&result);
+        self.total_tokens_after += tokens_after;
+
+        info!(
+            "Micro compression: {} messages -> {} messages ({} -> {} tokens)",
+            messages.len(),
+            result.len(),
+            tokens_before,
+            tokens_after
+        );
+        result
     }
 
     /// 设置系统 prompt 预估大小
@@ -1259,6 +1381,9 @@ impl ContextCompressor {
             llm_compression_attempts: self.llm_compression_attempts,
             llm_compression_failures: self.llm_compression_failures,
             savings_rate,
+            session_duration_secs: self.session_start.elapsed().as_secs(),
+            message_count: 0, // caller should fill this
+            time_based_enabled: self.time_config.enabled,
         }
     }
 }
@@ -1281,6 +1406,12 @@ pub struct CompressionStats {
     pub llm_compression_failures: u32,
     /// 累积节省率（百分比）
     pub savings_rate: u64,
+    /// 会话时长（秒）
+    pub session_duration_secs: u64,
+    /// 当前消息数
+    pub message_count: usize,
+    /// 时间基础压缩是否启用
+    pub time_based_enabled: bool,
 }
 
 // ── 测试 ───────────────────────────────────────────────────────────────────

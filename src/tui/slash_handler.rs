@@ -3,6 +3,9 @@
 //! Each handler function takes `&mut TuiApp` + args and returns a String response.
 //! This module exists to keep app.rs focused on core TUI state management.
 
+use crate::agent::agent::AgentConfig;
+use crate::agent::roles::AgentRole;
+use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
 use crate::tui::app::{AppMode, TuiApp};
 use crate::tools::Tool;
 
@@ -1043,9 +1046,406 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                         path.display()
                     )
                 }
-                Err(e) => format!("Failed to save rule: {}", e),
+Err(e) => format!("Failed to save rule: {}", e),
             }
         }
         Some(_) => "Usage: /permissions [mode|rules|allow|deny|ask] ...".to_string(),
     }
+}
+
+// ─── Skill Commands ─────────────────────────────────────────────────────────
+
+pub async fn handle_simplify(app: &mut TuiApp, _args: &str) -> String {
+    match app.bundled_skills.get("simplify") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            let tool = crate::tools::GitTool;
+            let params = serde_json::json!({ "action": "diff" });
+            let result = tool.execute(params, app.build_tool_context().await).await;
+            let error_for_audit = result.error.clone();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_simplify",
+                    result.success,
+                    started.elapsed().as_millis() as u64,
+                    error_for_audit.as_deref(),
+                );
+            }
+            let diff = if result.success {
+                result.content
+            } else {
+                result.error.unwrap_or_else(|| {
+                    "No uncommitted changes or unable to read diff.".to_string()
+                })
+            };
+
+            // Launch 3 parallel sub-agents: Reuse, Quality, Efficiency
+            let agent_manager = match app.streaming_engine.as_ref().and_then(|e| e.agent_manager()) {
+                Some(am) => am,
+                None => {
+                    return "Agent manager not available. Cannot run simplify.".to_string();
+                }
+            };
+            let _working_dir = if let Some(ref wt) = app.worktree_manager {
+                wt.current_worktree().await.unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                })
+            } else {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            };
+
+            let reuse_prompt = format!(
+                "{}\n\n## Focus: Code Reuse Review\n\nAnalyze this diff for:\n- Repeated code that should be extracted\n- Copy-paste patterns\n- Missing abstractions\n- DRY violations\n\nDiff:\n```diff\n{}\n```",
+                skill.content, diff
+            );
+            let quality_prompt = format!(
+                "{}\n\n## Focus: Code Quality Review\n\nAnalyze this diff for:\n- Redundant state or parameter sprawl\n- Leaky abstractions\n- Error handling issues\n- Missing validation\n- Poor naming or documentation\n\nDiff:\n```diff\n{}\n```",
+                skill.content, diff
+            );
+            let efficiency_prompt = format!(
+                "{}\n\n## Focus: Efficiency Review\n\nAnalyze this diff for:\n- Unnecessary computations\n- Missed concurrency opportunities\n- Hot-path bloat\n- Memory allocation issues\n- Inefficient data structures\n\nDiff:\n```diff\n{}\n```",
+                skill.content, diff
+            );
+
+            let spawn_agent = |description: String, prompt: String, role: AgentRole| {
+                let am = agent_manager.clone();
+                async move {
+                    let config = AgentConfig::new(format!("simplify: {}", description))
+                        .with_description(&description)
+                        .with_system_prompt(&prompt)
+                        .with_max_turns(10)
+                        .with_max_cost_usd(0.05)
+                        .with_role(role);
+                    let agent_id = am.spawn(config, None).await?;
+                    let task_msg = AgentMessage::new(
+                        AgentId::new(),
+                        agent_id.clone(),
+                        prompt,
+                        AgentMessageType::Task,
+                    );
+                    am.send_message(&agent_id, task_msg).await?;
+                    am.wait_for_result(&agent_id, 120).await
+                }
+            };
+
+            let (reuse_result, quality_result, efficiency_result) = tokio::join!(
+                spawn_agent("code-reuse".to_string(), reuse_prompt, AgentRole::Default),
+                spawn_agent("code-quality".to_string(), quality_prompt, AgentRole::Default),
+                spawn_agent("efficiency".to_string(), efficiency_prompt, AgentRole::Default),
+            );
+
+            let mut report = "# Simplify Report\n\n".to_string();
+            report += "Running 3 parallel review agents: Reuse / Quality / Efficiency...\n\n";
+
+            match reuse_result {
+                Ok(r) => {
+                    let status = if r.status == crate::agent::types::AgentStatus::Completed { "✓" } else { "✗" };
+                    report += &format!("## Code Reuse Review {}:\n{}\n\n", status, r.content);
+                }
+                Err(e) => {
+                    report += &format!("## Code Reuse Review ✗:\nError: {}\n\n", e);
+                }
+            }
+            match quality_result {
+                Ok(r) => {
+                    let status = if r.status == crate::agent::types::AgentStatus::Completed { "✓" } else { "✗" };
+                    report += &format!("## Code Quality Review {}:\n{}\n\n", status, r.content);
+                }
+                Err(e) => {
+                    report += &format!("## Code Quality Review ✗:\nError: {}\n\n", e);
+                }
+            }
+            match efficiency_result {
+                Ok(r) => {
+                    let status = if r.status == crate::agent::types::AgentStatus::Completed { "✓" } else { "✗" };
+                    report += &format!("## Efficiency Review {}:\n{}\n\n", status, r.content);
+                }
+                Err(e) => {
+                    report += &format!("## Efficiency Review ✗:\nError: {}\n\n", e);
+                }
+            }
+
+            app.add_system_message(report.clone());
+            app.send_message(format!(
+                "I've run a comprehensive simplify analysis on your changes. Here's the summary:\n\n{}\n\nSending to main agent for detailed recommendations...",
+                report
+            )).await;
+            String::new()
+        }
+        None => "Skill 'simplify' not found.".to_string(),
+    }
+}
+
+pub async fn handle_verify(app: &mut TuiApp) -> String {
+    match app.bundled_skills.get("verify") {
+        Some(_skill) => {
+            let started = std::time::Instant::now();
+            let tool = crate::tools::BashTool;
+
+            // Detect project type
+            let (test_cmd, project_type) = if std::path::Path::new("Cargo.toml").exists() {
+                ("cargo test 2>&1", "Rust")
+            } else if std::path::Path::new("package.json").exists() {
+                ("npm test 2>&1", "Node.js")
+            } else if std::path::Path::new("pyproject.toml").exists() || std::path::Path::new("setup.py").exists() {
+                ("python -m pytest 2>&1", "Python")
+            } else {
+                ("echo 'No recognized project type found'", "Unknown")
+            };
+
+            let params = serde_json::json!({
+                "command": test_cmd,
+                "description": "Run project tests"
+            });
+            let result = tool.execute(params, app.build_tool_context().await).await;
+            let error_for_audit = result.error.clone();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_verify",
+                    result.success,
+                    started.elapsed().as_millis() as u64,
+                    error_for_audit.as_deref(),
+                );
+            }
+
+            let output = &result.content;
+            let passed = count_test_passed(output);
+            let failed = count_test_failed(output);
+            let summary = format!(
+                "# Verify Report\n\nProject: {}\nCommand: `{}`\n\n**Result**: {} passed, {} failed\n\n```\n{}\n```",
+                project_type, test_cmd, passed, failed,
+                if output.len() > 2000 { &output[..2000] } else { output }
+            );
+            app.add_system_message(summary.clone());
+            String::new()
+        }
+        None => "Skill 'verify' not found.".to_string(),
+    }
+}
+
+fn count_test_passed(output: &str) -> u32 {
+    // Rust: "test result: ok. X passed"
+    // Node: "X passing"
+    // Python: "X passed"
+    let candidates = [
+        regex::Regex::new(r"(\d+) passed").ok(),
+        regex::Regex::new(r"test result: ok\. (\d+) passed").ok(),
+        regex::Regex::new(r"(\d+) passing").ok(),
+    ];
+    let mut max = 0u32;
+    for re in candidates.iter().flatten() {
+        if let Some(caps) = re.captures(output) {
+            if let Ok(n) = caps.get(1).unwrap().as_str().parse::<u32>() {
+                max = max.max(n);
+            }
+        }
+    }
+    max
+}
+
+fn count_test_failed(output: &str) -> u32 {
+    let candidates = [
+        regex::Regex::new(r"(\d+) failed").ok(),
+        regex::Regex::new(r"test result: FAILED\. (\d+) failed").ok(),
+    ];
+    let mut max = 0u32;
+    for re in candidates.iter().flatten() {
+        if let Some(caps) = re.captures(output) {
+            if let Ok(n) = caps.get(1).unwrap().as_str().parse::<u32>() {
+                max = max.max(n);
+            }
+        }
+    }
+    max
+}
+
+pub async fn handle_debug(app: &mut TuiApp) -> String {
+    match app.bundled_skills.get("debug") {
+        Some(_skill) => {
+            let started = std::time::Instant::now();
+            let tool = crate::tools::BashTool;
+
+            // Find recent log files
+            let log_dir = dirs::data_local_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("priority-agent")
+                .join("logs");
+
+            let params = serde_json::json!({
+                "command": format!("tail -n 100 {}/*.log 2>/dev/null | grep -E 'ERROR|WARN|panic' | tail -50 || echo 'No recent error logs found'", log_dir.display()),
+                "description": "Check recent debug logs"
+            });
+            let result = tool.execute(params, app.build_tool_context().await).await;
+            let error_for_audit = result.error.clone();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_debug",
+                    result.success,
+                    started.elapsed().as_millis() as u64,
+                    error_for_audit.as_deref(),
+                );
+            }
+
+            let logs = if result.success && !result.content.trim().is_empty() {
+                result.content
+            } else {
+                "No ERROR/WARN entries found in recent logs.".to_string()
+            };
+
+            let report = format!(
+                "# Debug Report\n\nRecent errors/warnings in logs:\n\n```\n{}\n```\n\nTo get more details, run:\n- `tail -f ~/.priority-agent/logs/*.log` to watch logs live\n- Set `RUST_LOG=debug` for more verbose output",
+                logs
+            );
+            app.add_system_message(report);
+            String::new()
+        }
+        None => "Skill 'debug' not found.".to_string(),
+    }
+}
+
+pub async fn handle_stuck(app: &mut TuiApp) -> String {
+    match app.bundled_skills.get("stuck") {
+        Some(_skill) => {
+            let started = std::time::Instant::now();
+            let tool = crate::tools::BashTool;
+
+            // Scan for claude/priority-agent processes
+            let params = serde_json::json!({
+                "command": r#"ps aux | grep -E 'priority-agent|claude' | grep -v grep | awk '{print $2, $3, $4, $11}' | head -20"#,
+                "description": "Scan for hung processes"
+            });
+            let result = tool.execute(params, app.build_tool_context().await).await;
+            let error_for_audit = result.error.clone();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_stuck",
+                    result.success,
+                    started.elapsed().as_millis() as u64,
+                    error_for_audit.as_deref(),
+                );
+            }
+
+            let processes = if result.success && !result.content.trim().is_empty() {
+                result.content
+            } else {
+                "No other priority-agent or claude processes found.".to_string()
+            };
+
+            let report = format!(
+                "# Stuck Process Report\n\nProcesses found (PID CPU% MEM% COMMAND):\n\n```\n{}\n```\n\nIf a process appears stuck (high CPU with no progress, D/T/Z state), you may want to:\n- Kill it: `kill -9 <PID>`\n- Check for zombie processes: `ps aux | grep Z`",
+                processes
+            );
+            app.add_system_message(report);
+            String::new()
+        }
+        None => "Skill 'stuck' not found.".to_string(),
+    }
+}
+
+pub async fn handle_remember(app: &mut TuiApp, _args: &str) -> String {
+    match app.bundled_skills.get("remember") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_remember",
+                    true,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+
+            // Load existing memory files if they exist
+            let claude_md = std::path::Path::new("CLAUDE.md");
+
+            let report = format!(
+                "# Remember Report\n\n## Memory Files\n\n{}\n\n## Suggestions\n\nBased on {}, consider:\n1. **CLAUDE.md** - Project-wide conventions, architecture decisions\n2. **CLAUDE.local.md** - User-specific preferences (git ignored)\n3. **Team memory** - Cross-project shared knowledge\n\nTo add a memory, use `/memory_save <content>` or manually edit CLAUDE.md.",
+                if claude_md.exists() {
+                    "CLAUDE.md exists in current directory."
+                } else {
+                    "No CLAUDE.md found in current directory."
+                },
+                skill.content
+            );
+            app.add_system_message(report);
+            String::new()
+        }
+        None => "Skill 'remember' not found.".to_string(),
+    }
+}
+
+pub fn handle_keybindings(app: &mut TuiApp, args: &str) -> String {
+    match app.bundled_skills.get("keybindings") {
+        Some(_skill) => {
+            let config_dir = dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("priority-agent");
+            let kb_path = config_dir.join("keybindings.json");
+
+            if args.is_empty() || args == "list" {
+                // Show current keybindings
+                if kb_path.exists() {
+                    match std::fs::read_to_string(&kb_path) {
+                        Ok(content) => format!("Current keybindings:\n\n```json\n{}\n```", content),
+                        Err(e) => format!("Failed to read keybindings: {}", e),
+                    }
+                } else {
+                    let default_kb = get_default_keybindings();
+                    format!(
+                        "No custom keybindings found. Default keybindings:\n\n```json\n{}\n```\n\nTo customize, use `/keybindings edit <json>`",
+                        default_kb
+                    )
+                }
+            } else if args.starts_with("edit ") {
+                let json_str = &args[5..];
+                // Basic validation
+                if json_str.trim().starts_with("{") {
+                    if let Some(parent) = kb_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match std::fs::write(&kb_path, json_str) {
+                        Ok(_) => format!("Keybindings saved to {}", kb_path.display()),
+                        Err(e) => format!("Failed to save keybindings: {}", e),
+                    }
+                } else {
+                    "Invalid JSON. Use `/keybindings edit <json>`".to_string()
+                }
+            } else {
+                "Usage: /keybindings [list|edit <json>]".to_string()
+            }
+        }
+        None => "Skill 'keybindings' not found.".to_string(),
+    }
+}
+
+fn get_default_keybindings() -> String {
+    serde_json::json!({
+        "version": 1,
+        "contexts": {
+            "global": {
+                "Ctrl+C": "cancel",
+                "Ctrl+Z": "undo",
+                "Ctrl+S": "save"
+            },
+            "chat": {
+                "Enter": "submit",
+                "Shift+Enter": "newline",
+                "Ctrl+J": "history_up",
+                "Ctrl+K": "history_down",
+                "Ctrl+B": "toggle_sidebar"
+            },
+            "vim_normal": {
+                "j": "down",
+                "k": "up",
+                "i": "insert_mode",
+                "Ctrl+V": "toggle_mode"
+            }
+        }
+    })
+    .to_string()
 }
