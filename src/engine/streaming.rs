@@ -8,6 +8,7 @@ use anyhow::Result;
 use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
+use tracing::warn;
 use tokio::sync::mpsc;
 
 /// 流式查询事件
@@ -38,6 +39,8 @@ pub enum StreamEvent {
     },
     /// 完成
     Complete,
+    /// 输出被截断（达到 max_tokens 限制）
+    OutputTruncated,
     /// 错误
     Error(String),
     /// 工具执行需要用户授权
@@ -89,6 +92,8 @@ pub struct StreamingQueryEngine {
     llm_memory_extraction: bool,
     /// 工具授权通道（用于交互式 MCP 授权）
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
+    /// Fallback 模型名称（当主模型失败时使用）
+    fallback_model: Option<String>,
 }
 
 impl StreamingQueryEngine {
@@ -126,6 +131,7 @@ impl StreamingQueryEngine {
             )),
             llm_memory_extraction: false,
             approval_channel: None,
+            fallback_model: std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").ok(),
         }
     }
 
@@ -265,6 +271,17 @@ impl StreamingQueryEngine {
         self
     }
 
+    /// 设置 fallback 模型
+    pub fn with_fallback_model(mut self, model: impl Into<String>) -> Self {
+        self.fallback_model = Some(model.into());
+        self
+    }
+
+    /// 获取 fallback 模型名称
+    pub fn fallback_model(&self) -> Option<&str> {
+        self.fallback_model.as_deref()
+    }
+
     /// 运行时更新权限模式（供 TUI 命令调用）
     pub fn set_permission_mode(&self, mode: crate::permissions::PermissionMode) {
         *self
@@ -351,6 +368,7 @@ impl StreamingQueryEngine {
             permission_mode: self.permission_mode(),
             llm_memory_extraction: self.llm_memory_extraction,
             approval_channel: self.approval_channel.clone(),
+            fallback_model: self.fallback_model.clone(),
         };
 
         tokio::spawn(async move {
@@ -393,20 +411,63 @@ impl StreamingQueryEngine {
                 msgs
             };
 
-            // 4. 执行查询
+            // 4. 执行查询（带 fallback 支持）
             let mut assistant_content = String::new();
             let mut assistant_tool_calls = Vec::new();
 
-            match engine
-                .run_query_with_messages(messages_for_query, &tx)
-                .await
-            {
+            let run_result = engine
+                .run_query_with_messages(messages_for_query.clone(), &tx)
+                .await;
+
+            match run_result {
                 Ok((content, tool_calls)) => {
                     assistant_content = content;
                     assistant_tool_calls = tool_calls;
                 }
                 Err(e) => {
-                    let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+                    let err_str = e.to_string().to_lowercase();
+                    let should_fallback = err_str.contains("rate limit")
+                        || err_str.contains("overloaded")
+                        || err_str.contains("context")
+                        || err_str.contains("timeout")
+                        || err_str.contains("model");
+                    if should_fallback && engine.fallback_model.is_some() {
+                        warn!("Primary model failed ({}), trying fallback", &engine.model);
+                        // Fallback: 重新执行，stream 事件会继续发送到 tx
+                        let fb_model = engine.fallback_model.clone().unwrap();
+                        let fb_engine = StreamingEngineInner {
+                            provider: engine.provider.clone(),
+                            tool_registry: engine.tool_registry.clone(),
+                            model: fb_model,
+                            system_prompt: engine.system_prompt.clone(),
+                            max_iterations: engine.max_iterations,
+                            agent_manager: engine.agent_manager.clone(),
+                            task_manager: engine.task_manager.clone(),
+                            mcp_manager: engine.mcp_manager.clone(),
+                            lsp_manager: engine.lsp_manager.clone(),
+                            worktree_manager: engine.worktree_manager.clone(),
+                            memory_manager: engine.memory_manager.clone(),
+                            cost_tracker: engine.cost_tracker.clone(),
+                            permission_mode: engine.permission_mode,
+                            llm_memory_extraction: engine.llm_memory_extraction,
+                            approval_channel: engine.approval_channel.clone(),
+                            fallback_model: None, // 防止无限 fallback
+                        };
+                        match fb_engine
+                            .run_query_with_messages(messages_for_query.clone(), &tx)
+                            .await
+                        {
+                            Ok((content, tool_calls)) => {
+                                assistant_content = content;
+                                assistant_tool_calls = tool_calls;
+                            }
+                            Err(fb_err) => {
+                                let _ = tx.send(StreamEvent::Error(fb_err.to_string())).await;
+                            }
+                        }
+                    } else {
+                        let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+                    }
                 }
             }
 
@@ -487,6 +548,7 @@ struct StreamingEngineInner {
     permission_mode: crate::permissions::PermissionMode,
     llm_memory_extraction: bool,
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
+    fallback_model: Option<String>,
 }
 
 impl StreamingEngineInner {

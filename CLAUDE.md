@@ -465,6 +465,106 @@ Compared to the real Claude Code (`~/Desktop/claude/`), this reimplementation is
 **状态**：✅ 已完成
 **关键文件**：`src/engine/lsp.rs`
 **实现**：`prepare_call_hierarchy`/`incoming_calls`/`outgoing_calls` 已在 `LspClient`；`LspManager` 管理多服务器；诊断缓存；格式输出函数
-
 ### 实施顺序
 1. simplify → 2. verify → 3. keybindings → 4. debug → 5. stuck → 6. remember → 7. context_compressor → 8. lsp
+
+## 2026-04-20 Claude Code 编程能力差距分析与追赶计划
+
+对比 `~/Desktop/claude/src`（真实 Claude Code），以下是我们项目尚存的差距及改进方向：
+
+### 一、流式工具执行（Streaming Tool Executor）
+**目标**：在模型流式输出的同时开始执行工具（读操作并行），不等待模型完成
+**状态**：✅ 已完成
+**实现**：
+- 改造 `StreamingQueryEngine`，在模型流输出期间就开始调度只读工具
+- 利用 `buffer_unordered` 实现真正并行
+- `execute_tools_parallel` 跳过已预执行的只读工具，避免重复执行
+**关键文件**：`src/engine/streaming.rs`, `src/engine/conversation_loop.rs`
+
+### 二、工具结果磁盘缓存
+**目标**：当工具结果过大时写入磁盘，只在 context 中保留摘要
+**状态**：✅ 已完成
+**实现**：
+- `truncate_tool_result()` 当 `content.len() > 32 KiB` 时写入 `~/.priority-agent/tool-results/`
+- 在 context 中保留 `file_path` 引用和头尾摘要
+**关键文件**：`src/tools/mod.rs`, `src/engine/conversation_loop.rs`
+
+### 三、LLM 驱动的记忆提取服务
+**目标**：后台 forked agent 自动从对话中提取关键信息，不阻塞主对话
+**状态**：✅ 已完成
+**实现**：
+- `sync_turn_llm_background()` 使用 tokio spawn 后台执行 LLM 记忆提取
+- 2秒延迟让主对话先完成响应
+- 提取结果直接写入 `MEMORY.md`
+**关键文件**：`src/memory/manager.rs`
+
+### 四、响应式压缩（Reactive Compact）
+**目标**：遇到 413 (prompt-too-long) 时自动触发压缩，不浪费已经生成的内容
+**状态**：✅ 已完成
+**实现**：
+- `response_compression_loop` 在 API 调用层拦截上下文超限错误
+- 最多 3 轮压缩重试（第一次完整压缩，第二次 micro_compress）
+- 压缩后通知前端 `[Context compressed due to size limits]`
+**关键文件**：`src/engine/streaming.rs`, `src/engine/context_compressor.rs`
+
+### 五、工具预验证与 UI 渲染
+**目标**：每个工具支持 `validate_input()`、`render_result()` 等
+**状态**：✅ 已完成
+**实现**：
+- `Tool` trait 新增 `validate_params()` 和 `render_result()` 默认方法
+- `validate_params()` 检查必需参数和类型
+- `render_result()` 截断长输出，保留关键部分
+**关键文件**：`src/tools/mod.rs`
+
+### 六、模型降级（Fallback Model）
+**目标**：当主模型失败时自动降级到备用模型
+**状态**：✅ 已完成
+**实现**：
+- `PRIORITY_AGENT_FALLBACK_MODEL` 环境变量配置 fallback 模型
+- `StreamingQueryEngine::query_stream` 检测 rate limit/overloaded/context/timeout 错误自动切换
+- 防止无限 fallback（fallback_model 置为 None）
+**关键文件**：`src/engine/streaming.rs`
+
+### 七、技能预发现（Skill Prefetch）
+**目标**：在工具执行期间预发现相关技能，下一轮前消费
+**状态**：✅ 已完成
+**实现**：
+- `SkillRegistry::prefetch()` 根据用户消息关键词预取相关 skills
+- 支持精确匹配、短语匹配、描述匹配
+- 去重并限制 5 个结果
+**关键文件**：`src/skills/registry.rs`
+
+### 八、上下文折叠（Context Collapse）
+**目标**：使用投影机制将历史消息持久化到文件，读取时重放
+**状态**：缺失（高难度）
+**关键文件**：`src/session_store/`, `src/engine/conversation_loop.rs`
+
+### 九、错误恢复策略增强
+**目标**：完善 max_output_tokens 恢复、prompt-too-long 恢复机制
+**状态**：✅ 已完成
+**实现**：
+- `StreamEvent::OutputTruncated` 检测 `FinishReason::Length`
+- TUI 可据此向用户提示输出被截断
+**关键文件**：`src/engine/streaming.rs`, `src/engine/conversation_loop.rs`
+
+### 十、权限系统增强
+**目标**：增加 classifier-based auto mode、coordinator 决策
+**现状**：有基础规则匹配和 ask 模式
+**实现**：
+- 增加基于 LLM 的权限分类器
+- 实现 coordinator 协调多 agent 权限决策
+- 支持交互式权限审批 UI
+**状态**：可改进
+**关键文件**：`src/permissions/mod.rs`, `src/tui/`
+
+### 实施优先级顺序
+1. ✅ **流式工具执行** — 提升交互响应速度
+2. ✅ **LLM 记忆提取** — 减少重复工作
+3. ✅ **响应式压缩** — 提升长对话稳定性
+4. ✅ **工具结果磁盘缓存** — 节省 context 空间
+5. ✅ **模型降级** — 提升容错能力
+6. ✅ **工具预验证与 UI 渲染** — 提升工具质量
+7. ✅ **技能预发现** — 提升技能匹配准确度
+8. ✅ **错误恢复策略增强**
+9. **上下文折叠** — 高难度，未完成
+10. **权限系统增强** — 可改进

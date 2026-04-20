@@ -120,6 +120,63 @@ pub trait Tool: Send + Sync {
     fn confirmation_prompt(&self, _params: &Value) -> Option<String> {
         None
     }
+
+    /// 验证参数是否符合 schema（返回 None 表示验证通过，Some(msg) 表示错误）
+    fn validate_params(&self, params: &Value) -> Option<String> {
+        let schema = self.parameters();
+        if let Some(obj) = schema.get("properties")?.as_object() {
+            for (key, prop) in obj {
+                // 检查必需字段
+                if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+                    if required.iter().any(|r| r.as_str() == Some(key)) {
+                        if !params.get(key).is_some() {
+                            return Some(format!("Missing required parameter: {}", key));
+                        }
+                    }
+                }
+                // 类型检查
+                if let Some(value) = params.get(key) {
+                    if let Some(type_str) = prop.get("type").and_then(|t| t.as_str()) {
+                        let actual_type = match value {
+                            Value::Null => "null",
+                            Value::Bool(_) => "boolean",
+                            Value::Number(_) => "number",
+                            Value::String(_) => "string",
+                            Value::Array(_) => "array",
+                            Value::Object(_) => "object",
+                        };
+                        if type_str != "any" && actual_type != type_str {
+                            return Some(format!(
+                                "Parameter '{}' must be of type {}, got {}",
+                                key, type_str, actual_type
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// 渲染工具结果（用于 TUI 展示）
+    fn render_result(&self, result: &ToolResult) -> String {
+        if result.success {
+            // 成功结果：截断长输出，保留关键部分
+            let content = &result.content;
+            if content.len() > 2000 {
+                format!(
+                    "{}\n\n[Output truncated - {} bytes total]",
+                    &content[..2000],
+                    content.len()
+                )
+            } else {
+                content.clone()
+            }
+        } else {
+            // 错误结果：显示完整错误
+            result.content.clone()
+        }
+    }
 }
 
 /// 工具执行上下文

@@ -9,6 +9,7 @@
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 const MAX_LEARNINGS_PER_TURN: usize = 3;
@@ -163,6 +164,78 @@ impl MemoryManager {
                 self.ingest_learnings(llm_learnings, MAX_LEARNINGS_PER_TURN);
             }
         }
+    }
+
+    /// 后台 LLM 记忆提取（不阻塞主对话循环）
+    ///
+    /// 使用 `spawn` 在后台 fork 一个 task 进行 LLM 调用，
+    /// 主对话循环不会被 LLM 延迟阻塞。
+    pub fn sync_turn_llm_background(
+        &self,
+        user: String,
+        assistant: String,
+        provider: Arc<dyn LlmProvider>,
+        model: String,
+    ) {
+        let path = self.memory_path.clone();
+
+        tokio::spawn(async move {
+            // 小延迟，让主对话先完成响应
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+            let heuristic = extract_learnings_from_turn(&user, &assistant);
+            if heuristic.is_empty() {
+                let system_prompt = "You are a memory extraction assistant. \
+Analyze the conversation turn and extract up to 3 concise memory bullets of CRITICAL CONTEXT only. \
+Critical context includes: API keys or paths, architecture decisions, user preferences, \
+specific error messages and their fixes, project conventions, or important configuration values. \
+Each bullet should be one line starting with '- '. \
+Return exactly the word NONE if there is nothing critical to remember.";
+
+                let content = format!(
+                    "User:\n{}\n\nAssistant:\n{}\n",
+                    user,
+                    assistant.chars().take(4000).collect::<String>()
+                );
+
+                let request = ChatRequest::new(&model).with_messages(vec![
+                    Message::system(system_prompt),
+                    Message::user(&content),
+                ]);
+
+                if let Ok(response) = provider.chat(request).await {
+                    let text = response.content.trim();
+                    if !text.eq_ignore_ascii_case("NONE") && !text.is_empty() {
+                        let bullets: Vec<String> = text
+                            .lines()
+                            .map(|l: &str| l.trim())
+                            .filter(|l| !l.is_empty())
+                            .map(|l| {
+                                if let Some(stripped) = l.strip_prefix("- ") {
+                                    stripped.to_string()
+                                } else {
+                                    l.to_string()
+                                }
+                            })
+                            .filter(|l| !l.is_empty())
+                            .collect();
+                        debug!("Background LLM extracted {} memory bullets", bullets.len());
+
+                        // 写入文件（不依赖 MemoryManager 内部状态）
+                        for bullet in bullets {
+                            let entry = format!(
+                                "- [{}] {}\n",
+                                chrono::Local::now().format("%Y-%m-%d %H:%M"),
+                                bullet
+                            );
+                            let existing = std::fs::read_to_string(&path).unwrap_or_default();
+                            let new_content = format!("{}{}", existing, entry);
+                            let _ = std::fs::write(&path, new_content);
+                        }
+                    }
+                }
+            }
+        });
     }
 
     /// 使用 LLM 从对话中提取记忆

@@ -36,15 +36,58 @@ const READ_ONLY_TOOLS: &[&str] = &[
 
 const DEFAULT_READ_ONLY_TOOL_CONCURRENCY: usize = 8;
 
+/// 工具结果截断阈值（字节），超过此值会截断并写入磁盘
+const TOOL_RESULT_TRUNCATE_THRESHOLD: usize = 32 * 1024; // 32 KiB
+/// 工具结果磁盘缓存目录
+fn tool_result_cache_dir() -> std::path::PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("priority-agent")
+        .join("tool-results")
+}
+
 fn read_only_tool_concurrency() -> usize {
     std::env::var("PRIORITY_AGENT_READ_ONLY_TOOL_CONCURRENCY")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_READ_ONLY_TOOL_CONCURRENCY)
+.unwrap_or(DEFAULT_READ_ONLY_TOOL_CONCURRENCY)
 }
 
-/// 工具授权请求
+/// 截断工具结果，如果超过阈值则写入磁盘
+fn truncate_tool_result(result: &mut ToolResult, tool_name: &str, tool_call_id: &str) {
+    if result.content.len() > TOOL_RESULT_TRUNCATE_THRESHOLD {
+        let cache_dir = tool_result_cache_dir();
+        // 忽略 mkdir 错误（权限问题等）
+        let _ = std::fs::create_dir_all(&cache_dir);
+
+        let filename = format!(
+            "{}_{}_{}.txt",
+            tool_name,
+            tool_call_id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        let file_path = cache_dir.join(&filename);
+
+        if std::fs::write(&file_path, &result.content).is_ok() {
+            let original_len = result.content.len();
+            let half = 2048.min(original_len / 2);
+            result.content = format!(
+                "[Output truncated: {} bytes -> saved to {}]\n\n--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}",
+                original_len,
+                file_path.display(),
+                half,
+                &result.content[..half],
+                half,
+                &result.content[original_len.saturating_sub(half)..]
+            );
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolApprovalRequest {
     pub tool_call: ToolCall,
@@ -124,6 +167,9 @@ pub struct LoopResult {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
     pub iterations: usize,
+    /// 流式预执行的只读工具结果（tool_index → result）
+    /// execute_tools_parallel 应跳过已有结果的只读工具
+    pub pre_executed_results: std::collections::HashMap<usize, ToolResult>,
 }
 
 impl ConversationLoop {
@@ -381,16 +427,70 @@ impl ConversationLoop {
                 }
             }
 
-            let request = ChatRequest::new(&self.model)
+            let mut request = ChatRequest::new(&self.model)
                 .with_messages(request_messages)
                 .with_tools(tools.clone());
 
-            // 根据模式选择 API 调用方式
-            let (content, tool_calls) = if let Some(tx) = tx {
-                self.call_api_streaming(request, tx).await?
-            } else {
-                self.call_api(request).await?
-            };
+            // ── 响应式压缩循环（遇到 413 等上下文超限自动触发）────────────
+            let mut compressed_this_turn = false;
+            let mut api_result: Result<(String, Vec<ToolCall>, std::collections::HashMap<usize, ToolResult>)> =
+                Err(anyhow::anyhow!("initial"));
+            for compress_retry in 0..3 {
+                api_result = if let Some(tx) = tx {
+                    self.call_api_streaming(request.clone(), tx).await
+                } else {
+                    self.call_api(request.clone()).await
+                };
+
+                match &api_result {
+                    Ok(_) => break, // 成功，跳出重试循环
+                    Err(e) => {
+                        let err_str = e.to_string().to_lowercase();
+                        let needs_compress = err_str.contains("payload too large")
+                            || err_str.contains("413")
+                            || err_str.contains("context")
+                            || err_str.contains("too many tokens")
+                            || err_str.contains("maximum context length");
+                        if needs_compress && compress_retry < 2 {
+                            warn!(
+                                "API error (attempt {}/3): {}. Compressing context and retrying...",
+                                compress_retry + 1,
+                                e
+                            );
+                            if let Some(ref comp) = self.compressor {
+                                let msgs_for_comp = if compress_retry == 0 {
+                                    messages.clone()
+                                } else {
+                                    // 第二次重试，用更激进的 micro_compress
+                                    let mut comp = comp.lock().await;
+                                    comp.micro_compress(&messages)
+                                };
+                                let compressed =
+                                    comp.lock().await.compress_async(&msgs_for_comp).await;
+                                request = ChatRequest::new(&self.model)
+                                    .with_messages(compressed)
+                                    .with_tools(tools.clone());
+                                compressed_this_turn = true;
+                            }
+                        } else {
+                            break; // 不需要压缩或已达最大重试
+                        }
+                    }
+                }
+            }
+
+            let (content, tool_calls, pre_executed) = api_result?;
+
+            // 如果本轮发生了压缩，通知前端
+            if compressed_this_turn {
+                if let Some(tx) = tx {
+                    let _ = tx
+                        .send(StreamEvent::TextChunk(
+                            "\n[Context compressed due to size limits]\n".to_string(),
+                        ))
+                        .await;
+                }
+            }
 
             final_content = content.clone();
             final_tool_calls = tool_calls.clone();
@@ -403,8 +503,10 @@ impl ConversationLoop {
             // 有工具调用 → 添加助手消息到历史
             messages.push(Message::assistant_with_tools(&content, tool_calls.clone()));
 
-            // 并行执行工具
-            let results = self.execute_tools_parallel(&tool_calls, tx).await;
+            // 并行执行工具（跳过流式预执行的只读工具）
+            let mut results = self
+                .execute_tools_parallel(&tool_calls, tx, pre_executed)
+                .await;
 
             // ── 迭代预算退还 ──────────────────────────────
             // 检查本轮工具调用是否全是只读的，如果是则退还迭代
@@ -419,10 +521,12 @@ impl ConversationLoop {
                 effective_iterations += 1;
             }
 
-            // 将工具结果添加到消息历史
+            // 将工具结果添加到消息历史（截断过大的结果）
             let mut tool_results_text = String::new();
             let mut changed_files = Vec::new();
-            for (tc, result) in &results {
+            for (tc, result) in results.iter_mut() {
+                // 截断过大的工具结果，写入磁盘
+                truncate_tool_result(result, &tc.name, &tc.id);
                 let result_content = format!(
                     "Result: {}\n{}",
                     if result.success { "OK" } else { "ERROR" },
@@ -573,18 +677,22 @@ impl ConversationLoop {
             content: final_content,
             tool_calls: final_tool_calls,
             iterations: iterations_used,
+            pre_executed_results: std::collections::HashMap::new(),
         })
     }
 
     /// 非流式 API 调用
-    async fn call_api(&self, request: ChatRequest) -> Result<(String, Vec<ToolCall>)> {
+    async fn call_api(
+        &self,
+        request: ChatRequest,
+    ) -> Result<(String, Vec<ToolCall>, std::collections::HashMap<usize, ToolResult>)> {
         let response = self.provider.chat(request).await?;
         self.record_cost(&response).await;
 
         let content = response.content.clone();
         let tool_calls = response.tool_calls.unwrap_or_default();
 
-        Ok((content, tool_calls))
+        Ok((content, tool_calls, std::collections::HashMap::new()))
     }
 
     /// 流式 API 调用
@@ -592,7 +700,7 @@ impl ConversationLoop {
         &self,
         request: ChatRequest,
         tx: &mpsc::Sender<StreamEvent>,
-    ) -> Result<(String, Vec<ToolCall>)> {
+    ) -> Result<(String, Vec<ToolCall>, std::collections::HashMap<usize, ToolResult>)> {
         // 保存 fallback 需要的数据
         let fallback_messages = request.messages.clone();
         let fallback_tools = request.tools.clone();
@@ -602,6 +710,18 @@ impl ConversationLoop {
                 let mut full_content = String::new();
                 let mut collected_tool_calls: Vec<ToolCall> = Vec::new();
                 let mut raw_args_accum: Vec<String> = Vec::new();
+
+                // ── 流式只读工具并行执行 ─────────────────────────────────
+                // 当只读工具的参数开始到达时，在后台并行执行
+                // key: tool index, value: join_handle
+                let mut read_only_tasks:
+                    std::collections::HashMap<usize, tokio::task::JoinHandle<ToolResult>> =
+                    std::collections::HashMap::new();
+                let read_only_concurrency = read_only_tool_concurrency();
+                let tool_registry = self.tool_registry.clone();
+                let tool_context = self.create_tool_context();
+                let cost_tracker = self.cost_tracker.clone();
+                let hook_manager = self.hook_manager.clone();
 
                 while let Some(result) = stream.next().await {
                     match result {
@@ -628,6 +748,12 @@ impl ConversationLoop {
                                             });
                                             raw_args_accum.push(String::new());
                                         }
+
+                                        // 提前提取工具名称（避免在后续 borrow 中冲突）
+                                        let mut tool_name_for_spawn: Option<String> = None;
+                                        let mut tool_id_for_spawn: Option<String> = None;
+                                        let mut args_for_spawn: Option<String> = None;
+
                                         let tc = &mut collected_tool_calls[idx];
                                         if let Some(id) = &tc_delta.id {
                                             tc.id = id.clone();
@@ -644,6 +770,12 @@ impl ConversationLoop {
                                             }
                                             if let Some(args) = &function.arguments {
                                                 raw_args_accum[idx].push_str(args);
+
+                                                // 提取所有需要的数据，在 mutable borrow 释放后使用
+                                                tool_name_for_spawn = Some(tc.name.clone());
+                                                tool_id_for_spawn = Some(tc.id.clone());
+                                                args_for_spawn = Some(raw_args_accum[idx].clone());
+
                                                 let _ = tx
                                                     .send(StreamEvent::ToolCallArgs {
                                                         id: tc.id.clone(),
@@ -652,10 +784,133 @@ impl ConversationLoop {
                                                     .await;
                                             }
                                         }
+
+                                        // ── 触发只读工具后台执行 ─────────────────
+                                        // 在收到 args_delta 后，工具名/id/参数都已齐全，此时启动后台执行
+                                        if let (Some(tool_name), Some(tid), Some(current_args)) =
+                                            (tool_name_for_spawn, tool_id_for_spawn, args_for_spawn)
+                                        {
+                                            if !tool_name.is_empty()
+                                                && Self::is_read_only(&tool_name)
+                                                && !read_only_tasks.contains_key(&idx)
+                                                && read_only_tasks.len() < read_only_concurrency
+                                            {
+                                                let registry = tool_registry.clone();
+                                                let context = tool_context.clone();
+                                                let ct = cost_tracker.clone();
+                                                let hooks = hook_manager.clone();
+                                                let tid2 = tid.clone();
+                                                let tool_n = tool_name.clone();
+                                                let tool_n2 = tool_name.clone();
+
+                                                read_only_tasks.insert(
+                                                    idx,
+                                                    tokio::spawn(async move {
+                                                        let started_at =
+                                                            std::time::Instant::now();
+                                                        let pre_decision = if let Some(ref h)
+                                                            = hooks
+                                                        {
+                                                            let t = ToolCall {
+                                                                id: tid.clone(),
+                                                                name: tool_n.clone(),
+                                                                arguments:
+                                                                    serde_json::from_str(
+                                                                        &current_args,
+                                                                    )
+                                                                    .unwrap_or_else(|_| {
+                                                                        serde_json::Value::Null
+                                                                    }),
+                                                            };
+                                                            h.run_pre_tool(&t, &context).await
+                                                        } else {
+                                                            HookDecision {
+                                                                allow: true,
+                                                                reason: None,
+                                                            }
+                                                        };
+
+                                                        let ctx_clone = context.clone();
+                                                        let mut result = if !pre_decision.allow {
+                                                            ToolResult::error(
+                                                                pre_decision.reason.unwrap_or_else(
+                                                                    || format!(
+                                                                        "blocked by pre-tool hook: {}",
+                                                                        tool_n
+                                                                    ),
+                                                                ),
+                                                            )
+                                                        } else if let Some(tool) =
+                                                            registry.get(&tool_n)
+                                                        {
+                                                            let parsed_args =
+                                                                serde_json::from_str(
+                                                                    &current_args,
+                                                                )
+                                                                .unwrap_or_else(|_| {
+                                                                    serde_json::Value::Null
+                                                                });
+                                                            tool.execute(parsed_args, context)
+                                                                .await
+                                                        } else {
+                                                            ToolResult::error(format!(
+                                                                "Tool '{}' not found",
+                                                                tool_n
+                                                            ))
+                                                        };
+
+                                                        let duration_ms =
+                                                            started_at.elapsed().as_millis()
+                                                                as u64;
+                                                        if result.duration_ms.is_none() {
+                                                            result.duration_ms =
+                                                                Some(duration_ms);
+                                                        }
+                                                        if let Some(ref h) = hooks {
+                                                            let tc_for_hook = ToolCall {
+                                                                id: tid2.clone(),
+                                                                name: tool_n2.clone(),
+                                                                arguments:
+                                                                    serde_json::from_str(
+                                                                        &current_args,
+                                                                    )
+                                                                    .unwrap_or_else(|_| {
+                                                                        serde_json::Value::Null
+                                                                    }),
+                                                            };
+                                                            h.run_post_tool(&tc_for_hook, &result, &ctx_clone)
+                                                                .await;
+                                                        }
+                                                        {
+                                                            let mut tracker = ct.lock().await;
+                                                            tracker.record_tool_execution(
+                                                                &tool_n,
+                                                                result.success,
+                                                                duration_ms,
+                                                                result.success.then_some(
+                                                                    &result.content,
+                                                                ),
+                                                            );
+                                                        }
+                                                        result
+                                                    }),
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
 
+                            // 检测输出截断（FinishReason::Length）
+                            let truncated = chunk.choices.iter().any(|c| {
+                                c.finish_reason.as_ref().map_or(false, |fr| {
+                                    // Length 表示达到 max_tokens 限制
+                                    format!("{:?}", fr).contains("Length")
+                                })
+                            });
+                            if truncated {
+                                let _ = tx.send(StreamEvent::OutputTruncated).await;
+                            }
                             if chunk.choices.iter().any(|c| c.finish_reason.is_some()) {
                                 break;
                             }
@@ -684,7 +939,22 @@ impl ConversationLoop {
                     }
                 }
 
-                Ok((full_content, collected_tool_calls))
+                // ── 等待并收集后台只读工具结果 ─────────────────────────
+                // 收集预执行结果，供 execute_tools_parallel 跳过已执行的只读工具
+                let mut pre_executed: std::collections::HashMap<usize, ToolResult> =
+                    std::collections::HashMap::new();
+                for (idx, handle) in read_only_tasks {
+                    if let Ok(result) = handle.await {
+                        debug!(
+                            "Read-only tool at index {} pre-executed with result: {}",
+                            idx,
+                            if result.success { "OK" } else { "ERROR" }
+                        );
+                        pre_executed.insert(idx, result);
+                    }
+                }
+
+                Ok((full_content, collected_tool_calls, pre_executed))
             }
             Err(e) => {
                 // 流式 API 失败，回退到非流式
@@ -704,7 +974,7 @@ impl ConversationLoop {
                     let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
                 }
                 let tool_calls = response.tool_calls.unwrap_or_default();
-                Ok((content, tool_calls))
+                Ok((content, tool_calls, std::collections::HashMap::new()))
             }
         }
     }
@@ -750,12 +1020,14 @@ impl ConversationLoop {
         &self,
         tool_calls: &[ToolCall],
         tx: Option<&mpsc::Sender<StreamEvent>>,
+        pre_executed: std::collections::HashMap<usize, ToolResult>,
     ) -> Vec<(ToolCall, ToolResult)> {
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
         let mut denied_results = Vec::new();
+        let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
 
-        for tc in tool_calls {
+        for (i, tc) in tool_calls.iter().enumerate() {
             if tc.name.is_empty() {
                 continue;
             }
@@ -770,6 +1042,29 @@ impl ConversationLoop {
                     ));
                     continue;
                 }
+            }
+
+            // 如果该工具已在流式期间预执行，直接使用预执行结果
+            if let Some(pre_result) = pre_executed.get(&i) {
+                debug!(
+                    "Skipping pre-executed read-only tool at index {}: {}",
+                    i, tc.name
+                );
+                results.push((tc.clone(), pre_result.clone()));
+                if let Some(tx) = tx {
+                    let result_content = format!(
+                        "Result: {}\n{}",
+                        if pre_result.success { "OK" } else { "ERROR" },
+                        pre_result.content
+                    );
+                    let _ = tx
+                        .send(StreamEvent::ToolExecutionComplete {
+                            id: tc.id.clone(),
+                            result: result_content,
+                        })
+                        .await;
+                }
+                continue;
             }
 
             if Self::is_read_only(&tc.name) {
@@ -833,7 +1128,8 @@ impl ConversationLoop {
             }
         }
 
-        let mut results = denied_results;
+        // 添加工具拒绝结果
+        results.append(&mut denied_results);
 
         // 并发执行只读工具（带上限）
         let concurrency = read_only_tool_concurrency();

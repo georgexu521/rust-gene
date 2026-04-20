@@ -6,7 +6,7 @@ use super::parser::parse_skill_md;
 use super::types::Skill;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Skill 注册表 - 文件驱动
 pub struct SkillRegistry {
@@ -164,6 +164,65 @@ impl SkillRegistry {
             self.register(skill);
         }
         count
+    }
+
+    /// 预发现：根据用户消息关键词预取可能相关的 skills
+    ///
+    /// 在工具执行期间调用，将预取结果缓存到下一轮 context
+    pub fn prefetch(&self, user_message: &str) -> Vec<String> {
+        let keywords: Vec<String> = user_message
+            .split_whitespace()
+            .filter(|w| w.len() > 3)
+            .map(|w| w.to_lowercase())
+            .collect();
+
+        if keywords.is_empty() {
+            return Vec::new();
+        }
+
+        // 提取名词短语（2-3词的组合）
+        let phrases: Vec<String> = user_message
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .filter_map(|w| {
+                if w.iter().all(|s| s.len() > 2) {
+                    Some(w.join(" ").to_lowercase())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let mut matched = Vec::new();
+        for skill in self.skills.values() {
+            let name_lower = skill.meta.name.to_lowercase();
+            let desc_lower = skill.meta.description.to_lowercase();
+
+            // 精确匹配 skill 名
+            if keywords.iter().any(|k| name_lower.contains(k)) {
+                matched.push(skill.meta.name.clone());
+                continue;
+            }
+
+            // 描述中匹配
+            if keywords.iter().any(|k| desc_lower.contains(k)) {
+                matched.push(skill.meta.name.clone());
+                continue;
+            }
+
+            // 短语匹配
+            if phrases.iter().any(|p| name_lower.contains(p) || desc_lower.contains(p)) {
+                matched.push(skill.meta.name.clone());
+            }
+        }
+
+        // 去重并限制数量
+        matched.sort();
+        matched.dedup();
+        matched.truncate(5);
+        debug!("Prefetched {} relevant skills for next turn", matched.len());
+        matched
     }
 }
 
