@@ -468,6 +468,137 @@ Compared to the real Claude Code (`~/Desktop/claude/`), this reimplementation is
 ### 实施顺序
 1. simplify → 2. verify → 3. keybindings → 4. debug → 5. stuck → 6. remember → 7. context_compressor → 8. lsp
 
+## 2026-04-20 Claude 思考机制（Thinking）
+
+### 实现状态：✅ 已完成
+
+Claude Code 在生成回复前会进行"主动思考"，这是模型自身的推理能力，通过 `thinking_delta` / `redacted_thinking` 内容块实现。Kimi（Moonshot）等支持 extended thinking 的模型也提供此功能。
+
+**实现细节**：
+- `services/api/kimi.rs` — `KimiConfig` 新增 `thinking_enabled: bool` 和 `thinking_budget: Option<u32>`
+- `ThinkingConfig` wrapper 实现 `Config` trait，注入 `Anthropic-Beta: interleaved-thinking=2025-05-14` header
+- 环境变量控制：
+  - `PRIORITY_AGENT_THINKING=0` 禁用（默认启用）
+  - `PRIORITY_AGENT_THINKING_BUDGET` 设置 thinking token 预算（默认 adaptive）
+- `ChatRequest` 新增 `thinking_budget: Option<u32>` 字段
+- `StreamEvent::Thinking(String)` 已存在，可发送思考内容到 TUI 渲染
+
+**当前限制**：
+- 流式响应的 thinking content block 解析尚未接入（需要 async-openai 支持或自行解析 SSE）
+- 非流式 `chat()` 已完整支持 thinking
+
+### 环境变量
+```bash
+PRIORITY_AGENT_THINKING=1          # 启用 thinking（默认）
+PRIORITY_AGENT_THINKING=0          # 禁用 thinking
+PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
+```
+
+---
+
+## 2026-04-20 系统性差距审查报告
+
+对比 `~/Desktop/claude/src`（真实 Claude Code）进行系统性审查，发现三个最高优先级缺口：
+
+### 1. LLM 驱动的主动记忆提取（最高优先级）
+
+**Claude Code**：`extractMemories.ts` 使用 `runForkedAgent` 在后台 forked 会话中运行 LLM，主动从对话历史提取记忆写入 `~/.claude/projects/<path>/memory/` 目录。包含 mutual exclusion（主 agent 已写记忆则跳过）、throttle（每 N 轮提取一次）、trailing run 机制，以及完整的缓存命中率 telemetry。
+
+**我们的现状**：`memory/manager.rs` 仅有启发式关键词提取，无 LLM 驱动的主动提取能力。
+
+**实现难度**：高（需要 forked agent 基础设施、缓存共享机制）
+
+### 2. 响应式压缩 Reactive Compact（高优先级）
+
+**Claude Code**：`compact.ts` 有完整 feature flag `REACTIVE_COMPACT`，先尝试 session memory compaction，失败后才走传统 summarization。包含 `microcompactMessages` 先对消息做轻量级 token 削减，以及 `promptCacheBreakDetection` 机制。
+
+**我们的现状**：`context_compressor.rs` 仅基于固定阈值（0.6 snip / 0.8 compress）的简单 token ratio 截断，无 LLM summarization，无 microcompact 预处理。
+
+**实现难度**：高（需要 LLM summarization 子系统）
+
+### 3. 模型降级增强 Fallback Model（中优先级）
+
+**Claude Code**：`withRetry.ts` 中 `FallbackTriggeredError` 在连续 3 次 529 错误后触发，切换到备用模型。完整的多层认证错误处理（401/403/OAuth/Bedrock/Vertex），persistent retry 模式支持无人值守会话。
+
+**我们的现状**：`streaming.rs` 有 fallback 机制但仅做简单错误字符串匹配，无连续错误计数、无多层认证处理、无 persistent retry 模式。
+
+**实现难度**：中
+
+---
+
+## Phase 5：三个最高优先级缺口的追赶计划
+
+### Task 1：LLM 驱动的主动记忆提取
+
+**目标**：在后台 forked 会话中运行 LLM 从对话历史提取记忆，不阻塞主对话
+
+**实现步骤**：
+1. 在 `memory/manager.rs` 中新增 `extract_memories_with_llm()` 方法
+2. 使用 tokio spawn 创建后台任务，跳过主对话完成前的记忆写入（mutual exclusion）
+3. 实现 throttle 机制（每 N 轮提取一次，可配置）
+4. 记忆写入 `~/.priority-agent/memory/` 目录
+5. 实现 trailing run 机制（对话结束后最终提取）
+6. 添加缓存命中率 telemetry
+
+**关键文件**：`src/memory/manager.rs`
+
+**环境变量**：
+- `PRIORITY_AGENT_LLM_MEMORY_EXTRACTION=1` 启用
+- `PRIORITY_AGENT_LLM_MEMORY_INTERVAL=5` 每 N 轮提取一次
+
+---
+
+### Task 2：响应式压缩 Reactive Compact
+
+**目标**：先尝试轻量级 microcompact，失败后再走 LLM summarization
+
+**实现步骤**：
+1. 增强 `context_compressor.rs`，新增 LLM summarization 能力
+2. 实现 `microcompact_messages()` 先对消息做轻量 token 削减（移除重复字段、压缩长内容）
+3. 新增 `reactive_compact()` 方法，先尝试 microcompact，失败后再 full compress
+4. 添加 `prompt_cache_break_detection` 检测 context overflow 前的信号
+5. 保持与现有压缩逻辑的兼容性
+
+**关键文件**：`src/engine/context_compressor.rs`
+
+**环境变量**：
+- `PRIORITY_AGENT_REACTIVE_COMPACT=1` 启用
+- `PRIORITY_AGENT_MICROCOMPACT_THRESHOLD=0.5`
+
+---
+
+### Task 3：模型降级增强
+
+**目标**：完善的 fallback 触发机制、多层认证处理、persistent retry 模式
+
+**实现步骤**：
+1. 新增 `FallbackState` 跟踪连续错误次数（529 计数）
+2. 增加 401/403/OAuth/Bedrock/Vertex 专属错误处理路径
+3. 新增 `persistent_retry` 模式（无人值守时持续重试）
+4. 增加 `max_fallback_attempts` 限制防止无限循环
+5. 在 TUI 中显示 fallback 状态变化
+
+**关键文件**：`src/engine/streaming.rs`, `src/services/api/mod.rs`
+
+**环境变量**：
+- `PRIORITY_AGENT_FALLBACK_MAX_ATTEMPTS=3`
+- `PRIORITY_AGENT_PERSISTENT_RETRY=1`
+
+---
+
+### Phase 5 当前状态
+- ✅ Task 1（LLM 记忆提取）：未开始
+- ✅ Task 2（Reactive Compact）：未开始
+- ✅ Task 3（模型降级增强）：未开始
+
+### 验证方式
+每个 task 完成后：
+1. 运行 `cargo test` 确保不破坏现有测试
+2. 手动测试对应功能
+3. 确认测试数量不减少
+
+---
+
 ## 2026-04-20 Claude Code 编程能力差距分析与追赶计划
 
 对比 `~/Desktop/claude/src`（真实 Claude Code），以下是我们项目尚存的差距及改进方向：

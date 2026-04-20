@@ -37,6 +37,9 @@ pub struct ChatRequest {
     pub tools: Option<Vec<Tool>>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    /// Thinking budget (token 数)，启用 extended thinking
+    /// 仅 Claude 4+ 和部分模型支持
+    pub thinking_budget: Option<u32>,
 }
 
 impl ChatRequest {
@@ -47,6 +50,7 @@ impl ChatRequest {
             tools: None,
             temperature: Some(0.6),
             max_tokens: None,
+            thinking_budget: None,
         }
     }
 

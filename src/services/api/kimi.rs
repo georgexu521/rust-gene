@@ -1,11 +1,11 @@
 //! Kimi (Moonshot AI) API 客户端
 //!
-//! 支持 OpenAI 兼容格式的 API 调用
+//! 支持 OpenAI 兼容格式的 API 调用，支持 extended thinking
 
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage};
 use anyhow::{Context, Result};
 use async_openai::{
-    config::OpenAIConfig,
+    config::{Config, OpenAIConfig},
     types::{
         ChatCompletionMessageToolCall, ChatCompletionRequestAssistantMessage,
         ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage,
@@ -16,7 +16,13 @@ use async_openai::{
     Client,
 };
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tracing::{debug, info};
+
+/// Thinking beta header 名称（Anthropic 格式）
+const THINKING_BETA_HEADER: &str = "Anthropic-Beta";
+/// interleaved-thinking beta - 允许在 tool use 期间进行 thinking
+const THINKING_BETA_VALUE: &str = "interleaved-thinking=2025-05-14";
 
 /// Kimi API 配置
 #[derive(Debug, Clone)]
@@ -24,6 +30,10 @@ pub struct KimiConfig {
     pub api_key: String,
     pub base_url: String,
     pub default_model: String,
+    /// 是否启用 thinking（extended thinking beta）
+    pub thinking_enabled: bool,
+    /// thinking budget（token 数），如果为 None 则使用 adaptive thinking
+    pub thinking_budget: Option<u32>,
 }
 
 impl KimiConfig {
@@ -37,37 +47,109 @@ impl KimiConfig {
         let default_model =
             std::env::var("MOONSHOT_MODEL").unwrap_or_else(|_| "kimi-k2.5".to_string());
 
+        // PRIORITY_AGENT_THINKING=0 禁用，默认启用
+        let thinking_enabled = std::env::var("PRIORITY_AGENT_THINKING")
+            .ok()
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+
+        //thinking budget，默认为 adaptive（None）
+        let thinking_budget = std::env::var("PRIORITY_AGENT_THINKING_BUDGET")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok());
+
         Ok(Self {
             api_key,
             base_url,
             default_model,
+            thinking_enabled,
+            thinking_budget,
         })
     }
 
     /// 加载 .env 文件并创建配置
     pub fn init() -> Result<Self> {
-        // 尝试加载 .env 文件（如果不存在则忽略）
         let _ = dotenvy::dotenv();
         Self::from_env()
     }
 }
 
+/// 支持 thinking beta header 的自定义 Config
+#[derive(Clone, Debug)]
+struct ThinkingConfig {
+    inner: OpenAIConfig,
+    thinking_header: Option<(HeaderName, HeaderValue)>,
+}
+
+impl ThinkingConfig {
+    fn new(api_key: &str, base_url: &str, thinking_enabled: bool) -> Self {
+        let inner = OpenAIConfig::new()
+            .with_api_key(api_key)
+            .with_api_base(base_url);
+
+        let thinking_header = if thinking_enabled {
+            Some((
+                HeaderName::from_static(THINKING_BETA_HEADER),
+                HeaderValue::from_static(THINKING_BETA_VALUE),
+            ))
+        } else {
+            None
+        };
+
+        Self {
+            inner,
+            thinking_header,
+        }
+    }
+}
+
+impl Config for ThinkingConfig {
+    fn headers(&self) -> HeaderMap {
+        let mut headers = self.inner.headers();
+        if let Some((name, value)) = &self.thinking_header {
+            headers.insert(name.clone(), value.clone());
+        }
+        headers
+    }
+
+    fn url(&self, path: &str) -> String {
+        self.inner.url(path)
+    }
+
+    fn query(&self) -> Vec<(&str, &str)> {
+        self.inner.query()
+    }
+
+    fn api_base(&self) -> &str {
+        self.inner.api_base()
+    }
+
+    fn api_key(&self) -> &secrecy::SecretBox<str> {
+        self.inner.api_key()
+    }
+}
+
 /// Kimi API 客户端
 pub struct KimiClient {
-    client: Client<OpenAIConfig>,
+    client: Client<ThinkingConfig>,
     config: KimiConfig,
 }
 
 impl KimiClient {
     /// 创建新的 Kimi 客户端
     pub fn new(config: KimiConfig) -> Self {
-        let openai_config = OpenAIConfig::new()
-            .with_api_key(&config.api_key)
-            .with_api_base(&config.base_url);
+        let thinking_config = ThinkingConfig::new(
+            &config.api_key,
+            &config.base_url,
+            config.thinking_enabled,
+        );
 
-        let client = Client::with_config(openai_config);
+        let client = Client::with_config(thinking_config);
 
-        info!("Kimi client initialized with base URL: {}", config.base_url);
+        info!(
+            "Kimi client initialized with base URL: {}, thinking: {}",
+            config.base_url, config.thinking_enabled
+        );
 
         Self { client, config }
     }
@@ -87,24 +169,39 @@ impl KimiClient {
     pub fn base_url(&self) -> &str {
         &self.config.base_url
     }
+
+    /// 是否启用了 thinking
+    pub fn is_thinking_enabled(&self) -> bool {
+        self.config.thinking_enabled
+    }
+
+    /// 获取 thinking budget
+    pub fn thinking_budget(&self) -> Option<u32> {
+        self.config.thinking_budget
+    }
 }
 
 #[async_trait]
 impl LlmProvider for KimiClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        debug!("Sending chat request to Kimi API");
+        debug!("Sending chat request to Kimi API (thinking: {})", self.config.thinking_enabled);
 
         let messages: Vec<ChatCompletionRequestMessage> =
             request.messages.into_iter().map(convert_message).collect();
 
         let mut req = CreateChatCompletionRequest {
-            model: request.model,
+            model: request.model.clone(),
             messages,
             temperature: request.temperature,
             max_completion_tokens: request.max_tokens,
             tools: None,
             ..Default::default()
         };
+
+        // 如果有 thinking budget，添加到请求中
+        if let Some(budget) = self.config.thinking_budget {
+            req.max_completion_tokens = Some(budget);
+        }
 
         // 添加工具（如果提供）
         if let Some(tools) = request.tools {
@@ -178,19 +275,24 @@ impl LlmProvider for KimiClient {
         &self,
         request: ChatRequest,
     ) -> Result<async_openai::types::ChatCompletionResponseStream> {
-        debug!("Sending streaming chat request to Kimi API");
+        debug!("Sending streaming chat request to Kimi API (thinking: {})", self.config.thinking_enabled);
 
         let messages: Vec<ChatCompletionRequestMessage> =
             request.messages.into_iter().map(convert_message).collect();
 
         let mut req = CreateChatCompletionRequest {
-            model: request.model,
+            model: request.model.clone(),
             messages,
             temperature: request.temperature,
             max_completion_tokens: request.max_tokens,
             tools: None,
             ..Default::default()
         };
+
+        // 如果有 thinking budget，添加到请求中
+        if let Some(budget) = self.config.thinking_budget {
+            req.max_completion_tokens = Some(budget);
+        }
 
         // 添加工具（如果提供）
         if let Some(tools) = request.tools {
@@ -289,5 +391,7 @@ mod tests {
         assert_eq!(config.api_key, "test-key");
         assert_eq!(config.base_url, "https://test.api/v1");
         assert_eq!(config.default_model, "kimi-k2.5");
+        assert!(config.thinking_enabled); // 默认启用
+        assert!(config.thinking_budget.is_none()); // 默认 adaptive
     }
 }
