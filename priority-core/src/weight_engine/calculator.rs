@@ -58,6 +58,7 @@ pub struct WeightCalculator {
     /// 已完成的任务ID
     completed_tasks: Vec<TaskId>,
     /// 任务依赖图
+    #[allow(dead_code)]
     dependency_graph: HashMap<TaskId, Vec<TaskId>>,
 }
 

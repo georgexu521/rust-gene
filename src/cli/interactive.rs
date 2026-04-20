@@ -1,6 +1,6 @@
 //! 交互式提示模块
 
-use crate::weight_engine::types::{Project, Task, TaskId};
+use priority_core::weight_engine::types::{Project, Task, TaskId};
 use std::io::{self, Write};
 
 /// 提示用户输入任务信息

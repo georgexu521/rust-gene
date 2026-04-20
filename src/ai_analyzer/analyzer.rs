@@ -6,7 +6,7 @@
 
 use crate::ai_analyzer::heuristics::{HeuristicResult, WeightHeuristics};
 use crate::engine::QueryEngine;
-use crate::weight_engine::types::{Project, Task, TaskId, Weight};
+use priority_core::weight_engine::types::{Project, Task, TaskId, Weight};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{info, warn};

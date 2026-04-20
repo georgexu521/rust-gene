@@ -3,8 +3,8 @@
 //! 智能任务分配、优先级调度
 
 use crate::agent::AgentManager;
-use crate::weight_engine::types::{Project, Task};
-use crate::weight_engine::{WeightAnalysisResult, WeightAnalysisTool};
+use priority_core::weight_engine::types::{Project, Task};
+use priority_core::weight_engine::{WeightAnalysisResult, WeightAnalysisTool};
 use std::sync::Arc;
 
 /// 智能任务调度器

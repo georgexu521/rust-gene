@@ -1,6 +1,6 @@
 //! 任务解析器 - 从各种格式解析任务定义
 
-use crate::weight_engine::types::{Task, TaskId};
+use priority_core::weight_engine::types::{Task, TaskId};
 use std::collections::HashMap;
 
 /// 解析错误

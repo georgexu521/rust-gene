@@ -4,6 +4,7 @@
 //! for sharing across multiple frontends.
 
 pub mod errors;
+pub mod weight_engine;
 
 /// Core engine components
 pub mod engine {

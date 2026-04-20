@@ -39,7 +39,6 @@ pub mod telemetry;
 pub mod tools;
 pub mod tui;
 pub mod voice;
-pub mod weight_engine;
 
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;

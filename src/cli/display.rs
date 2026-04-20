@@ -1,6 +1,6 @@
 //! 显示格式化模块
 
-use crate::weight_engine::types::{Project, Task, TaskStatus, Weight};
+use priority_core::weight_engine::types::{Project, Task, TaskStatus, Weight};
 
 /// ANSI 颜色代码
 pub mod colors {

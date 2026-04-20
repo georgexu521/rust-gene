@@ -2,7 +2,7 @@
 //!
 //! 基于任务特征计算权重分数
 
-use crate::weight_engine::types::Task;
+use priority_core::weight_engine::types::Task;
 
 /// 启发式分析结果
 #[derive(Debug, Clone)]

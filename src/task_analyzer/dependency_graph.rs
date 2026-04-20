@@ -1,6 +1,6 @@
 //! 依赖图 - 管理任务间的依赖关系
 
-use crate::weight_engine::types::{Task, TaskId};
+use priority_core::weight_engine::types::{Task, TaskId};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// 循环依赖错误

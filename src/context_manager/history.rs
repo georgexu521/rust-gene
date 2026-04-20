@@ -1,6 +1,6 @@
 //! 历史记录管理
 
-use crate::weight_engine::types::TaskId;
+use priority_core::weight_engine::types::TaskId;
 use std::collections::VecDeque;
 use std::time::SystemTime;
 
