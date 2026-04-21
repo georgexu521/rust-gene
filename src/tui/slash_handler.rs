@@ -264,25 +264,64 @@ pub fn handle_stats(app: &TuiApp) -> String {
 
 pub fn handle_status(app: &TuiApp) -> String {
     let msg_count = app.messages.len();
-    let (history_len, model_line, provider_line) = if let Some(ref engine) = app.streaming_engine {
-        let provider_base = app.current_provider_base_url();
-        let provider = app.current_provider_label();
-        (
-            futures::executor::block_on(engine.get_history()).len(),
-            format!("Model: {}", app.current_model_label()),
-            format!("Provider: {} ({})", provider, provider_base),
-        )
+    let mut lines = vec![];
+
+    // 基本信息
+    lines.push(format!("Messages: {}", msg_count));
+
+    if let Some(ref engine) = app.streaming_engine {
+        let history_len = futures::executor::block_on(engine.get_history()).len();
+        lines.push(format!("History: {} turns", history_len));
+
+        // 模型信息
+        lines.push(format!(
+            "Model: {} (via {})",
+            app.current_model_label(),
+            app.current_provider_label()
+        ));
+
+        // 工具统计
+        let tracker = engine.cost_tracker();
+        let tracker_guard = futures::executor::block_on(tracker.lock());
+        lines.push(format!(
+            "Cost: ${:.4} ({} tokens)",
+            tracker_guard.estimated_cost_usd, tracker_guard.total_tokens.total
+        ));
+        let total_calls: u64 = tracker_guard.tool_metrics.values().map(|s| s.calls).sum();
+        let total_failed: u64 = tracker_guard.tool_metrics.values().map(|s| s.failed).sum();
+        lines.push(format!(
+            "Tools: {} calls ({} failed)",
+            total_calls, total_failed
+        ));
+        drop(tracker_guard);
+
+        // MCP 状态
+        if let Some(mcp) = engine.mcp_manager() {
+            let available = mcp.available_servers();
+            let degraded = mcp.degraded_servers();
+            if available.is_empty() && degraded.is_empty() {
+                lines.push("MCP: no servers configured".to_string());
+            } else {
+                if !available.is_empty() {
+                    lines.push(format!("MCP: {} available", available.len()));
+                }
+                if !degraded.is_empty() {
+                    lines.push(format!("MCP: {} degraded", degraded.join(", ")));
+                }
+            }
+        }
+
+        // 权限模式
+        let mode = engine.permission_mode();
+        lines.push(format!("Permission mode: {:?}", mode));
     } else {
-        (
-            0,
-            "Model: unavailable".to_string(),
-            "Provider: unavailable".to_string(),
-        )
-    };
-    format!(
-        "Messages: {}\nHistory: {} turns\nQuerying: {}\n{}\n{}",
-        msg_count, history_len, app.is_querying, model_line, provider_line
-    )
+        lines.push("Model: unavailable".to_string());
+    }
+
+    // 查询状态
+    lines.push(format!("Querying: {}", app.is_querying));
+
+    lines.join("\n")
 }
 
 pub async fn handle_tasks(app: &TuiApp) -> String {
@@ -3189,6 +3228,93 @@ pub fn handle_memory(_app: &TuiApp) -> String {
 /// /skills - List available skills
 pub fn handle_skills(_app: &TuiApp) -> String {
     "Skills: use /help to see all skill-based commands (commit, review, explain, fix, etc.)".to_string()
+}
+
+/// Get diagnostic suggestions based on recent failures
+pub fn get_failure_suggestions(app: &TuiApp) -> String {
+    let Some(ref engine) = app.streaming_engine else {
+        return String::new();
+    };
+
+    let tracker_guard = futures::executor::block_on(engine.cost_tracker().lock());
+
+    // Get top failure reasons
+    let mut agg: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for s in tracker_guard.tool_metrics.values() {
+        for (reason, cnt) in &s.failure_reasons {
+            *agg.entry(reason.clone()).or_insert(0) += *cnt;
+        }
+    }
+
+    if agg.is_empty() {
+        return String::new();
+    }
+
+    let mut suggestions: Vec<String> = vec![];
+
+    for (reason, _count) in agg.iter().take(3) {
+        let reason_str: &str = reason.as_str();
+        match reason_str {
+            "timeout" => {
+                suggestions.push("Timeout: Try /retry to repeat, or /doctor to check tool latency".to_string());
+            }
+            "permission" => {
+                suggestions.push("Permission denied: Use /permissions to check rules, or /doctor to diagnose".to_string());
+            }
+            "not_found" => {
+                suggestions.push("Not found: Check file paths with /ls, or verify resource exists".to_string());
+            }
+            "hook_blocked" => {
+                suggestions.push("Hook blocked: Check PRE_TOOL_HOOK / POST_TOOL_HOOK env vars in /doctor".to_string());
+            }
+            "dangerous_command" => {
+                suggestions.push("Dangerous command: Use /permissions to allow, or modify the command".to_string());
+            }
+            _ => {
+                suggestions.push(format!("Error '{}': Run /doctor for detailed diagnostics", reason_str));
+            }
+        }
+    }
+
+    drop(tracker_guard);
+
+    if suggestions.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nRecovery suggestions:\n- {}", suggestions.join("\n- "))
+    }
+}
+
+/// Suggest recovery action based on error context
+pub fn suggest_recovery(error: &str, _context: &str) -> String {
+    let error_lower = error.to_lowercase();
+
+    if error_lower.contains("timeout") {
+        return "Timeout error. Suggestions:\n- Use /retry to repeat the operation\n- Use /doctor to check tool latency\n- Try a simpler command".to_string();
+    }
+
+    if error_lower.contains("permission") || error_lower.contains("denied") {
+        return "Permission error. Suggestions:\n- Use /permissions rules to check current rules\n- Use /permissions mode to change mode\n- Run /doctor for permission diagnostics".to_string();
+    }
+
+    if error_lower.contains("not found") || error_lower.contains("does not exist") {
+        return "Not found error. Suggestions:\n- Check file/resource exists with ls or glob\n- Verify the path is correct\n- Use /context to see current state".to_string();
+    }
+
+    if error_lower.contains("syntax") || error_lower.contains("parse") {
+        return "Syntax error. Suggestions:\n- Check command arguments with /help <command>\n- Verify JSON formatting if using structured args\n- Try /doctor to validate environment".to_string();
+    }
+
+    // Default
+    format!(
+        "Error encountered. General suggestions:\n\
+        - Use /retry to attempt the operation again\n\
+        - Use /doctor to run full diagnostics\n\
+        - Use /status to check current state\n\
+        - Use /context to view conversation context\n\
+        Error: {}",
+        error
+    )
 }
 
 // ═══════════════════════════════════════

@@ -18,6 +18,10 @@ pub struct CommandDef {
     pub usage: &'static str,
     /// 详细描述
     pub description: &'static str,
+    /// 是否为实验性命令
+    pub experimental: bool,
+    /// 是否为占位命令（功能尚未完全实现）
+    pub placeholder: bool,
 }
 
 impl CommandDef {
@@ -34,6 +38,29 @@ impl CommandDef {
             category,
             usage,
             description,
+            experimental: false,
+            placeholder: false,
+        }
+    }
+
+    /// Create a new command with experimental and placeholder flags
+    pub const fn new_with_flags(
+        name: &'static str,
+        aliases: &'static [&'static str],
+        category: &'static str,
+        usage: &'static str,
+        description: &'static str,
+        experimental: bool,
+        placeholder: bool,
+    ) -> Self {
+        Self {
+            name,
+            aliases,
+            category,
+            usage,
+            description,
+            experimental,
+            placeholder,
         }
     }
 }
@@ -41,9 +68,9 @@ impl CommandDef {
 /// 命令注册表
 pub struct CommandRegistry {
     /// 按名称索引
-    commands: HashMap<String, &'static CommandDef>,
+    commands: HashMap<String, CommandDef>,
     /// 按分类分组
-    categories: HashMap<&'static str, Vec<&'static CommandDef>>,
+    categories: HashMap<&'static str, Vec<String>>,
 }
 
 impl CommandRegistry {
@@ -55,19 +82,20 @@ impl CommandRegistry {
     }
 
     /// 注册一个命令
-    pub fn register(&mut self, def: &'static CommandDef) {
+    pub fn register(&mut self, def: &CommandDef) {
+        let name = def.name.to_string();
         // 注册主名称
-        self.commands.insert(def.name.to_string(), def);
+        self.commands.insert(name.clone(), def.clone());
         // 注册别名
         for alias in def.aliases {
-            self.commands.insert(alias.to_string(), def);
+            self.commands.insert(alias.to_string(), def.clone());
         }
         // 按分类分组
-        self.categories.entry(def.category).or_default().push(def);
+        self.categories.entry(def.category).or_default().push(name);
     }
 
     /// 查找命令
-    pub fn get(&self, name: &str) -> Option<&&CommandDef> {
+    pub fn get(&self, name: &str) -> Option<&CommandDef> {
         self.commands.get(name)
     }
 
@@ -80,21 +108,102 @@ impl CommandRegistry {
 
         for cat in cats {
             result.push_str(&format!("\n  {}:\n", cat));
-            if let Some(cmds) = self.categories.get(cat) {
-                for cmd in cmds {
-                    let alias_str = if cmd.aliases.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({})", cmd.aliases.join(", "))
-                    };
-                    result.push_str(&format!(
-                        "    {:<24} {}{}\n",
-                        cmd.usage, cmd.description, alias_str
-                    ));
+            if let Some(cmd_names) = self.categories.get(cat) {
+                for cmd_name in cmd_names {
+                    if let Some(cmd) = self.commands.get(cmd_name) {
+                        let alias_str = if cmd.aliases.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", cmd.aliases.join(", "))
+                        };
+                        let flag_str = if cmd.experimental {
+                            " [experimental]".to_string()
+                        } else if cmd.placeholder {
+                            " [placeholder]".to_string()
+                        } else {
+                            String::new()
+                        };
+                        result.push_str(&format!(
+                            "    {:<24} {}{}{}\n",
+                            cmd.usage, cmd.description, alias_str, flag_str
+                        ));
+                    }
                 }
             }
         }
         result
+    }
+
+    /// 生成带标记的帮助文本（显示所有命令，包括 experimental 和 placeholder）
+    pub fn help_text_all(&self) -> String {
+        let mut result = String::from("Commands (all):\n");
+
+        let mut cats: Vec<_> = self.categories.keys().copied().collect();
+        cats.sort();
+
+        for cat in cats {
+            result.push_str(&format!("\n  {}:\n", cat));
+            if let Some(cmd_names) = self.categories.get(cat) {
+                for cmd_name in cmd_names {
+                    if let Some(cmd) = self.commands.get(cmd_name) {
+                        let alias_str = if cmd.aliases.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", cmd.aliases.join(", "))
+                        };
+                        let flag_str = if cmd.experimental {
+                            " [experimental]".to_string()
+                        } else if cmd.placeholder {
+                            " [placeholder]".to_string()
+                        } else {
+                            String::new()
+                        };
+                        result.push_str(&format!(
+                            "    {:<24} {}{}{}\n",
+                            cmd.usage, cmd.description, alias_str, flag_str
+                        ));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// 标记命令为占位符
+    pub fn mark_placeholder(&mut self, name: &str) {
+        if let Some(cmd) = self.commands.get_mut(name) {
+            cmd.placeholder = true;
+        }
+    }
+
+    /// 标记命令为实验性
+    pub fn mark_experimental(&mut self, name: &str) {
+        if let Some(cmd) = self.commands.get_mut(name) {
+            cmd.experimental = true;
+        }
+    }
+
+    /// 按分类列出命令
+    pub fn by_category(&self) -> std::collections::HashMap<&'static str, Vec<&CommandDef>> {
+        let mut result: std::collections::HashMap<&'static str, Vec<&CommandDef>> = Default::default();
+        for (cat, cmd_names) in &self.categories {
+            let cmds: Vec<&CommandDef> = cmd_names
+                .iter()
+                .filter_map(|n| self.commands.get(n))
+                .collect();
+            result.insert(cat, cmds);
+        }
+        result
+    }
+
+    /// 获取实验性命令
+    pub fn experimental_commands(&self) -> Vec<&CommandDef> {
+        self.commands.values().filter(|cmd| cmd.experimental).collect()
+    }
+
+    /// 获取占位命令
+    pub fn placeholder_commands(&self) -> Vec<&CommandDef> {
+        self.commands.values().filter(|cmd| cmd.placeholder).collect()
     }
 }
 
@@ -1115,6 +1224,55 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_SHORTCUTS);
     registry.register(&CMD_QUICK);
     registry.register(&CMD_FEEDBACK);
+
+    // Mark placeholder commands (功能尚未完全实现)
+    // Phase 10 Batch 3 - Integration commands that are progressive implementations
+    registry.mark_placeholder("/webhook");
+    registry.mark_placeholder("/wizard");
+    registry.mark_placeholder("/workspace");
+    registry.mark_placeholder("/slack");
+    registry.mark_placeholder("/stealth");
+    registry.mark_placeholder("/shadow");
+    registry.mark_placeholder("/reject");
+    registry.mark_placeholder("/subscribe");
+    registry.mark_placeholder("/slots");
+    registry.mark_placeholder("/ticker");
+    // Phase 10 Batch 4 - Partial implementations
+    registry.mark_placeholder("/config");
+    registry.mark_placeholder("/chrome");
+    registry.mark_placeholder("/effort");
+    registry.mark_placeholder("/preamble");
+    registry.mark_placeholder("/untrap");
+    registry.mark_placeholder("/verbose");
+    // Phase 10 Extended - More experimental commands
+    registry.mark_placeholder("/rollback");
+    registry.mark_placeholder("/project");
+    registry.mark_placeholder("/backend");
+    registry.mark_placeholder("/sandbox");
+    registry.mark_placeholder("/env");
+    registry.mark_placeholder("/cache");
+    registry.mark_placeholder("/benchmark");
+    registry.mark_placeholder("/test");
+    registry.mark_placeholder("/trace");
+    // Phase 10 Extended 2 - Auth and misc commands
+    registry.mark_placeholder("/init");
+    registry.mark_placeholder("/login");
+    registry.mark_placeholder("/logout");
+    registry.mark_placeholder("/key");
+    // Phase 10 Extended 3 - Session and utility commands
+    registry.mark_placeholder("/merge");
+    registry.mark_placeholder("/cleanup");
+    registry.mark_placeholder("/compact");
+    registry.mark_placeholder("/snippet");
+    registry.mark_placeholder("/bookmark");
+    registry.mark_placeholder("/tag");
+    registry.mark_placeholder("/search");
+    registry.mark_placeholder("/filter");
+    registry.mark_placeholder("/profile");
+    registry.mark_placeholder("/theme");
+    registry.mark_placeholder("/shortcuts");
+    registry.mark_placeholder("/quick");
+
     registry
 }
 
