@@ -77,6 +77,7 @@ impl Tool for CostTool {
             error: None,
             data: None,
             duration_ms: None,
+            ..Default::default()
         }
     }
 }

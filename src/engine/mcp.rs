@@ -191,6 +191,13 @@ fn now_unix_secs() -> u64 {
         .as_secs()
 }
 
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 fn parse_oauth_token_response(v: &Value) -> anyhow::Result<McpOAuthToken> {
     let access_token = v["access_token"]
         .as_str()
@@ -250,6 +257,90 @@ pub struct McpClient {
     connection: Arc<Mutex<Option<McpConnection>>>,
     /// OAuth token（可持久化）
     oauth_token: Arc<Mutex<Option<McpOAuthToken>>>,
+    /// 熔断器状态
+    circuit_breaker: Arc<std::sync::Mutex<CircuitBreaker>>,
+}
+
+/// 熔断器状态
+#[derive(Debug, Clone)]
+pub struct CircuitBreaker {
+    /// 连续失败次数
+    pub consecutive_failures: u32,
+    /// 熔断阈值
+    pub failure_threshold: u32,
+    /// 熔断是否触发
+    pub is_open: bool,
+    /// 熔断触发时间
+    pub opened_at_ms: Option<u64>,
+    /// 熔断恢复超时（毫秒）
+    pub recovery_timeout_ms: u64,
+}
+
+impl CircuitBreaker {
+    pub fn new(failure_threshold: u32, recovery_timeout_ms: u64) -> Self {
+        Self {
+            consecutive_failures: 0,
+            failure_threshold,
+            is_open: false,
+            opened_at_ms: None,
+            recovery_timeout_ms,
+        }
+    }
+
+    /// 记录一次失败
+    pub fn record_failure(&mut self) {
+        self.consecutive_failures += 1;
+        if self.consecutive_failures >= self.failure_threshold && !self.is_open {
+            self.is_open = true;
+            self.opened_at_ms = Some(now_epoch_ms());
+            info!("Circuit breaker opened after {} failures", self.consecutive_failures);
+        }
+    }
+
+    /// 记录一次成功
+    pub fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        if self.is_open {
+            self.is_open = false;
+            self.opened_at_ms = None;
+            info!("Circuit breaker closed after successful call");
+        }
+    }
+
+    /// 检查是否可以执行调用
+    pub fn can_execute(&self) -> bool {
+        if !self.is_open {
+            return true;
+        }
+        // 检查恢复超时
+        if let Some(opened_at) = self.opened_at_ms {
+            let now = now_epoch_ms();
+            if now.saturating_sub(opened_at) >= self.recovery_timeout_ms {
+                return true; // 超过恢复时间，允许一次调用测试
+            }
+        }
+        false
+    }
+
+    /// 检查是否完全打开（不允许任何调用）
+    pub fn is_fully_open(&self) -> bool {
+        if !self.is_open {
+            return false;
+        }
+        // 如果超过恢复时间，半开状态允许测试调用
+        if let Some(opened_at) = self.opened_at_ms {
+            let now = now_epoch_ms();
+            now.saturating_sub(opened_at) < self.recovery_timeout_ms
+        } else {
+            false
+        }
+    }
+}
+
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self::new(5, 30000) // 5次失败触发，30秒后允许重试
+    }
 }
 
 impl McpClient {
@@ -262,6 +353,7 @@ impl McpClient {
             request_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             connection: Arc::new(Mutex::new(None)),
             oauth_token: Arc::new(Mutex::new(load_persisted_oauth_token(&server_name))),
+            circuit_breaker: Arc::new(std::sync::Mutex::new(CircuitBreaker::default())),
         }
     }
 
@@ -271,8 +363,60 @@ impl McpClient {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// 检查熔断器状态
+    pub fn is_circuit_open(&self) -> bool {
+        let cb = self.circuit_breaker.lock().unwrap();
+        cb.is_open && cb.is_fully_open()
+    }
+
+    /// 获取熔断器状态描述
+    pub fn circuit_breaker_status(&self) -> String {
+        let cb = self.circuit_breaker.lock().unwrap();
+        if cb.is_open {
+            if cb.is_fully_open() {
+                format!(
+                    "OPEN (failures={}, recovery={}ms remaining)",
+                    cb.consecutive_failures,
+                    cb.recovery_timeout_ms
+                )
+            } else {
+                "HALF-OPEN (testing recovery)".to_string()
+            }
+        } else {
+            format!("CLOSED (failures={})", cb.consecutive_failures)
+        }
+    }
+
+    /// 启动心跳检测（后台任务）
+    pub fn start_heartbeat(self: &Arc<Self>, interval_secs: u64) -> tokio::task::JoinHandle<()> {
+        let client = self.clone();
+        tokio::spawn(async move {
+            let interval = tokio::time::Duration::from_secs(interval_secs);
+            loop {
+                tokio::time::sleep(interval).await;
+
+                // 执行健康检查
+                if let Err(e) = client.health_check().await {
+                    debug!("MCP heartbeat failed for {}: {}", client.config.name, e);
+                    // 注意：health_check 失败不触发熔断，因为 heartbeat 是轻量检测
+                }
+            }
+        })
+    }
+
     /// 确保已连接到 MCP 服务器
     async fn ensure_connected(&self) -> anyhow::Result<()> {
+        // 检查熔断器
+        {
+            let cb = self.circuit_breaker.lock().unwrap();
+            if cb.is_open && cb.is_fully_open() {
+                anyhow::bail!(
+                    "MCP server '{}' circuit breaker is open",
+                    self.config.name
+                );
+            }
+        }
+
         if self.config.oauth.is_some() {
             self.ensure_oauth_token_valid().await?;
         }
@@ -752,6 +896,20 @@ impl McpClient {
         self.send_request_with_retry(method, params, 0).await
     }
 
+    /// 记录成功到熔断器
+    fn circuit_record_success(&self) {
+        if let Ok(mut cb) = self.circuit_breaker.lock() {
+            cb.record_success();
+        }
+    }
+
+    /// 记录失败到熔断器
+    fn circuit_record_failure(&self) {
+        if let Ok(mut cb) = self.circuit_breaker.lock() {
+            cb.record_failure();
+        }
+    }
+
     /// 发送请求并获取响应（内部，支持重试）
     async fn send_request_with_retry(
         &self,
@@ -893,23 +1051,30 @@ impl McpClient {
                 if let Some(conn) = self.connection.lock().await.as_ref() {
                     conn.pending.lock().await.remove(&id);
                 }
+                self.circuit_record_failure();
                 anyhow::bail!("MCP response channel closed")
             }
             Err(_) => {
                 if let Some(conn) = self.connection.lock().await.as_ref() {
                     conn.pending.lock().await.remove(&id);
                 }
+                self.circuit_record_failure();
                 anyhow::bail!("MCP request timed out after 30 seconds")
             }
         };
 
         if let Some(err) = response.error {
+            self.circuit_record_failure();
             anyhow::bail!("MCP error ({}): {}", err.code, err.message);
         }
 
-        response
+        let result = response
             .result
-            .ok_or_else(|| anyhow::anyhow!("MCP response has no result"))
+            .ok_or_else(|| anyhow::anyhow!("MCP response has no result"))?;
+
+        // 成功，记录到熔断器
+        self.circuit_record_success();
+        Ok(result)
     }
 
     /// 发现服务器提供的工具
@@ -1356,6 +1521,114 @@ impl McpManager {
             }
         }
     }
+
+    /// 获取健康诊断报告
+    pub fn health_diagnostics(&self) -> Vec<McpServerHealth> {
+        self.clients
+            .iter()
+            .map(|(name, client)| {
+                let circuit_status = client.circuit_breaker_status();
+                let is_approved = self.is_server_approved(name);
+                let transport = match client.transport() {
+                    McpTransport::Stdio => "stdio",
+                    McpTransport::WebSocket => "websocket",
+                    McpTransport::Http => "http",
+                };
+
+                // 确定健康状态
+                let health = if !is_approved {
+                    McpHealthStatus::Pending
+                } else if circuit_status.contains("OPEN") {
+                    McpHealthStatus::Unhealthy
+                } else if circuit_status.contains("HALF-OPEN") {
+                    McpHealthStatus::Degraded
+                } else {
+                    McpHealthStatus::Healthy
+                };
+
+                McpServerHealth {
+                    name: name.clone(),
+                    transport: transport.to_string(),
+                    health,
+                    circuit_breaker: circuit_status,
+                    approved: is_approved,
+                }
+            })
+            .collect()
+    }
+
+    /// 获取健康报告字符串（用于 /doctor）
+    pub fn health_report(&self) -> String {
+        let diagnostics = self.health_diagnostics();
+        if diagnostics.is_empty() {
+            return "mcp_health: no servers configured".to_string();
+        }
+
+        let summary: Vec<String> = diagnostics
+            .iter()
+            .map(|d| {
+                let status = match d.health {
+                    McpHealthStatus::Healthy => "HEALTHY",
+                    McpHealthStatus::Degraded => "DEGRADED",
+                    McpHealthStatus::Unhealthy => "UNHEALTHY",
+                    McpHealthStatus::Pending => "PENDING",
+                };
+                format!("{}:{}({})", d.name, status, d.circuit_breaker)
+            })
+            .collect();
+
+        format!("mcp_health: {}", summary.join(", "))
+    }
+
+    /// 获取可用的（健康的）服务器列表
+    pub fn available_servers(&self) -> Vec<String> {
+        self.health_diagnostics()
+            .into_iter()
+            .filter(|d| d.health == McpHealthStatus::Healthy && d.approved)
+            .map(|d| d.name)
+            .collect()
+    }
+
+    /// 获取降级模式下的服务器列表（半开或熔断中但可部分工作）
+    pub fn degraded_servers(&self) -> Vec<String> {
+        self.health_diagnostics()
+            .into_iter()
+            .filter(|d| {
+                matches!(d.health, McpHealthStatus::Degraded | McpHealthStatus::Unhealthy)
+                    && d.approved
+            })
+            .map(|d| d.name)
+            .collect()
+    }
+}
+
+/// MCP 服务器健康状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpHealthStatus {
+    /// 健康
+    Healthy,
+    /// 降级（熔断器半开，尝试恢复中）
+    Degraded,
+    /// 不健康（熔断器打开）
+    Unhealthy,
+    /// 待批准
+    Pending,
+}
+
+/// MCP 服务器健康信息
+#[derive(Debug, Clone)]
+pub struct McpServerHealth {
+    /// 服务器名称
+    pub name: String,
+    /// 传输类型
+    pub transport: String,
+    /// 健康状态
+    pub health: McpHealthStatus,
+    /// 熔断器状态描述
+    pub circuit_breaker: String,
+    /// 是否已批准
+    pub approved: bool,
 }
 
 impl Default for McpManager {

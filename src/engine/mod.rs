@@ -20,6 +20,7 @@ pub mod error_classifier;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp;
+pub mod mcp_server;
 pub mod plan_mode;
 pub mod prompt_builder;
 pub mod query_engine;

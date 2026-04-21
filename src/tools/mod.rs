@@ -116,6 +116,161 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// 工具错误码
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorCode {
+    /// 成功
+    Success,
+    /// 参数验证失败
+    InvalidParams,
+    /// 权限被拒绝
+    PermissionDenied,
+    /// 资源不存在
+    NotFound,
+    /// 执行超时
+    Timeout,
+    /// 执行失败
+    ExecutionFailed,
+    /// 工具不可用
+    Unavailable,
+    /// 取消执行
+    Cancelled,
+    /// 危险操作被拦截
+    DangerousBlocked,
+    /// 未知错误
+    Unknown,
+}
+
+impl ToolErrorCode {
+    /// 从错误信息推断错误码
+    pub fn from_error(error: &str) -> Self {
+        let e = error.to_ascii_lowercase();
+        if e.contains("invalid param") || e.contains("missing required") || e.contains("must be of type") {
+            ToolErrorCode::InvalidParams
+        } else if e.contains("permission denied") || e.contains("denied") {
+            ToolErrorCode::PermissionDenied
+        } else if e.contains("not found") || e.contains("does not exist") {
+            ToolErrorCode::NotFound
+        } else if e.contains("timeout") || e.contains("timed out") {
+            ToolErrorCode::Timeout
+        } else if e.contains("dangerous") || e.contains("blocked") {
+            ToolErrorCode::DangerousBlocked
+        } else if e.contains("cancelled") || e.contains("canceled") {
+            ToolErrorCode::Cancelled
+        } else {
+            ToolErrorCode::Unknown
+        }
+    }
+
+    /// 获取错误码的 HTTP 状态码映射
+    pub fn http_status(&self) -> u16 {
+        match self {
+            ToolErrorCode::Success => 200,
+            ToolErrorCode::InvalidParams => 400,
+            ToolErrorCode::PermissionDenied => 403,
+            ToolErrorCode::NotFound => 404,
+            ToolErrorCode::Timeout => 408,
+            ToolErrorCode::DangerousBlocked => 451,
+            ToolErrorCode::Unavailable | ToolErrorCode::ExecutionFailed | ToolErrorCode::Cancelled | ToolErrorCode::Unknown => 500,
+        }
+    }
+}
+
+impl Default for ToolErrorCode {
+    fn default() -> Self {
+        ToolErrorCode::Unknown
+    }
+}
+
+/// 工具权限等级
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPermissionLevel {
+    /// 只读操作，不会修改任何文件或系统状态
+    ReadOnly,
+    /// 低风险操作，只会读取或创建临时文件
+    LowRisk,
+    /// 中等风险操作，会修改项目文件但可撤销
+    MediumRisk,
+    /// 高风险操作，会修改系统配置或不可撤销的操作
+    HighRisk,
+    /// 最高风险操作，可能影响系统安全或数据
+    Critical,
+}
+
+impl ToolPermissionLevel {
+    /// 从操作名称推断权限等级
+    pub fn from_operation(op: &str) -> Self {
+        let op_lower = op.to_ascii_lowercase();
+        if op_lower.contains("read") || op_lower.contains("get") || op_lower.contains("list") || op_lower.contains("search") {
+            ToolPermissionLevel::ReadOnly
+        } else if op_lower.contains("write") || op_lower.contains("edit") || op_lower.contains("create") {
+            ToolPermissionLevel::MediumRisk
+        } else if op_lower.contains("delete") || op_lower.contains("remove") || op_lower.contains("kill") {
+            ToolPermissionLevel::HighRisk
+        } else if op_lower.contains("exec") || op_lower.contains("bash") || op_lower.contains("shell") {
+            ToolPermissionLevel::Critical
+        } else {
+            ToolPermissionLevel::LowRisk
+        }
+    }
+
+    /// 是否需要确认提示
+    pub fn requires_confirmation(&self) -> bool {
+        matches!(self, ToolPermissionLevel::HighRisk | ToolPermissionLevel::Critical)
+    }
+}
+
+impl Default for ToolPermissionLevel {
+    fn default() -> Self {
+        ToolPermissionLevel::LowRisk
+    }
+}
+
+/// 工具元数据（schema 标准化）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolSchema {
+    /// 工具名称
+    pub name: String,
+    /// 工具描述
+    pub description: String,
+    /// 参数 JSON Schema
+    pub parameters: Value,
+    /// 错误码定义
+    pub error_codes: Vec<String>,
+    /// 权限等级
+    pub permission_level: ToolPermissionLevel,
+    /// 是否幂等（相同参数重复执行结果相同）
+    pub is_idempotent: bool,
+    /// 是否可重试
+    pub is_retryable: bool,
+    /// 预估执行时间（毫秒）
+    pub estimated_duration_ms: Option<u64>,
+    /// 输入定义
+    pub input_schema: Option<Value>,
+    /// 输出定义
+    pub output_schema: Option<Value>,
+}
+
+impl ToolSchema {
+    /// 从 Tool trait 获取 schema
+    pub fn from_tool(tool: &dyn Tool) -> Self {
+        Self {
+            name: tool.name().to_string(),
+            description: tool.description().to_string(),
+            parameters: tool.parameters(),
+            error_codes: tool.error_codes(),
+            permission_level: tool.permission_level(),
+            is_idempotent: tool.is_idempotent(),
+            is_retryable: tool.is_retryable(),
+            estimated_duration_ms: tool.estimated_duration_ms(),
+            input_schema: None,
+            output_schema: None,
+        }
+    }
+}
+
 /// 工具 trait - 所有工具必须实现
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -196,6 +351,45 @@ pub trait Tool: Send + Sync {
             // 错误结果：显示完整错误
             result.content.clone()
         }
+    }
+
+    /// 获取支持的错误码列表
+    fn error_codes(&self) -> Vec<String> {
+        vec![
+            "unknown".to_string(),
+            "invalid_params".to_string(),
+            "permission_denied".to_string(),
+            "timeout".to_string(),
+            "execution_failed".to_string(),
+        ]
+    }
+
+    /// 获取权限等级（默认 LowRisk）
+    fn permission_level(&self) -> ToolPermissionLevel {
+        ToolPermissionLevel::LowRisk
+    }
+
+    /// 是否幂等（相同参数重复执行结果相同）
+    fn is_idempotent(&self) -> bool {
+        false
+    }
+
+    /// 是否可重试（默认可重试）
+    fn is_retryable(&self) -> bool {
+        true
+    }
+
+    /// 预估执行时间（毫秒）
+    fn estimated_duration_ms(&self) -> Option<u64> {
+        None
+    }
+
+    /// 获取工具 schema
+    fn schema(&self) -> ToolSchema
+    where
+        Self: Sized,
+    {
+        ToolSchema::from_tool(self)
     }
 }
 
@@ -411,7 +605,7 @@ pub struct ToolPermissions {
 }
 
 /// 工具执行结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolResult {
     /// 是否成功
     pub success: bool,
@@ -419,11 +613,17 @@ pub struct ToolResult {
     pub content: String,
     /// 错误信息（如果有）
     pub error: Option<String>,
+    /// 错误码
+    #[serde(default)]
+    pub error_code: Option<ToolErrorCode>,
     /// 额外数据（JSON 格式）
     pub data: Option<Value>,
     /// 执行耗时（毫秒）
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// 工具名称（用于审计）
+    #[serde(default)]
+    pub tool_name: Option<String>,
 }
 
 impl ToolResult {
@@ -432,9 +632,8 @@ impl ToolResult {
         Self {
             success: true,
             content: content.into(),
-            error: None,
-            data: None,
-            duration_ms: None,
+            error_code: Some(ToolErrorCode::Success),
+            ..Default::default()
         }
     }
 
@@ -443,31 +642,68 @@ impl ToolResult {
         Self {
             success: true,
             content: content.into(),
-            error: None,
+            error_code: Some(ToolErrorCode::Success),
             data: Some(data),
-            duration_ms: None,
+            ..Default::default()
         }
     }
 
     /// 创建失败结果
     pub fn error(error: impl Into<String>) -> Self {
+        let err_str = error.into();
         Self {
             success: false,
-            content: String::new(),
-            error: Some(error.into()),
-            data: None,
-            duration_ms: None,
+            error: Some(err_str.clone()),
+            error_code: Some(ToolErrorCode::from_error(&err_str)),
+            ..Default::default()
         }
     }
 
     /// 创建带内容的失败结果
     pub fn error_with_content(error: impl Into<String>, content: impl Into<String>) -> Self {
+        let err_str = error.into();
         Self {
             success: false,
             content: content.into(),
-            error: Some(error.into()),
-            data: None,
-            duration_ms: None,
+            error: Some(err_str.clone()),
+            error_code: Some(ToolErrorCode::from_error(&err_str)),
+            ..Default::default()
+        }
+    }
+
+    /// 从缓存值重建 ToolResult
+    fn from_cached_value(value: Value) -> Self {
+        // 尝试从缓存的 JSON 重建
+        if let Ok(result) = serde_json::from_value::<ToolResult>(value.clone()) {
+            return result;
+        }
+
+        // 如果反序列化失败，创建一个通用的成功结果
+        let content = value
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Cached result")
+            .to_string();
+
+        let success = value
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let error = value
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let data = value.get("data").cloned();
+
+        Self {
+            success,
+            content,
+            error: error.clone(),
+            error_code: error.as_ref().map(|e| ToolErrorCode::from_error(e)),
+            data,
+            ..Default::default()
         }
     }
 }
@@ -718,43 +954,6 @@ impl CachedToolExecutor {
     /// 使特定工具缓存失效
     pub fn invalidate_tool_cache(&self, tool_name: &str) {
         self.cache.invalidate_tool(tool_name);
-    }
-}
-
-impl ToolResult {
-    /// 从缓存值重建 ToolResult
-    fn from_cached_value(value: Value) -> Self {
-        // 尝试从缓存的 JSON 重建
-        if let Ok(result) = serde_json::from_value::<ToolResult>(value.clone()) {
-            return result;
-        }
-
-        // 如果反序列化失败，创建一个通用的成功结果
-        let content = value
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Cached result")
-            .to_string();
-
-        let success = value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        let error = value
-            .get("error")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let data = value.get("data").cloned();
-
-        Self {
-            success,
-            content,
-            error,
-            data,
-            duration_ms: None,
-        }
     }
 }
 

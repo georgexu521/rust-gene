@@ -55,6 +55,77 @@ pub struct ToolExecStats {
     pub total_duration_ms: u64,
     pub max_duration_ms: u64,
     pub failure_reasons: HashMap<String, u64>,
+    /// 重试次数
+    pub retries: u64,
+    /// 用户反馈：赞（ thumbs up）
+    pub user_thumbs_up: u64,
+    /// 用户反馈：踩（thumbs down）
+    pub user_thumbs_down: u64,
+}
+
+impl ToolExecStats {
+    /// 计算成功率（0.0 - 1.0）
+    pub fn success_rate(&self) -> f64 {
+        if self.calls == 0 {
+            return 1.0;
+        }
+        self.success as f64 / self.calls as f64
+    }
+
+    /// 计算平均执行时间（毫秒）
+    pub fn avg_duration_ms(&self) -> f64 {
+        if self.calls == 0 {
+            return 0.0;
+        }
+        self.total_duration_ms as f64 / self.calls as f64
+    }
+
+    /// 计算重试率（0.0 - 1.0）
+    pub fn retry_rate(&self) -> f64 {
+        if self.calls == 0 {
+            return 0.0;
+        }
+        self.retries as f64 / self.calls as f64
+    }
+
+    /// 计算用户满意度（0.0 - 1.0）
+    pub fn user_satisfaction(&self) -> f64 {
+        let total_feedback = self.user_thumbs_up + self.user_thumbs_down;
+        if total_feedback == 0 {
+            return 0.5; // 无反馈时返回中性
+        }
+        self.user_thumbs_up as f64 / total_feedback as f64
+    }
+
+    /// 计算综合质量分数（0.0 - 100.0）
+    /// 综合考虑成功率、平均耗时、用户满意度
+    pub fn quality_score(&self) -> f64 {
+        let success_weight = 0.5;
+        let latency_weight = 0.2;
+        let satisfaction_weight = 0.3;
+
+        // 成功率分数（0-100）
+        let success_score = self.success_rate() * 100.0;
+
+        // 延迟分数（基于平均耗时，越低越好）
+        // 假设 1000ms 以内为满分，10000ms 以上为0分
+        let avg_ms = self.avg_duration_ms();
+        let latency_score = if avg_ms <= 100.0 {
+            100.0
+        } else if avg_ms >= 10000.0 {
+            0.0
+        } else {
+            100.0 - ((avg_ms - 100.0) / 9900.0 * 100.0)
+        };
+
+        // 用户满意度分数（0-100）
+        let satisfaction_score = self.user_satisfaction() * 100.0;
+
+        // 加权求和
+        success_weight * success_score
+            + latency_weight * latency_score
+            + satisfaction_weight * satisfaction_score
+    }
 }
 
 /// 工具调用审计事件
@@ -167,6 +238,49 @@ impl CostTracker {
             let drop_n = self.recent_tool_events.len() - MAX_RECENT_EVENTS;
             self.recent_tool_events.drain(0..drop_n);
         }
+    }
+
+    /// 记录工具重试
+    pub fn record_tool_retry(&mut self, tool_name: &str) {
+        let stats = self.tool_metrics.entry(tool_name.to_string()).or_default();
+        stats.retries += 1;
+    }
+
+    /// 记录用户对工具结果的反馈
+    pub fn record_tool_feedback(&mut self, tool_name: &str, thumbs_up: bool) {
+        let stats = self.tool_metrics.entry(tool_name.to_string()).or_default();
+        if thumbs_up {
+            stats.user_thumbs_up += 1;
+        } else {
+            stats.user_thumbs_down += 1;
+        }
+    }
+
+    /// 获取工具质量分数（用于质量排行）
+    pub fn tool_quality_scores(&self) -> Vec<(String, f64)> {
+        self.tool_metrics
+            .iter()
+            .filter(|(_, stats)| stats.calls > 0)
+            .map(|(name, stats)| (name.clone(), stats.quality_score()))
+            .collect()
+    }
+
+    /// 获取工具质量报告
+    pub fn tool_quality_report(&self, limit: usize) -> String {
+        let mut scores = self.tool_quality_scores();
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        if scores.is_empty() {
+            return "tool_quality: (no data)".to_string();
+        }
+
+        let items: Vec<String> = scores
+            .iter()
+            .take(limit)
+            .map(|(name, score)| format!("{}:{:.1}", name, score))
+            .collect();
+
+        format!("tool_quality: {}", items.join(", "))
     }
 
     /// 汇总工具诊断信息（用于 /doctor）

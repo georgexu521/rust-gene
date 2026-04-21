@@ -113,6 +113,7 @@ impl Tool for CopyTool {
             error: Some("No clipboard utility available (tried pbcopy/xclip/xsel)".to_string()),
             data: None,
             duration_ms: None,
+            ..Default::default()
         }
     }
 }

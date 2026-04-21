@@ -291,7 +291,7 @@
 ## Phase 4（W13-W15）：多 Agent 编排增强
 
 ### 目标
-1. 子代理从“可调用”升级为“可编排”。
+1. 子代理从”可调用”升级为”可编排”。
 2. 结果融合稳定、可解释。
 
 ### 任务
@@ -306,13 +306,63 @@
 2. 并行任务平均完成时间下降。
 3. Agent 结果可追溯性达标。
 
+### ✅ Phase 4 完成状态（2026-04-21）
+
+**Agent 生命周期增强：**
+| 组件 | 说明 |
+|------|------|
+| AgentResult | 新增 tools_used, confidence, has_conflict |
+
+**DAG 调度：**
+| 功能 | 状态 |
+|------|------|
+| AgentDag | ✅ 新增（依赖图跟踪） |
+| add_node() | ✅ 新增 |
+| get_runnable() | ✅ 新增（获取可执行节点） |
+| topological_sort() | ✅ 新增 |
+| has_cycle() | ✅ 新增（循环检测） |
+
+**结果融合：**
+| 功能 | 状态 |
+|------|------|
+| ResultFusion | ✅ 新增 |
+| FusedResult | ✅ 新增 |
+| 冲突检测 | ✅ 新增 |
+| 置信度评分 | ✅ 新增 |
+| 证据聚合 | ✅ 新增 |
+
+**Agent 审计：**
+| 功能 | 状态 |
+|------|------|
+| AgentAuditor | ✅ 新增 |
+| AgentAuditRecord | ✅ 新增 |
+| AgentAuditAction | ✅ 新增（Spawn/StatusChange/Message/Result/Kill/Error） |
+
+**测试（新增 9 个）：**
+- test_dag_add_node ✅
+- test_dag_get_runnable ✅
+- test_dag_topological_sort ✅
+- test_dag_no_cycle ✅
+- test_result_fusion_single ✅
+- test_result_fusion_multiple ✅
+- test_result_fusion_empty ✅
+- test_auditor_log ✅
+- test_auditor_clear ✅
+
+**验证结果：**
+- Build: ✅ 通过
+- Tests: ✅ 538 passed (+9 new tests)
+- Clippy: ⚠️ priority-core workspace 有 3 个 pre-existing warnings（Phase 8 清理）
+
+**下一步：Phase 5（W16-W18）工具与 MCP 产品化**
+
 ---
 
 ## Phase 5（W16-W18）：工具与 MCP 产品化
 
 ### 目标
-1. 工具调用从“能跑”到“稳定可治理”。
-2. MCP 从“连接能力”到“运行时能力”。
+1. 工具调用从”能跑”到”稳定可治理”。
+2. MCP 从”连接能力”到”运行时能力”。
 
 ### 任务
 1. 建立 Tool schema 规范（输入输出、错误码、权限等级、幂等性）。
@@ -325,6 +375,66 @@
 1. 工具调用失败率 < 5%。
 2. MCP 异常可自动恢复或可诊断。
 3. 关键 MCP 流程 E2E 全部通过。
+
+### ✅ Phase 5 完成状态（2026-04-21）
+
+**Tool schema 标准化：**
+| 组件 | 说明 |
+|------|------|
+| `ToolErrorCode` | 工具错误码枚举（Success/InvalidParams/PermissionDenied/Timeout 等） |
+| `ToolPermissionLevel` | 权限等级枚举（ReadOnly/LowRisk/MediumRisk/HighRisk/Critical） |
+| `ToolSchema` | 工具元数据结构（error_codes/permission_level/is_idempotent/is_retryable） |
+| `Tool` trait | 新增 `error_codes()`/`permission_level()`/`is_idempotent()`/`is_retryable()`/`estimated_duration_ms()`/`schema()` 方法 |
+| `ToolResult` | 新增 `error_code`/`tool_name` 字段 |
+
+**工具质量评分：**
+| 组件 | 说明 |
+|------|------|
+| `ToolExecStats` | 新增 `retries/user_thumbs_up/user_thumbs_down` 字段 |
+| `success_rate()` | 计算成功率（0.0-1.0） |
+| `retry_rate()` | 计算重试率（0.0-1.0） |
+| `user_satisfaction()` | 计算用户满意度（0.0-1.0） |
+| `quality_score()` | 综合质量分数（0.0-100.0） |
+| `record_tool_retry()` | 记录重试 |
+| `record_tool_feedback()` | 记录用户反馈 |
+| `tool_quality_scores()` | 质量排行 |
+
+**MCP 运行时增强：**
+| 组件 | 说明 |
+|------|------|
+| `CircuitBreaker` | 熔断器（failure_threshold=5, recovery_timeout=30s） |
+| `circuit_record_success()` | 记录成功到熔断器 |
+| `circuit_record_failure()` | 记录失败到熔断器 |
+| `start_heartbeat()` | 启动心跳检测后台任务 |
+
+**MCP Server Mode：**
+| 组件 | 说明 |
+|------|------|
+| `src/engine/mcp_server.rs` | 新文件 |
+| `McpServer` | MCP 服务器实现 |
+| `McpServerTransport` | Stdio/HTTP 传输支持 |
+| `McpServerManager` | 服务器生命周期管理 |
+| `handle_list_tools()` | tools/list 协议实现 |
+| `handle_call_tool()` | tools/call 协议实现 |
+| `run_stdio()` | Stdio 传输服务器 |
+| `run_http()` | HTTP 传输服务器 |
+
+**MCP 健康诊断与灰度降级：**
+| 组件 | 说明 |
+|------|------|
+| `McpHealthStatus` | Healthy/Degraded/Unhealthy/Pending 枚举 |
+| `McpServerHealth` | 健康信息结构体 |
+| `health_diagnostics()` | 返回所有服务器健康状态 |
+| `health_report()` | 健康报告字符串 |
+| `available_servers()` | 健康可用的服务器列表 |
+| `degraded_servers()` | 降级服务器列表 |
+
+**验证结果：**
+- Build: ✅ 通过
+- Tests: ✅ 540 passed (+2 new MCP server tests)
+- Clippy: ⚠️ priority-core workspace 有 3 个 pre-existing warnings（Phase 8 清理）
+
+**下一步：Phase 6（W19-W21）TUI/UX 产品化**
 
 ---
 

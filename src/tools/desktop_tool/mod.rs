@@ -53,6 +53,7 @@ impl Tool for DesktopTool {
                 error: Some("Missing 'target' parameter".to_string()),
                 data: None,
                 duration_ms: None,
+                ..Default::default()
             };
         }
 
@@ -143,6 +144,7 @@ impl Tool for DesktopTool {
             error: Some(format!("Failed to {} '{}' - platform not supported", action, target)),
             data: None,
             duration_ms: None,
+            ..Default::default()
         }
     }
 }
