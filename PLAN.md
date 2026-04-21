@@ -143,6 +143,33 @@
 2. 高频命令契约测试覆盖率 >= 90%。
 3. 失败重放可稳定复现与回归。
 
+### ✅ Phase 1 完成状态（2026-04-21）
+
+**语义修复：**
+| 命令 | 修复内容 |
+|------|----------|
+| `/git` | 新增禁止动作验证（push/force-push/rebase/reset/clean）|
+| `/redo` | 改进错误信息（明确说明未实现）|
+| `/package` | 删除冗余 match arm |
+
+**契约测试：**
+- 新增 5 个合约测试（slash_handler tests）
+- 覆盖：git 动作验证、share 返回格式、feedback 参数检查、redo 文档说明、package 帮助完整性
+
+**Destructive 命令确认路径：**
+| 工具 | 状态 |
+|------|------|
+| file_write | ✅ overwrite 确认已存在 |
+| bash_tool | ✅ dangerous command 检测已存在 |
+| worktree_tool | ✅ 确认提示已存在 |
+
+**验证结果：**
+- Build: ✅ 通过
+- Tests: ✅ 503 passed (+5 new contract tests)
+- Clippy: ⚠️ priority-core workspace 有 3 个 pre-existing warnings（Phase 8 清理）
+
+**下一步：Phase 2（W7-W9）权限与安全闭环**
+
 ---
 
 ## Phase 2（W7-W9）：权限与安全闭环
