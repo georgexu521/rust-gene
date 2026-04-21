@@ -8,7 +8,7 @@
 
 | Dimension | Claude Code | Our Implementation | Gap | Trend |
 |-----------|-------------|-------------------|-----|-------|
-| **Tools** | 64 | 58 | -6 | Improving |
+| **Tools** | 64 | ~58 | -6 | Improving |
 | **Commands** | 101 | 101 | 0 | ✅ Complete |
 | **Agents** | 7 types | 7 types | 0 | ✅ Complete |
 | **Transport** | 3 (stdio/http/ws) | 2 (stdio/http) | -1 | Improving |
@@ -23,7 +23,7 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 ## 1. Tools Coverage
 
 **Claude Code**: 64 tools
-**Our implementation**: 58 tools
+**Our implementation**: ~58 tool types (73 instances with Task variants)
 
 | Tool Category | Claude Code | Our Implementation | Status |
 |---------------|------------|-------------------|--------|
