@@ -660,6 +660,89 @@ pub const CMD_WRITE: CommandDef = CommandDef::new(
     "Write content to a file",
 );
 
+// Phase 10 Extended: More commands
+pub const CMD_ROLLBACK: CommandDef = CommandDef::new(
+    "/rollback",
+    &[],
+    "Git",
+    "/rollback [target]",
+    "Rollback changes via git",
+);
+
+pub const CMD_PROJECT: CommandDef = CommandDef::new(
+    "/project",
+    &[],
+    "Info",
+    "/project [info|list|init]",
+    "Project management",
+);
+
+pub const CMD_BACKEND: CommandDef = CommandDef::new(
+    "/backend",
+    &[],
+    "Config",
+    "/backend [local|restricted|external]",
+    "Switch execution backend",
+);
+
+pub const CMD_SANDBOX: CommandDef = CommandDef::new(
+    "/sandbox",
+    &[],
+    "Config",
+    "/sandbox [on|off]",
+    "Toggle sandbox mode",
+);
+
+pub const CMD_ENV: CommandDef = CommandDef::new(
+    "/env",
+    &[],
+    "Info",
+    "/env [list|get <key>]",
+    "Show environment variables",
+);
+
+pub const CMD_CACHE: CommandDef = CommandDef::new(
+    "/cache",
+    &[],
+    "Config",
+    "/cache [clear|stats]",
+    "Cache management",
+);
+
+pub const CMD_BENCHMARK: CommandDef = CommandDef::new(
+    "/benchmark",
+    &[],
+    "Info",
+    "/benchmark [n]",
+    "Run performance benchmark",
+);
+
+pub const CMD_TEST: CommandDef = CommandDef::new(
+    "/test",
+    &[],
+    "Info",
+    "/test [filter]",
+    "Run tests",
+);
+
+// Note: CMD_DEBUG not added - bundled skill handles /debug
+
+pub const CMD_TRACE: CommandDef = CommandDef::new(
+    "/trace",
+    &[],
+    "Config",
+    "/trace [on|off|status]",
+    "Tracing controls",
+);
+
+pub const CMD_SKILLS: CommandDef = CommandDef::new(
+    "/skills",
+    &[],
+    "Info",
+    "/skills",
+    "List available skills",
+);
+
 /// 创建默认命令注册表
 pub fn default_command_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
@@ -743,6 +826,19 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_UNTRAP);
     registry.register(&CMD_VERBOSE);
     registry.register(&CMD_WRITE);
+    // Phase 10 Extended: More commands
+    registry.register(&CMD_ROLLBACK);
+    registry.register(&CMD_PROJECT);
+    registry.register(&CMD_BACKEND);
+    registry.register(&CMD_SANDBOX);
+    registry.register(&CMD_ENV);
+    registry.register(&CMD_CACHE);
+    registry.register(&CMD_BENCHMARK);
+    registry.register(&CMD_TEST);
+    // Note: CMD_DEBUG not registered - bundled skill handles /debug
+    registry.register(&CMD_TRACE);
+    registry.register(&CMD_MEMORY);
+    registry.register(&CMD_SKILLS);
     registry
 }
 

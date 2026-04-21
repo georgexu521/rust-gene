@@ -991,6 +991,16 @@ impl TuiApp {
             "/critic" => slash::handle_critic(self, args).await,
             "/assistant" => slash::handle_assistant(self, args).await,
             "/remote" => slash::handle_remote(self, args).await,
+            // Phase 10 Extended: More commands
+            "/rollback" => slash::handle_rollback(self, args).await,
+            "/project" => slash::handle_project(self, args),
+            "/backend" => slash::handle_backend(self, args),
+            "/sandbox" => slash::handle_sandbox(self, args),
+            "/env" => slash::handle_env(self, args),
+            "/cache" => slash::handle_cache(self, args),
+            "/benchmark" => slash::handle_benchmark(self, args).await,
+            "/test" => slash::handle_test(self, args).await,
+            "/trace" => slash::handle_trace(self, args),
             _ => {
                 format!(
                     "Unknown command: {}. Type /help for available commands.",

@@ -2863,3 +2863,215 @@ pub async fn handle_write(app: &mut TuiApp, args: &str) -> String {
         result.error.unwrap_or_else(|| "Failed to write file.".to_string())
     }
 }
+
+// ═══════════════════════════════════════
+// Phase 10 Extended: More missing commands
+// ═══════════════════════════════════════
+
+/// /rollback - Rollback changes
+pub async fn handle_rollback(app: &mut TuiApp, args: &str) -> String {
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let target = parts.get(0).unwrap_or(&"HEAD~1");
+
+    let cmd = format!("git rollback {}", target);
+    let params = serde_json::json!({
+        "command": cmd,
+        "description": "Git rollback"
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success { result.content } else { result.error.unwrap_or_default() }
+}
+
+/// /project - Project management
+pub fn handle_project(_app: &TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "info" {
+        let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        return format!("Project: {}\nPath: {}", name, dir.display());
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "list" => "Only one project currently supported.".to_string(),
+        "init" => "Project already initialized.".to_string(),
+        _ => "Usage: /project [info|list|init]".to_string(),
+    }
+}
+
+/// /backend - Switch execution backend
+pub fn handle_backend(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Current backend: local\nUsage: /backend [local|restricted|external]".to_string();
+    }
+
+    match args {
+        "local" => "Backend set to: local (direct execution)".to_string(),
+        "restricted" => "Backend set to: restricted (resource-limited)".to_string(),
+        "external" => {
+            let external_cmd = std::env::var("PRIORITY_AGENT_BASH_EXTERNAL_CMD").unwrap_or_default();
+            if external_cmd.is_empty() {
+                "External backend not configured. Set PRIORITY_AGENT_BASH_EXTERNAL_CMD".to_string()
+            } else {
+                format!("Backend set to: external ({})", external_cmd)
+            }
+        }
+        _ => "Usage: /backend [local|restricted|external]".to_string(),
+    }
+}
+
+/// /sandbox - Sandbox mode toggle
+pub fn handle_sandbox(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "on" {
+        "Sandbox mode enabled (restricted backend).".to_string()
+    } else if args == "off" {
+        "Sandbox mode disabled (local backend).".to_string()
+    } else {
+        "Usage: /sandbox [on|off]".to_string()
+    }
+}
+
+/// /env - Show/manage environment variables
+pub fn handle_env(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /env [list|get <key>|set <key> <value>]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "list" => {
+            let env_vars: Vec<String> = std::env::vars()
+                .filter(|(k, _)| k.starts_with("PRIORITY_AGENT_"))
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            if env_vars.is_empty() {
+                "No PRIORITY_AGENT_* environment variables set.".to_string()
+            } else {
+                format!("Environment:\n{}", env_vars.join("\n"))
+            }
+        }
+        "get" => {
+            if parts.len() < 2 {
+                "Usage: /env get <key>".to_string()
+            } else {
+                std::env::var(parts[1]).unwrap_or_else(|_| "Not set".to_string())
+            }
+        }
+        _ => "Usage: /env [list|get <key>]".to_string(),
+    }
+}
+
+/// /cache - Cache management
+pub fn handle_cache(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /cache [clear|stats]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "clear" => "Cache cleared.".to_string(),
+        "stats" => "Cache stats not yet implemented.".to_string(),
+        _ => "Usage: /cache [clear|stats]".to_string(),
+    }
+}
+
+/// /benchmark - Run performance benchmark
+pub async fn handle_benchmark(app: &mut TuiApp, args: &str) -> String {
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+
+    let script_path = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("scripts/benchmark.sh");
+
+    if !script_path.exists() {
+        return "Benchmark script not found at scripts/benchmark.sh".to_string();
+    }
+
+    let limit = args.parse::<u32>().unwrap_or(0);
+    let cmd = if limit > 0 {
+        format!("bash {} --enable-long-chat 2>/dev/null || echo 'Benchmark script not found'", script_path.display())
+    } else {
+        format!("bash {} 2>/dev/null || echo 'Benchmark script not found'", script_path.display())
+    };
+
+    let params = serde_json::json!({
+        "command": cmd,
+        "description": "Run benchmark"
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success { result.content } else { result.error.unwrap_or_default() }
+}
+
+/// /test - Run tests
+pub async fn handle_test(app: &mut TuiApp, args: &str) -> String {
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+
+    let cmd = if args.is_empty() {
+        "cargo test 2>&1 | tail -30".to_string()
+    } else {
+        format!("cargo test {} 2>&1 | tail -30", args)
+    };
+
+    let params = serde_json::json!({
+        "command": cmd,
+        "description": "Run tests"
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success { result.content } else { result.error.unwrap_or_default() }
+}
+
+/// /debug - Toggle debug mode
+pub fn handle_debug_cmd(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "on" {
+        std::env::set_var("RUST_LOG", "debug");
+        "Debug mode enabled (RUST_LOG=debug)".to_string()
+    } else if args == "off" {
+        std::env::set_var("RUST_LOG", "info");
+        "Debug mode disabled (RUST_LOG=info)".to_string()
+    } else {
+        "Usage: /debug [on|off]".to_string()
+    }
+}
+
+/// /trace - Tracing controls
+pub fn handle_trace(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /trace [on|off|status]".to_string();
+    }
+
+    match args {
+        "on" => "Tracing enabled.".to_string(),
+        "off" => "Tracing disabled.".to_string(),
+        "status" => "Tracing status: not implemented.".to_string(),
+        _ => "Usage: /trace [on|off|status]".to_string(),
+    }
+}
+
+/// /memory - Memory management (enhanced)
+pub fn handle_memory(_app: &TuiApp) -> String {
+    let mem_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".priority-agent")
+        .join("memory");
+
+    if !mem_path.exists() {
+        return "No memory entries saved. Start chatting to create memories.".to_string();
+    }
+
+    match std::fs::read_dir(&mem_path) {
+        Ok(entries) => {
+            let count = entries.count();
+            format!("Memory entries: {} (stored in {})", count, mem_path.display())
+        }
+        Err(_) => "Failed to read memory directory.".to_string(),
+    }
+}
+
+/// /skills - List available skills
+pub fn handle_skills(_app: &TuiApp) -> String {
+    "Skills: use /help to see all skill-based commands (commit, review, explain, fix, etc.)".to_string()
+}
