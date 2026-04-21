@@ -2020,6 +2020,87 @@ pub async fn handle_remote(app: &mut TuiApp, args: &str) -> String {
     }
 }
 
+/// /dream - 启动梦境任务 Agent（后台探索性分析）
+pub async fn handle_dream(app: &mut TuiApp, args: &str) -> String {
+    match app.bundled_skills.get("dream") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_dream",
+                    true,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+
+            let prompt = format!(
+                "{}\n\n## Dream Task\n\n{}",
+                skill.content,
+                if args.is_empty() { "What would you like me to explore in the background?" } else { args }
+            );
+            app.send_message(prompt).await;
+            String::new()
+        }
+        None => "Skill 'dream' not found. The dream skill is not yet loaded.".to_string(),
+    }
+}
+
+/// /custom - Create a custom agent
+pub async fn handle_custom(app: &mut TuiApp, args: &str) -> String {
+    match app.bundled_skills.get("custom") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_custom",
+                    true,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+
+            let prompt = format!(
+                "{}\n\n## Custom Agent Request\n\n{}",
+                skill.content,
+                if args.is_empty() { "Describe the custom agent you want to create:" } else { args }
+            );
+            app.send_message(prompt).await;
+            String::new()
+        }
+        None => "Skill 'custom' not found.".to_string(),
+    }
+}
+
+/// /orchestrate - Multi-agent coordination
+pub async fn handle_orchestrate(app: &mut TuiApp, args: &str) -> String {
+    match app.bundled_skills.get("orchestrate") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_orchestrate",
+                    true,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+
+            let prompt = format!(
+                "{}\n\n## Orchestration Task\n\n{}",
+                skill.content,
+                if args.is_empty() { "What complex task would you like me to coordinate?" } else { args }
+            );
+            app.send_message(prompt).await;
+            String::new()
+        }
+        None => "Skill 'orchestrate' not found.".to_string(),
+    }
+}
+
 // ─── Batch 1 Commands (Phase 10) ──────────────────────────────────────────────
 
 /// /session - 会话管理

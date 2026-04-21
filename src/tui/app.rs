@@ -989,6 +989,9 @@ impl TuiApp {
             "/critic" => slash::handle_critic(self, args).await,
             "/assistant" => slash::handle_assistant(self, args).await,
             "/remote" => slash::handle_remote(self, args).await,
+            "/dream" => slash::handle_dream(self, args).await,
+            "/custom" => slash::handle_custom(self, args).await,
+            "/orchestrate" => slash::handle_orchestrate(self, args).await,
             // Phase 10 Extended: More commands
             "/rollback" => slash::handle_rollback(self, args).await,
             "/project" => slash::handle_project(self, args),

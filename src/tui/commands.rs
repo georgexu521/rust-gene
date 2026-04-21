@@ -344,6 +344,30 @@ pub const CMD_REMOTE: CommandDef = CommandDef::new(
     "Start a remote agent via bridge",
 );
 
+pub const CMD_DREAM: CommandDef = CommandDef::new(
+    "/dream",
+    &[],
+    "Agents",
+    "/dream [task]",
+    "Start a background exploratory analysis",
+);
+
+pub const CMD_CUSTOM: CommandDef = CommandDef::new(
+    "/custom",
+    &[],
+    "Agents",
+    "/custom [role] [domain]",
+    "Create a custom agent",
+);
+
+pub const CMD_ORCHESTRATE: CommandDef = CommandDef::new(
+    "/orchestrate",
+    &[],
+    "Agents",
+    "/orchestrate [task]",
+    "Coordinate multiple agents",
+);
+
 // Phase 10 Batch 1: Session & Control Commands
 pub const CMD_SESSION: CommandDef = CommandDef::new(
     "/session",
@@ -1002,6 +1026,9 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_CRITIC);
     registry.register(&CMD_ASSISTANT);
     registry.register(&CMD_REMOTE);
+    registry.register(&CMD_DREAM);
+    registry.register(&CMD_CUSTOM);
+    registry.register(&CMD_ORCHESTRATE);
     // Phase 10 Batch 1: Session & Control Commands
     registry.register(&CMD_SESSION);
     registry.register(&CMD_UNDO);
