@@ -34,7 +34,7 @@ impl Tool for ContextVisTool {
         })
     }
 
-    async fn execute(&self, params: Value, context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: Value, _context: ToolContext) -> ToolResult {
         let format = params.get("format")
             .and_then(|v| v.as_str())
             .unwrap_or("text");
