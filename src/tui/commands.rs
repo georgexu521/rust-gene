@@ -816,6 +816,111 @@ pub const CMD_ABOUT: CommandDef = CommandDef::new(
     "About this agent",
 );
 
+// Phase 10 Extended 3: Session management and utility commands
+pub const CMD_RESET: CommandDef = CommandDef::new(
+    "/reset",
+    &[],
+    "Session",
+    "/reset [session|all]",
+    "Reset session state",
+);
+
+pub const CMD_EXPORT: CommandDef = CommandDef::new(
+    "/export",
+    &[],
+    "Session",
+    "/export [json|md]",
+    "Export session data",
+);
+
+pub const CMD_IMPORT: CommandDef = CommandDef::new(
+    "/import",
+    &[],
+    "Session",
+    "/import <filepath>",
+    "Import session data",
+);
+
+pub const CMD_SAVE_SESSION: CommandDef = CommandDef::new(
+    "/save-session",
+    &[],
+    "Session",
+    "/save-session",
+    "Save current session",
+);
+
+pub const CMD_LOAD_SESSION: CommandDef = CommandDef::new(
+    "/load-session",
+    &[],
+    "Session",
+    "/load-session <session_id>",
+    "Load a session",
+);
+
+pub const CMD_MERGE: CommandDef = CommandDef::new(
+    "/merge",
+    &[],
+    "Session",
+    "/merge <session_id>",
+    "Merge sessions",
+);
+
+pub const CMD_CLEANUP: CommandDef = CommandDef::new(
+    "/cleanup",
+    &[],
+    "Config",
+    "/cleanup [sessions|cache|logs|all]",
+    "Cleanup old data",
+);
+
+pub const CMD_COMPACT: CommandDef = CommandDef::new(
+    "/compact",
+    &[],
+    "General",
+    "/compact",
+    "Compact context",
+);
+
+pub const CMD_SNIPPET: CommandDef = CommandDef::new(
+    "/snippet",
+    &[],
+    "General",
+    "/snippet [save|load|list] <name>",
+    "Manage code snippets",
+);
+
+pub const CMD_BOOKMARK: CommandDef = CommandDef::new(
+    "/bookmark",
+    &[],
+    "General",
+    "/bookmark [add|go|list]",
+    "Bookmark locations",
+);
+
+pub const CMD_TAG: CommandDef = CommandDef::new(
+    "/tag",
+    &[],
+    "General",
+    "/tag [add|list|find]",
+    "Tag items",
+);
+
+pub const CMD_SEARCH_CMD: CommandDef = CommandDef::new(
+    "/search",
+    &[],
+    "Session",
+    "/search <query>",
+    "Search within session",
+);
+
+pub const CMD_FILTER: CommandDef = CommandDef::new(
+    "/filter",
+    &[],
+    "Session",
+    "/filter [user|assistant|tool|all]",
+    "Filter messages",
+);
+
 /// 创建默认命令注册表
 pub fn default_command_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
@@ -922,6 +1027,20 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_UPTIME);
     registry.register(&CMD_VERSION);
     registry.register(&CMD_ABOUT);
+    // Phase 10 Extended 3: Session management and utility commands
+    registry.register(&CMD_RESET);
+    registry.register(&CMD_EXPORT);
+    registry.register(&CMD_IMPORT);
+    registry.register(&CMD_SAVE_SESSION);
+    registry.register(&CMD_LOAD_SESSION);
+    registry.register(&CMD_MERGE);
+    registry.register(&CMD_CLEANUP);
+    registry.register(&CMD_COMPACT);
+    registry.register(&CMD_SNIPPET);
+    registry.register(&CMD_BOOKMARK);
+    registry.register(&CMD_TAG);
+    registry.register(&CMD_SEARCH_CMD);
+    registry.register(&CMD_FILTER);
     registry
 }
 

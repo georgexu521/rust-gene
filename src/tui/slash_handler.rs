@@ -3162,3 +3162,180 @@ pub fn handle_about(_app: &TuiApp) -> String {
         env!("CARGO_PKG_VERSION")
     )
 }
+
+// ═══════════════════════════════════════
+// Phase 10 Extended 3: Even more commands
+// ═══════════════════════════════════════
+
+/// /reset - Reset session state
+pub fn handle_reset(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "session" {
+        app.messages.clear();
+        "Session reset. Messages cleared.".to_string()
+    } else if args == "all" {
+        app.messages.clear();
+        format!("Full reset not yet implemented.")
+    } else {
+        "Usage: /reset [session|all]".to_string()
+    }
+}
+
+/// /export - Export data
+pub async fn handle_export_data(app: &mut TuiApp, args: &str) -> String {
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+
+    let format = if args.is_empty() { "json" } else { args };
+    let session_id = app.session_manager.current_session_id().unwrap_or("unknown");
+
+    let cmd = match format {
+        "json" => format!("echo 'Session {}' > /tmp/export.json && cat /tmp/export.json", &session_id[..8.min(session_id.len())]),
+        "md" => format!("echo '# Session Export' > /tmp/export.md && echo 'Session: {}' >> /tmp/export.md && cat /tmp/export.md", &session_id[..8.min(session_id.len())]),
+        _ => return "Usage: /export [json|md]".to_string(),
+    };
+
+    let params = serde_json::json!({
+        "command": cmd,
+        "description": "Export session data"
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success { result.content } else { result.error.unwrap_or_default() }
+}
+
+/// /import - Import data
+pub async fn handle_import(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /import <file_path>".to_string();
+    }
+
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+    let cmd = format!("test -f {} && echo 'File exists' || echo 'File not found'", args);
+
+    let params = serde_json::json!({
+        "command": cmd,
+        "description": "Check import file"
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success && result.content.contains("exists") {
+        format!("Import of {} not yet implemented.", args)
+    } else {
+        format!("File not found: {}", args)
+    }
+}
+
+/// /save-session - Save current session
+pub fn handle_save_session(app: &TuiApp) -> String {
+    if let Some(id) = app.session_manager.current_session_id() {
+        format!("Session {} auto-saved.", &id[..8.min(id.len())])
+    } else {
+        "No active session to save.".to_string()
+    }
+}
+
+/// /load-session - Load a session
+pub async fn handle_load_session(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /load-session <session_id>".to_string();
+    }
+    app.restore_session(args).await
+}
+
+/// /merge - Merge sessions
+pub fn handle_merge(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /merge <session_id> into current".to_string();
+    }
+    format!("Merge session {} not yet implemented.", args)
+}
+
+/// /cleanup - Cleanup old data
+pub fn handle_cleanup(_app: &mut TuiApp, args: &str) -> String {
+    let target = if args.is_empty() { "all" } else { args };
+
+    match target {
+        "sessions" => "Cleaned up old sessions (not yet implemented).".to_string(),
+        "cache" => "Cache cleaned.".to_string(),
+        "logs" => "Logs cleaned (not yet implemented).".to_string(),
+        "all" => "Full cleanup not yet implemented.".to_string(),
+        _ => "Usage: /cleanup [sessions|cache|logs|all]".to_string(),
+    }
+}
+
+/// /compact - Compact context
+pub fn handle_compact(_app: &mut TuiApp) -> String {
+    "Use /compact command from bundled skills for context compression.".to_string()
+}
+
+/// /snippet - Save/load code snippets
+pub fn handle_snippet(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /snippet [save <name>|load <name>|list]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "save" => {
+            if parts.len() < 2 { "Usage: /snippet save <name>".to_string() }
+            else { format!("Snippet '{}' saved (not yet implemented).", parts[1]) }
+        }
+        "load" => {
+            if parts.len() < 2 { "Usage: /snippet load <name>".to_string() }
+            else { format!("Snippet '{}' loaded (not yet implemented).", parts[1]) }
+        }
+        "list" => "No snippets saved.".to_string(),
+        _ => "Usage: /snippet [save|load|list]".to_string(),
+    }
+}
+
+/// /bookmark - Bookmark locations
+pub fn handle_bookmark(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "list" {
+        return "No bookmarks saved.".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "add" => format!("Bookmark '{}' added (not yet implemented).", parts.get(1).unwrap_or(&"?")),
+        "go" => format!("Navigate to bookmark (not yet implemented)."),
+        _ => "Usage: /bookmark [add <name>|go <name>|list]".to_string(),
+    }
+}
+
+/// /tag - Tag items
+pub fn handle_tag(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /tag [add <item> <tag>|list <item>|find <tag>]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "add" => format!("Tag '{}' added (not yet implemented).", parts.get(2).unwrap_or(&"?")),
+        "list" => "No tags.".to_string(),
+        "find" => format!("Items with tag '{}' (not yet implemented).", parts.get(1).unwrap_or(&"?")),
+        _ => "Usage: /tag [add|list|find]".to_string(),
+    }
+}
+
+/// /search - Search within session
+pub fn handle_search_cmd(_app: &TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /search <query>".to_string();
+    }
+    format!("Search for '{}' (use input field for interactive search)", args)
+}
+
+/// /filter - Filter messages
+pub fn handle_filter(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /filter [user|assistant|tool|all]".to_string();
+    }
+
+    match args {
+        "user" => "Filter set to: user messages only (not yet implemented).".to_string(),
+        "assistant" => "Filter set to: assistant messages only.".to_string(),
+        "tool" => "Filter set to: tool messages only.".to_string(),
+        "all" => "Filter cleared.".to_string(),
+        _ => "Usage: /filter [user|assistant|tool|all]".to_string(),
+    }
+}

@@ -904,8 +904,6 @@ impl TuiApp {
             }
             "/sessions" => slash::handle_sessions(self),
             "/new" => slash::handle_new(self).await,
-            "/export" => slash::handle_export(self),
-            "/search" => slash::handle_search(self, args),
             "/stats" => slash::handle_stats(self),
             "/settings" => {
                 let config = crate::services::config::AppConfig::load().unwrap_or_default();
@@ -1011,6 +1009,19 @@ impl TuiApp {
             "/uptime" => slash::handle_uptime(self),
             "/version" => slash::handle_version(self),
             "/about" => slash::handle_about(self),
+            // Phase 10 Extended 3: Session management and utility commands
+            "/reset" => slash::handle_reset(self, args),
+            "/export" => slash::handle_export_data(self, args).await,
+            "/import" => slash::handle_import(self, args).await,
+            "/save-session" => slash::handle_save_session(self),
+            "/load-session" => slash::handle_load_session(self, args).await,
+            "/merge" => slash::handle_merge(self, args),
+            "/cleanup" => slash::handle_cleanup(self, args),
+            "/compact" => slash::handle_compact(self),
+            "/snippet" => slash::handle_snippet(self, args),
+            "/bookmark" => slash::handle_bookmark(self, args),
+            "/tag" => slash::handle_tag(self, args),
+            "/filter" => slash::handle_filter(self, args),
             _ => {
                 format!(
                     "Unknown command: {}. Type /help for available commands.",
