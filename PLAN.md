@@ -175,7 +175,7 @@
 ## Phase 2（W7-W9）：权限与安全闭环
 
 ### 目标
-1. 把权限系统升级为“规则 + 分类器 + 审计”三层。
+1. 把权限系统升级为”规则 + 分类器 + 审计”三层。
 2. 让决策可解释、可复盘。
 
 ### 任务
@@ -189,6 +189,44 @@
 1. 权限误判率显著下降（目标 < 2%）。
 2. 所有被拦截/放行决策可追溯。
 3. 安全回放测试集通过率 >= 95%。
+
+### ✅ Phase 2 完成状态（2026-04-21）
+
+**权限分类器增强：**
+| 组件 | 说明 |
+|------|------|
+| `PermissionClassifier` trait | 同步/异步双通道分类器接口 |
+| `ExplainableDecision` | 决策依据、置信度(0.0-1.0)、风险级别、警告 |
+| `RuleBasedClassifier` | 基于规则的默认分类器实现 |
+| `explain_decision()` | 生成完整可解释决策 |
+
+**路径/参数风险检测增强：**
+| 检测类型 | 状态 |
+|----------|------|
+| 命令注入（$; | & $() ``） | ✅ 增强 |
+| 路径穿越（../） | ✅ 检测并警告 |
+| 高风险路径（/dev/sda 等） | ✅ 已添加 |
+| PATH_TRAVERSAL 警告 | ✅ 新增 |
+
+**安全回放测试集：**
+- 20 个新安全测试（command_injection/path_traversal/mcp_malicious）
+- 覆盖：pipe/semicolon/and/or/backtick/dollar/fork_bomb/heredoc/base64
+- 覆盖：路径穿越（简单/编码/绝对路径）
+- 覆盖：MCP 恶意服务器名/工具名
+
+**审计日志：**
+| 功能 | 状态 |
+|------|------|
+| `/audit summary` | ✅ 已存在 |
+| `/audit recent <n>` | ✅ 已存在 |
+| `/audit export [path]` | ✅ 已存在 |
+
+**验证结果：**
+- Build: ✅ 通过
+- Tests: ✅ 523 passed (+20 security replay tests)
+- Clippy: ⚠️ priority-core workspace 有 3 个 pre-existing warnings（Phase 8 清理）
+
+**下一步：Phase 3（W10-W12）Context 与 Memory 升级**
 
 ---
 

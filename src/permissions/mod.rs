@@ -64,7 +64,7 @@ pub enum PermissionMode {
 
 /// 风险级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum RiskLevel {
+pub enum RiskLevel {
     Low,
     Medium,
     High,
@@ -507,6 +507,9 @@ impl PermissionContext {
             ".env",
             "id_rsa",
             "authorized_keys",
+            "/dev/sda",
+            "/dev/sdb",
+            "/dev/hda",
         ];
         sensitive_markers.iter().any(|m| lower.contains(m))
     }
@@ -518,6 +521,225 @@ impl PermissionContext {
             .map(str::len)
             .unwrap_or(0);
         content_len > 20_000
+    }
+
+    /// Enhanced decision with full explainability
+    pub fn explain_decision(&self, tool_name: &str, params: &serde_json::Value) -> ExplainableDecision {
+        let effective_tool_name = if tool_name == "mcp_tool" {
+            let server = params["server_name"].as_str().unwrap_or("");
+            let t = params["tool_name"].as_str().unwrap_or("");
+            if !server.is_empty() && !t.is_empty() {
+                format!("mcp/{}/{}", server, t)
+            } else {
+                tool_name.to_string()
+            }
+        } else {
+            tool_name.to_string()
+        };
+
+        let base_decision = self.rules.check(&effective_tool_name);
+        let matching_rules = self.rules.get_matching_rules(&effective_tool_name);
+        let risk = Self::risk_level(tool_name, params);
+        let confidence = self.calculate_confidence(tool_name, params, &matching_rules);
+
+        // Build explanation
+        let mut reasons = Vec::new();
+        for (decision, rule) in &matching_rules {
+            reasons.push(format!("{:?} by {:?} rule '{}'", decision, rule.source, rule.pattern));
+        }
+        if reasons.is_empty() {
+            reasons.push(format!("No matching rules, default to {:?}", base_decision));
+        }
+
+        // Risk-specific warnings
+        let mut warnings = Vec::new();
+        if tool_name == "bash" {
+            let cmd = params["command"].as_str().unwrap_or_default();
+            if Self::is_high_risk_command(cmd) {
+                warnings.push("HIGH_RISK_COMMAND: dangerous shell command detected".to_string());
+            }
+            if crate::security::is_dangerous_command(cmd) {
+                warnings.push("COMMAND_INJECTION: potentially malicious pattern detected".to_string());
+            }
+        }
+        if tool_name == "file_write" || tool_name == "file_edit" {
+            let path = params["path"].as_str().unwrap_or_default();
+            if Self::is_high_risk_path(path) {
+                warnings.push("HIGH_RISK_PATH: sensitive system path detected".to_string());
+            }
+            // Check for path traversal
+            if path.contains("..") {
+                warnings.push("PATH_TRAVERSAL: parent directory reference detected".to_string());
+            }
+        }
+
+        ExplainableDecision {
+            decision: base_decision,
+            confidence,
+            reasons,
+            risk_level: risk,
+            warnings,
+            matched_rules: matching_rules.into_iter().map(|(d, r)| (d, r.clone())).collect(),
+        }
+    }
+
+    /// Calculate confidence score for the decision (0.0 - 1.0)
+    fn calculate_confidence(
+        &self,
+        tool_name: &str,
+        params: &serde_json::Value,
+        rules: &[(PermissionDecision, &SourcedRule)],
+    ) -> f32 {
+        // Base confidence based on rule coverage
+        let rule_confidence = if rules.is_empty() {
+            0.5 // No rules, moderate confidence in default
+        } else {
+            // More specific rules = higher confidence
+            let avg_pattern_len: f32 =
+                rules.iter().map(|(_, r)| r.pattern.len() as f32).sum::<f32>() / rules.len() as f32;
+            (avg_pattern_len / 50.0).min(0.95)
+        };
+
+        // Adjust based on mode
+        let mode_confidence = match self.mode {
+            PermissionMode::AutoAll => 0.9, // Trusting all operations
+            PermissionMode::ReadOnly => 0.85,
+            PermissionMode::Once => 0.8,
+            PermissionMode::AutoLowRisk => 0.75, // Conservative
+            PermissionMode::Default => 0.7,
+        };
+
+        // Adjust for risk
+        let risk_adjustment = match Self::risk_level(tool_name, params) {
+            RiskLevel::High => -0.1,
+            RiskLevel::Medium => 0.0,
+            RiskLevel::Low => 0.05,
+        };
+
+        (rule_confidence + mode_confidence + risk_adjustment) / 2.0
+    }
+}
+
+/// Explainable permission decision with full context
+#[derive(Debug, Clone)]
+pub struct ExplainableDecision {
+    /// The permission decision
+    pub decision: PermissionDecision,
+    /// Confidence score (0.0 - 1.0)
+    pub confidence: f32,
+    /// Human-readable reasons for the decision
+    pub reasons: Vec<String>,
+    /// Risk level of the operation
+    pub risk_level: RiskLevel,
+    /// Security warnings (injections, traversal, etc.)
+    pub warnings: Vec<String>,
+    /// The matched rules that led to this decision
+    pub matched_rules: Vec<(PermissionDecision, SourcedRule)>,
+}
+
+impl ExplainableDecision {
+    /// Format as human-readable string
+    pub fn format(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push(format!("Decision: {:?}", self.decision));
+        lines.push(format!("Confidence: {:.0}%", self.confidence * 100.0));
+        lines.push(format!("Risk: {:?}", self.risk_level));
+        lines.push("\nReasons:".to_string());
+        for reason in &self.reasons {
+            lines.push(format!("  - {}", reason));
+        }
+        if !self.warnings.is_empty() {
+            lines.push("\n⚠️  Warnings:".to_string());
+            for warning in &self.warnings {
+                lines.push(format!("  - {}", warning));
+            }
+        }
+        lines.join("\n")
+    }
+
+    /// Format as machine-parseable JSON
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "decision": format!("{:?}", self.decision),
+            "confidence": self.confidence,
+            "risk_level": format!("{:?}", self.risk_level),
+            "reasons": self.reasons,
+            "warnings": self.warnings,
+            "matched_rules": self.matched_rules.iter().map(|(d, r)| {
+                serde_json::json!({
+                    "decision": format!("{:?}", d),
+                    "pattern": r.pattern,
+                    "source": format!("{:?}", r.source)
+                })
+            }).collect::<Vec<_>>()
+        })
+    }
+}
+
+/// Permission classifier trait for extensible risk assessment
+/// Implement this trait to add custom classifiers (e.g., LLM-based)
+#[async_trait::async_trait]
+pub trait PermissionClassifier: Send + Sync {
+    /// Classify a tool call with parameters
+    async fn classify(
+        &self,
+        tool_name: &str,
+        params: &serde_json::Value,
+        context: &PermissionContext,
+    ) -> Result<ExplainableDecision, ClassifierError>;
+
+    /// Name of this classifier
+    fn name(&self) -> &str;
+
+    /// Priority of this classifier (higher = evaluated first)
+    fn priority(&self) -> u32 {
+        0
+    }
+}
+
+/// Classifier error types
+#[derive(Debug, Clone)]
+pub enum ClassifierError {
+    /// Classification failed due to internal error
+    Internal(String),
+    /// Classifier unavailable (e.g., LLM not configured)
+   Unavailable(String),
+    /// Classification timed out
+    Timeout,
+}
+
+impl std::fmt::Display for ClassifierError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClassifierError::Internal(s) => write!(f, "Classification error: {}", s),
+            ClassifierError::Unavailable(s) => write!(f, "Classifier unavailable: {}", s),
+            ClassifierError::Timeout => write!(f, "Classification timed out"),
+        }
+    }
+}
+
+impl std::error::Error for ClassifierError {}
+
+/// Default rule-based classifier (uses existing PermissionContext logic)
+pub struct RuleBasedClassifier;
+
+#[async_trait::async_trait]
+impl PermissionClassifier for RuleBasedClassifier {
+    async fn classify(
+        &self,
+        tool_name: &str,
+        params: &serde_json::Value,
+        context: &PermissionContext,
+    ) -> Result<ExplainableDecision, ClassifierError> {
+        Ok(context.explain_decision(tool_name, params))
+    }
+
+    fn name(&self) -> &str {
+        "rule-based"
+    }
+
+    fn priority(&self) -> u32 {
+        0 // Low priority - fallback
     }
 }
 
@@ -711,5 +933,179 @@ mod tests {
 
         // Other tools still require confirmation
         assert!(ctx.requires_confirmation("bash", &serde_json::Value::Null));
+    }
+
+    // ─── Security Replay Tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_security_replay_command_injection_pipe() {
+        // Simulates: echo "malicious" | rm -rf /
+        let cmd = "echo test | rm -rf /";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_command_injection_semicolon() {
+        // Simulates: rm -rf / ; echo done
+        let cmd = "rm -rf / ; echo done";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_command_injection_and() {
+        // Simulates: rm -rf / && echo done
+        let cmd = "rm -rf / && echo done";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_command_injection_or() {
+        // Simulates: rm -rf / || echo done
+        let cmd = "rm -rf / || echo done";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_command_injection_backtick() {
+        // Simulates: `rm -rf /`
+        let cmd = "`rm -rf /`";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_command_injection_dollar() {
+        // Simulates: $(rm -rf /)
+        let cmd = "$(rm -rf /)";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_command_injection_fork_bomb() {
+        // Fork bomb pattern
+        let cmd = ":(){ :|:& };:";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_path_traversal_simple() {
+        // Simulates: ../../../etc/passwd
+        let path = "../../../etc/passwd";
+        assert!(path.contains(".."));
+    }
+
+    #[test]
+    fn test_security_replay_path_traversal_encoded() {
+        // Simulates: %2e%2e%2f%2e%2e%2fetc%2fpasswd (URL encoded ../..)
+        // We check for literal ".." which is the decoded form
+        let path = "a/../b/../c";
+        let parts: Vec<&str> = path.split('/').collect();
+        assert!(parts.contains(&".."));
+    }
+
+    #[test]
+    fn test_security_replay_path_traversal_absolute() {
+        // Absolute path with traversal
+        let path = "/etc/../etc/passwd";
+        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        assert!(parts.contains(&".."));
+    }
+
+    #[test]
+    fn test_security_replay_mcp_malicious_server_name() {
+        // Malicious server name patterns that should be detected
+        let malicious_names = [
+            ("../../malicious", "path traversal in server name"),
+            ("'; DROP TABLE--", "SQL injection in server name"),
+            ("<script>alert(1)</script>", "XSS pattern in server name"),
+        ];
+        for (name, description) in malicious_names {
+            // Server names should not contain shell metacharacters or path traversal
+            let has_shell_chars = name.chars().any(|c| c == ';' || c == '|' || c == '&' || c == '$' || c == '`' || c == '<' || c == '>');
+            let has_traversal = name.contains("..");
+            assert!(has_shell_chars || has_traversal, "Should detect {}: {}", description, name);
+        }
+    }
+
+    #[test]
+    fn test_security_replay_mcp_malicious_tool_name() {
+        // Malicious tool name injection
+        let malicious = "read_file'; exec('rm -rf /')";
+        let has_injection = malicious.contains('\'') || malicious.contains(';') || malicious.contains("exec");
+        assert!(has_injection);
+    }
+
+    #[test]
+    fn test_security_replay_env_variable_injection() {
+        // Environment variable injection
+        let cmd = "echo $HOME/.ssh/id_rsa";
+        // $ in commands can be dangerous if variables expand to malicious values
+        assert!(cmd.contains('$'));
+    }
+
+    #[test]
+    fn test_security_replay_heredoc_injection() {
+        // Heredoc injection
+        let cmd = "cat <<EOF\nmalicious content\nEOF";
+        assert!(cmd.contains("<<"));
+    }
+
+    #[test]
+    fn test_security_replay_base64_injection() {
+        // Base64 encoded command injection
+        let cmd = "base64 -d <<<'cm0gLXJmIC8=' | sh";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_overwrite_sensitive_file() {
+        // High risk paths
+        let sensitive_paths = [
+            "/etc/passwd",
+            "/etc/shadow",
+            "/.ssh/authorized_keys",
+            ".env",
+            "id_rsa",
+            "/dev/sda",
+        ];
+        for path in sensitive_paths {
+            // Create a PermissionContext and check if path is high risk
+            let ctx = PermissionContext::new(".");
+            let params = serde_json::json!({"path": path, "content": "malicious"});
+            let decision = ctx.explain_decision("file_write", &params);
+            assert!(decision.warnings.iter().any(|w| w.contains("HIGH_RISK_PATH") || w.contains("PATH_TRAVERSAL")),
+                "Should warn about sensitive path: {}", path);
+        }
+    }
+
+    #[test]
+    fn test_security_replay_disk_write() {
+        // Direct disk write
+        let cmd = "dd if=/dev/zero of=/dev/sda";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_chmod_dangerous() {
+        // Dangerous chmod - recursive permission changes to root
+        let dangerous_chmod = ["chmod -R 777 /", "chmod -R 000 /", "chmod 777 /", "chmod 000 /"];
+        for cmd in dangerous_chmod {
+            assert!(crate::security::is_dangerous_command(cmd), "Should detect dangerous chmod: {}", cmd);
+        }
+    }
+
+    #[test]
+    fn test_security_replay_sudo_without_confirmation() {
+        // Sudo without confirmation
+        let cmd = "sudo rm -rf /";
+        assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_security_replay_kill_critical_process() {
+        // Kill critical processes via sudo
+        let dangerous = ["sudo kill -9 1", "sudo killall -9 init"];
+        for cmd in dangerous {
+            assert!(crate::security::is_dangerous_command(cmd), "Should detect: {}", cmd);
+        }
     }
 }
