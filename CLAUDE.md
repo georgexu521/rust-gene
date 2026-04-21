@@ -1655,18 +1655,14 @@ priority-agent/ (workspace)
 **已完成**：
 - errors.rs ✅
 - workspace 结构 ✅
+- permissions/ 循环依赖已解决（提取 security 模块）✅
 
 **待解决**：
-- permissions/ 循环依赖（依赖 tools::bash_tool::is_dangerous_command）
-- 剩余 20+ 模块迁移
+- 剩余 20+ 模块迁移到 priority-core
 
 **解决方案**：
 
-1. **解循环依赖**：
-   - 将 `is_dangerous_command` 移到独立函数或新模块
-   - 或在 permissions/ 中重构该依赖
-
-2. **继续迁移**：
+1. **继续迁移**：
    - state/ → priority-core
    - services/api/ → priority-core
    - engine/ → priority-core
@@ -1686,6 +1682,93 @@ priority-agent/ (workspace)
 2. **Task 2（WebSocket MCP）** — Phase 4 收尾
 3. **Task 1（Advanced Agents）** — 架构改动大，后做
 4. **Task 4（Workspace 拆分）** — 技术债务清理
+
+---
+
+## Phase 10：命令补齐计划
+
+目标：逐步补充缺失命令，每次新增 10 条，最终达到 60+ 命令覆盖
+
+### 缺失命令清单（39 条已识别 + 30+ 未枚举）
+
+**第一批（10 条）- 高频实用命令**
+| 命令 | 描述 | 优先级 |
+|------|------|--------|
+| `/session` | 会话管理（查看/切换） | P0 |
+| `/undo` | 撤销上一次操作 | P0 |
+| `/redo` | 重做 | P0 |
+| `/retry` | 重试上一次 LLM 调用 | P0 |
+| `/stop` | 停止当前正在进行的操作 | P0 |
+| `/reload` | 重新加载配置/插件 | P1 |
+| `/share` | 分享当前会话 | P1 |
+| `/token` | 显示当前 token 使用情况 | P1 |
+| `/lsp` | LSP 服务器管理 | P1 |
+| `/npm` | npm 包管理辅助 | P1 |
+
+**第二批（10 条）- 工具/调试命令**
+| 命令 | 描述 | 优先级 |
+|------|------|--------|
+| `/hooks` | 查看/管理 hooks | P1 |
+| `/profiling` | 性能分析 | P2 |
+| `/prompt` | 提示词管理 | P2 |
+| `/migrate` | 迁移工具 | P2 |
+| `/focus` | 专注模式 | P2 |
+| `/pause` | 暂停对话 | P2 |
+| `/install` | 安装依赖 | P2 |
+| `/skeleton` | 生成代码骨架 | P2 |
+| `/branch` | Git 分支操作 | P2 |
+| `/color` | 颜色配置 | P3 |
+
+**第三批（10 条）- 集成/高级命令**
+| 命令 | 描述 | 优先级 |
+|------|------|--------|
+| `/webhook` | Webhook 管理 | P2 |
+| `/wizard` | 向导模式 | P2 |
+| `/workspace` | 工作区管理 | P2 |
+| `/slack` | Slack 集成 | P3 |
+| `/stealth` | 隐身模式 | P3 |
+| `/shadow` | 影子模式 | P3 |
+| `/reject` | 拒绝建议 | P3 |
+| `/subscribe` | 订阅更新 | P3 |
+| `/slots` | 槽位管理 | P3 |
+| `/ticker` |  ticker | P3 |
+
+**第四批（9 条）- 收尾**
+| 命令 | 描述 | 优先级 |
+|------|------|--------|
+| `/config` | 交互式配置 | P1 |
+| `/copy` | 复制内容 | P1 |
+| `/desktop` | 桌面集成 | P2 |
+| `/chrome` | Chrome 集成 | P3 |
+| `/effort` | 预估工作量 | P2 |
+| `/preamble` | 修改前置提示 | P2 |
+| `/untrap` | 取消拦截 | P3 |
+| `/verbose` | 详细输出 | P3 |
+| `/write` | 写入文件 | P2 |
+
+### 实施顺序
+
+1. **Batch 1（第一批）**：session, undo, redo, retry, stop, reload, share, token, lsp, npm
+2. **Batch 2（第二批）**：hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color
+3. **Batch 3（第三批）**：webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker
+4. **Batch 4（第四批）**：config, copy, desktop, chrome, effort, preamble, untrap, verbose, write
+
+### Phase 10 当前状态
+
+- 🔄 Batch 1（10 条）：未开始
+- ⏳ Batch 2（10 条）：待处理
+- ⏳ Batch 3（10 条）：待处理
+- ⏳ Batch 4（9 条）：待处理
+
+---
+
+### 验证标准
+
+每批完成后：
+1. `cargo test` 通过
+2. `/help` 中可见新命令
+3. 更新 `docs/CLAUDE_GAP_SCORECARD.md`
+4. 命令 gap 减少 10 条
 
 ### Phase 9 当前状态
 

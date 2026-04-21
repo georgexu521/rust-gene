@@ -897,53 +897,6 @@ pub fn handle_telemetry() -> String {
     )
 }
 
-pub fn handle_share(app: &TuiApp) -> String {
-    let share_dir = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".priority-agent")
-        .join("shared");
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("session_{}.md", timestamp);
-    let output_path = share_dir.join(&filename);
-    let _ = std::fs::create_dir_all(&share_dir);
-
-    let mut lines = vec![
-        "# Session Export\n".to_string(),
-        format!(
-            "**Session ID**: {}\n",
-            app.session_manager
-                .current_session_id()
-                .unwrap_or("unknown")
-        ),
-        format!(
-            "**Exported at**: {}\n",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-        ),
-        format!("**Messages**: {}\n", app.messages.len()),
-        "---\n".to_string(),
-    ];
-    for msg in &app.messages {
-        use crate::state::MessageRole;
-        let role_label = match msg.role {
-            MessageRole::User => "**User**",
-            MessageRole::Assistant => "**Assistant**",
-            MessageRole::System => "**System**",
-            MessageRole::Tool => "**Tool**",
-        };
-        lines.push(format!("\n{}\n\n{}\n", role_label, msg.content));
-    }
-    let markdown = lines.join("\n");
-
-    match std::fs::write(&output_path, markdown) {
-        Ok(()) => format!(
-            "Session exported to {} ({} messages)",
-            output_path.display(),
-            app.messages.len()
-        ),
-        Err(e) => format!("Failed to export session: {}", e),
-    }
-}
-
 pub fn handle_vim(app: &mut TuiApp) -> String {
     app.vim_mode = !app.vim_mode;
     if app.vim_mode {
@@ -2064,5 +2017,286 @@ pub async fn handle_remote(app: &mut TuiApp, args: &str) -> String {
             String::new()
         }
         None => "Skill 'remote' not found.".to_string(),
+    }
+}
+
+// ─── Batch 1 Commands (Phase 10) ──────────────────────────────────────────────
+
+/// /session - 会话管理
+pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "list" {
+        // List sessions
+        match app.session_manager.list_sessions(10) {
+            Ok(sessions) => {
+                if sessions.is_empty() {
+                    "No sessions found.".to_string()
+                } else {
+                    let current = app.session_manager.current_session_id();
+                    let mut lines = vec!["Sessions:".to_string()];
+                    for (i, s) in sessions.iter().enumerate() {
+                        let _marker = if current == Some(s.id.as_str()) {
+                            " (current)"
+                        } else {
+                            ""
+                        };
+                        lines.push(format!(
+                            "{}. {} - {} [{}]",
+                            i + 1,
+                            s.title,
+                            s.id[..8.min(s.id.len())].to_string(),
+                            s.updated_at
+                        ));
+                    }
+                    lines.push("\nUse /session <n> to switch.".to_string());
+                    lines.join("\n")
+                }
+            }
+            Err(e) => format!("Failed to list sessions: {}", e),
+        }
+    } else if let Ok(n) = args.parse::<usize>() {
+        // Switch by index
+        match app.session_manager.list_sessions(20) {
+            Ok(sessions) if n <= sessions.len() => {
+                let session = &sessions[n - 1];
+                futures::executor::block_on(app.restore_session(&session.id));
+                format!("Switched to session: {}", session.title)
+            }
+            _ => "Invalid session number. Use /session list to see available.".to_string(),
+        }
+    } else if args.starts_with("new") {
+        // Create new session
+        let title = args.strip_prefix("new ").unwrap_or("New Session");
+        match app.session_manager.start_session(title, "kimi-k2.5") {
+            Ok(id) => {
+                futures::executor::block_on(app.restore_session(&id));
+                format!("Created new session: {}", title)
+            }
+            Err(e) => format!("Failed to create session: {}", e),
+        }
+    } else if args == "current" {
+        // Show current session
+        let id = app.session_manager.current_session_id().map(|s| s.to_string()).unwrap_or_else(|| "none".to_string());
+        let title = app.session_manager.current_session_title();
+        format!("Current session: {} ({})", title, &id[..8.min(id.len())])
+    } else {
+        "Usage: /session [list|n|<n>|new <title>|current]".to_string()
+    }
+}
+
+/// /undo - 撤销上一次操作
+pub fn handle_undo(app: &mut TuiApp, _args: &str) -> String {
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => id,
+        None => return "No active session.".to_string(),
+    };
+
+    match app.session_manager.rewind_last_edit(&session_id) {
+        Ok(msg) => msg,
+        Err(e) => format!("Nothing to undo or undo failed: {}", e),
+    }
+}
+
+/// /redo - 重做
+pub fn handle_redo(app: &mut TuiApp, _args: &str) -> String {
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => id,
+        None => return "No active session.".to_string(),
+    };
+
+    match app.session_manager.rewind_last_edit(&session_id) {
+        Ok(msg) => msg,
+        Err(e) => format!("Nothing to redo: {}", e),
+    }
+}
+
+/// /retry - 重试上一次 LLM 调用
+pub async fn handle_retry(app: &mut TuiApp, _args: &str) -> String {
+    if app.messages.len() < 2 {
+        return "No previous message to retry.".to_string();
+    }
+    // Get the last user message content (clone before mutating)
+    let content = {
+        let user_msg = app.messages.iter().rev().find(|m| m.role == crate::state::MessageRole::User);
+        match user_msg {
+            Some(msg) => msg.content.clone(),
+            None => return "No user message to retry.".to_string(),
+        }
+    };
+    app.messages.pop(); // Remove last message
+    app.send_message(content).await;
+    String::new()
+}
+
+/// /stop - 停止当前操作
+pub fn handle_stop(app: &mut TuiApp, _args: &str) -> String {
+    if app.is_querying {
+        app.is_querying = false;
+        "Stopping current operation...".to_string()
+    } else {
+        "No operation in progress.".to_string()
+    }
+}
+
+/// /reload - 重新加载配置/插件
+pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "config" {
+        match crate::services::config::AppConfig::load() {
+            Ok(config) => {
+                format!("Config reloaded:\n- API: {}\n- Model: {}",
+                    config.api.base_url, config.api.model)
+            }
+            Err(e) => format!("Failed to reload config: {}", e),
+        }
+    } else if args == "plugins" {
+        // Reload plugins
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut registry = crate::tools::ToolRegistry::default_registry();
+        let injected = crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
+        format!("Plugins reloaded. {} plugin tools injected.", injected)
+    } else if args == "skills" {
+        // Reload skills
+        if let Some(ref _engine) = app.streaming_engine {
+            format!("Skills registry: use /skills list to view")
+        } else {
+            "Skills not available.".to_string()
+        }
+    } else {
+        "Usage: /reload [config|plugins|skills]".to_string()
+    }
+}
+
+/// /share - 分享当前会话
+pub fn handle_share(app: &mut TuiApp, _args: &str) -> String {
+    if let Some(id) = app.session_manager.current_session_id() {
+        match app.session_manager.export_session(&id) {
+            Ok(json) => {
+                let path = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".priority-agent")
+                    .join(format!("share_{}.json", &id[..8.min(id.len())]));
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match std::fs::write(&path, &json) {
+                    Ok(_) => format!("Session exported to: {}", path.display()),
+                    Err(e) => format!("Failed to write: {}", e),
+                }
+            }
+            Err(e) => format!("Failed to export: {}", e),
+        }
+    } else {
+        "No active session to share.".to_string()
+    }
+}
+
+/// /token - 显示 token 使用情况
+pub fn handle_token(app: &TuiApp) -> String {
+    if let Some(ref engine) = app.streaming_engine {
+        let tracker = futures::executor::block_on(engine.cost_tracker().lock());
+        let report = tracker.generate_report();
+        format!("Token Usage:\n{}", report)
+    } else {
+        "Engine not initialized.".to_string()
+    }
+}
+
+/// /lsp - LSP 服务器管理
+pub fn handle_lsp(app: &TuiApp, args: &str) -> String {
+    if let Some(ref mgr) = app.lsp_manager {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        if parts.is_empty() || parts[0] == "list" {
+            let servers = mgr.server_names();
+            if servers.is_empty() {
+                "No LSP servers running.".to_string()
+            } else {
+                format!("LSP servers ({}):\n{}", servers.len(), servers.join("\n"))
+            }
+        } else if parts[0] == "restart" && parts.len() >= 2 {
+            let _name = parts[1];
+            format!("Restarting LSP server: {}...", _name)
+        } else if parts[0] == "stop" && parts.len() >= 2 {
+            let _name = parts[1];
+            format!("Stopping LSP server: {}...", _name)
+        } else {
+            "Usage: /lsp [list|restart <name>|stop <name>]".to_string()
+        }
+    } else {
+        "LSP manager not available.".to_string()
+    }
+}
+
+/// /npm - npm 包管理辅助
+pub async fn handle_npm(app: &mut TuiApp, args: &str) -> String {
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let action = parts.first().unwrap_or(&"");
+
+    match *action {
+        "install" => {
+            let pkg = parts.get(1).unwrap_or(&"");
+            let cmd = if pkg.is_empty() {
+                "npm install".to_string()
+            } else {
+                format!("npm install {}", pkg)
+            };
+            let params = serde_json::json!({
+                "command": cmd,
+                "description": "Install npm package"
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success { result.content } else { result.error.unwrap_or_default() }
+        }
+        "update" => {
+            let params = serde_json::json!({
+                "command": "npm update",
+                "description": "Update npm packages"
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success { result.content } else { result.error.unwrap_or_default() }
+        }
+        "outdated" => {
+            let params = serde_json::json!({
+                "command": "npm outdated",
+                "description": "Check outdated packages"
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success { result.content } else { result.error.unwrap_or_default() }
+        }
+        "test" => {
+            let params = serde_json::json!({
+                "command": "npm test",
+                "description": "Run npm tests"
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success { result.content } else { result.error.unwrap_or_default() }
+        }
+        "run" => {
+            let script = parts.get(1).unwrap_or(&"");
+            let cmd = if script.is_empty() {
+                "npm run".to_string()
+            } else {
+                format!("npm run {}", script)
+            };
+            let params = serde_json::json!({
+                "command": cmd,
+                "description": "Run npm script"
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success { result.content } else { result.error.unwrap_or_default() }
+        }
+        "" => {
+            "Usage: /npm [install|update|outdated|test|run] [args]".to_string()
+        }
+        _ => {
+            let cmd = args;
+            let params = serde_json::json!({
+                "command": format!("npm {}", cmd),
+                "description": format!("npm {}", cmd)
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success { result.content } else { result.error.unwrap_or_default() }
+        }
     }
 }

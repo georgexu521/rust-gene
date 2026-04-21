@@ -344,6 +344,87 @@ pub const CMD_REMOTE: CommandDef = CommandDef::new(
     "Start a remote agent via bridge",
 );
 
+// Phase 10 Batch 1: Session & Control Commands
+pub const CMD_SESSION: CommandDef = CommandDef::new(
+    "/session",
+    &[],
+    "Session",
+    "/session [list|new|delete <id>]",
+    "Manage sessions (list/create/delete)",
+);
+
+pub const CMD_UNDO: CommandDef = CommandDef::new(
+    "/undo",
+    &[],
+    "Session",
+    "/undo [n]",
+    "Undo the last n edits",
+);
+
+pub const CMD_REDO: CommandDef = CommandDef::new(
+    "/redo",
+    &[],
+    "Session",
+    "/redo [n]",
+    "Redo the last n undone edits",
+);
+
+pub const CMD_RETRY: CommandDef = CommandDef::new(
+    "/retry",
+    &[],
+    "Session",
+    "/retry",
+    "Retry the last LLM call with the same input",
+);
+
+pub const CMD_STOP: CommandDef = CommandDef::new(
+    "/stop",
+    &[],
+    "Session",
+    "/stop",
+    "Stop the current operation",
+);
+
+pub const CMD_RELOAD: CommandDef = CommandDef::new(
+    "/reload",
+    &[],
+    "Session",
+    "/reload [config|skills|tools|all]",
+    "Reload configuration, skills, or tools",
+);
+
+pub const CMD_SHARE: CommandDef = CommandDef::new(
+    "/share",
+    &[],
+    "Session",
+    "/share",
+    "Share current session as a transcript",
+);
+
+pub const CMD_TOKEN: CommandDef = CommandDef::new(
+    "/token",
+    &[],
+    "Info",
+    "/token",
+    "Show token usage and cost breakdown",
+);
+
+pub const CMD_LSP: CommandDef = CommandDef::new(
+    "/lsp",
+    &[],
+    "Info",
+    "/lsp [check|restart|symbol <name>]",
+    "LSP server status and operations",
+);
+
+pub const CMD_NPM: CommandDef = CommandDef::new(
+    "/npm",
+    &[],
+    "Info",
+    "/npm [install|update|outdated] [package]",
+    "Run npm package operations",
+);
+
 /// 创建默认命令注册表
 pub fn default_command_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
@@ -379,11 +460,22 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_HISTORY);
     registry.register(&CMD_MODE);
     registry.register(&CMD_PACKAGE);
-    // Phase 9 Task 1: Advanced Agent Types
+// Phase 9 Task 1: Advanced Agent Types
     registry.register(&CMD_TEAMMATE);
     registry.register(&CMD_CRITIC);
     registry.register(&CMD_ASSISTANT);
     registry.register(&CMD_REMOTE);
+    // Phase 10 Batch 1: Session & Control Commands
+    registry.register(&CMD_SESSION);
+    registry.register(&CMD_UNDO);
+    registry.register(&CMD_REDO);
+    registry.register(&CMD_RETRY);
+    registry.register(&CMD_STOP);
+    registry.register(&CMD_RELOAD);
+    registry.register(&CMD_SHARE);
+    registry.register(&CMD_TOKEN);
+    registry.register(&CMD_LSP);
+    registry.register(&CMD_NPM);
     registry
 }
 

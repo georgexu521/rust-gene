@@ -866,17 +866,18 @@ impl TuiApp {
                     "Model: unavailable (no engine connected)".to_string()
                 }
             }
-            "/status" => slash::handle_status(self),
+"/status" => slash::handle_status(self),
             "/resume" => slash::handle_resume(self, args).await,
             "/rewind" => slash::handle_rewind(self, args),
-            "/cost" => {
-                if let Some(ref engine) = self.streaming_engine {
-                    let tracker = engine.cost_tracker().lock().await;
-                    tracker.generate_report()
-                } else {
-                    "Cost tracking unavailable (no engine connected).".to_string()
-                }
-            }
+            // Phase 10 Batch 1: Session & Control Commands
+            "/session" => slash::handle_session_cmd(self, args),
+            "/undo" => slash::handle_undo(self, args),
+            "/redo" => slash::handle_redo(self, args),
+            "/retry" => slash::handle_retry(self, args).await,
+            "/stop" => slash::handle_stop(self, args),
+            "/reload" => slash::handle_reload(self, args).await,
+            "/share" => slash::handle_share(self, args),
+            "/token" => slash::handle_token(self),
             "/diff" => {
                 let tool = crate::tools::GitTool;
                 let params = serde_json::json!({ "action": "diff", "range": "HEAD~3..HEAD" });
@@ -902,7 +903,6 @@ impl TuiApp {
                 "Use Ctrl+C to exit".to_string()
             }
             "/sessions" => slash::handle_sessions(self),
-            "/session" => slash::handle_session(self, args).await,
             "/new" => slash::handle_new(self).await,
             "/export" => slash::handle_export(self),
             "/search" => slash::handle_search(self, args),
@@ -942,7 +942,8 @@ impl TuiApp {
             "/mcp" => slash::handle_mcp(self, args),
             "/voice" => slash::handle_voice(),
             "/telemetry" => slash::handle_telemetry(),
-            "/share" => slash::handle_share(self),
+            "/lsp" => slash::handle_lsp(self, args),
+            "/npm" => slash::handle_npm(self, args).await,
             "/vim" => slash::handle_vim(self),
             "/onboarding" | "/onboard" => slash::handle_onboarding(self),
             "/skip" => slash::handle_skip(self),
