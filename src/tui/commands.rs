@@ -425,6 +425,87 @@ pub const CMD_NPM: CommandDef = CommandDef::new(
     "Run npm package operations",
 );
 
+// Phase 10 Batch 2: hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color
+pub const CMD_HOOKS: CommandDef = CommandDef::new(
+    "/hooks",
+    &[],
+    "Info",
+    "/hooks",
+    "Show hook configuration status",
+);
+
+pub const CMD_PROFILING: CommandDef = CommandDef::new(
+    "/profiling",
+    &[],
+    "Info",
+    "/profiling",
+    "Show runtime profiling info",
+);
+
+pub const CMD_PROMPT: CommandDef = CommandDef::new(
+    "/prompt",
+    &[],
+    "Config",
+    "/prompt [show|edit <text>]",
+    "Show or edit system prompt",
+);
+
+pub const CMD_MIGRATE: CommandDef = CommandDef::new(
+    "/migrate",
+    &[],
+    "Config",
+    "/migrate [up|down|status]",
+    "Run database migrations",
+);
+
+pub const CMD_FOCUS: CommandDef = CommandDef::new(
+    "/focus",
+    &[],
+    "General",
+    "/focus [on|off]",
+    "Toggle focus mode",
+);
+
+pub const CMD_PAUSE: CommandDef = CommandDef::new(
+    "/pause",
+    &[],
+    "General",
+    "/pause [pause|resume]",
+    "Pause or resume agent",
+);
+
+pub const CMD_INSTALL: CommandDef = CommandDef::new(
+    "/install",
+    &[],
+    "Info",
+    "/install [cargo|npm|pip] [package]",
+    "Install dependencies",
+);
+
+pub const CMD_SKELETON: CommandDef = CommandDef::new(
+    "/skeleton",
+    &[],
+    "Info",
+    "/skeleton <language> [filename]",
+    "Generate code skeleton",
+);
+
+pub const CMD_BRANCH: CommandDef = CommandDef::new(
+    "/branch",
+    &[],
+    "Git",
+    "/branch [create <name>|current]",
+    "Git branch management",
+);
+
+pub const CMD_COLOR: CommandDef = CommandDef::new(
+    "/color",
+    &[],
+    "Config",
+    "/color [dark|light|monokai|gruvbox|dracula]",
+    "Change theme color",
+);
+
 /// 创建默认命令注册表
 pub fn default_command_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
@@ -476,6 +557,17 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_TOKEN);
     registry.register(&CMD_LSP);
     registry.register(&CMD_NPM);
+    // Phase 10 Batch 2: hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color
+    registry.register(&CMD_HOOKS);
+    registry.register(&CMD_PROFILING);
+    registry.register(&CMD_PROMPT);
+    registry.register(&CMD_MIGRATE);
+    registry.register(&CMD_FOCUS);
+    registry.register(&CMD_PAUSE);
+    registry.register(&CMD_INSTALL);
+    registry.register(&CMD_SKELETON);
+    registry.register(&CMD_BRANCH);
+    registry.register(&CMD_COLOR);
     registry
 }
 

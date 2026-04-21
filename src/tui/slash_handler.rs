@@ -2300,3 +2300,233 @@ pub async fn handle_npm(app: &mut TuiApp, args: &str) -> String {
         }
     }
 }
+
+// ═══════════════════════════════════════
+// Phase 10 Batch 2: hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color
+// ═══════════════════════════════════════
+
+/// /hooks - Show hook configuration status
+pub fn handle_hooks(_app: &TuiApp) -> String {
+    use std::env;
+
+    let pre_hook = env::var("PRIORITY_AGENT_PRE_TOOL_HOOK").ok();
+    let post_hook = env::var("PRIORITY_AGENT_POST_TOOL_HOOK").ok();
+    let tool_before = env::var("PRIORITY_AGENT_TOOL_HOOK_BEFORE").ok();
+    let tool_after = env::var("PRIORITY_AGENT_TOOL_HOOK_AFTER").ok();
+    let timeout = env::var("PRIORITY_AGENT_HOOK_TIMEOUT_MS").ok();
+    let fail_closed = env::var("PRIORITY_AGENT_HOOK_FAIL_CLOSED").ok();
+
+    let mut lines = vec!["Hook Configuration:".to_string()];
+
+    if let Some(ref h) = pre_hook {
+        lines.push(format!("  PRE_TOOL_HOOK: {}", h));
+    } else {
+        lines.push("  PRE_TOOL_HOOK: not set".to_string());
+    }
+    if let Some(ref h) = post_hook {
+        lines.push(format!("  POST_TOOL_HOOK: {}", h));
+    } else {
+        lines.push("  POST_TOOL_HOOK: not set".to_string());
+    }
+    if let Some(ref h) = tool_before {
+        lines.push(format!("  TOOL_HOOK_BEFORE: {}", h));
+    } else {
+        lines.push("  TOOL_HOOK_BEFORE: not set".to_string());
+    }
+    if let Some(ref h) = tool_after {
+        lines.push(format!("  TOOL_HOOK_AFTER: {}", h));
+    } else {
+        lines.push("  TOOL_HOOK_AFTER: not set".to_string());
+    }
+    lines.push(format!("  HOOK_TIMEOUT_MS: {}", timeout.unwrap_or_else(|| "1000".to_string())));
+    lines.push(format!("  HOOK_FAIL_CLOSED: {}", fail_closed.unwrap_or_else(|| "false".to_string())));
+
+    if pre_hook.is_none() && post_hook.is_none() && tool_before.is_none() && tool_after.is_none() {
+        lines.push("\nNo hooks configured. Set PRIORITY_AGENT_*_HOOK environment variables.".to_string());
+    }
+
+    lines.join("\n")
+}
+
+/// /profiling - Show runtime profiling info
+pub fn handle_profiling(app: &TuiApp) -> String {
+    let mut lines = vec!["Profiling Info:".to_string()];
+
+    // Session info
+    if let Some(id) = app.session_manager.current_session_id() {
+        lines.push(format!("  Session: {}...", &id[..8.min(id.len())]));
+    }
+    lines.push(format!("  Messages: {}", app.messages.len()));
+
+    // Engine info
+    if app.streaming_engine.is_some() {
+        lines.push("  Engine: StreamingQueryEngine".to_string());
+    } else {
+        lines.push("  Engine: not initialized".to_string());
+    }
+
+    // Memory
+    if let Some(ref engine) = app.streaming_engine {
+        if engine.memory_manager().is_some() {
+            lines.push("  Memory: active (use /memory to view)".to_string());
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// /prompt - Show/edit system prompt
+pub fn handle_prompt(_app: &TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        "Usage: /prompt [show|edit <text>]".to_string()
+    } else if args == "show" {
+        "System prompt configuration not exposed via TUI yet.".to_string()
+    } else if args.starts_with("edit ") {
+        format!("Prompt editing not implemented yet. Received: {}", args)
+    } else {
+        "Usage: /prompt [show|edit <text>]".to_string()
+    }
+}
+
+/// /migrate - Migration helper
+pub fn handle_migrate(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /migrate [up|down|status]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "up" => "Migration 'up' not implemented via TUI.".to_string(),
+        "down" => "Migration 'down' not implemented via TUI.".to_string(),
+        "status" => {
+            let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let migrations_dir = dir.join("migrations");
+            if migrations_dir.exists() {
+                format!("Migrations directory exists at: {}", migrations_dir.display())
+            } else {
+                "No migrations directory found.".to_string()
+            }
+        }
+        _ => "Usage: /migrate [up|down|status]".to_string(),
+    }
+}
+
+/// /focus - Focus mode toggle
+pub fn handle_focus(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "on" {
+        "Focus mode enabled (UI filtering not yet implemented).".to_string()
+    } else if args == "off" {
+        "Focus mode disabled.".to_string()
+    } else {
+        "Usage: /focus [on|off]".to_string()
+    }
+}
+
+/// /pause - Pause/resume agent
+pub fn handle_pause(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "pause" {
+        app.is_querying = false;
+        "Agent paused. Use /pause resume to continue.".to_string()
+    } else if args == "resume" {
+        app.is_querying = true;
+        "Agent resumed.".to_string()
+    } else {
+        "Usage: /pause [pause|resume]".to_string()
+    }
+}
+
+/// /install - Dependency installer
+pub async fn handle_install(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /install [cargo|npm|pip] [package]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let tool_name = parts[0];
+
+    let (_tool, cmd) = match tool_name {
+        "cargo" => ("BashTool", format!("cargo {}", parts.get(1).unwrap_or(&""))),
+        "npm" => ("BashTool", format!("npm install {}", parts.get(1).unwrap_or(&""))),
+        "pip" => ("BashTool", format!("pip install {}", parts.get(1).unwrap_or(&""))),
+        _ => ("BashTool", format!("{} {}", tool_name, parts.get(1).unwrap_or(&""))),
+    };
+
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+    let params = serde_json::json!({
+        "command": cmd.trim(),
+        "description": format!("install {}", args)
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success { result.content } else { result.error.unwrap_or_default() }
+}
+
+/// /skeleton - Generate code skeleton
+pub fn handle_skeleton(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /skeleton <language> [filename]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let lang = parts[0];
+    let filename = parts.get(1).unwrap_or(&"main");
+
+    let skeleton = match lang {
+        "rust" => format!("// {}.rs\n\nfn main() {{\n    println!(\"Hello, world!\");\n}}\n", filename),
+        "python" => format!("# {}.py\n\ndef main():\n    print(\"Hello, world!\")\n\nif __name__ == \"__main__\":\n    main()\n", filename),
+        "typescript" | "ts" => format!("// {}.ts\n\nexport function main(): void {{\n    console.log(\"Hello, world!\");\n}}\n", filename),
+        "javascript" | "js" => format!("// {}.js\n\nfunction main() {{\n    console.log(\"Hello, world!\");\n}}\n\nmain();\n", filename),
+        _ => return format!("Unsupported language: {}. Supported: rust, python, typescript, javascript", lang),
+    };
+
+    format!("```{}```\n\n{}", lang, skeleton)
+}
+
+/// /branch - Git branch management
+pub async fn handle_branch(app: &mut TuiApp, args: &str) -> String {
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+
+    let cmd = if args.is_empty() {
+        "git branch -a".to_string()
+    } else if args.starts_with("create ") {
+        let name = args.strip_prefix("create ").unwrap_or("");
+        format!("git checkout -b {}", name)
+    } else if args == "current" {
+        "git branch --show-current".to_string()
+    } else {
+        format!("git branch {}", args)
+    };
+
+    let params = serde_json::json!({
+        "command": cmd,
+        "description": "git branch"
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success { result.content } else { result.error.unwrap_or_default() }
+}
+
+/// /color - Theme color customization
+pub fn handle_color(app: &mut TuiApp, args: &str) -> String {
+    use crate::tui::theme::Theme;
+
+    if args.is_empty() {
+        return "Current theme: Dark\nUse /color <preset> to change (dark/light/high-contrast)".to_string();
+    }
+
+    match args {
+        "dark" => {
+            app.theme = Theme::from_name("dark");
+            "Theme changed to: dark".to_string()
+        }
+        "light" => {
+            app.theme = Theme::from_name("light");
+            "Theme changed to: light".to_string()
+        }
+        "high-contrast" => {
+            app.theme = Theme::from_name("high-contrast");
+            "Theme changed to: high-contrast".to_string()
+        }
+        _ => format!("Unknown preset: {}. Available: dark, light, high-contrast", args),
+    }
+}

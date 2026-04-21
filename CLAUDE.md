@@ -1755,8 +1755,8 @@ priority-agent/ (workspace)
 
 ### Phase 10 当前状态
 
-- 🔄 Batch 1（10 条）：未开始
-- ⏳ Batch 2（10 条）：待处理
+- ✅ Batch 1（10 条）：已完成 (session, undo, redo, retry, stop, reload, share, token, lsp, npm)
+- 🔄 Batch 2（10 条）：进行中 (hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color)
 - ⏳ Batch 3（10 条）：待处理
 - ⏳ Batch 4（9 条）：待处理
 
