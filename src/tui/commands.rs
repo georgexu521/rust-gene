@@ -587,6 +587,79 @@ pub const CMD_TICKER: CommandDef = CommandDef::new(
     "Display scrolling ticker",
 );
 
+// Phase 10 Batch 4: config, copy, desktop, chrome, effort, preamble, untrap, verbose, write
+pub const CMD_CONFIG: CommandDef = CommandDef::new(
+    "/config",
+    &[],
+    "Config",
+    "/config [edit|get <key>]",
+    "View/edit configuration",
+);
+
+pub const CMD_COPY: CommandDef = CommandDef::new(
+    "/copy",
+    &[],
+    "General",
+    "/copy <text>",
+    "Copy text to clipboard",
+);
+
+pub const CMD_DESKTOP: CommandDef = CommandDef::new(
+    "/desktop",
+    &[],
+    "Info",
+    "/desktop [open|close|notify] <target>",
+    "Desktop integration",
+);
+
+pub const CMD_CHROME: CommandDef = CommandDef::new(
+    "/chrome",
+    &[],
+    "Info",
+    "/chrome [open|tabs|bookmarks]",
+    "Chrome integration",
+);
+
+pub const CMD_EFFORT: CommandDef = CommandDef::new(
+    "/effort",
+    &[],
+    "Config",
+    "/effort [minimal|normal|maximum]",
+    "Set effort level",
+);
+
+pub const CMD_PREAMBLE: CommandDef = CommandDef::new(
+    "/preamble",
+    &[],
+    "Config",
+    "/preamble [show|set <text>|reset]",
+    "Customize agent preamble",
+);
+
+pub const CMD_UNTRAP: CommandDef = CommandDef::new(
+    "/untrap",
+    &[],
+    "General",
+    "/untrap",
+    "Reset trapped state",
+);
+
+pub const CMD_VERBOSE: CommandDef = CommandDef::new(
+    "/verbose",
+    &[],
+    "Config",
+    "/verbose [on|off]",
+    "Toggle verbose output",
+);
+
+pub const CMD_WRITE: CommandDef = CommandDef::new(
+    "/write",
+    &[],
+    "General",
+    "/write <filepath> <content>",
+    "Write content to a file",
+);
+
 /// 创建默认命令注册表
 pub fn default_command_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
@@ -660,6 +733,16 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_SUBSCRIBE);
     registry.register(&CMD_SLOTS);
     registry.register(&CMD_TICKER);
+    // Phase 10 Batch 4: config, copy, desktop, chrome, effort, preamble, untrap, verbose, write
+    registry.register(&CMD_CONFIG);
+    registry.register(&CMD_COPY);
+    registry.register(&CMD_DESKTOP);
+    registry.register(&CMD_CHROME);
+    registry.register(&CMD_EFFORT);
+    registry.register(&CMD_PREAMBLE);
+    registry.register(&CMD_UNTRAP);
+    registry.register(&CMD_VERBOSE);
+    registry.register(&CMD_WRITE);
     registry
 }
 

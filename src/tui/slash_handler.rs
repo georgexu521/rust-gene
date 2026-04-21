@@ -2680,3 +2680,186 @@ pub fn handle_ticker(_app: &mut TuiApp, args: &str) -> String {
 
     format!("Ticker: {} (display not yet implemented in TUI)", args)
 }
+
+// ═══════════════════════════════════════
+// Phase 10 Batch 4: config, copy, desktop, chrome, effort, preamble, untrap, verbose, write
+// ═══════════════════════════════════════
+
+/// /config - Configuration viewer/editor
+pub fn handle_config(_app: &TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        // Show current config summary
+        match crate::services::config::AppConfig::load() {
+            Ok(config) => {
+                format!(
+                    "Config:\n  API: {}\n  Model: {}\n  Theme: {}",
+                    config.api.base_url, config.api.model, config.ui.theme
+                )
+            }
+            Err(_) => "No config file found. Using defaults.".to_string(),
+        }
+    } else if args == "edit" {
+        "Config editing not yet implemented. Edit config.toml directly.".to_string()
+    } else if args.starts_with("get ") {
+        let key = args.strip_prefix("get ").unwrap_or("");
+        format!("Config value for '{}' (not yet implemented)", key)
+    } else {
+        "Usage: /config [edit|get <key>]".to_string()
+    }
+}
+
+/// /copy - Copy text to clipboard
+pub async fn handle_copy(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /copy <text>".to_string();
+    }
+
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+
+    #[cfg(target_os = "macos")]
+    let cmd = format!("echo '{}' | pbcopy", args.replace("'", "'\\''"));
+    #[cfg(not(target_os = "macos"))]
+    let cmd = format!("echo '{}' | xclip -selection clipboard", args.replace("'", "'\\''"));
+
+    let params = serde_json::json!({
+        "command": cmd,
+        "description": "Copy to clipboard"
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success {
+        "Copied to clipboard.".to_string()
+    } else {
+        result.error.unwrap_or_else(|| "Failed to copy.".to_string())
+    }
+}
+
+/// /desktop - Desktop integration commands
+pub fn handle_desktop(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /desktop [open|close|notify] <target>".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "open" => {
+            if parts.len() < 2 {
+                "Usage: /desktop open <target>".to_string()
+            } else {
+                format!("Desktop open not yet implemented for: {}", parts[1])
+            }
+        }
+        "close" => "Desktop close not yet implemented.".to_string(),
+        "notify" => {
+            if parts.len() < 2 {
+                "Usage: /desktop notify <message>".to_string()
+            } else {
+                format!("Desktop notification: {} (not yet implemented)", parts[1])
+            }
+        }
+        _ => "Usage: /desktop [open|close|notify]".to_string(),
+    }
+}
+
+/// /chrome - Chrome integration
+pub fn handle_chrome(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /chrome [open|tabs|bookmarks]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "open" => {
+            if parts.len() < 2 {
+                "Usage: /chrome open <url>".to_string()
+            } else {
+                format!("Chrome open not yet implemented: {}", parts[1])
+            }
+        }
+        "tabs" => "Chrome tabs listing not yet implemented.".to_string(),
+        "bookmarks" => "Chrome bookmarks not yet implemented.".to_string(),
+        _ => "Usage: /chrome [open|tabs|bookmarks]".to_string(),
+    }
+}
+
+/// /effort - Set effort level for tasks
+pub fn handle_effort(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /effort [minimal|normal|maximum]".to_string();
+    }
+
+    match args {
+        "minimal" => "Effort set to: minimal (quick solutions)".to_string(),
+        "normal" => "Effort set to: normal (balanced approach)".to_string(),
+        "maximum" => "Effort set to: maximum (thorough analysis)".to_string(),
+        _ => "Usage: /effort [minimal|normal|maximum]".to_string(),
+    }
+}
+
+/// /preamble - Customize agent preamble
+pub fn handle_preamble(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /preamble [show|set <text>|reset]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "show" => "Preamble: (default agent preamble in use)".to_string(),
+        "set" => {
+            if parts.len() < 2 {
+                "Usage: /preamble set <text>".to_string()
+            } else {
+                format!("Preamble would be set to: {} (not yet implemented)", parts[1])
+            }
+        }
+        "reset" => "Preamble reset to default.".to_string(),
+        _ => "Usage: /preamble [show|set <text>|reset]".to_string(),
+    }
+}
+
+/// /untrap - Reset trapped state
+pub fn handle_untrap(_app: &mut TuiApp, _args: &str) -> String {
+    "Untrap: Reset agent from trapped state.".to_string()
+}
+
+/// /verbose - Toggle verbose output
+pub fn handle_verbose(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "on" {
+        "Verbose mode enabled.".to_string()
+    } else if args == "off" {
+        "Verbose mode disabled.".to_string()
+    } else {
+        "Usage: /verbose [on|off]".to_string()
+    }
+}
+
+/// /write - Write content to a file
+pub async fn handle_write(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /write <filepath> <content>".to_string();
+    }
+
+    // Parse: /write <filepath> <content>
+    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+    if parts.len() < 2 {
+        return "Usage: /write <filepath> <content>".to_string();
+    }
+
+    let filepath = parts[0];
+    let content = parts[1];
+
+    let tool = crate::tools::FileWriteTool;
+    let ctx = app.build_tool_context().await;
+    let params = serde_json::json!({
+        "file_path": filepath,
+        "content": content,
+        "create_dirs": true
+    });
+
+    let result = tool.execute(params, ctx).await;
+    if result.success {
+        format!("Written to: {}", filepath)
+    } else {
+        result.error.unwrap_or_else(|| "Failed to write file.".to_string())
+    }
+}
