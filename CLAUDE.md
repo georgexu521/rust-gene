@@ -1757,12 +1757,18 @@ priority-agent/ (workspace)
 
 ### Phase 10 当前状态
 
-- ✅ Batch 1（10 条）：已完成 (session, undo, redo, retry, stop, reload, share, token, lsp, npm)
-- ✅ Batch 2（10 条）：已完成 (hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color)
-- ✅ Batch 3（10 条）：已完成 (webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker)
-- ✅ Batch 4（9 条）：已完成 (config, copy, desktop, chrome, effort, preamble, untrap, verbose, write)
+- ✅ Batch 1（10 条）：命令入口已完成，核心流程可用 (session, undo, redo, retry, stop, reload, share, token, lsp, npm)
+- ✅ Batch 2（10 条）：命令入口已完成，部分为轻量实现/占位 (hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color)
+- ✅ Batch 3（10 条）：命令入口已完成，集成类命令多为渐进实现 (webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker)
+- ✅ Batch 4（9 条）：命令入口已完成，能力深度后续补齐 (config, copy, desktop, chrome, effort, preamble, untrap, verbose, write)
 
-**Phase 10 完成！共实现 101 条命令，完全对齐 Claude Code！**
+**Phase 10 结论：命令覆盖显著提升（当前 100+ 命令入口），但与 Claude Code 的“能力深度与完成度”仍有差距。**
+
+#### 命令成熟度分层（建议口径）
+
+- `Production-ready`：可稳定完成主要任务（如 session/history、部分 git/tool 相关命令）
+- `Usable`：可执行主流程，但边界能力较弱
+- `Scaffold/Placeholder`：入口与帮助已具备，后续补齐实现细节
 
 ---
 
@@ -1802,7 +1808,7 @@ priority-agent/ (workspace)
 
 ### Phase 11：剩余工具缺口补齐（2026-04-21）
 
-**目标**：消除剩余 6 个工具缺口
+**目标**：消除剩余 3 个关键工具缺口（按当前清单）
 
 | 工具 | 状态 | 说明 |
 |------|------|------|

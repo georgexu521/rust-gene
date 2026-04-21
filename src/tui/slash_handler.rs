@@ -2137,7 +2137,7 @@ pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
     } else if let Ok(n) = args.parse::<usize>() {
         // Switch by index
         match app.session_manager.list_sessions(20) {
-            Ok(sessions) if n <= sessions.len() => {
+            Ok(sessions) if n > 0 && n <= sessions.len() => {
                 let session = &sessions[n - 1];
                 futures::executor::block_on(app.restore_session(&session.id));
                 format!("Switched to session: {}", session.title)
@@ -2179,31 +2179,25 @@ pub fn handle_undo(app: &mut TuiApp, _args: &str) -> String {
 
 /// /redo - 重做
 pub fn handle_redo(app: &mut TuiApp, _args: &str) -> String {
-    let session_id = match app.session_manager.current_session_id() {
-        Some(id) => id,
-        None => return "No active session.".to_string(),
-    };
-
-    match app.session_manager.rewind_last_edit(&session_id) {
-        Ok(msg) => msg,
-        Err(e) => format!("Nothing to redo: {}", e),
+    if app.session_manager.current_session_id().is_none() {
+        return "No active session.".to_string();
     }
+    "Redo is not available yet: undo/redo stack is not implemented. Use /rewind to inspect edits first.".to_string()
 }
 
 /// /retry - 重试上一次 LLM 调用
 pub async fn handle_retry(app: &mut TuiApp, _args: &str) -> String {
-    if app.messages.len() < 2 {
-        return "No previous message to retry.".to_string();
-    }
-    // Get the last user message content (clone before mutating)
-    let content = {
-        let user_msg = app.messages.iter().rev().find(|m| m.role == crate::state::MessageRole::User);
-        match user_msg {
-            Some(msg) => msg.content.clone(),
-            None => return "No user message to retry.".to_string(),
-        }
+    // Retry the last user turn: remove that user message and everything after it,
+    // then resend the same content to regenerate downstream responses coherently.
+    let Some(last_user_idx) = app
+        .messages
+        .iter()
+        .rposition(|m| m.role == crate::state::MessageRole::User)
+    else {
+        return "No user message to retry.".to_string();
     };
-    app.messages.pop(); // Remove last message
+    let content = app.messages[last_user_idx].content.clone();
+    app.messages.truncate(last_user_idx);
     app.send_message(content).await;
     String::new()
 }
@@ -2951,16 +2945,40 @@ pub async fn handle_write(app: &mut TuiApp, args: &str) -> String {
 
 /// /rollback - Rollback changes
 pub async fn handle_rollback(app: &mut TuiApp, args: &str) -> String {
+    let mut target = "HEAD~1";
+    let mut confirmed = false;
+    for part in args.split_whitespace() {
+        if part == "--yes" {
+            confirmed = true;
+        } else {
+            target = part;
+        }
+    }
+
+    if !target
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '~' | '^'))
+    {
+        return "Invalid rollback target. Allowed characters: letters, digits, -, _, ., /, ~, ^"
+            .to_string();
+    }
+
+    if !confirmed {
+        return format!(
+            "Rollback is destructive.\nUsage: /rollback [target] --yes\nExample: /rollback {} --yes",
+            target
+        );
+    }
+
     let tool = crate::tools::BashTool;
     let ctx = app.build_tool_context().await;
-
-    let parts: Vec<&str> = args.split_whitespace().collect();
-    let target = parts.get(0).unwrap_or(&"HEAD~1");
-
-    let cmd = format!("git rollback {}", target);
+    let cmd = format!(
+        "git rev-parse --verify '{}^{{commit}}' >/dev/null && git reset --hard '{}'",
+        target, target
+    );
     let params = serde_json::json!({
         "command": cmd,
-        "description": "Git rollback"
+        "description": format!("Git rollback to {}", target)
     });
     let result = tool.execute(params, ctx).await;
     if result.success { result.content } else { result.error.unwrap_or_default() }
