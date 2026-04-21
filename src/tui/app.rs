@@ -782,6 +782,9 @@ impl TuiApp {
             context = context.with_worktree_manager(wt.clone());
         }
         context = context.with_file_cache(crate::tools::file_cache::GLOBAL_FILE_CACHE.clone());
+        if let Some(ref engine) = self.streaming_engine {
+            context = context.with_cost_tracker(engine.cost_tracker().clone());
+        }
         context
     }
 

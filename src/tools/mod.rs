@@ -37,6 +37,7 @@ pub mod share_tool;
 pub mod sleep_tool;
 pub mod symbol_tool;
 pub mod task_tool;
+pub mod cost_tool;
 pub mod team_tool;
 pub mod telemetry_tool;
 pub mod todo_tool;
@@ -53,6 +54,7 @@ pub use agent_tool::AgentTool;
 pub use bash_tool::BashTool;
 pub use browser_tool::BrowserTool;
 pub use calculate_tool::CalculateTool;
+pub use cost_tool::CostTool;
 pub use datetime_tool::DatetimeTool;
 pub use diff_tool::DiffTool;
 pub use encode_tool::EncodeTool;
@@ -213,6 +215,8 @@ pub struct ToolContext {
     pub worktree_manager: Option<std::sync::Arc<crate::engine::worktree::WorktreeManager>>,
     /// Task 管理器（task_tool 创建和管理任务）
     pub task_manager: Option<std::sync::Arc<crate::task_manager::TaskManager>>,
+    /// 成本追踪器（cost_tool 查询 token 和费用统计）
+    pub cost_tracker: Option<std::sync::Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>>,
     /// 文件状态缓存（file_read/file_edit 优化与变更检测）
     pub file_cache: Option<std::sync::Arc<crate::tools::file_cache::FileStateCache>>,
     /// 诊断跟踪器（用于 diagnostic tracking 功能）
@@ -275,6 +279,7 @@ impl ToolContext {
             lsp_manager: None,
             worktree_manager: None,
             task_manager: None,
+            cost_tracker: None,
             file_cache: None,
             diagnostic_tracker: None,
         }
@@ -343,6 +348,15 @@ impl ToolContext {
         manager: std::sync::Arc<crate::task_manager::TaskManager>,
     ) -> Self {
         self.task_manager = Some(manager);
+        self
+    }
+
+    /// 设置成本追踪器
+    pub fn with_cost_tracker(
+        mut self,
+        tracker: std::sync::Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
+    ) -> Self {
+        self.cost_tracker = Some(tracker);
         self
     }
 
@@ -516,6 +530,7 @@ impl ToolRegistry {
         registry.register(TodoWriteTool);
 
         // 注册新添加的工具
+        registry.register(CostTool);
         registry.register(CalculateTool);
         registry.register(DatetimeTool);
         registry.register(JsonQueryTool);
