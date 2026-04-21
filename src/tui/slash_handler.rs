@@ -452,6 +452,72 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
             "cost_tracker",
             tracker.tool_diagnostics_line(),
         ));
+
+        // W4-2: Performance panel - tool P95 latency
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "tool_latency",
+            tracker.slowest_tools_line(5),
+        ));
+
+        // W4-2: Failure reasons
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "tool_failures",
+            tracker.top_failure_reasons_line(5),
+        ));
+
+        // W4-2: Cache hit rate (tool result cache - if available via executor)
+        // Note: ToolRegistry doesn't have cache by default, only CachedToolExecutor does
+        // Report tool call efficiency from cost_tracker instead
+        let total_calls: u64 = tracker.tool_metrics.values().map(|s| s.calls).sum();
+        let total_success: u64 = tracker.tool_metrics.values().map(|s| s.success).sum();
+        let success_rate = if total_calls > 0 {
+            (total_success as f64 / total_calls as f64) * 100.0
+        } else {
+            0.0
+        };
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "tool_success_rate",
+            format!("calls={} success={} success_rate={:.1}%", total_calls, total_success, success_rate),
+        ));
+
+        // W4-2: Memory extraction stats (if available)
+        if let Some(ref mem_mgr) = engine.memory_manager() {
+            let mem = mem_mgr.lock().await;
+            let (hits, misses) = mem.cache_stats();
+            let mem_hit_rate = if hits + misses > 0 {
+                ((hits as f64) / ((hits + misses) as f64)) * 100.0
+            } else {
+                0.0
+            };
+            report.checks.push(crate::diagnostics::CheckResult::info(
+                "memory_cache",
+                format!("memory_extraction: hits={} misses={} hit_rate={:.1}%", hits, misses, mem_hit_rate),
+            ));
+        }
+
+        // W4-2: Context compression stats
+        if let Some(compressor) = engine.compressor() {
+            let comp = compressor.lock().await;
+            let stats = comp.stats();
+            let savings = if stats.total_tokens_before > 0 {
+                ((stats.total_tokens_before - stats.total_tokens_after) as f64
+                    / stats.total_tokens_before as f64)
+                    * 100.0
+            } else {
+                0.0
+            };
+            report.checks.push(crate::diagnostics::CheckResult::info(
+                "context_compression",
+                format!(
+                    "compressions={} before={} after={} savings={:.1}% session={}s",
+                    stats.compression_count,
+                    stats.total_tokens_before,
+                    stats.total_tokens_after,
+                    savings,
+                    stats.session_duration_secs
+                ),
+            ));
+        }
     } else {
         report.checks.push(crate::diagnostics::CheckResult::error(
             "engine",
@@ -912,7 +978,7 @@ pub fn handle_skip(app: &mut TuiApp) -> String {
 
 // ─── Permissions (complex, 128 lines) ─────────────────────────────────
 
-use crate::permissions::{PermissionMode, RuleSource};
+use crate::permissions::{match_wildcard, PermissionMode, RuleSource, SourcedRule};
 use crate::tui::app::{parse_permission_mode, permission_mode_name, persist_permission_rule};
 
 pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
@@ -929,7 +995,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
             format!(
-                "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions <allow|deny|ask> <pattern> [project|global]",
+                "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions explain <tool_name> - explain why a decision was made\n  /permissions export [path] - export rules to a file\n  /permissions import <path> [project|global] - import rules from a file\n  /permissions dry-run <allow|deny|ask> <pattern> - test a rule without saving\n  /permissions <allow|deny|ask> <pattern> [project|global]",
                 permission_mode_name(mode),
                 ctx.rules.always_allow.len(),
                 ctx.rules.always_deny.len(),
@@ -941,6 +1007,177 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                     .join("permissions.toml")
                     .display(),
             )
+        }
+        Some("explain") => {
+            let tool_name = match parts.next() {
+                Some(t) if !t.trim().is_empty() => t.trim(),
+                _ => return "Usage: /permissions explain <tool_name>".to_string(),
+            };
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let ctx = crate::permissions::PermissionContext::new(&cwd);
+            let (decision, details) = ctx.check_with_details(tool_name);
+
+            // Build explanation based on risk level and matching rules
+            let risk = ctx.rules.check(tool_name);
+            let mut lines = vec![
+                format!("Permission explanation for '{}':", tool_name),
+                format!("  Decision: {:?}", decision),
+                format!("  Risk level: {:?}", risk),
+            ];
+
+            if details.is_empty() {
+                lines.push("  Reason: No explicit rules matched - using default policy".to_string());
+                lines.push("  Default behavior: ask (prompt before execution)".to_string());
+            } else {
+                lines.push("  Matched rules:".to_string());
+                for d in &details {
+                    lines.push(format!("    - {}", d));
+                }
+                lines.push("  Priority: deny > allow > ask (first match wins)".to_string());
+            }
+
+            // Add mode context
+            let mode = app
+                .streaming_engine
+                .as_ref()
+                .map(|e| e.permission_mode())
+                .unwrap_or(PermissionMode::AutoLowRisk);
+            lines.push(format!("\n  Current mode: {}", permission_mode_name(mode)));
+            match mode {
+                PermissionMode::AutoAll => lines.push("    (all operations auto-allowed - rules ignored)".to_string()),
+                PermissionMode::AutoLowRisk => lines.push("    (low-risk operations auto-allowed, others follow rules)".to_string()),
+                PermissionMode::ReadOnly => lines.push("    (all write operations denied)".to_string()),
+                PermissionMode::Once => lines.push("    (each operation allowed once then denied)".to_string()),
+                _ => {}
+            }
+
+            lines.join("\n")
+        }
+        Some("export") => {
+            let path = parts.next().map(|p| {
+                if p == "global" || p == "project" {
+                    return None;
+                }
+                Some(std::path::PathBuf::from(p))
+            }).unwrap_or_else(|| {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                Some(cwd.join(".priority-agent").join("permissions_export.toml"))
+            });
+
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let ctx = crate::permissions::PermissionContext::new(&cwd);
+
+            // Build export content
+            let mut content = String::new();
+            content.push_str("# Permission Rules Export\n");
+            content.push_str(&format!("# Exported at: {}\n\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+
+            content.push_str("[allow]\n");
+            for r in &ctx.rules.always_allow {
+                content.push_str(&format!("{} = {:?}\n", r.pattern, r.source));
+            }
+
+            content.push_str("\n[deny]\n");
+            for r in &ctx.rules.always_deny {
+                content.push_str(&format!("{} = {:?}\n", r.pattern, r.source));
+            }
+
+            content.push_str("\n[ask]\n");
+            for r in &ctx.rules.always_ask {
+                content.push_str(&format!("{} = {:?}\n", r.pattern, r.source));
+            }
+
+            if let Some(ref p) = path {
+                if let Some(parent) = p.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match std::fs::write(p, &content) {
+                    Ok(_) => format!("Rules exported to: {}", p.display()),
+                    Err(e) => format!("Failed to export: {}", e),
+                }
+            } else {
+                content
+            }
+        }
+        Some("import") => {
+            let file_path = match parts.next() {
+                Some(p) if !p.trim().is_empty() => p.trim(),
+                _ => return "Usage: /permissions import <path> [project|global]".to_string(),
+            };
+            let scope = match parts.next().map(|s| s.to_ascii_lowercase()) {
+                Some(s) if s == "global" => RuleSource::Global,
+                Some(s) if s == "project" => RuleSource::Project,
+                Some(other) => return format!("Invalid scope '{}'. Use 'project' or 'global'.", other),
+                None => RuleSource::Project,
+            };
+
+            let content = match std::fs::read_to_string(file_path) {
+                Ok(c) => c,
+                Err(e) => return format!("Failed to read file: {}", e),
+            };
+
+            let target_path = match scope {
+                RuleSource::Global => dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".priority-agent")
+                    .join("permissions.toml"),
+                _ => std::env::current_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    .join(".priority-agent")
+                    .join("permissions.toml"),
+            };
+
+            if let Some(parent) = target_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            match std::fs::write(&target_path, &content) {
+                Ok(_) => format!("Rules imported from '{}' to: {}", file_path, target_path.display()),
+                Err(e) => format!("Failed to import: {}", e),
+            }
+        }
+        Some("dry-run") => {
+            let action = match parts.next() {
+                Some(a) if a == "allow" || a == "deny" || a == "ask" => a,
+                _ => return "Usage: /permissions dry-run <allow|deny|ask> <pattern>".to_string(),
+            };
+            let pattern = match parts.next() {
+                Some(p) if !p.trim().is_empty() => p.trim(),
+                _ => return "Usage: /permissions dry-run <allow|deny|ask> <pattern>".to_string(),
+            };
+
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let ctx = crate::permissions::PermissionContext::new(&cwd);
+
+            // Simulate adding the rule temporarily
+            let mut test_rules = ctx.rules.clone();
+            let test_rule = SourcedRule::new(pattern, RuleSource::User);
+
+            match action {
+                "allow" => test_rules.always_allow.push(test_rule),
+                "deny" => test_rules.always_deny.push(test_rule),
+                "ask" => test_rules.always_ask.push(test_rule),
+                _ => unreachable!(),
+            }
+
+            // Show what tools would match
+            let mut lines = vec![
+                format!("Dry-run: {} '{}'", action, pattern),
+                format!("Config path: {}/.priority-agent/permissions.toml", cwd.display()),
+                "".to_string(),
+                "This rule would affect:".to_string(),
+            ];
+
+            // Check some common tools
+            let test_tools = ["file_read", "file_write", "bash", "grep", "glob", "agent", "mcp"];
+            for tool in test_tools {
+                if match_wildcard(pattern, tool) {
+                    let decision = test_rules.check(tool);
+                    lines.push(format!("  {} -> {:?}", tool, decision));
+                }
+            }
+
+            lines.join("\n")
         }
         Some("mode") => {
             if let Some(mode_arg) = parts.next() {

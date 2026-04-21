@@ -308,6 +308,13 @@ impl StreamingQueryEngine {
         self.memory_manager.clone()
     }
 
+    /// 获取上下文压缩器
+    pub fn compressor(
+        &self,
+    ) -> Option<Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>> {
+        Some(self.compressor.clone())
+    }
+
     /// 获取任务管理器
     pub fn task_manager(&self) -> Option<Arc<crate::task_manager::TaskManager>> {
         self.task_manager.clone()
