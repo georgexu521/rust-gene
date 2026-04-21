@@ -2019,4 +2019,161 @@ mod tests {
         assert_eq!(stats.llm_compression_attempts, 0);
         assert_eq!(stats.llm_compression_failures, 0);
     }
+
+    // ─── Long Session Stress Tests ─────────────────────────────────────────────
+
+    /// Helper to create a long conversation with many turns
+    fn create_long_conversation(turns: usize) -> Vec<Message> {
+        let mut messages = vec![Message::system("You are a helpful coding assistant.")];
+        for i in 0..turns {
+            messages.push(Message::user(format!("Task {}: Implement feature X", i)));
+            messages.push(Message::assistant(format!(
+                "I'll implement feature X for task {}. Here's my approach...",
+                i
+            )));
+            // Add some tool calls
+            messages.push(Message::assistant_with_tools(
+                format!("Tool use for task {}", i),
+                vec![crate::services::api::ToolCall {
+                    id: format!("call_{}", i),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({"command": "echo done"}),
+                }],
+            ));
+            messages.push(Message::tool(format!("call_{}", i), "Command executed successfully".to_string()));
+        }
+        messages
+    }
+
+    #[test]
+    fn test_long_session_50_turns_stability() {
+        // 50 turns stress test - should remain stable
+        let messages = create_long_conversation(50);
+        let tokens = estimate_messages_tokens(&messages);
+
+        // With 50 turns, we should have token usage (threshold adjusted for estimation method)
+        assert!(tokens > 1000, "50 turns should use >1000 tokens, got {}", tokens);
+
+        // Test that micro_compress doesn't panic and produces valid output
+        let mut compressor = ContextCompressor::new(128_000);
+        let compressed = compressor.micro_compress(&messages);
+
+        // Compressed messages should still be valid
+        assert!(!compressed.is_empty());
+
+        // Check stats show micro_compress ran
+        let stats = compressor.stats();
+        assert!(stats.total_tokens_before > 0, "Should track tokens before");
+    }
+
+    #[test]
+    fn test_long_session_100_turns_stability() {
+        // 100 turns stress test - compression should trigger
+        let messages = create_long_conversation(100);
+        let tokens = estimate_messages_tokens(&messages);
+
+        // With 100 turns, significant token usage
+        assert!(tokens > 2000, "100 turns should use >2000 tokens, got {}", tokens);
+
+        // Test micro_compress
+        let mut compressor = ContextCompressor::new(128_000);
+        let compressed = compressor.micro_compress(&messages);
+
+        assert!(!compressed.is_empty());
+        // micro_compress trims tool results but doesn't remove messages
+
+        let stats = compressor.stats();
+        assert!(stats.total_tokens_before > 0);
+    }
+
+    #[test]
+    fn test_long_session_200_turns_stability() {
+        // 200 turns stress test - aggressive compression
+        let messages = create_long_conversation(200);
+        let tokens = estimate_messages_tokens(&messages);
+
+        // With 200 turns, very high token usage
+        assert!(tokens > 4000, "200 turns should use >4000 tokens, got {}", tokens);
+
+        // Test micro_compress handles large inputs
+        let mut compressor = ContextCompressor::new(128_000);
+        let compressed = compressor.micro_compress(&messages);
+
+        assert!(!compressed.is_empty());
+
+        // Multiple micro_compress calls should be stable
+        let recompressed = compressor.micro_compress(&compressed);
+        assert!(!recompressed.is_empty());
+    }
+
+    #[test]
+    fn test_micro_compress_quality_preservation() {
+        // Verify that micro_compress preserves critical content
+        let mut messages = vec![Message::system("You are a helpful assistant.")];
+        messages.push(Message::user("Remember: the API endpoint is at localhost:8080".to_string()));
+        messages.push(Message::assistant("I'll remember that the API is at localhost:8080".to_string()));
+
+        // Add many filler messages
+        for i in 0..50 {
+            messages.push(Message::user(format!("Turn {}", i)));
+            messages.push(Message::assistant(format!("Response {}", i)));
+        }
+
+        // Critical info should be preserved - check in original messages
+        let api_reference = "localhost:8080";
+        let has_critical = messages.iter().any(|m| match m {
+            Message::User { content, .. } | Message::Assistant { content, .. } => content.contains(api_reference),
+            _ => false,
+        });
+        assert!(has_critical, "Original messages should contain critical info");
+
+        let mut compressor = ContextCompressor::new(128_000);
+        let compressed = compressor.micro_compress(&messages);
+
+        // After compression, the critical info should still be present
+        // (micro_compress doesn't remove content, just trims tool results)
+        let preserved = compressed.iter().any(|m| match m {
+            Message::User { content, .. } | Message::Assistant { content, .. } => content.contains(api_reference),
+            _ => false,
+        });
+        assert!(preserved, "Compressed messages should preserve critical info");
+    }
+
+    #[test]
+    fn test_time_based_compression_triggers() {
+        use std::time::Duration;
+
+        let mut config = TimeBasedConfig::default();
+        config.session_duration_threshold_secs = 1; // 1 second threshold
+        config.message_count_threshold = 5;
+
+        let mut compressor = ContextCompressor::new(128_000);
+        compressor.time_config = config;
+
+        // Create a session start time in the past
+        compressor.session_start = std::time::Instant::now() - Duration::from_secs(10);
+
+        // Should trigger time-based compression
+        let messages: Vec<Message> = (0..3)
+            .map(|i| Message::user(format!("Message {}", i)))
+            .collect();
+
+        assert!(compressor.needs_time_based_compression(&messages));
+    }
+
+    #[test]
+    fn test_compression_warning_levels() {
+        let compressor = ContextCompressor::new(100_000); // Small window
+
+        // 50% usage - should be None or Approaching
+        let low_messages = vec![
+            Message::system("System"),
+            Message::user("Hi"),
+            Message::assistant("Hello"),
+        ];
+
+        // With small window, even few messages might approach limit
+        let warning = compressor.warning_level(&low_messages);
+        assert!(matches!(warning, CompressionWarning::None | CompressionWarning::Approaching));
+    }
 }

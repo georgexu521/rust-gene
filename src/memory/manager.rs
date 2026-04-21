@@ -15,12 +15,45 @@ use tracing::{debug, info, warn};
 const MAX_LEARNINGS_PER_TURN: usize = 3;
 const MAX_LEARNINGS_PER_SESSION_EXTRACT: usize = 6;
 
+/// 记忆层级
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryTier {
+    /// 会话记忆（当前会话内）
+    Session,
+    /// 项目记忆（.priority-agent/MEMORY.md）
+    Project,
+    /// 用户偏好（~/.priority-agent/USER.md）
+    User,
+}
+
 /// 记忆条目
 #[derive(Debug, Clone)]
 pub struct MemoryEntry {
     pub content: String,
     pub category: String,
     pub timestamp: String,
+}
+
+/// 记忆摘要（用于上下文可视化）
+#[derive(Debug, Clone)]
+pub struct MemorySummary {
+    pub project_memory_chars: usize,
+    pub user_memory_chars: usize,
+    pub session_memory_items: usize,
+    pub has_frozen_snapshot: bool,
+}
+
+impl MemorySummary {
+    /// 获取格式化的摘要字符串
+    pub fn format(&self) -> String {
+        format!(
+            "Memory Tiers:\n  Project: {} chars\n  User: {} chars\n  Session: {} items\n  Frozen: {}",
+            self.project_memory_chars,
+            self.user_memory_chars,
+            self.session_memory_items,
+            if self.has_frozen_snapshot { "yes" } else { "no" }
+        )
+    }
 }
 
 /// 记忆管理器
@@ -659,6 +692,85 @@ Return exactly the word NONE if there is nothing critical to remember.";
         let memory_content = std::fs::read_to_string(&self.memory_path).unwrap_or_default();
         let keywords = extract_keywords(query);
         search_memory(&memory_content, &keywords, 5)
+    }
+
+    /// 按层级搜索记忆
+    pub fn search_tier(&self, query: &str, tier: MemoryTier) -> Vec<String> {
+        match tier {
+            MemoryTier::Session => {
+                // Session memory is in pending_learnings
+                self.pending_learnings.iter()
+                    .filter(|l| {
+                        let keywords = extract_keywords(query);
+                        keywords.iter().any(|k| l.to_lowercase().contains(&k.to_lowercase()))
+                    })
+                    .take(5)
+                    .cloned()
+                    .collect()
+            }
+            MemoryTier::Project => {
+                let content = std::fs::read_to_string(&self.memory_path).unwrap_or_default();
+                let keywords = extract_keywords(query);
+                search_memory(&content, &keywords, 5)
+            }
+            MemoryTier::User => {
+                let content = std::fs::read_to_string(&self.user_path).unwrap_or_default();
+                let keywords = extract_keywords(query);
+                search_memory(&content, &keywords, 5)
+            }
+        }
+    }
+
+    /// 加载指定层级的记忆内容
+    pub fn load_tier(&self, tier: MemoryTier) -> String {
+        match tier {
+            MemoryTier::Session => {
+                // Session memory is transient - return empty for injection
+                String::new()
+            }
+            MemoryTier::Project => {
+                let content = std::fs::read_to_string(&self.memory_path).unwrap_or_default();
+                let trimmed = content.trim();
+                if trimmed.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "[Project Memory]\n{}",
+                        trimmed.chars().take(self.memory_char_limit).collect::<String>()
+                    )
+                }
+            }
+            MemoryTier::User => {
+                let content = std::fs::read_to_string(&self.user_path).unwrap_or_default();
+                let trimmed = content.trim();
+                if trimmed.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "[User Preferences]\n{}",
+                        trimmed.chars().take(self.user_char_limit).collect::<String>()
+                    )
+                }
+            }
+        }
+    }
+
+    /// 获取所有层级记忆的摘要（用于上下文可视化）
+    pub fn memory_summary(&self) -> MemorySummary {
+        let project_size = std::fs::read_to_string(&self.memory_path)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        let user_size = std::fs::read_to_string(&self.user_path)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        let session_count = self.pending_learnings.len();
+
+        MemorySummary {
+            project_memory_chars: project_size,
+            user_memory_chars: user_size,
+            session_memory_items: session_count,
+            has_frozen_snapshot: self.frozen_memory.is_some() || self.frozen_user.is_some(),
+        }
     }
 
     /// 尝试添加学习内容到 pending，去重
