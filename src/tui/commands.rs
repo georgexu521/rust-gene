@@ -743,6 +743,79 @@ pub const CMD_SKILLS: CommandDef = CommandDef::new(
     "List available skills",
 );
 
+// Phase 10 Extended 2: More commands
+pub const CMD_INIT: CommandDef = CommandDef::new(
+    "/init",
+    &[],
+    "General",
+    "/init <project_name>",
+    "Initialize a new project",
+);
+
+pub const CMD_LOGIN: CommandDef = CommandDef::new(
+    "/login",
+    &[],
+    "General",
+    "/login [provider]",
+    "Authenticate with provider",
+);
+
+pub const CMD_LOGOUT: CommandDef = CommandDef::new(
+    "/logout",
+    &[],
+    "General",
+    "/logout",
+    "Logout from provider",
+);
+
+pub const CMD_KEY: CommandDef = CommandDef::new(
+    "/key",
+    &[],
+    "Config",
+    "/key [show|clear]",
+    "API key management",
+);
+
+pub const CMD_HEALTH: CommandDef = CommandDef::new(
+    "/health",
+    &[],
+    "Info",
+    "/health",
+    "Health check",
+);
+
+pub const CMD_PING: CommandDef = CommandDef::new(
+    "/ping",
+    &[],
+    "Info",
+    "/ping",
+    "Latency check",
+);
+
+pub const CMD_UPTIME: CommandDef = CommandDef::new(
+    "/uptime",
+    &[],
+    "Info",
+    "/uptime",
+    "Show uptime",
+);
+
+pub const CMD_VERSION: CommandDef = CommandDef::new(
+    "/version",
+    &[],
+    "Info",
+    "/version",
+    "Show version",
+);
+
+pub const CMD_ABOUT: CommandDef = CommandDef::new(
+    "/about",
+    &[],
+    "Info",
+    "/about",
+    "About this agent",
+);
+
 /// 创建默认命令注册表
 pub fn default_command_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
@@ -839,6 +912,16 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_TRACE);
     registry.register(&CMD_MEMORY);
     registry.register(&CMD_SKILLS);
+    // Phase 10 Extended 2: More commands
+    registry.register(&CMD_INIT);
+    registry.register(&CMD_LOGIN);
+    registry.register(&CMD_LOGOUT);
+    registry.register(&CMD_KEY);
+    registry.register(&CMD_HEALTH);
+    registry.register(&CMD_PING);
+    registry.register(&CMD_UPTIME);
+    registry.register(&CMD_VERSION);
+    registry.register(&CMD_ABOUT);
     registry
 }
 

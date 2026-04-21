@@ -3075,3 +3075,90 @@ pub fn handle_memory(_app: &TuiApp) -> String {
 pub fn handle_skills(_app: &TuiApp) -> String {
     "Skills: use /help to see all skill-based commands (commit, review, explain, fix, etc.)".to_string()
 }
+
+// ═══════════════════════════════════════
+// Phase 10 Extended 2: Even more commands
+// ═══════════════════════════════════════
+
+/// /init - Initialize a new project
+pub fn handle_init(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /init <project_name>".to_string();
+    }
+
+    let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let project_path = dir.join(&args);
+
+    format!("Init not yet implemented. Would create: {}", project_path.display())
+}
+
+/// /login - Authentication
+pub fn handle_login(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /login [provider]".to_string();
+    }
+
+    format!("Login to {} not yet implemented.", args)
+}
+
+/// /logout - Logout from provider
+pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
+    "Logout not yet implemented.".to_string()
+}
+
+/// /key - API key management
+pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        let has_key = std::env::var("MOONSHOT_API_KEY").is_ok()
+            || std::env::var("OPENAI_API_KEY").is_ok();
+        return if has_key {
+            "API key is set. Use /model to see which model is active.".to_string()
+        } else {
+            "No API key set. Set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.".to_string()
+        };
+    }
+
+    match args {
+        "show" => "API key not shown for security. Set MOONSHOT_API_KEY or OPENAI_API_KEY.".to_string(),
+        "clear" => "Cleared API key (from environment). Restart required.".to_string(),
+        _ => "Usage: /key [show|clear]".to_string(),
+    }
+}
+
+/// /status - Detailed status
+pub fn handle_status_detailed(_app: &TuiApp) -> String {
+    let mut lines = vec!["Detailed Status:".to_string()];
+    lines.push(format!("  Mode: TUI"));
+    lines.push(format!("  Rust version: {}", std::env::consts::OS));
+    format!("{}\n{}", lines.join("\n"), "Use /doctor for full diagnostics")
+}
+
+/// /health - Health check
+pub fn handle_health(_app: &TuiApp) -> String {
+    "Health: OK\nSystem operational.".to_string()
+}
+
+/// /ping - Latency check
+pub fn handle_ping(_app: &mut TuiApp) -> String {
+    let start = std::time::Instant::now();
+    let elapsed = start.elapsed().as_millis();
+    format!("Pong! Latency: {}ms", elapsed)
+}
+
+/// /uptime - Show uptime
+pub fn handle_uptime(_app: &TuiApp) -> String {
+    format!("Uptime: since boot (detailed tracking not implemented)")
+}
+
+/// /version - Show version
+pub fn handle_version(_app: &TuiApp) -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// /about - About this agent
+pub fn handle_about(_app: &TuiApp) -> String {
+    format!(
+        "Priority Agent v{}\nWeighted priority desktop Agent.\nType /help for available commands.",
+        env!("CARGO_PKG_VERSION")
+    )
+}

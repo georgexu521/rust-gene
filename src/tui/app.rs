@@ -1001,6 +1001,16 @@ impl TuiApp {
             "/benchmark" => slash::handle_benchmark(self, args).await,
             "/test" => slash::handle_test(self, args).await,
             "/trace" => slash::handle_trace(self, args),
+            // Phase 10 Extended 2: More commands
+            "/init" => slash::handle_init(self, args),
+            "/login" => slash::handle_login(self, args),
+            "/logout" => slash::handle_logout(self, args),
+            "/key" => slash::handle_key(self, args),
+            "/health" => slash::handle_health(self),
+            "/ping" => slash::handle_ping(self),
+            "/uptime" => slash::handle_uptime(self),
+            "/version" => slash::handle_version(self),
+            "/about" => slash::handle_about(self),
             _ => {
                 format!(
                     "Unknown command: {}. Type /help for available commands.",
