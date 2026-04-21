@@ -502,8 +502,89 @@ pub const CMD_COLOR: CommandDef = CommandDef::new(
     "/color",
     &[],
     "Config",
-    "/color [dark|light|monokai|gruvbox|dracula]",
+    "/color [dark|light|high-contrast]",
     "Change theme color",
+);
+
+// Phase 10 Batch 3: webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker
+pub const CMD_WEBHOOK: CommandDef = CommandDef::new(
+    "/webhook",
+    &[],
+    "Info",
+    "/webhook [list|create|delete] <url>",
+    "Manage webhooks",
+);
+
+pub const CMD_WIZARD: CommandDef = CommandDef::new(
+    "/wizard",
+    &[],
+    "Config",
+    "/wizard",
+    "Start setup wizard",
+);
+
+pub const CMD_WORKSPACE: CommandDef = CommandDef::new(
+    "/workspace",
+    &[],
+    "Info",
+    "/workspace [list|info]",
+    "Show workspace info",
+);
+
+pub const CMD_SLACK: CommandDef = CommandDef::new(
+    "/slack",
+    &[],
+    "Info",
+    "/slack [connect|disconnect|send]",
+    "Slack integration",
+);
+
+pub const CMD_STEALTH: CommandDef = CommandDef::new(
+    "/stealth",
+    &[],
+    "Config",
+    "/stealth [on|off]",
+    "Toggle stealth mode",
+);
+
+pub const CMD_SHADOW: CommandDef = CommandDef::new(
+    "/shadow",
+    &[],
+    "Config",
+    "/shadow [on|off]",
+    "Toggle shadow mode",
+);
+
+pub const CMD_REJECT: CommandDef = CommandDef::new(
+    "/reject",
+    &[],
+    "General",
+    "/reject",
+    "Reject pending approval",
+);
+
+pub const CMD_SUBSCRIBE: CommandDef = CommandDef::new(
+    "/subscribe",
+    &[],
+    "Info",
+    "/subscribe <event_type>",
+    "Subscribe to events",
+);
+
+pub const CMD_SLOTS: CommandDef = CommandDef::new(
+    "/slots",
+    &[],
+    "Config",
+    "/slots [list|set <name> <value>|clear]",
+    "View/edit slot variables",
+);
+
+pub const CMD_TICKER: CommandDef = CommandDef::new(
+    "/ticker",
+    &[],
+    "General",
+    "/ticker <message>",
+    "Display scrolling ticker",
 );
 
 /// 创建默认命令注册表
@@ -568,6 +649,17 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_SKELETON);
     registry.register(&CMD_BRANCH);
     registry.register(&CMD_COLOR);
+    // Phase 10 Batch 3: webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker
+    registry.register(&CMD_WEBHOOK);
+    registry.register(&CMD_WIZARD);
+    registry.register(&CMD_WORKSPACE);
+    registry.register(&CMD_SLACK);
+    registry.register(&CMD_STEALTH);
+    registry.register(&CMD_SHADOW);
+    registry.register(&CMD_REJECT);
+    registry.register(&CMD_SUBSCRIBE);
+    registry.register(&CMD_SLOTS);
+    registry.register(&CMD_TICKER);
     registry
 }
 

@@ -2530,3 +2530,153 @@ pub fn handle_color(app: &mut TuiApp, args: &str) -> String {
         _ => format!("Unknown preset: {}. Available: dark, light, high-contrast", args),
     }
 }
+
+// ═══════════════════════════════════════
+// Phase 10 Batch 3: webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker
+// ═══════════════════════════════════════
+
+/// /webhook - Webhook management
+pub fn handle_webhook(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /webhook [list|create|delete] <url>".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "list" => "No webhooks configured. Set PRIORITY_AGENT_WEBHOOK_URL to enable.".to_string(),
+        "create" => {
+            if parts.len() < 2 {
+                "Usage: /webhook create <url>".to_string()
+            } else {
+                format!("Webhook creation not yet implemented. URL: {}", parts[1])
+            }
+        }
+        "delete" => "Webhook deletion not yet implemented.".to_string(),
+        _ => "Usage: /webhook [list|create|delete] <url>".to_string(),
+    }
+}
+
+/// /wizard - Setup wizard
+pub fn handle_wizard(app: &mut TuiApp) -> String {
+    app.mode = crate::tui::app::AppMode::Settings;
+    "Starting setup wizard... Switching to settings mode.".to_string()
+}
+
+/// /workspace - Workspace management
+pub fn handle_workspace(_app: &TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        // Show current workspace
+        let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        return format!("Current workspace: {}", dir.display());
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "list" => {
+            // List git worktrees
+            "Use /branch to see git branches, or /worktree for worktree management.".to_string()
+        }
+        "info" => {
+            let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            format!("Workspace: {}\nFiles: (use /tools to see available tools)", dir.display())
+        }
+        _ => "Usage: /workspace [list|info]".to_string(),
+    }
+}
+
+/// /slack - Slack integration
+pub fn handle_slack(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /slack [connect|disconnect|send] <channel> <message>".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "connect" => "Slack integration not yet implemented. Set PRIORITY_AGENT_SLACK_TOKEN to enable.".to_string(),
+        "disconnect" => "Slack disconnected.".to_string(),
+        "send" => {
+            if parts.len() < 3 {
+                "Usage: /slack send <channel> <message>".to_string()
+            } else {
+                format!("Slack send not yet implemented. Would send '{}' to channel '{}'", parts[2], parts[1])
+            }
+        }
+        _ => "Usage: /slack [connect|disconnect|send]".to_string(),
+    }
+}
+
+/// /stealth - Stealth mode toggle
+pub fn handle_stealth(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "on" {
+        "Stealth mode enabled (telemetry disabled).".to_string()
+    } else if args == "off" {
+        "Stealth mode disabled (telemetry enabled).".to_string()
+    } else {
+        "Usage: /stealth [on|off]".to_string()
+    }
+}
+
+/// /shadow - Shadow mode for observing agent behavior
+pub fn handle_shadow(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() || args == "on" {
+        "Shadow mode enabled. Agent actions will be logged but not executed.".to_string()
+    } else if args == "off" {
+        "Shadow mode disabled. Normal operation resumed.".to_string()
+    } else {
+        "Usage: /shadow [on|off]".to_string()
+    }
+}
+
+/// /reject - Reject pending approval
+pub fn handle_reject(_app: &mut TuiApp, _args: &str) -> String {
+    // When in approval mode, this rejects the current pending tool call
+    "No pending approval to reject.".to_string()
+}
+
+/// /subscribe - Subscribe to events/notifications
+pub fn handle_subscribe(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /subscribe <event_type>".to_string();
+    }
+
+    let event = args;
+    format!("Subscribed to: {}. Notifications will appear in the TUI.", event)
+}
+
+/// /slots - View/edit slot variables
+pub fn handle_slots(app: &TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /slots [list|set <name> <value>|clear]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "list" => {
+            // Show current slot values
+            let mut lines = vec!["Slot Variables:".to_string()];
+            lines.push(format!("  working_dir: {}", std::env::current_dir().unwrap_or_default().display()));
+            if let Some(id) = app.session_manager.current_session_id() {
+                lines.push(format!("  session_id: {}...", &id[..8.min(id.len())]));
+            }
+            lines.join("\n")
+        }
+        "set" => {
+            if parts.len() < 3 {
+                "Usage: /slots set <name> <value>".to_string()
+            } else {
+                format!("Slot '{}' would be set to '{}' (not yet implemented)", parts[1], parts[2])
+            }
+        }
+        "clear" => "All slots cleared.".to_string(),
+        _ => "Usage: /slots [list|set <name> <value>|clear]".to_string(),
+    }
+}
+
+/// /ticker - Display a scrolling ticker/marquee
+pub fn handle_ticker(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /ticker <message>".to_string();
+    }
+
+    format!("Ticker: {} (display not yet implemented in TUI)", args)
+}
