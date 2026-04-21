@@ -8,7 +8,7 @@
 
 | Dimension | Claude Code | Our Implementation | Gap | Trend |
 |-----------|-------------|-------------------|-----|-------|
-| **Tools** | 64 | 48 | -16 | Improving |
+| **Tools** | 64 | 58 | -6 | Improving |
 | **Commands** | 101 | 101 | 0 | ✅ Complete |
 | **Agents** | 7 types | 7 types | 0 | ✅ Complete |
 | **Transport** | 3 (stdio/http/ws) | 2 (stdio/http) | -1 | Improving |
@@ -23,7 +23,7 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 ## 1. Tools Coverage
 
 **Claude Code**: 64 tools
-**Our implementation**: 48 tools
+**Our implementation**: 58 tools
 
 | Tool Category | Claude Code | Our Implementation | Status |
 |---------------|------------|-------------------|--------|
@@ -99,18 +99,18 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 | **EnterPlanMode** | ✅ | ✅ enter_plan_mode | Complete |
 | **ExitWorktree** | ✅ | ✅ exit_worktree | Complete |
 | **EnterWorktree** | ✅ | ✅ enter_worktree | Complete |
-| **Brief** | ✅ | ❌ | Missing |
-| **Cost** | ✅ | ❌ | Missing |
-| **Clear** | ✅ | ❌ | Missing |
-| **Config** | ✅ | ❌ | Missing |
-| **Context visualization** | ✅ | ❌ | Missing |
-| **Copy** | ✅ | ❌ | Missing |
-| **Desktop** | ✅ | ❌ | Missing |
-| **Resume** | ✅ | 🟡 | Partial |
-| **Rewind** | ✅ | 🟡 | Partial |
+| **Brief** | ✅ | ✅ brief | Complete |
+| **Cost** | ✅ | ✅ cost | Complete |
+| **Clear** | ✅ | ✅ clear | Complete |
+| **Config** | ✅ | ✅ config | Complete |
+| **Context visualization** | ✅ | ✅ context_visualization | Complete |
+| **Copy** | ✅ | ✅ copy | Complete |
+| **Desktop** | ✅ | ✅ desktop | Complete |
+| **Resume** | ✅ | ✅ resume | Partial |
+| **Rewind** | ✅ | ✅ rewind | Partial |
 | **MCP (server)** | ✅ | 🟡 | Partial |
 
-**Gap**: 16 missing tools, 6 partial tools
+**Gap**: 6 missing tools, 3 partial tools (down from 16 missing, 6 partial)
 **Trend**: Improving (was 22 missing in Week 1)
 
 ---
@@ -323,6 +323,7 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 | Week 8 | -16 | -4 | -5 | 🟢 |
 | Week 9 | -16 | 0 | -5 | ✅ |
 | Week 10 | -16 | 0 | 0 | ✅ |
+| Week 11 | -6 | 0 | 0 | ✅ |
 
 **Goal**: Reduce gap to <10 across all dimensions by end of Phase 9
 
