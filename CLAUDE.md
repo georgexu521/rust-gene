@@ -1522,3 +1522,203 @@ priority-agent/ (workspace)
   - 已完成 / 未完成 / 阻塞项
   - 指标变化（启动、测试时长、失败率）
   - 下周范围收敛（删减低收益任务）
+
+---
+
+## Phase 9：Critical & High 优先级缺口（2026-04-21 开始）
+
+目标：消除 Critical 缺口，补齐 High 优先级缺口，大幅提升命令覆盖率
+
+### 目标清单
+
+| 优先级 | 缺口 | 目标 |
+|--------|------|------|
+| 🔴 Critical | Advanced Agent Types | 补齐 teammate/remote specialist/dream-task |
+| 🟡 High | WebSocket MCP transport | 完成 Phase 4 Task 3 收尾 |
+| 🟡 High | 更多命令 | 新增 10+ 高价值命令 |
+| 🟡 High | Workspace 拆分 | 完成 Phase 8 Task 9 剩余模块 |
+
+---
+
+### Task 1：Advanced Agent Types（Critical）
+
+**目标**：补齐 Claude Code 的 7 种 Agent 类型中的 5 种缺失类型
+
+**Claude Code Agent 类型**：
+- Task Agent ✅（已有）
+- Teammate ❌（缺失）
+- Assistant ❌（缺失）
+- Critic ❌（缺失）
+- Verifier ✅（已有）
+- Remote Specialist ❌（缺失）
+- Dream Task ❌（缺失）
+
+**实现步骤**：
+
+1. **Teammate Agent（队友 Agent）**
+   - 目标：与其他 Agent 协作完成复杂任务
+   - 新增 `TeammateAgent` 结构体
+   - 实现任务委托、结果汇总机制
+   - 注册为 skill `/teammate`
+
+2. **Assistant Agent（助手 Agent）**
+   - 目标：专注特定领域（代码审查、安全、数据处理）
+   - 新增 `AssistantAgent` 结构体，支持 `domain` 参数
+   - 提供预设 domain 配置
+
+3. **Critic Agent（批评 Agent）**
+   - 目标：审查其他 Agent 的工作，提出改进建议
+   - 新增 `CriticAgent` 结构体
+   - 实现审查 prompt 模板
+
+4. **Remote Specialist（远程专家 Agent）**
+   - 目标：通过 Bridge 调度远程 Agent
+   - 复用现有 `BridgeClient`
+   - 新增 `RemoteSpecialistAgent`
+
+5. **Dream Task Agent（梦境任务 Agent）**
+   - 目标：后台探索性分析，不阻塞主对话
+   - 新增 `DreamTaskAgent` 结构体
+   - 实现异步执行、结果回调机制
+
+**关键文件**：`src/agent/mod.rs`, `src/agent/manager.rs`, `src/agent/types.rs`
+
+**环境变量**：
+- `PRIORITY_AGENT_ADVANCED_AGENTS=1` — 启用高级 Agent
+
+**验收标准**：
+- 至少 3 种新 Agent 类型可用
+- `/teammate` 命令可演示任务协作
+- `cargo test` 通过
+
+---
+
+### Task 2：WebSocket MCP Transport（High）
+
+**目标**：完成 Phase 4 Task 3 收尾，新增 WebSocket 传输支持
+
+**现状**：Phase 4 Task 3 第一阶段已完成 stdio/http 传输骨架
+
+**实现步骤**：
+
+1. 在 `McpTransport` 枚举新增 `websocket` 变体
+2. 实现 `WebSocketTransport` 结构体
+3. 支持 `ws://`/`wss://` URL
+4. 实现连接管理、心跳、重新连接
+5. 在 `/doctor` 中显示 WebSocket 状态
+
+**关键文件**：`src/engine/mcp.rs`
+
+**环境变量**：
+- `PRIORITY_AGENT_MCP_WS_URL` — WebSocket endpoint
+
+---
+
+### Task 3：高价值命令补齐（High）
+
+**目标**：新增 10+ 高价值命令，快速提升命令覆盖率
+
+**目标命令（按优先级）**：
+
+1. `/btw` — 随口说一句（one-off 注释）
+2. `/context` — 显示当前上下文状态
+3. `/config` — 交互式配置管理
+4. `/keybindings` — 显示/修改键位
+5. `/git` — 内联 Git 操作
+6. `/history` — 会话历史查看
+7. `/retry` — 重试上一次 LLM 调用
+8. `/undo` — 撤销上一次操作
+9. `/mode` — 切换交互模式
+10. `/package` — 包管理相关操作
+
+**实现步骤**：
+
+1. 在 `src/tui/commands.rs` 新增命令常量
+2. 在 `src/tui/slash_handler.rs` 实现处理函数
+3. 注册命令到 slash command registry
+4. 编写对应 bundled skill
+
+**环境变量**：
+- `PRIORITY_AGENT_EXTRA_COMMANDS=1` — 启用额外命令
+
+**验收标准**：
+- 新增 >= 10 条命令
+- `/help` 中可见新命令
+- `cargo test` 通过
+
+---
+
+### Task 4：Workspace 拆分收尾（High）
+
+**目标**：完成 Phase 8 Task 9 的剩余模块迁移
+
+**已完成**：
+- errors.rs ✅
+- workspace 结构 ✅
+
+**待解决**：
+- permissions/ 循环依赖（依赖 tools::bash_tool::is_dangerous_command）
+- 剩余 20+ 模块迁移
+
+**解决方案**：
+
+1. **解循环依赖**：
+   - 将 `is_dangerous_command` 移到独立函数或新模块
+   - 或在 permissions/ 中重构该依赖
+
+2. **继续迁移**：
+   - state/ → priority-core
+   - services/api/ → priority-core
+   - engine/ → priority-core
+   - tools/ → priority-core
+
+**关键文件**：`priority-core/src/`, `priority-cli/src/`
+
+**验收标准**：
+- `cargo build --workspace` 成功
+- `cargo test --workspace` 通过
+
+---
+
+### Phase 9 实施顺序
+
+1. **Task 3（命令补齐）** — 先做，快速见效
+2. **Task 2（WebSocket MCP）** — Phase 4 收尾
+3. **Task 1（Advanced Agents）** — 架构改动大，后做
+4. **Task 4（Workspace 拆分）** — 技术债务清理
+
+### Phase 9 当前状态
+
+- ✅ Task 1（Advanced Agent Types）：已完成
+  - 新增 `/teammate` 命令（协作队友 Agent）
+  - 新增 `/critic` 命令（批评型代码审查 Agent）
+  - 新增 `/assistant` 命令（领域专家 Agent，支持 code_review/security/data/infrastructure/testing）
+  - 新增 `/remote` 命令（远程专家 Agent）
+  - 新增 bundled skills：teammate.md、critic.md、assistant.md、remote.md
+- ✅ Task 2（WebSocket MCP）：已完成
+  - WebSocket transport 已在 Phase 4 Task 3 实现
+  - `McpTransport::WebSocket` 支持 ws:// 和 wss://
+  - 自动重连和断线检测已实现
+- ✅ Task 3（命令补齐）：已完成
+  - 新增 `/btw` 命令（随口注释）
+  - 新增 `/context` 命令（显示上下文状态）
+  - 新增 `/git` 命令（内联 Git 操作）
+  - 新增 `/history` 命令（会话历史查看）
+  - 新增 `/mode` 命令（切换交互模式）
+  - 新增 `/package` 命令（包管理信息）
+  - 命令总数从 22 增加到 28
+- 🔄 Task 4（Workspace 拆分）：延后
+  - Workspace 结构已建立（priority-core/priority-cli）
+  - 已知问题：`permissions/` 依赖 `tools::bash_tool::is_dangerous_command`，存在循环依赖
+  - 需要先提取 `is_dangerous_command` 到共享模块才能继续
+  - 当前 `cargo build --workspace` 和 `cargo test` 均通过
+
+---
+
+### 验证方式
+
+每个 task 完成后：
+1. 运行 `cargo test` 确保不破坏现有测试
+2. 手动测试对应功能
+3. 确认测试数量不减少
+4. 更新 `docs/CLAUDE_GAP_SCORECARD.md`

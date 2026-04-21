@@ -262,6 +262,88 @@ pub const CMD_VIM: CommandDef = CommandDef::new(
     "Toggle Vim keybindings mode",
 );
 
+// Phase 9 Task 3: New high-value commands
+pub const CMD_BTW: CommandDef = CommandDef::new(
+    "/btw",
+    &[],
+    "General",
+    "/btw <message>",
+    "Add a side note without disrupting conversation",
+);
+
+pub const CMD_CONTEXT: CommandDef = CommandDef::new(
+    "/context",
+    &[],
+    "Info",
+    "/context",
+    "Show current context status (session, model, tokens)",
+);
+
+pub const CMD_GIT: CommandDef = CommandDef::new(
+    "/git",
+    &[],
+    "Git",
+    "/git [status|diff|log|...]",
+    "Run git commands inline",
+);
+
+pub const CMD_HISTORY: CommandDef = CommandDef::new(
+    "/history",
+    &[],
+    "Session",
+    "/history [n]",
+    "Show recent message history",
+);
+
+pub const CMD_MODE: CommandDef = CommandDef::new(
+    "/mode",
+    &[],
+    "General",
+    "/mode [chat|settings|vim]",
+    "Switch interaction mode",
+);
+
+pub const CMD_PACKAGE: CommandDef = CommandDef::new(
+    "/package",
+    &[],
+    "Info",
+    "/package [list|deps|outdated]",
+    "Show package info and dependencies",
+);
+
+// Phase 9 Task 1: Advanced Agent Types
+pub const CMD_TEAMMATE: CommandDef = CommandDef::new(
+    "/teammate",
+    &[],
+    "Agents",
+    "/teammate [domain]",
+    "Start a collaborative teammate agent",
+);
+
+pub const CMD_CRITIC: CommandDef = CommandDef::new(
+    "/critic",
+    &[],
+    "Agents",
+    "/critic [scope]",
+    "Start a critic agent to review code",
+);
+
+pub const CMD_ASSISTANT: CommandDef = CommandDef::new(
+    "/assistant",
+    &[],
+    "Agents",
+    "/assistant [domain:task]",
+    "Start a domain-specific assistant (code_review/security/data/infrastructure/testing)",
+);
+
+pub const CMD_REMOTE: CommandDef = CommandDef::new(
+    "/remote",
+    &[],
+    "Agents",
+    "/remote [task]",
+    "Start a remote agent via bridge",
+);
+
 /// 创建默认命令注册表
 pub fn default_command_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
@@ -290,6 +372,18 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_FIX);
     registry.register(&CMD_MCP);
     registry.register(&CMD_VIM);
+    // Phase 9 Task 3: Register new commands
+    registry.register(&CMD_BTW);
+    registry.register(&CMD_CONTEXT);
+    registry.register(&CMD_GIT);
+    registry.register(&CMD_HISTORY);
+    registry.register(&CMD_MODE);
+    registry.register(&CMD_PACKAGE);
+    // Phase 9 Task 1: Advanced Agent Types
+    registry.register(&CMD_TEAMMATE);
+    registry.register(&CMD_CRITIC);
+    registry.register(&CMD_ASSISTANT);
+    registry.register(&CMD_REMOTE);
     registry
 }
 

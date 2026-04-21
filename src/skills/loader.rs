@@ -23,6 +23,11 @@ const BUNDLED_SKILLS: &[(&str, &str)] = &[
     ("stuck", include_str!("bundled/stuck.md")),
     ("remember", include_str!("bundled/remember.md")),
     ("keybindings", include_str!("bundled/keybindings.md")),
+    // Phase 9 Task 1: Advanced Agent Types
+    ("teammate", include_str!("bundled/teammate.md")),
+    ("critic", include_str!("bundled/critic.md")),
+    ("assistant", include_str!("bundled/assistant.md")),
+    ("remote", include_str!("bundled/remote.md")),
 ];
 
 /// 加载所有 bundled skills

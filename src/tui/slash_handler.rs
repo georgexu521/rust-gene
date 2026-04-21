@@ -1708,3 +1708,361 @@ fn get_default_keybindings() -> String {
     })
     .to_string()
 }
+
+// ─── New Commands (Phase 9 Task 3) ────────────────────────────────────
+
+/// /btw -随口说一句（one-off 注释，不影响对话）
+pub async fn handle_btw(app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /btw <message> - Add a side note without disrupting the conversation".to_string();
+    }
+    let note = format!("[btw] {}", args);
+    app.add_system_message(note.clone());
+    String::new()
+}
+
+/// /context - 显示当前上下文状态
+pub fn handle_context(app: &TuiApp) -> String {
+    let msg_count = app.messages.len();
+    let history_len = if let Some(ref engine) = app.streaming_engine {
+        futures::executor::block_on(engine.get_history()).len()
+    } else {
+        0
+    };
+    let model = app.current_model_label();
+    let provider = app.current_provider_label();
+    let working_dir = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let session_id = app.session_manager.current_session_id()
+        .map(|s| format!("{}", &s[..8.min(s.len())]))
+        .unwrap_or_else(|| "none".to_string());
+
+    let engine_info = if let Some(ref engine) = app.streaming_engine {
+        let history = futures::executor::block_on(engine.get_history());
+
+        let approximate_tokens = history.iter().map(|m| {
+            match m {
+                crate::services::api::Message::System { content } => content.len(),
+                crate::services::api::Message::User { content } => content.len(),
+                crate::services::api::Message::Assistant { content, .. } => content.len(),
+                crate::services::api::Message::Tool { content, .. } => content.len(),
+            }
+        }).sum::<usize>() / 4;
+
+        format!(
+            "History turns: {}\nMessages in view: {}\nApproximate tokens: {}",
+            history_len,
+            msg_count,
+            approximate_tokens
+        )
+    } else {
+        "Engine not initialized".to_string()
+    };
+
+    format!(
+        "# Context Status\n\n\
+         Session: {}\n\
+         Model: {} ({})\n\
+         Working dir: {}\n\
+         \n\
+         {}",
+        session_id, model, provider, working_dir, engine_info
+    )
+}
+
+/// /git - 内联 Git 操作
+pub async fn handle_git(app: &mut TuiApp, args: &str) -> String {
+    let tool = crate::tools::GitTool;
+    let action = if args.is_empty() { "status" } else { args };
+    let params = serde_json::json!({ "action": action });
+    let result = tool.execute(params, app.build_tool_context().await).await;
+    if result.success {
+        result.content
+    } else {
+        result.error.unwrap_or_else(|| "Git command failed".to_string())
+    }
+}
+
+/// /history - 会话历史查看
+pub fn handle_history(app: &TuiApp, args: &str) -> String {
+    let limit = args.parse::<usize>().unwrap_or(20);
+    let messages = &app.messages;
+
+    if messages.is_empty() {
+        return "No messages in current session.".to_string();
+    }
+
+    let start = if messages.len() > limit {
+        messages.len() - limit
+    } else {
+        0
+    };
+
+    let mut lines = vec![format!("Recent {} messages: ", messages.len() - start)];
+    for (i, msg) in messages.iter().enumerate().skip(start) {
+        let role_str = match msg.role {
+            crate::state::MessageRole::User => "user",
+            crate::state::MessageRole::Assistant => "assistant",
+            crate::state::MessageRole::System => "system",
+            crate::state::MessageRole::Tool => "tool",
+        };
+        let preview = if msg.content.len() > 60 {
+            format!("{}...", &msg.content[..60])
+        } else {
+            msg.content.clone()
+        };
+        lines.push(format!("{}. [{}] {}", i + 1, role_str, preview));
+    }
+    lines.join("\n")
+}
+
+/// /mode - 切换交互模式
+pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
+    let current = format!("{:?}", app.mode);
+    if args.is_empty() {
+        return format!(
+            "Current mode: {}\n\nAvailable modes:\n\
+             - chat: Normal chat mode\n\
+             - settings: Settings configuration mode\n\
+             - vim_normal: Vim-style navigation mode\n\n\
+             Usage: /mode <mode_name>",
+            current
+        );
+    }
+
+    let new_mode = args.trim().to_lowercase();
+    match new_mode.as_str() {
+        "chat" => {
+            app.mode = AppMode::Chat;
+            format!("Switched to chat mode.")
+        }
+        "settings" => {
+            let config = crate::services::config::AppConfig::load().unwrap_or_default();
+            app.settings_state = Some(crate::tui::components::settings::SettingsState::new(
+                config,
+                app.keybindings.clone(),
+            ));
+            app.mode = AppMode::Settings;
+            format!("Switched to settings mode.")
+        }
+        "vim" | "vim_normal" => {
+            app.mode = AppMode::VimNormal;
+            format!("Switched to vim_normal mode. Use j/k to navigate, i to return to insert mode.")
+        }
+        _ => format!("Unknown mode: {}. Available: chat, settings, vim", new_mode),
+    }
+}
+
+/// /package - 包管理相关操作
+pub async fn handle_package(app: &mut TuiApp, args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let action = parts.first().map(|s| *s).unwrap_or("help");
+
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+
+    match action {
+        "list" => {
+            // List available package files
+            let params = serde_json::json!({
+                "command": r#"find . -name "package.json" -o -name "Cargo.toml" -o -name "go.mod" -o -name "pyproject.toml" -o -name "Gemfile" 2>/dev/null | head -20"#,
+                "description": "Find package files"
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success {
+                format!("Found package files:\n\n{}", result.content)
+            } else {
+                "No package files found in current directory.".to_string()
+            }
+        }
+        "deps" => {
+            // Show dependencies for detected package manager
+            let params = serde_json::json!({
+                "command": r#"if [ -f "package.json" ]; then npm ls --depth=0 2>/dev/null || echo "npm not available"; elif [ -f "Cargo.toml" ]; then cargo tree --depth=1 2>/dev/null || echo "cargo tree not available"; elif [ -f "go.mod" ]; then go list -m all 2>/dev/null || echo "go not available"; else echo "No recognized package file found"; fi"#,
+                "description": "List dependencies"
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success {
+                format!("Dependencies:\n\n{}", result.content)
+            } else {
+                result.error.unwrap_or_else(|| "Failed to list dependencies.".to_string())
+            }
+        }
+        "outdated" => {
+            let params = serde_json::json!({
+                "command": r#"if [ -f "package.json" ]; then npm outdated 2>/dev/null || echo "npm outdated not available"; elif [ -f "Cargo.toml" ]; then cargo outdated --depth=1 2>/dev/null || echo "cargo outdated not available"; else echo "No recognized package file with outdated check"; fi"#,
+                "description": "Check outdated packages"
+            });
+            let result = tool.execute(params, ctx).await;
+            if result.success {
+                format!("Outdated packages:\n\n{}", result.content)
+            } else {
+                result.error.unwrap_or_else(|| "Failed to check outdated packages.".to_string())
+            }
+        }
+        "help" | _ => {
+            format!(
+                "Package Manager Commands:\n\n\
+                 /package list     - List package files in project\n\
+                 /package deps     - Show installed dependencies\n\
+                 /package outdated - Check for outdated packages\n\n\
+                 Supported: npm (Node.js), cargo (Rust), go (Go)"
+            )
+        }
+    }
+}
+
+// ─── Advanced Agent Commands (Phase 9 Task 1) ─────────────────────────────────
+
+/// /teammate - 启动协作队友 Agent
+pub async fn handle_teammate(app: &mut TuiApp, args: &str) -> String {
+    match app.bundled_skills.get("teammate") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_teammate",
+                    true,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+
+            let domain = if args.is_empty() {
+                "general software development tasks".to_string()
+            } else {
+                args.to_string()
+            };
+
+            let prompt = format!(
+                "{}\n\n## Your Focus\n\nYou are collaborating on: {}\n\nBegin by introducing yourself and asking what specific task you'd like to work on together.",
+                skill.content, domain
+            );
+            app.send_message(prompt).await;
+            String::new()
+        }
+        None => "Skill 'teammate' not found.".to_string(),
+    }
+}
+
+/// /critic - 启动批评型 Agent 审查代码
+pub async fn handle_critic(app: &mut TuiApp, args: &str) -> String {
+    match app.bundled_skills.get("critic") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_critic",
+                    true,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+
+            let tool = crate::tools::GitTool;
+            let params = serde_json::json!({ "action": "diff" });
+            let result = tool.execute(params, app.build_tool_context().await).await;
+            let diff = if result.success {
+                result.content
+            } else {
+                result.error.unwrap_or_else(|| "No changes to review.".to_string())
+            };
+
+            let scope = if args.is_empty() {
+                "all code in the diff".to_string()
+            } else {
+                args.to_string()
+            };
+
+            let prompt = format!(
+                "{}\n\n## Review Scope\n\nPlease critically review: {}\n\n## Changes\n\n```diff\n{}\n```",
+                skill.content, scope, diff
+            );
+            app.send_message(prompt).await;
+            String::new()
+        }
+        None => "Skill 'critic' not found.".to_string(),
+    }
+}
+
+/// /assistant - 启动领域专家 Agent
+pub async fn handle_assistant(app: &mut TuiApp, args: &str) -> String {
+    match app.bundled_skills.get("assistant") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_assistant",
+                    true,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+
+            let parts: Vec<&str> = args.splitn(2, ':').collect();
+            let domain = parts.first().unwrap_or(&"general");
+            let task = parts.get(1).map(|s| s.trim()).unwrap_or("");
+
+            let domain_intro = match *domain {
+                "code_review" => "You are an expert code analyst. Provide deep insights into code structure, patterns, and potential issues.",
+                "security" => "You are a security expert. Focus on vulnerabilities, injection risks, authentication issues, and secure coding practices.",
+                "data" => "You are a data engineering expert. Focus on data pipelines, transformations, storage, and processing efficiency.",
+                "infrastructure" => "You are an infrastructure expert. Focus on DevOps, deployment, CI/CD, and infrastructure as code.",
+                "testing" => "You are a testing expert. Focus on test strategy, coverage, edge cases, and quality assurance.",
+                _ => "You are a helpful specialized assistant.",
+            };
+
+            let prompt = if task.is_empty() {
+                format!(
+                    "{}\n\n## Domain\n\n{}\n\nWhat would you like expert assistance with?",
+                    skill.content, domain_intro
+                )
+            } else {
+                format!(
+                    "{}\n\n## Domain\n\n{}\n\n## Task\n\n{}",
+                    skill.content, domain_intro, task
+                )
+            };
+            app.send_message(prompt).await;
+            String::new()
+        }
+        None => "Skill 'assistant' not found.".to_string(),
+    }
+}
+
+/// /remote - 启动远程专家 Agent
+pub async fn handle_remote(app: &mut TuiApp, args: &str) -> String {
+    match app.bundled_skills.get("remote") {
+        Some(skill) => {
+            let started = std::time::Instant::now();
+            if let Some(ref engine) = app.streaming_engine {
+                let mut tracker = engine.cost_tracker().lock().await;
+                tracker.record_tool_execution(
+                    "slash_remote",
+                    true,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                );
+            }
+
+            // Bridge configuration is read from environment variables
+            let bridge_url = std::env::var("PRIORITY_AGENT_BRIDGE_URL")
+                .ok()
+                .unwrap_or_else(|| "not configured".to_string());
+
+            let prompt = format!(
+                "{}\n\n## Bridge Configuration\n\nBridge URL: {}\n\nTo enable remote execution, set PRIORITY_AGENT_BRIDGE_URL environment variable.\n\n## Your Task\n\n{}",
+                skill.content,
+                bridge_url,
+                if args.is_empty() { "What remote task would you like to execute?" } else { args }
+            );
+            app.send_message(prompt).await;
+            String::new()
+        }
+        None => "Skill 'remote' not found.".to_string(),
+    }
+}

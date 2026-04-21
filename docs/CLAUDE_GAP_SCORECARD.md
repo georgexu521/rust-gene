@@ -118,7 +118,7 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 ## 2. Commands Coverage
 
 **Claude Code**: 101 commands
-**Our implementation**: 22 commands
+**Our implementation**: 28 commands
 
 | Command | Claude Code | Our Implementation | Status |
 |---------|------------|-------------------|--------|
@@ -148,9 +148,9 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 | `/mcp` | ✅ | ✅ | Complete |
 | `/vim` | ✅ | ✅ | Complete |
 | `/compact` | ✅ | ✅ | Complete |
-| `/btw` | ✅ | ❌ | Missing |
+| `/btw` | ✅ | ✅ | Complete |
 | `/config` | ✅ | ❌ | Missing |
-| `/context` | ✅ | ❌ | Missing |
+| `/context` | ✅ | ✅ | Complete |
 | `/copy` | ✅ | ❌ | Missing |
 | `/desktop` | ✅ | ❌ | Missing |
 | `/branch` | ✅ | ❌ | Missing |
@@ -160,16 +160,16 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 | `/effort` | ✅ | ❌ | Missing |
 | `/exit-plan` | ✅ | ✅ | Complete |
 | `/focus` | ✅ | ❌ | Missing |
-| `/git` | ✅ | ❌ | Missing |
-| `/history` | ✅ | ❌ | Missing |
+| `/git` | ✅ | ✅ | Complete |
+| `/history` | ✅ | ✅ | Complete |
 | `/hooks` | ✅ | ❌ | Missing |
 | `/install` | ✅ | ❌ | Missing |
-| `/keybindings` | ✅ | ❌ | Missing |
+| `/keybindings` | ✅ | ✅ | Complete |
 | `/lsp` | ✅ | ❌ | Missing |
 | `/migrate` | ✅ | ❌ | Missing |
-| `/mode` | ✅ | ❌ | Missing |
+| `/mode` | ✅ | ✅ | Complete |
 | `/npm` | ✅ | ❌ | Missing |
-| `/package` | ✅ | ❌ | Missing |
+| `/package` | ✅ | ✅ | Complete |
 | `/pause` | ✅ | ❌ | Missing |
 | `/preamble` | ✅ | ❌ | Missing |
 | `/profiling` | ✅ | ❌ | Missing |
@@ -199,7 +199,7 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 | `/write` | ✅ | ❌ | Missing |
 | ... (and 30+ more) | | | |
 
-**Gap**: 79 missing commands
+**Gap**: 73 missing commands
 **Trend**: Improving (was 85 missing in Week 1)
 
 ---
@@ -207,20 +207,20 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 ## 3. Agent Types
 
 **Claude Code**: 7 agent types (task, teammate, assistant, critic, verifier, custom, etc.)
-**Our implementation**: 2 types (general purpose, verification)
+**Our implementation**: 4 types (general purpose, teammate, critic, assistant, remote, verification)
 
 | Agent Type | Claude Code | Our Implementation | Status |
 |------------|------------|-------------------|--------|
 | Task Agent | ✅ | ✅ | Complete |
-| Teammate | ✅ | ❌ | Missing |
-| Assistant | ✅ | ❌ | Missing |
-| Critic | ✅ | ❌ | Missing |
+| Teammate | ✅ | ✅ | Complete |
+| Assistant | ✅ | ✅ | Complete |
+| Critic | ✅ | ✅ | Complete |
 | Verifier | ✅ | ✅ | Complete |
-| Remote Specialist | ✅ | ❌ | Missing |
-| Dream Task | ✅ | ❌ | Missing |
+| Remote Specialist | ✅ | ✅ | Complete |
+| Dream Task | ✅ | 🟡 | Partial (role exists, skill not fully implemented) |
 
-**Gap**: 5 missing agent types
-**Trend**: Stable
+**Gap**: 3 missing (partially complete agent types)
+**Trend**: Improving
 
 ---
 
@@ -315,6 +315,7 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 | Week 2 | -20 | -83 | -5 | 🔴 |
 | Week 3 | -18 | -81 | -5 | 🟡 |
 | Week 4 | -16 | -79 | -5 | 🟡 |
+| Week 5 | -16 | -73 | -3 | 🟡 |
 
 **Goal**: Reduce gap to <10 across all dimensions by end of Phase 9
 

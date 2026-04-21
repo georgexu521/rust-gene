@@ -946,6 +946,18 @@ impl TuiApp {
             "/vim" => slash::handle_vim(self),
             "/onboarding" | "/onboard" => slash::handle_onboarding(self),
             "/skip" => slash::handle_skip(self),
+            // Phase 9 Task 3: New high-value commands
+            "/btw" => slash::handle_btw(self, args).await,
+            "/context" => slash::handle_context(self),
+            "/git" => slash::handle_git(self, args).await,
+            "/history" => slash::handle_history(self, args),
+            "/mode" => slash::handle_mode(self, args),
+            "/package" => slash::handle_package(self, args).await,
+            // Phase 9 Task 1: Advanced Agent Types
+            "/teammate" => slash::handle_teammate(self, args).await,
+            "/critic" => slash::handle_critic(self, args).await,
+            "/assistant" => slash::handle_assistant(self, args).await,
+            "/remote" => slash::handle_remote(self, args).await,
             _ => {
                 format!(
                     "Unknown command: {}. Type /help for available commands.",
