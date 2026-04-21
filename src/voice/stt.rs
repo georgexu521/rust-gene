@@ -246,6 +246,12 @@ impl WhisperSttBackend {
     }
 }
 
+impl Default for WhisperSttBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait::async_trait]
 impl VoiceBackend for WhisperSttBackend {
     fn name(&self) -> &str {

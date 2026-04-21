@@ -56,7 +56,7 @@ fn current_trust_mode() -> plugins::trust::TrustMode {
     let mode_str = crate::services::config::AppConfig::load()
         .map(|c| c.features.plugin_trust_mode)
         .unwrap_or_else(|_| "warn".to_string());
-    plugins::trust::TrustMode::from_str(&mode_str)
+    plugins::trust::TrustMode::parse_lossy(&mode_str)
 }
 
 fn sanitize_tool_name(id: &str) -> String {

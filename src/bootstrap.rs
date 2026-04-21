@@ -413,11 +413,8 @@ mod tests {
 
             if path.is_dir() {
                 cleanup_old_snapshots_dir(&path, cutoff, cleaned, failed);
-                if is_old {
-                    match std::fs::remove_dir(&path) {
-                        Ok(_) => *cleaned += 1,
-                        Err(_) => {}
-                    }
+                if is_old && std::fs::remove_dir(&path).is_ok() {
+                    *cleaned += 1;
                 }
             } else if is_old {
                 match std::fs::remove_file(&path) {

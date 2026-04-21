@@ -13,7 +13,7 @@ pub struct KeyBinding {
 }
 
 impl KeyBinding {
-    pub fn from_str(s: &str) -> Result<Self, String> {
+    pub fn parse(s: &str) -> Result<Self, String> {
         let trimmed = s.trim();
         if trimmed.is_empty() {
             return Err("Empty keybinding".to_string());
@@ -62,6 +62,14 @@ impl KeyBinding {
 
     pub fn matches(&self, event: KeyEvent) -> bool {
         self.modifiers == event.modifiers && self.code == event.code
+    }
+}
+
+impl std::str::FromStr for KeyBinding {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
     }
 }
 
@@ -214,30 +222,30 @@ pub struct Keybindings {
 impl Default for Keybindings {
     fn default() -> Self {
         Self {
-            global_quit: KeyBinding::from_str("ctrl+c").unwrap(),
-            global_quit_alt: KeyBinding::from_str("ctrl+q").unwrap(),
-            chat_submit: KeyBinding::from_str("enter").unwrap(),
-            chat_newline: KeyBinding::from_str("shift+enter").unwrap(),
-            toggle_vim_mode: KeyBinding::from_str("ctrl+v").unwrap(),
-            vim_scroll_up: KeyBinding::from_str("k").unwrap(),
-            vim_scroll_down: KeyBinding::from_str("j").unwrap(),
-            vim_scroll_top: KeyBinding::from_str("g").unwrap(),
-            vim_scroll_bottom: KeyBinding::from_str("G").unwrap(),
-            vim_insert: KeyBinding::from_str("i").unwrap(),
-            vim_command: KeyBinding::from_str(":").unwrap(),
-            plan_approve: KeyBinding::from_str("y").unwrap(),
-            plan_reject: KeyBinding::from_str("n").unwrap(),
-            plan_modify: KeyBinding::from_str("m").unwrap(),
-            permission_approve: KeyBinding::from_str("y").unwrap(),
-            permission_reject: KeyBinding::from_str("n").unwrap(),
-            permission_view_diff: KeyBinding::from_str("d").unwrap(),
-            settings_save: KeyBinding::from_str("s").unwrap(),
-            settings_next_page: KeyBinding::from_str("l").unwrap(),
-            settings_prev_page: KeyBinding::from_str("h").unwrap(),
-            settings_next_item: KeyBinding::from_str("j").unwrap(),
-            settings_prev_item: KeyBinding::from_str("k").unwrap(),
-            settings_edit: KeyBinding::from_str("enter").unwrap(),
-            settings_toggle_bool: KeyBinding::from_str("space").unwrap(),
+            global_quit: KeyBinding::parse("ctrl+c").unwrap(),
+            global_quit_alt: KeyBinding::parse("ctrl+q").unwrap(),
+            chat_submit: KeyBinding::parse("enter").unwrap(),
+            chat_newline: KeyBinding::parse("shift+enter").unwrap(),
+            toggle_vim_mode: KeyBinding::parse("ctrl+v").unwrap(),
+            vim_scroll_up: KeyBinding::parse("k").unwrap(),
+            vim_scroll_down: KeyBinding::parse("j").unwrap(),
+            vim_scroll_top: KeyBinding::parse("g").unwrap(),
+            vim_scroll_bottom: KeyBinding::parse("G").unwrap(),
+            vim_insert: KeyBinding::parse("i").unwrap(),
+            vim_command: KeyBinding::parse(":").unwrap(),
+            plan_approve: KeyBinding::parse("y").unwrap(),
+            plan_reject: KeyBinding::parse("n").unwrap(),
+            plan_modify: KeyBinding::parse("m").unwrap(),
+            permission_approve: KeyBinding::parse("y").unwrap(),
+            permission_reject: KeyBinding::parse("n").unwrap(),
+            permission_view_diff: KeyBinding::parse("d").unwrap(),
+            settings_save: KeyBinding::parse("s").unwrap(),
+            settings_next_page: KeyBinding::parse("l").unwrap(),
+            settings_prev_page: KeyBinding::parse("h").unwrap(),
+            settings_next_item: KeyBinding::parse("j").unwrap(),
+            settings_prev_item: KeyBinding::parse("k").unwrap(),
+            settings_edit: KeyBinding::parse("enter").unwrap(),
+            settings_toggle_bool: KeyBinding::parse("space").unwrap(),
         }
     }
 }
@@ -281,7 +289,7 @@ impl Keybindings {
         macro_rules! override_binding {
             ($field:ident) => {
                 match file.$field.as_deref() {
-                    Some(s) => match KeyBinding::from_str(s) {
+                    Some(s) => match KeyBinding::parse(s) {
                         Ok(kb) => kb,
                         Err(e) => {
                             tracing::warn!("Invalid keybinding for {}: {}", stringify!($field), e);
@@ -437,31 +445,31 @@ mod tests {
 
     #[test]
     fn test_keybinding_parsing() {
-        let kb = KeyBinding::from_str("ctrl+c").unwrap();
+        let kb = KeyBinding::parse("ctrl+c").unwrap();
         assert_eq!(kb.modifiers, KeyModifiers::CONTROL);
         assert_eq!(kb.code, KeyCode::Char('c'));
 
-        let kb = KeyBinding::from_str("shift+enter").unwrap();
+        let kb = KeyBinding::parse("shift+enter").unwrap();
         assert_eq!(kb.modifiers, KeyModifiers::SHIFT);
         assert_eq!(kb.code, KeyCode::Enter);
 
-        let kb = KeyBinding::from_str("esc").unwrap();
+        let kb = KeyBinding::parse("esc").unwrap();
         assert_eq!(kb.modifiers, KeyModifiers::NONE);
         assert_eq!(kb.code, KeyCode::Esc);
 
-        let kb = KeyBinding::from_str("G").unwrap();
+        let kb = KeyBinding::parse("G").unwrap();
         assert_eq!(kb.code, KeyCode::Char('G'));
     }
 
     #[test]
     fn test_keybinding_display() {
-        let kb = KeyBinding::from_str("ctrl+shift+j").unwrap();
+        let kb = KeyBinding::parse("ctrl+shift+j").unwrap();
         assert_eq!(kb.to_string(), "ctrl+shift+j");
 
-        let kb = KeyBinding::from_str("enter").unwrap();
+        let kb = KeyBinding::parse("enter").unwrap();
         assert_eq!(kb.to_string(), "enter");
 
-        let kb = KeyBinding::from_str("space").unwrap();
+        let kb = KeyBinding::parse("space").unwrap();
         assert_eq!(kb.to_string(), "space");
     }
 

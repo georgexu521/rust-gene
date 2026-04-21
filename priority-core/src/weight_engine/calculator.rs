@@ -41,11 +41,7 @@ impl Eq for ExecutableTask {}
 
 impl PartialOrd for ExecutableTask {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // BinaryHeap 是最大堆，默认 pop() 返回最大元素
-        // 所以这里使用正序，让高权重任务被视为"更大"
-        self.absolute_weight
-            .value()
-            .partial_cmp(&other.absolute_weight.value())
+        Some(self.cmp(other))
     }
 }
 

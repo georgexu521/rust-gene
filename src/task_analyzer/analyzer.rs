@@ -261,7 +261,7 @@ impl TaskAnalyzer {
 
         report.push_str("# 项目分析报告\n\n");
 
-        report.push_str(&format!("## 概览\n"));
+        report.push_str("## 概览\n");
         report.push_str(&format!("- 任务总数: {}\n", result.total_tasks));
         report.push_str(&format!("- 最大深度: {}\n", result.max_depth));
         report.push_str(&format!(

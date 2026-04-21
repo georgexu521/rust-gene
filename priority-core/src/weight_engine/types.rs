@@ -48,10 +48,11 @@ impl Default for Weight {
 }
 
 /// 任务状态
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     /// 待处理
+    #[default]
     Pending,
     /// 进行中
     InProgress,
@@ -59,12 +60,6 @@ pub enum TaskStatus {
     Completed,
     /// 阻塞中
     Blocked,
-}
-
-impl Default for TaskStatus {
-    fn default() -> Self {
-        TaskStatus::Pending
-    }
 }
 
 /// 任务定义

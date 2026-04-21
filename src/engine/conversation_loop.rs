@@ -161,6 +161,12 @@ impl ToolApprovalChannel {
     }
 }
 
+impl Default for ToolApprovalChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -865,9 +871,7 @@ impl ConversationLoop {
                                                                     serde_json::from_str(
                                                                         &current_args,
                                                                     )
-                                                                    .unwrap_or_else(|_| {
-                                                                        serde_json::Value::Null
-                                                                    }),
+                                                                    .unwrap_or(serde_json::Value::Null),
                                                             };
                                                             h.run_pre_tool(&t, &context).await
                                                         } else {
@@ -894,9 +898,7 @@ impl ConversationLoop {
                                                                 serde_json::from_str(
                                                                     &current_args,
                                                                 )
-                                                                .unwrap_or_else(|_| {
-                                                                    serde_json::Value::Null
-                                                                });
+                                                                .unwrap_or(serde_json::Value::Null);
                                                             tool.execute(parsed_args, context)
                                                                 .await
                                                         } else {
@@ -921,9 +923,7 @@ impl ConversationLoop {
                                                                     serde_json::from_str(
                                                                         &current_args,
                                                                     )
-                                                                    .unwrap_or_else(|_| {
-                                                                        serde_json::Value::Null
-                                                                    }),
+                                                                    .unwrap_or(serde_json::Value::Null),
                                                             };
                                                             h.run_post_tool(&tc_for_hook, &result, &ctx_clone)
                                                                 .await;
@@ -950,7 +950,7 @@ impl ConversationLoop {
 
                             // 检测输出截断（FinishReason::Length）
                             let truncated = chunk.choices.iter().any(|c| {
-                                c.finish_reason.as_ref().map_or(false, |fr| {
+                                c.finish_reason.as_ref().is_some_and(|fr| {
                                     // Length 表示达到 max_tokens 限制
                                     format!("{:?}", fr).contains("Length")
                                 })

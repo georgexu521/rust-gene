@@ -72,7 +72,7 @@ impl Tool for ConfigTool {
                 let output = format!("Config [{}] set to: {}", key, value);
                 ToolResult::success(output)
             }
-            "list" | _ => {
+            _ => {
                 // List common configuration options
                 let config_list = r#"Current Configuration Options:
   model              - LLM model to use

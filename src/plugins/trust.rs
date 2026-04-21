@@ -16,7 +16,7 @@ pub enum TrustMode {
 }
 
 impl TrustMode {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_lossy(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "strict" => TrustMode::Strict,
             "off" | "none" | "disabled" => TrustMode::Off,
@@ -30,6 +30,14 @@ impl TrustMode {
             TrustMode::Warn => "warn",
             TrustMode::Off => "off",
         }
+    }
+}
+
+impl std::str::FromStr for TrustMode {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse_lossy(s))
     }
 }
 
@@ -245,12 +253,12 @@ mod tests {
 
     #[test]
     fn test_trust_mode_parsing() {
-        assert_eq!(TrustMode::from_str("strict"), TrustMode::Strict);
-        assert_eq!(TrustMode::from_str("STRICT"), TrustMode::Strict);
-        assert_eq!(TrustMode::from_str("warn"), TrustMode::Warn);
-        assert_eq!(TrustMode::from_str("off"), TrustMode::Off);
-        assert_eq!(TrustMode::from_str("none"), TrustMode::Off);
-        assert_eq!(TrustMode::from_str("unknown"), TrustMode::Warn);
+        assert_eq!(TrustMode::parse_lossy("strict"), TrustMode::Strict);
+        assert_eq!(TrustMode::parse_lossy("STRICT"), TrustMode::Strict);
+        assert_eq!(TrustMode::parse_lossy("warn"), TrustMode::Warn);
+        assert_eq!(TrustMode::parse_lossy("off"), TrustMode::Off);
+        assert_eq!(TrustMode::parse_lossy("none"), TrustMode::Off);
+        assert_eq!(TrustMode::parse_lossy("unknown"), TrustMode::Warn);
     }
 
     #[test]

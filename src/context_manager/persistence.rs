@@ -52,7 +52,7 @@ impl FileStorage {
 
     fn key_to_path(&self, key: &str) -> PathBuf {
         // 简单的键到文件路径映射
-        let safe_key = key.replace('/', "_").replace('\\', "_");
+        let safe_key = key.replace(['/', '\\'], "_");
         self.base_path.join(format!("{}.json", safe_key))
     }
 }
@@ -90,7 +90,7 @@ impl StorageBackend for FileStorage {
             let entry = entry.map_err(|e| PersistenceError::IoError(e.to_string()))?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "json") {
+            if path.extension().is_some_and(|ext| ext == "json") {
                 if let Some(stem) = path.file_stem() {
                     keys.push(stem.to_string_lossy().to_string());
                 }

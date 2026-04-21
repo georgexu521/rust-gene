@@ -273,18 +273,14 @@ impl ContextCollapseService {
             match entry {
                 ContextCollapseEntry::Commit { id, .. } => {
                     let path = self.get_collapse_file_path(&id);
-                    if path.exists() {
-                        if std::fs::remove_file(&path).is_ok() {
-                            removed += 1;
-                        }
+                    if path.exists() && std::fs::remove_file(&path).is_ok() {
+                        removed += 1;
                     }
                 }
                 ContextCollapseEntry::Snapshot { id, .. } => {
                     let path = self.config.storage_dir.join(format!("{}.snap", id));
-                    if path.exists() {
-                        if std::fs::remove_file(&path).is_ok() {
-                            removed += 1;
-                        }
+                    if path.exists() && std::fs::remove_file(&path).is_ok() {
+                        removed += 1;
                     }
                 }
             }

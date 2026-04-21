@@ -11,6 +11,10 @@ pub mod provider;
 use async_openai::types::ChatCompletionResponseStream;
 use async_trait::async_trait;
 
+type PreHookFn = dyn Fn(ChatRequest) -> ChatRequest + Send + Sync;
+type PostHookFn = dyn Fn(&ChatRequest, &ChatResponse) + Send + Sync;
+type ErrorHookFn = dyn Fn(&str) + Send + Sync;
+
 /// LLM Provider trait - 抽象不同的 API 提供商
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
@@ -35,11 +39,11 @@ pub struct ProviderHook {
     /// Hook 名称
     pub name: String,
     /// 请求前 Hook（可修改请求）
-    pub pre_hook: Option<Box<dyn Fn(ChatRequest) -> ChatRequest + Send + Sync>>,
+    pub pre_hook: Option<Box<PreHookFn>>,
     /// 响应后 Hook（可处理/记录响应）
-    pub post_hook: Option<Box<dyn Fn(&ChatRequest, &ChatResponse) + Send + Sync>>,
+    pub post_hook: Option<Box<PostHookFn>>,
     /// 错误 Hook
-    pub error_hook: Option<Box<dyn Fn(&str) + Send + Sync>>,
+    pub error_hook: Option<Box<ErrorHookFn>>,
 }
 
 impl Clone for ProviderHook {

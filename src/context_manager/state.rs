@@ -77,7 +77,7 @@ pub enum Theme {
 }
 
 /// 上下文快照
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ContextSnapshot {
     /// 快照ID
@@ -169,18 +169,6 @@ impl SessionState {
         self.last_activity
             .map(|last| SystemTime::now().duration_since(last).unwrap_or_default())
             .unwrap_or_default()
-    }
-}
-
-impl Default for ContextSnapshot {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            created_at: None,
-            project: None,
-            completed_tasks: Vec::new(),
-            description: String::new(),
-        }
     }
 }
 

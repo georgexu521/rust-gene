@@ -211,6 +211,12 @@ impl PlanApprovalChannel {
     }
 }
 
+impl Default for PlanApprovalChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Plan Mode 管理器
 pub struct PlanModeManager {
     state: Arc<Mutex<PlanModeState>>,
@@ -326,6 +332,12 @@ impl PlanModeManager {
         let mut plan = self.current_plan.lock().await;
         *plan = None;
         info!("Exited plan mode (rejected={})", rejected);
+    }
+}
+
+impl Default for PlanModeManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

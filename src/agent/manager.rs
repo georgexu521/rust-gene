@@ -104,7 +104,7 @@ impl AgentDag {
         let mut visited = HashSet::new();
         let mut rec_stack = HashSet::new();
 
-        for (_, node) in &self.nodes {
+        for node in self.nodes.values() {
             if self.detect_cycle_dfs(node, &mut visited, &mut rec_stack) {
                 return true;
             }
@@ -145,7 +145,7 @@ impl AgentDag {
         let mut result = Vec::new();
         let mut visited = HashSet::new();
 
-        for (id, _) in &self.nodes {
+        for id in self.nodes.keys() {
             if !visited.contains(id) {
                 self.ts_dfs(id, &mut visited, &mut result);
             }

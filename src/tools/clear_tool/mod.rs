@@ -46,7 +46,7 @@ impl Tool for ClearTool {
             "context" => {
                 ToolResult::success("Context window cleared. Conversation history preserved.")
             }
-            "all" | _ => {
+            _ => {
                 ToolResult::success("Conversation history and context window cleared.")
             }
         }

@@ -280,6 +280,12 @@ impl ProjectScanner {
     }
 }
 
+impl Default for ProjectScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── 工具接口 ──────────────────────────────────────────
 
 /// Project List 工具 - 让 agent 查看项目结构

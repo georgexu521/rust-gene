@@ -90,8 +90,8 @@ impl ToolHookManager {
         let post = std::env::var("PRIORITY_AGENT_POST_TOOL_HOOK").ok();
 
         // 检查是否有任何钩子配置
-        let has_any_hook = pre.as_ref().map_or(false, |v| !v.trim().is_empty())
-            || post.as_ref().map_or(false, |v| !v.trim().is_empty());
+        let has_any_hook = pre.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || post.as_ref().is_some_and(|v| !v.trim().is_empty());
 
         // 检查细粒度钩子
         let mut tool_specific_hooks = false;

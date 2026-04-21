@@ -45,6 +45,12 @@ impl AskChannel {
     }
 }
 
+impl Default for AskChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// AskUserQuestion 工具
 pub struct AskUserQuestionTool {
     channel: Arc<AskChannel>,

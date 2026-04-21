@@ -11,7 +11,7 @@ pub fn is_dangerous_command(command: &str) -> bool {
     // 0. 检查命令注入模式（$()、反引号、~展开）
     if command.contains("$(") || command.contains('`') {
         // Remove both opening and closing parens/backticks
-        let cleaned = command.replace("$(", " ").replace(')', " ").replace('`', " ");
+        let cleaned = command.replace("$(", " ").replace([')', '`'], " ");
         if is_dangerous_command(&cleaned) {
             return true;
         }
@@ -68,10 +68,11 @@ pub fn is_dangerous_command(command: &str) -> bool {
     }
 
     // 3. 检查 mkfs 命令
-    if cmd_normalized.contains("mkfs.") || cmd_normalized.contains("mkfs ") {
-        if !cmd_normalized.contains("--help") && !cmd_normalized.contains("-h") {
-            return true;
-        }
+    if (cmd_normalized.contains("mkfs.") || cmd_normalized.contains("mkfs "))
+        && !cmd_normalized.contains("--help")
+        && !cmd_normalized.contains("-h")
+    {
+        return true;
     }
 
     // 4. 检查格式化命令

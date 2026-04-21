@@ -44,12 +44,8 @@ fn check_file_size_limit(path: &Path, operation: &str) -> Result<(), String> {
 /// 处理文件中的智能引号 vs 模型输出的直引号差异
 fn normalize_quotes(input: &str) -> String {
     input
-        .replace('\u{2018}', "'") // LEFT SINGLE QUOTATION MARK → '
-        .replace('\u{2019}', "'") // RIGHT SINGLE QUOTATION MARK → '
-        .replace('\u{201C}', "\"") // LEFT DOUBLE QUOTATION MARK → "
-        .replace('\u{201D}', "\"") // RIGHT DOUBLE QUOTATION MARK → "
-        .replace('\u{201A}', "'") // SINGLE LOW-9 QUOTATION MARK → '
-        .replace('\u{201B}', "'") // SINGLE HIGH-REVERSED-9 QUOTATION MARK → '
+        .replace(['\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'], "'") // single quotes
+        .replace(['\u{201C}', '\u{201D}'], "\"") // double quotes
 }
 
 /// 反转义处理（Claude Code 使用 &lt;fnr&gt; 等转义）
@@ -71,7 +67,7 @@ pub fn mark_file_read(session_id: &str, file_path: &str) {
     let mut tracker = READ_FILES.lock().unwrap();
     let session_files = tracker
         .entry(session_id.to_string())
-        .or_insert_with(HashSet::new);
+        .or_default();
     session_files.insert(file_path.to_string());
 }
 

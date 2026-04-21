@@ -173,9 +173,7 @@ impl BatchRefactor {
 
         let total_duration = start.elapsed().as_millis() as u64;
 
-        let status = if results.iter().all(|r| r.success) {
-            BatchRefactorStatus::Completed
-        } else if results.iter().any(|r| r.success) {
+        let status = if results.iter().any(|r| r.success) {
             BatchRefactorStatus::Completed // 部分成功也认为完成
         } else {
             BatchRefactorStatus::Failed("All units failed".to_string())
@@ -318,7 +316,7 @@ impl BatchRefactor {
     /// 在 worktree 中执行重构
     async fn run_refactor_in_worktree(
         unit: &RefactorUnit,
-        worktree_path: &PathBuf,
+        worktree_path: &std::path::Path,
     ) -> Result<(String, Option<String>), String> {
         // 这里可以调用 Agent 来执行实际的重构任务
         // 目前简化处理，返回模拟结果

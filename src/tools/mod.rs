@@ -117,7 +117,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// 工具错误码
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolErrorCode {
     /// 成功
@@ -139,6 +139,7 @@ pub enum ToolErrorCode {
     /// 危险操作被拦截
     DangerousBlocked,
     /// 未知错误
+    #[default]
     Unknown,
 }
 
@@ -177,19 +178,14 @@ impl ToolErrorCode {
     }
 }
 
-impl Default for ToolErrorCode {
-    fn default() -> Self {
-        ToolErrorCode::Unknown
-    }
-}
-
 /// 工具权限等级
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPermissionLevel {
     /// 只读操作，不会修改任何文件或系统状态
     ReadOnly,
     /// 低风险操作，只会读取或创建临时文件
+    #[default]
     LowRisk,
     /// 中等风险操作，会修改项目文件但可撤销
     MediumRisk,
@@ -219,12 +215,6 @@ impl ToolPermissionLevel {
     /// 是否需要确认提示
     pub fn requires_confirmation(&self) -> bool {
         matches!(self, ToolPermissionLevel::HighRisk | ToolPermissionLevel::Critical)
-    }
-}
-
-impl Default for ToolPermissionLevel {
-    fn default() -> Self {
-        ToolPermissionLevel::LowRisk
     }
 }
 
@@ -303,10 +293,10 @@ pub trait Tool: Send + Sync {
             for (key, prop) in obj {
                 // 检查必需字段
                 if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-                    if required.iter().any(|r| r.as_str() == Some(key)) {
-                        if !params.get(key).is_some() {
-                            return Some(format!("Missing required parameter: {}", key));
-                        }
+                    if required.iter().any(|r| r.as_str() == Some(key))
+                        && params.get(key).is_none()
+                    {
+                        return Some(format!("Missing required parameter: {}", key));
                     }
                 }
                 // 类型检查

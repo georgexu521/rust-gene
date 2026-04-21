@@ -560,6 +560,12 @@ impl StructuredSummary {
     }
 }
 
+impl Default for StructuredSummary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── 上下文压缩器 ──────────────────────────────────────────
 
 /// 上下文压缩器
@@ -2143,9 +2149,11 @@ mod tests {
     fn test_time_based_compression_triggers() {
         use std::time::Duration;
 
-        let mut config = TimeBasedConfig::default();
-        config.session_duration_threshold_secs = 1; // 1 second threshold
-        config.message_count_threshold = 5;
+        let config = TimeBasedConfig {
+            session_duration_threshold_secs: 1, // 1 second threshold
+            message_count_threshold: 5,
+            ..TimeBasedConfig::default()
+        };
 
         let mut compressor = ContextCompressor::new(128_000);
         compressor.time_config = config;

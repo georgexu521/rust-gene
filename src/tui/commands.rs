@@ -207,6 +207,12 @@ impl CommandRegistry {
     }
 }
 
+impl Default for CommandRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ═══════════════════════════════════════
 // 命令定义（编译期常量）
 // ═══════════════════════════════════════

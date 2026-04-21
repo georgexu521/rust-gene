@@ -23,6 +23,12 @@ impl WeightAnalysisTool {
     }
 }
 
+impl Default for WeightAnalysisTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 权重分析结果 (stub)
 pub struct WeightAnalysisResult {
     pub weights: std::collections::HashMap<String, f64>,

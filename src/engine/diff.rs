@@ -141,6 +141,8 @@ fn parse_diff_output(diff_text: &str, old_path: &str, new_path: &str) -> Result<
     let mut hunks = Vec::new();
     let mut insertions = 0u32;
     let mut deletions = 0u32;
+    let hunk_re = regex::Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
+        .map_err(|e| format!("Failed to compile diff hunk regex: {}", e))?;
 
     let mut current_hunk: Option<Hunk> = None;
     let mut current_lines: Vec<DiffLine> = Vec::new();
@@ -149,10 +151,7 @@ fn parse_diff_output(diff_text: &str, old_path: &str, new_path: &str) -> Result<
         let trimmed = line.trim_end();
 
         // Hunk 头: @@ -start,count +start,count @@
-        if let Some(caps) = regex::Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
-            .ok()
-            .and_then(|re| re.captures(trimmed))
-        {
+        if let Some(caps) = hunk_re.captures(trimmed) {
             // 保存之前的 hunk
             if let Some(h) = current_hunk.take() {
                 hunks.push(h);
@@ -299,7 +298,7 @@ fn escape_for_display(content: &str, tab_width: u32) -> String {
             '\t' => {
                 // Tab 转换为空格
                 let spaces = tab_width as usize;
-                result.extend(std::iter::repeat(' ').take(spaces));
+                result.extend(std::iter::repeat_n(' ', spaces));
             }
             '\n' => result.push('\n'),
             '\r' => {} // 忽略回车

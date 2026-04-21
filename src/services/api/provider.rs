@@ -47,7 +47,7 @@ pub enum ProviderType {
 
 impl ProviderType {
     /// 从字符串解析 Provider 类型
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_lossy(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "kimi" | "moonshot" => ProviderType::Kimi,
             "openai" => ProviderType::OpenAI,
@@ -58,6 +58,14 @@ impl ProviderType {
             "azure" | "azure_openai" => ProviderType::Azure,
             _ => ProviderType::Custom,
         }
+    }
+}
+
+impl std::str::FromStr for ProviderType {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse_lossy(s))
     }
 }
 
@@ -298,7 +306,7 @@ fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
     // {"type":"openai","api_key":"...","base_url":"https://...","model":"gpt-4o"}
     if value.trim_start().starts_with('{') {
         let json = serde_json::from_str::<serde_json::Value>(value).ok()?;
-        let provider_type = ProviderType::from_str(json.get("type")?.as_str()?);
+        let provider_type = ProviderType::parse_lossy(json.get("type")?.as_str()?);
         let api_key = json.get("api_key")?.as_str()?.to_string();
         let base_url = json
             .get("base_url")
@@ -331,7 +339,7 @@ fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
         return None;
     }
 
-    let provider_type = ProviderType::from_str(p_type);
+    let provider_type = ProviderType::parse_lossy(p_type);
     let api_key = p_key.to_string();
     let (base_url, default_model) = match rest {
         None => (None, "gpt-4o".to_string()),
@@ -402,11 +410,11 @@ mod tests {
 
     #[test]
     fn test_provider_type_from_str() {
-        assert_eq!(ProviderType::from_str("kimi"), ProviderType::Kimi);
-        assert_eq!(ProviderType::from_str("moonshot"), ProviderType::Kimi);
-        assert_eq!(ProviderType::from_str("openai"), ProviderType::OpenAI);
-        assert_eq!(ProviderType::from_str("anthropic"), ProviderType::Anthropic);
-        assert_eq!(ProviderType::from_str("unknown"), ProviderType::Custom);
+        assert_eq!(ProviderType::parse_lossy("kimi"), ProviderType::Kimi);
+        assert_eq!(ProviderType::parse_lossy("moonshot"), ProviderType::Kimi);
+        assert_eq!(ProviderType::parse_lossy("openai"), ProviderType::OpenAI);
+        assert_eq!(ProviderType::parse_lossy("anthropic"), ProviderType::Anthropic);
+        assert_eq!(ProviderType::parse_lossy("unknown"), ProviderType::Custom);
     }
 
     #[test]

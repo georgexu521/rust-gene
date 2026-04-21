@@ -27,7 +27,7 @@ pub enum SymbolKind {
 }
 
 impl SymbolKind {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_node_kind(s: &str) -> Self {
         match s {
             "function" | "function_item" => SymbolKind::Function,
             "struct" | "struct_item" => SymbolKind::Struct,
@@ -216,7 +216,7 @@ impl SymbolIndex {
 
         Some(Symbol {
             name,
-            kind: SymbolKind::from_str(kind),
+            kind: SymbolKind::from_node_kind(kind),
             file: path.to_path_buf(),
             line,
             column,

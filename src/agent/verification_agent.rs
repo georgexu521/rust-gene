@@ -320,7 +320,7 @@ pub enum ProjectType {
 }
 
 impl ProjectType {
-    pub fn detect(working_dir: &PathBuf) -> Self {
+    pub fn detect(working_dir: &std::path::Path) -> Self {
         if working_dir.join("Cargo.toml").exists() {
             ProjectType::Rust
         } else if working_dir.join("package.json").exists() {

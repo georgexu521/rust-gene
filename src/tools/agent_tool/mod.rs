@@ -811,7 +811,7 @@ impl Tool for AgentTool {
             .unwrap_or_default();
         let role = params["role"]
             .as_str()
-            .and_then(AgentRole::from_str)
+            .and_then(AgentRole::parse)
             .unwrap_or_default();
         let template = params["template"]
             .as_str()

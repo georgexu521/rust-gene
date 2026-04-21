@@ -8,12 +8,14 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+type ConfigCallback = dyn Fn(&AppConfig) + Send + Sync;
+
 /// 配置钩子 - 配置加载后调用的回调
 pub struct ConfigHook {
     /// 钩子名称
     pub name: String,
     /// 配置加载后回调（接收配置快照）
-    pub callback: Option<Box<dyn Fn(&AppConfig) + Send + Sync>>,
+    pub callback: Option<Box<ConfigCallback>>,
 }
 
 impl std::fmt::Debug for ConfigHook {
@@ -84,7 +86,7 @@ impl ConfigLoader {
     /// 从环境变量创建并加载配置
     pub fn load_from_env() -> Result<AppConfig, ConfigError> {
         static LOADER: std::sync::OnceLock<ConfigLoader> = std::sync::OnceLock::new();
-        let loader = LOADER.get_or_init(|| ConfigLoader::new());
+        let loader = LOADER.get_or_init(ConfigLoader::new);
         loader.load()
     }
 }

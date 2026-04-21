@@ -21,7 +21,7 @@ pub enum AgentRole {
 
 impl AgentRole {
     /// 从字符串解析角色（不区分大小写）
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "default" => Some(AgentRole::Default),
             "teammate" => Some(AgentRole::Teammate),
@@ -63,20 +63,28 @@ impl AgentRole {
     }
 }
 
+impl std::str::FromStr for AgentRole {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| format!("Unknown agent role: {}", s))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_role_parsing() {
-        assert_eq!(AgentRole::from_str("teammate"), Some(AgentRole::Teammate));
-        assert_eq!(AgentRole::from_str("Teammate"), Some(AgentRole::Teammate));
+        assert_eq!(AgentRole::parse("teammate"), Some(AgentRole::Teammate));
+        assert_eq!(AgentRole::parse("Teammate"), Some(AgentRole::Teammate));
         assert_eq!(
-            AgentRole::from_str("dream_task"),
+            AgentRole::parse("dream_task"),
             Some(AgentRole::DreamTask)
         );
-        assert_eq!(AgentRole::from_str("dreamtask"), Some(AgentRole::DreamTask));
-        assert_eq!(AgentRole::from_str("unknown"), None);
+        assert_eq!(AgentRole::parse("dreamtask"), Some(AgentRole::DreamTask));
+        assert_eq!(AgentRole::parse("unknown"), None);
     }
 
     #[test]
