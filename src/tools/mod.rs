@@ -215,6 +215,8 @@ pub struct ToolContext {
     pub task_manager: Option<std::sync::Arc<crate::task_manager::TaskManager>>,
     /// 文件状态缓存（file_read/file_edit 优化与变更检测）
     pub file_cache: Option<std::sync::Arc<crate::tools::file_cache::FileStateCache>>,
+    /// 诊断跟踪器（用于 diagnostic tracking 功能）
+    pub diagnostic_tracker: Option<std::sync::Arc<crate::engine::DiagnosticTracker>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -274,6 +276,7 @@ impl ToolContext {
             worktree_manager: None,
             task_manager: None,
             file_cache: None,
+            diagnostic_tracker: None,
         }
     }
 
@@ -349,6 +352,15 @@ impl ToolContext {
         cache: std::sync::Arc<crate::tools::file_cache::FileStateCache>,
     ) -> Self {
         self.file_cache = Some(cache);
+        self
+    }
+
+    /// 设置诊断跟踪器
+    pub fn with_diagnostic_tracker(
+        mut self,
+        tracker: std::sync::Arc<crate::engine::DiagnosticTracker>,
+    ) -> Self {
+        self.diagnostic_tracker = Some(tracker);
         self
     }
 }

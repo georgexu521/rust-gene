@@ -1067,25 +1067,37 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
 
-            // Build export content
+            // Build export content (using standard TOML array format)
             let mut content = String::new();
             content.push_str("# Permission Rules Export\n");
             content.push_str(&format!("# Exported at: {}\n\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
 
-            content.push_str("[allow]\n");
-            for r in &ctx.rules.always_allow {
-                content.push_str(&format!("{} = {:?}\n", r.pattern, r.source));
+            content.push_str("[allow]\npatterns = [");
+            for (i, r) in ctx.rules.always_allow.iter().enumerate() {
+                if i > 0 {
+                    content.push_str(", ");
+                }
+                content.push_str(&format!("\"{}\"", r.pattern));
             }
+            content.push_str("]\n");
 
-            content.push_str("\n[deny]\n");
-            for r in &ctx.rules.always_deny {
-                content.push_str(&format!("{} = {:?}\n", r.pattern, r.source));
+            content.push_str("\n[deny]\npatterns = [");
+            for (i, r) in ctx.rules.always_deny.iter().enumerate() {
+                if i > 0 {
+                    content.push_str(", ");
+                }
+                content.push_str(&format!("\"{}\"", r.pattern));
             }
+            content.push_str("]\n");
 
-            content.push_str("\n[ask]\n");
-            for r in &ctx.rules.always_ask {
-                content.push_str(&format!("{} = {:?}\n", r.pattern, r.source));
+            content.push_str("\n[ask]\npatterns = [");
+            for (i, r) in ctx.rules.always_ask.iter().enumerate() {
+                if i > 0 {
+                    content.push_str(", ");
+                }
+                content.push_str(&format!("\"{}\"", r.pattern));
             }
+            content.push_str("]\n");
 
             if let Some(ref p) = path {
                 if let Some(parent) = p.parent() {

@@ -773,6 +773,22 @@ impl LspManager {
             })
             .collect()
     }
+
+    /// 获取文件路径对应的诊断信息
+    /// 通过第一个可用客户端获取诊断
+    pub async fn get_diagnostics(&self, path: &str) -> Vec<LspDiagnostic> {
+        // 尝试将 path 转换为 URI
+        let uri = path_to_uri(std::path::Path::new(path));
+
+        // 遍历所有客户端查找诊断
+        for client in self.clients.values() {
+            let diags = client.get_diagnostics(&uri).await;
+            if !diags.is_empty() {
+                return diags;
+            }
+        }
+        Vec::new()
+    }
 }
 
 /// 服务器状态

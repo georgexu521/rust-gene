@@ -12,6 +12,9 @@ pub mod context_manager;
 pub mod conversation_loop;
 pub mod cron;
 pub mod diagnostic_tracker;
+pub use diagnostic_tracker::{
+    DiagnosticEntry, DiagnosticRange, DiagnosticSeverity, DiagnosticTracker,
+};
 pub mod diff;
 pub mod error_classifier;
 pub mod hooks;
