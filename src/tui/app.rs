@@ -1022,6 +1022,12 @@ impl TuiApp {
             "/bookmark" => slash::handle_bookmark(self, args),
             "/tag" => slash::handle_tag(self, args),
             "/filter" => slash::handle_filter(self, args),
+            // Phase 10 Final: Complete commands
+            "/profile" => slash::handle_profile(self, args),
+            "/theme" => slash::handle_theme(self, args),
+            "/shortcuts" => slash::handle_shortcuts(self),
+            "/quick" => slash::handle_quick(self),
+            "/feedback" => slash::handle_feedback(self, args),
             _ => {
                 format!(
                     "Unknown command: {}. Type /help for available commands.",

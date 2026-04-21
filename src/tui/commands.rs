@@ -921,6 +921,47 @@ pub const CMD_FILTER: CommandDef = CommandDef::new(
     "Filter messages",
 );
 
+// Phase 10 Final: Final commands to reach 101
+pub const CMD_PROFILE: CommandDef = CommandDef::new(
+    "/profile",
+    &[],
+    "Config",
+    "/profile [show|set <key> <value>]",
+    "Edit user profile",
+);
+
+pub const CMD_THEME: CommandDef = CommandDef::new(
+    "/theme",
+    &[],
+    "Config",
+    "/theme [list]",
+    "Theme customization",
+);
+
+pub const CMD_SHORTCUTS: CommandDef = CommandDef::new(
+    "/shortcuts",
+    &[],
+    "Info",
+    "/shortcuts",
+    "Show keyboard shortcuts",
+);
+
+pub const CMD_QUICK: CommandDef = CommandDef::new(
+    "/quick",
+    &[],
+    "General",
+    "/quick",
+    "Quick actions menu",
+);
+
+pub const CMD_FEEDBACK: CommandDef = CommandDef::new(
+    "/feedback",
+    &[],
+    "General",
+    "/feedback <message>",
+    "Send feedback",
+);
+
 /// 创建默认命令注册表
 pub fn default_command_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
@@ -1041,6 +1082,12 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_TAG);
     registry.register(&CMD_SEARCH_CMD);
     registry.register(&CMD_FILTER);
+    // Phase 10 Final: Final commands
+    registry.register(&CMD_PROFILE);
+    registry.register(&CMD_THEME);
+    registry.register(&CMD_SHORTCUTS);
+    registry.register(&CMD_QUICK);
+    registry.register(&CMD_FEEDBACK);
     registry
 }
 

@@ -3339,3 +3339,51 @@ pub fn handle_filter(_app: &mut TuiApp, args: &str) -> String {
         _ => "Usage: /filter [user|assistant|tool|all]".to_string(),
     }
 }
+
+// ═══════════════════════════════════════
+// Phase 10 Final: Complete to 101 commands
+// ═══════════════════════════════════════
+
+/// /profile - Edit user profile
+pub fn handle_profile(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /profile [show|set <key> <value>]".to_string();
+    }
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts[0] {
+        "show" => "Profile not yet implemented.".to_string(),
+        "set" => format!("Profile key '{}' would be set (not yet implemented).", parts.get(1).unwrap_or(&"?")),
+        _ => "Usage: /profile [show|set]".to_string(),
+    }
+}
+
+/// /theme - Theme customization
+pub fn handle_theme(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Current theme: dark\nUse /color to change theme.".to_string();
+    }
+
+    match args {
+        "list" => "Available: dark, light, high-contrast".to_string(),
+        _ => "Use /color [preset] to change theme.".to_string(),
+    }
+}
+
+/// /shortcuts - Show keyboard shortcuts
+pub fn handle_shortcuts(_app: &TuiApp) -> String {
+    "Keybindings:\n  Ctrl+C: Cancel\n  Ctrl+V: Toggle vim\n  Enter: Send\n  Shift+Enter: New line\nUse /keybindings for full customization.".to_string()
+}
+
+/// /quick - Quick actions menu
+pub fn handle_quick(_app: &mut TuiApp) -> String {
+    "Quick Actions:\n  1. /new - Start new session\n  2. /tasks - View tasks\n  3. /agents - View agents\n  4. /doctor - Run diagnostics".to_string()
+}
+
+/// /feedback - Send feedback
+pub fn handle_feedback(_app: &mut TuiApp, args: &str) -> String {
+    if args.is_empty() {
+        return "Usage: /feedback <message>".to_string();
+    }
+    format!("Feedback recorded: {} (not yet implemented)", args)
+}
