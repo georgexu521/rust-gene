@@ -177,16 +177,18 @@ Compared to the real Claude Code (`~/Desktop/claude/`), this reimplementation is
 - **Bridge / Remote Sessions** — `RemoteTriggerTool` + `BridgeClient` over HTTP; `--bridge-url` CLI flag.
 
 ### Critical Missing
-- **Advanced Agent Types** — Existing `AgentManager` is single-role and local-first; still missing teammate/remote-specialist style agent types and richer delegation contracts.
+- **Advanced Agent Types** ✅ — Teammate, Critic, Assistant, Remote, Dream agents implemented in Phase 9.
 
 ### High Priority Missing
-- **MCP Advanced Transport** — Mostly stdio-oriented today; missing WebSocket transport, OAuth flows, and approval UX parity.
+- **MCP Advanced Transport** ✅ — WebSocket transport complete; OAuth flows partially complete.
 - **Plugin Ecosystem Productization** — Plugin MVP exists, but marketplace/distribution/signature trust and lifecycle governance are still missing.
 - **Permission Management Deep UX** — `/permissions` exists, but still lacks richer interactive review flows and policy import/export UX.
+- **MCP Server** 🟡 — Missing standalone MCP server capability (partial implementation).
+- **Resume/Rewind** 🟡 — Partial implementation; session control commands partially wired.
 
 ### Medium Priority Missing
 - **Voice Mode** — No `src/voice/` equivalent.
-- **LLM-based Memory Extraction** — Heuristic-only; no `extractMemories` service using LLM.
+- **LLM-based Memory Extraction** ✅ — Forked agent mode and trailing run implemented in Phase 6.
 - **Keybinding Customization** — Hardcoded keys only.
 
 ### Low Priority / Ecosystem
@@ -1797,6 +1799,27 @@ priority-agent/ (workspace)
   - 提取 `is_dangerous_command` 到 security 模块，打破 permissions ↔ tools/bash_tool 循环依赖
   - `permissions/mod.rs` 和 `tools/bash_tool/mod.rs` 均使用 `crate::security::is_dangerous_command`
   - `cargo build` 和 `cargo test` (498 passed) 均通过
+
+### Phase 11：剩余工具缺口补齐（2026-04-21）
+
+**目标**：消除剩余 6 个工具缺口
+
+| 工具 | 状态 | 说明 |
+|------|------|------|
+| MCP Server | 🟡 Partial | 缺少独立的 MCP 服务器运行能力 |
+| Resume | 🟡 Partial | 会话恢复功能部分实现 |
+| Rewind | 🟡 Partial | 对话回退功能部分实现 |
+
+**已完成的工具补齐**（2026-04-21）：
+- ✅ Brief - 任务摘要工具
+- ✅ Cost - 成本追踪工具
+- ✅ Clear - 清除历史工具
+- ✅ Config - 配置管理工具
+- ✅ Context visualization - 上下文可视化工具
+- ✅ Copy - 剪贴板工具
+- ✅ Desktop - 桌面集成工具
+
+**当前工具总数**：~58 种工具类型，73 个注册实例（含 Task 变体）
 
 ---
 
