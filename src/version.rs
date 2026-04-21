@@ -59,17 +59,6 @@ impl Version {
         }
     }
 
-    /// 完整版本字符串
-    pub fn to_string(&self) -> String {
-        match self.channel {
-            ReleaseChannel::Stable => format!("{}.{}.{}", self.major, self.minor, self.patch),
-            _ => format!(
-                "{}.{}.{}-{}",
-                self.major, self.minor, self.patch, self.channel.as_str()
-            ),
-        }
-    }
-
     /// 检查是否为稳定版
     pub fn is_stable(&self) -> bool {
         self.channel == ReleaseChannel::Stable
@@ -78,7 +67,17 @@ impl Version {
 
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        match self.channel {
+            ReleaseChannel::Stable => write!(f, "{}.{}.{}", self.major, self.minor, self.patch),
+            _ => write!(
+                f,
+                "{}.{}.{}-{}",
+                self.major,
+                self.minor,
+                self.patch,
+                self.channel.as_str()
+            ),
+        }
     }
 }
 

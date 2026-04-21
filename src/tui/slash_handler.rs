@@ -1652,8 +1652,7 @@ pub fn handle_keybindings(app: &mut TuiApp, args: &str) -> String {
                         default_kb
                     )
                 }
-            } else if args.starts_with("edit ") {
-                let json_str = &args[5..];
+            } else if let Some(json_str) = args.strip_prefix("edit ") {
                 // Basic validation
                 if json_str.trim().starts_with("{") {
                     if let Some(parent) = kb_path.parent() {
@@ -1727,7 +1726,7 @@ pub fn handle_context(app: &TuiApp) -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
     let session_id = app.session_manager.current_session_id()
-        .map(|s| format!("{}", &s[..8.min(s.len())]))
+        .map(|s| s[..8.min(s.len())].to_string())
         .unwrap_or_else(|| "none".to_string());
 
     let engine_info = if let Some(ref engine) = app.streaming_engine {
@@ -1843,7 +1842,7 @@ pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
     match new_mode.as_str() {
         "chat" => {
             app.mode = AppMode::Chat;
-            format!("Switched to chat mode.")
+            "Switched to chat mode.".to_string()
         }
         "settings" => {
             let config = crate::services::config::AppConfig::load().unwrap_or_default();
@@ -1852,11 +1851,12 @@ pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
                 app.keybindings.clone(),
             ));
             app.mode = AppMode::Settings;
-            format!("Switched to settings mode.")
+            "Switched to settings mode.".to_string()
         }
         "vim" | "vim_normal" => {
             app.mode = AppMode::VimNormal;
-            format!("Switched to vim_normal mode. Use j/k to navigate, i to return to insert mode.")
+            "Switched to vim_normal mode. Use j/k to navigate, i to return to insert mode."
+                .to_string()
         }
         _ => format!("Unknown mode: {}. Available: chat, settings, vim", new_mode),
     }
@@ -1865,7 +1865,7 @@ pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
 /// /package - 包管理相关操作
 pub async fn handle_package(app: &mut TuiApp, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
-    let action = parts.first().map(|s| *s).unwrap_or("help");
+    let action = parts.first().copied().unwrap_or("help");
 
     let tool = crate::tools::BashTool;
     let ctx = app.build_tool_context().await;
@@ -1910,13 +1910,12 @@ pub async fn handle_package(app: &mut TuiApp, args: &str) -> String {
             }
         }
         _ => {
-            format!(
-                "Package Manager Commands:\n\n\
+            "Package Manager Commands:\n\n\
                  /package list     - List package files in project\n\
                  /package deps     - Show installed dependencies\n\
                  /package outdated - Check for outdated packages\n\n\
                  Supported: npm (Node.js), cargo (Rust), go (Go)"
-            )
+                .to_string()
         }
     }
 }
@@ -2179,7 +2178,7 @@ pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
                             "{}. {} - {} [{}]",
                             i + 1,
                             s.title,
-                            s.id[..8.min(s.id.len())].to_string(),
+                            &s.id[..8.min(s.id.len())],
                             s.updated_at
                         ));
                     }
@@ -2226,7 +2225,7 @@ pub fn handle_undo(app: &mut TuiApp, _args: &str) -> String {
         None => return "No active session.".to_string(),
     };
 
-    match app.session_manager.rewind_last_edit(&session_id) {
+    match app.session_manager.rewind_last_edit(session_id) {
         Ok(msg) => msg,
         Err(e) => format!("Nothing to undo or undo failed: {}", e),
     }
@@ -2286,7 +2285,7 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
     } else if args == "skills" {
         // Reload skills
         if let Some(ref _engine) = app.streaming_engine {
-            format!("Skills registry: use /skills list to view")
+            "Skills registry: use /skills list to view".to_string()
         } else {
             "Skills not available.".to_string()
         }
@@ -2298,7 +2297,7 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
 /// /share - 分享当前会话
 pub fn handle_share(app: &mut TuiApp, _args: &str) -> String {
     if let Some(id) = app.session_manager.current_session_id() {
-        match app.session_manager.export_session(&id) {
+        match app.session_manager.export_session(id) {
             Ok(json) => {
                 let path = dirs::home_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -3165,9 +3164,9 @@ pub async fn handle_test(app: &mut TuiApp, args: &str) -> String {
     let ctx = app.build_tool_context().await;
 
     let cmd = if args.is_empty() {
-        "cargo test 2>&1 | tail -30".to_string()
+        "tmp=$(mktemp -t priority-agent-test.XXXXXX); cargo test > \"$tmp\" 2>&1; status=$?; tail -30 \"$tmp\"; rm -f \"$tmp\"; exit $status".to_string()
     } else {
-        format!("cargo test {} 2>&1 | tail -30", args)
+        format!("tmp=$(mktemp -t priority-agent-test.XXXXXX); cargo test {} > \"$tmp\" 2>&1; status=$?; tail -30 \"$tmp\"; rm -f \"$tmp\"; exit $status", args)
     };
 
     let params = serde_json::json!({
@@ -3328,7 +3327,7 @@ pub fn handle_init(_app: &mut TuiApp, args: &str) -> String {
     }
 
     let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let project_path = dir.join(&args);
+    let project_path = dir.join(args);
 
     format!("Init not yet implemented. Would create: {}", project_path.display())
 }
@@ -3369,7 +3368,7 @@ pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
 /// /status - Detailed status
 pub fn handle_status_detailed(_app: &TuiApp) -> String {
     let mut lines = vec!["Detailed Status:".to_string()];
-    lines.push(format!("  Mode: TUI"));
+    lines.push("  Mode: TUI".to_string());
     lines.push(format!("  Rust version: {}", std::env::consts::OS));
     format!("{}\n{}", lines.join("\n"), "Use /doctor for full diagnostics")
 }
@@ -3380,15 +3379,24 @@ pub fn handle_health(_app: &TuiApp) -> String {
 }
 
 /// /ping - Latency check
-pub fn handle_ping(_app: &mut TuiApp) -> String {
-    let start = std::time::Instant::now();
-    let elapsed = start.elapsed().as_millis();
-    format!("Pong! Latency: {}ms", elapsed)
+pub fn handle_ping(app: &mut TuiApp) -> String {
+    use std::time::Instant;
+
+    // Measure a real local round-trip by touching the session store.
+    let db_start = Instant::now();
+    let db_ok = app.session_manager.list_sessions(1).is_ok();
+    let db_ms = db_start.elapsed().as_millis();
+
+    format!(
+        "Pong! Local DB round-trip: {}ms ({})",
+        db_ms,
+        if db_ok { "ok" } else { "error" }
+    )
 }
 
 /// /uptime - Show uptime
 pub fn handle_uptime(_app: &TuiApp) -> String {
-    format!("Uptime: since boot (detailed tracking not implemented)")
+    "Uptime: since boot (detailed tracking not implemented)".to_string()
 }
 
 /// /version - Show version
@@ -3415,7 +3423,7 @@ pub fn handle_reset(app: &mut TuiApp, args: &str) -> String {
         "Session reset. Messages cleared.".to_string()
     } else if args == "all" {
         app.messages.clear();
-        format!("Full reset not yet implemented.")
+        "Full reset not yet implemented.".to_string()
     } else {
         "Usage: /reset [session|all]".to_string()
     }
@@ -3449,19 +3457,14 @@ pub async fn handle_import(app: &mut TuiApp, args: &str) -> String {
         return "Usage: /import <file_path>".to_string();
     }
 
-    let tool = crate::tools::BashTool;
-    let ctx = app.build_tool_context().await;
-    let cmd = format!("test -f {} && echo 'File exists' || echo 'File not found'", args);
-
-    let params = serde_json::json!({
-        "command": cmd,
-        "description": "Check import file"
-    });
-    let result = tool.execute(params, ctx).await;
-    if result.success && result.content.contains("exists") {
-        format!("Import of {} not yet implemented.", args)
-    } else {
+    let path = std::path::Path::new(args.trim());
+    if !path.exists() {
         format!("File not found: {}", args)
+    } else if !path.is_file() {
+        format!("Not a file: {}", args)
+    } else {
+        let _ = app; // import implementation will use app context in future phases.
+        format!("Import of {} not yet implemented.", path.display())
     }
 }
 
@@ -3538,7 +3541,7 @@ pub fn handle_bookmark(_app: &mut TuiApp, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts[0] {
         "add" => format!("Bookmark '{}' added (not yet implemented).", parts.get(1).unwrap_or(&"?")),
-        "go" => format!("Navigate to bookmark (not yet implemented)."),
+        "go" => "Navigate to bookmark (not yet implemented).".to_string(),
         _ => "Usage: /bookmark [add <name>|go <name>|list]".to_string(),
     }
 }
