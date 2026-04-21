@@ -47,7 +47,6 @@ pub enum MessagePriority {
     Low,
 }
 
-
 /// 消息类型
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -63,7 +62,6 @@ pub enum MessageKind {
     /// 广播
     Broadcast,
 }
-
 
 /// 未读消息统计
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,11 +174,7 @@ impl TeammateMailbox {
         inner
             .messages
             .iter()
-            .filter(|m| {
-                (m.to == self.self_id || m.to == "*")
-                    && m.from == from
-                    && !m.read
-            })
+            .filter(|m| (m.to == self.self_id || m.to == "*") && m.from == from && !m.read)
             .take(limit)
             .cloned()
             .collect()
@@ -351,7 +345,13 @@ mod tests {
         let path = dir.path().join("mailbox.jsonl");
         let mb = TeammateMailbox::with_path("alice", path);
 
-        let msg = mb.send("alice", "Hello self!", MessagePriority::Normal, MessageKind::Notify, None);
+        let msg = mb.send(
+            "alice",
+            "Hello self!",
+            MessagePriority::Normal,
+            MessageKind::Notify,
+            None,
+        );
         assert_eq!(msg.from, "alice");
         assert_eq!(msg.to, "alice");
 
@@ -376,7 +376,13 @@ mod tests {
         let path = dir.path().join("mailbox.jsonl");
         let mb = TeammateMailbox::with_path("me", path);
 
-        let msg = mb.send("me", "todo 1", MessagePriority::Normal, MessageKind::Request, None);
+        let msg = mb.send(
+            "me",
+            "todo 1",
+            MessagePriority::Normal,
+            MessageKind::Request,
+            None,
+        );
         assert_eq!(mb.receive(10).len(), 1);
 
         assert!(mb.mark_read(&msg.id));
@@ -389,9 +395,27 @@ mod tests {
         let path = dir.path().join("mailbox.jsonl");
         let mb = TeammateMailbox::with_path("me", path);
 
-        mb.send("me", "msg1", MessagePriority::High, MessageKind::Notify, None);
-        mb.send("me", "msg2", MessagePriority::Normal, MessageKind::Notify, None);
-        mb.send("me", "msg3", MessagePriority::High, MessageKind::Notify, None);
+        mb.send(
+            "me",
+            "msg1",
+            MessagePriority::High,
+            MessageKind::Notify,
+            None,
+        );
+        mb.send(
+            "me",
+            "msg2",
+            MessagePriority::Normal,
+            MessageKind::Notify,
+            None,
+        );
+        mb.send(
+            "me",
+            "msg3",
+            MessagePriority::High,
+            MessageKind::Notify,
+            None,
+        );
 
         let summary = mb.unread_summary();
         assert_eq!(summary.total, 3);
@@ -403,7 +427,13 @@ mod tests {
         let path = dir.path().join("mailbox.jsonl");
         let mb = TeammateMailbox::with_path("me", path);
 
-        let msg = mb.send("me", "delete me", MessagePriority::Normal, MessageKind::Notify, None);
+        let msg = mb.send(
+            "me",
+            "delete me",
+            MessagePriority::Normal,
+            MessageKind::Notify,
+            None,
+        );
         assert!(mb.delete_message(&msg.id));
         assert!(mb.get_message(&msg.id).is_none());
     }
@@ -414,7 +444,13 @@ mod tests {
         let path = dir.path().join("mailbox.jsonl");
         {
             let mb = TeammateMailbox::with_path("agent", path.clone());
-            mb.send("other", "persistent", MessagePriority::Normal, MessageKind::Notify, None);
+            mb.send(
+                "other",
+                "persistent",
+                MessagePriority::Normal,
+                MessageKind::Notify,
+                None,
+            );
         }
         {
             let mb = TeammateMailbox::with_path("other", path);

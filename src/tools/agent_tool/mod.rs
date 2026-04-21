@@ -257,7 +257,11 @@ async fn spawn_single_agent(
 }
 
 /// 汇总多个子 Agent 结果
-fn synthesize_results(description: &str, results: Vec<ManagerAgentResult>, files: &[String]) -> ToolResult {
+fn synthesize_results(
+    description: &str,
+    results: Vec<ManagerAgentResult>,
+    files: &[String],
+) -> ToolResult {
     let files_info = if files.is_empty() {
         String::new()
     } else {
@@ -269,7 +273,10 @@ fn synthesize_results(description: &str, results: Vec<ManagerAgentResult>, files
         description, files_info
     );
 
-    let success_count = results.iter().filter(|r| r.status == crate::agent::types::AgentStatus::Completed).count();
+    let success_count = results
+        .iter()
+        .filter(|r| r.status == crate::agent::types::AgentStatus::Completed)
+        .count();
     let fail_count = results.len() - success_count;
 
     output.push_str(&format!(
@@ -355,20 +362,22 @@ async fn handle_resume(
 async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
     let branches_array = match ctx.params["fork_branches"].as_array() {
         Some(arr) => arr,
-        None => {
-            return ToolResult::error(
-                "Invalid params: 'fork_branches' must be an array",
-            )
-        }
+        None => return ToolResult::error("Invalid params: 'fork_branches' must be an array"),
     };
     if branches_array.is_empty() {
         return ToolResult::error("fork_branches array cannot be empty");
     }
 
-    let description = ctx.params["description"].as_str().unwrap_or("fork exploration");
+    let description = ctx.params["description"]
+        .as_str()
+        .unwrap_or("fork exploration");
     let files: Vec<String> = ctx.params["files"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     // If parent_agent_id specified, inherit its memory
@@ -432,7 +441,10 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
         }
     }
 
-    let success_count = results.iter().filter(|r| r.get("content").is_some()).count();
+    let success_count = results
+        .iter()
+        .filter(|r| r.get("content").is_some())
+        .count();
     let mut output = format!(
         "Fork exploration completed: {} branches\n\n",
         branches_array.len()
@@ -486,7 +498,11 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
         }
         let files: Vec<String> = t["files"]
             .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         subtasks.push(SubTask {
             description: desc.to_string(),
@@ -495,7 +511,9 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
         });
     }
 
-    let description = ctx.params["description"].as_str().unwrap_or("parallel tasks");
+    let description = ctx.params["description"]
+        .as_str()
+        .unwrap_or("parallel tasks");
     let parallel = ctx.params["parallel"].as_bool().unwrap_or(false);
 
     let results = if parallel || subtasks.len() > 1 {
@@ -546,7 +564,11 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
 
     let files: Vec<String> = ctx.params["files"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     synthesize_results(description, results, &files)
@@ -565,7 +587,11 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
 
     let files: Vec<String> = ctx.params["files"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     match spawn_single_agent(
@@ -593,7 +619,9 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
 
             // Handle memory operations
             let memory_manager = crate::agent::memory::global_memory_manager();
-            let agent_memory = memory_manager.get_or_create(&result.agent_id.to_string()).await;
+            let agent_memory = memory_manager
+                .get_or_create(&result.agent_id.to_string())
+                .await;
 
             // If memory_key specified, save result to memory
             if let Some(memory_key) = ctx.params["memory_key"].as_str() {
@@ -604,7 +632,10 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
             // If memory_snapshot specified, create snapshot
             if ctx.params["memory_snapshot"].as_bool().unwrap_or(false) {
                 let snapshot = agent_memory.snapshot().await;
-                info!("Created memory snapshot at timestamp: {}", snapshot.timestamp);
+                info!(
+                    "Created memory snapshot at timestamp: {}",
+                    snapshot.timestamp
+                );
             }
 
             ToolResult::success_with_data(
@@ -759,7 +790,10 @@ impl Tool for AgentTool {
         // 1. Resume existing agent
         if let Some(agent_id_str) = params["agent_id"].as_str() {
             // Only resume if no other action specified
-            if params["fork_branches"].is_null() && params["subtasks"].is_null() && params["description"].is_null() {
+            if params["fork_branches"].is_null()
+                && params["subtasks"].is_null()
+                && params["description"].is_null()
+            {
                 return handle_resume(&agent_manager, agent_id_str).await;
             }
         }
@@ -779,7 +813,9 @@ impl Tool for AgentTool {
             .as_str()
             .and_then(AgentRole::from_str)
             .unwrap_or_default();
-        let template = params["template"].as_str().and_then(AgentTemplate::from_str);
+        let template = params["template"]
+            .as_str()
+            .and_then(AgentTemplate::from_str);
 
         let ctx = ExecuteParams {
             agent_manager: &agent_manager,

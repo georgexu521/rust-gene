@@ -60,7 +60,8 @@ impl Tool for SymbolQueryTool {
 
         if index.is_empty() {
             return ToolResult::success_with_data(
-                "No symbols indexed. This may be a non-Rust project or the source files are empty.".to_string(),
+                "No symbols indexed. This may be a non-Rust project or the source files are empty."
+                    .to_string(),
                 json!({ "count": 0 }),
             );
         }
@@ -168,8 +169,8 @@ impl Tool for SymbolQueryTool {
                     "trait" => SymbolKind::Trait,
                     "impl" => SymbolKind::Impl,
                     "module" => SymbolKind::Module,
-                    "class" => SymbolKind::Struct,     // TypeScript/Python class
-                    "interface" => SymbolKind::Trait,  // TypeScript interface
+                    "class" => SymbolKind::Struct, // TypeScript/Python class
+                    "interface" => SymbolKind::Trait, // TypeScript interface
                     "type" => SymbolKind::TypeAlias,
                     _ => {
                         return ToolResult::error(format!(

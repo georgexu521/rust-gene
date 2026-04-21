@@ -238,11 +238,7 @@ impl Project {
             return 0.0;
         }
 
-        let total_weight: f64 = self
-            .root_tasks
-            .iter()
-            .map(|t| t.local_weight.value())
-            .sum();
+        let total_weight: f64 = self.root_tasks.iter().map(|t| t.local_weight.value()).sum();
 
         if total_weight == 0.0 {
             return 0.0;
@@ -287,11 +283,11 @@ mod tests {
     #[test]
     fn test_task_with_children_progress() {
         let mut parent = Task::new("parent", "Parent").with_weight(1.0);
-        
+
         let child1 = Task::new("c1", "Child 1")
             .with_weight(0.6)
             .with_description("First child");
-        
+
         let mut child2 = Task::new("c2", "Child 2")
             .with_weight(0.4)
             .with_description("Second child");

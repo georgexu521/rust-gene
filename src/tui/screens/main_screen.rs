@@ -210,7 +210,11 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         ));
     } else {
         right_text.push(Span::styled(
-            format!("{} / {}", app.current_provider_label(), app.current_model_label()),
+            format!(
+                "{} / {}",
+                app.current_provider_label(),
+                app.current_model_label()
+            ),
             Style::default().fg(app.theme.info),
         ));
         right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
@@ -452,12 +456,7 @@ pub fn render_plan_approval(f: &mut Frame, plan: &crate::engine::plan_mode::Plan
 }
 
 /// 渲染问答用户弹窗
-pub fn render_ask_user(
-    f: &mut Frame,
-    question: &str,
-    options: &[String],
-    area: Rect,
-) {
+pub fn render_ask_user(f: &mut Frame, question: &str, options: &[String], area: Rect) {
     let popup_area = centered_rect(70, 50, area);
 
     let block = Block::default()
@@ -482,10 +481,7 @@ pub fn render_ask_user(
         )]));
         for (i, opt) in options.iter().enumerate() {
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {}. ", i + 1),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(format!("  {}. ", i + 1), Style::default().fg(Color::Cyan)),
                 Span::styled(opt.clone(), Style::default().fg(Color::White)),
             ]));
         }
@@ -544,18 +540,30 @@ pub fn render_onboarding(
         } else if line.starts_with("- ") {
             lines.push(Line::from(vec![
                 Span::styled("  • ", Style::default().fg(Color::Cyan)),
-                Span::styled(line.strip_prefix("- ").unwrap_or(line).to_string(), Style::default().fg(theme.text)),
+                Span::styled(
+                    line.strip_prefix("- ").unwrap_or(line).to_string(),
+                    Style::default().fg(theme.text),
+                ),
             ]));
         } else if line.ends_with(':') && !line.contains(" ") {
-            lines.push(Line::from(vec![
-                Span::styled(line.to_string(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                line.to_string(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]));
         } else if line.starts_with("Welcome") || line.starts_with("You're all set") {
-            lines.push(Line::from(vec![
-                Span::styled(line.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                line.to_string(),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )]));
         } else {
-            lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(theme.text))));
+            lines.push(Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(theme.text),
+            )));
         }
     }
 
@@ -565,25 +573,56 @@ pub fn render_onboarding(
 
     let nav_spans = if step.index() == 0 {
         vec![
-            Span::styled("Enter/→", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter/→",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" = Next  ", Style::default().fg(Color::Gray)),
-            Span::styled("Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" = Skip", Style::default().fg(Color::Gray)),
         ]
     } else if step == crate::onboarding::OnboardingStep::Done {
         vec![
-            Span::styled("←", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "←",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" = Back  ", Style::default().fg(Color::Gray)),
-            Span::styled("Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" = Finish", Style::default().fg(Color::Gray)),
         ]
     } else {
         vec![
-            Span::styled("←", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "←",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" = Back  ", Style::default().fg(Color::Gray)),
-            Span::styled("Enter/→", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter/→",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" = Next  ", Style::default().fg(Color::Gray)),
-            Span::styled("Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" = Skip", Style::default().fg(Color::Gray)),
         ]
     };
@@ -591,9 +630,7 @@ pub fn render_onboarding(
     lines.push(Line::from(nav_spans));
 
     let text = Text::from(lines);
-    let paragraph = Paragraph::new(text)
-        .wrap(Wrap { trim: true })
-        .block(block);
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: true }).block(block);
 
     f.render_widget(Clear, popup_area);
     f.render_widget(paragraph, popup_area);

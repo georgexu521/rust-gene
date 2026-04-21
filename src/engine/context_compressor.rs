@@ -121,10 +121,12 @@ pub struct TimeBasedConfig {
 impl Default for TimeBasedConfig {
     fn default() -> Self {
         Self {
-            session_duration_threshold_secs: std::env::var("PRIORITY_AGENT_SESSION_DURATION_THRESHOLD")
-                .ok()
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(3600), // 默认 1 小时
+            session_duration_threshold_secs: std::env::var(
+                "PRIORITY_AGENT_SESSION_DURATION_THRESHOLD",
+            )
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(3600), // 默认 1 小时
             message_count_threshold: std::env::var("PRIORITY_AGENT_MESSAGE_COUNT_THRESHOLD")
                 .ok()
                 .and_then(|s| s.parse::<usize>().ok())
@@ -171,7 +173,9 @@ impl CompressionWarning {
     pub fn message(&self) -> &'static str {
         match self {
             CompressionWarning::None => "",
-            CompressionWarning::Approaching => "Context usage is approaching 60%. Consider wrapping up soon.",
+            CompressionWarning::Approaching => {
+                "Context usage is approaching 60%. Consider wrapping up soon."
+            }
             CompressionWarning::Near => "Context is 80% full. Compression will happen soon.",
             CompressionWarning::Critical => "Context is nearly full! Compression imminent.",
         }
@@ -1143,8 +1147,9 @@ impl ContextCompressor {
                         }
                         // 保留关键命令参数（尤其是编译/测试/诊断命令）
                         if tc.name == "bash" {
-                            if let Some(cmd) =
-                                tc.arguments["command"].as_str().or_else(|| tc.arguments["cmd"].as_str())
+                            if let Some(cmd) = tc.arguments["command"]
+                                .as_str()
+                                .or_else(|| tc.arguments["cmd"].as_str())
                             {
                                 let trimmed = cmd.trim();
                                 if !trimmed.is_empty() {
@@ -1695,16 +1700,10 @@ mod tests {
 
     #[test]
     fn test_prune_keeps_more_context_for_critical_tool_output() {
-        let mut messages = vec![
-            Message::user("start"),
-            Message::assistant("ok"),
-        ];
+        let mut messages = vec![Message::user("start"), Message::assistant("ok")];
         for i in 0..6 {
             let content = if i == 0 {
-                format!(
-                    "Result: ERROR\n{}\n",
-                    "x".repeat(1500)
-                )
+                format!("Result: ERROR\n{}\n", "x".repeat(1500))
             } else {
                 "Result: OK\nsmall output".to_string()
             };
@@ -1715,9 +1714,10 @@ mod tests {
         let first_tool = pruned
             .iter()
             .find_map(|m| match m {
-                Message::Tool { tool_call_id, content } if tool_call_id == "call_0" => {
-                    Some(content.clone())
-                }
+                Message::Tool {
+                    tool_call_id,
+                    content,
+                } if tool_call_id == "call_0" => Some(content.clone()),
                 _ => None,
             })
             .expect("missing call_0");
@@ -1938,8 +1938,7 @@ mod tests {
             response: Some(summary_text.to_string()),
         });
 
-        let mut compressor = ContextCompressor::new(1000)
-            .with_llm_provider(provider, "mock-model");
+        let mut compressor = ContextCompressor::new(1000).with_llm_provider(provider, "mock-model");
 
         let messages = vec![
             Message::system("You are a helpful assistant."),
@@ -1958,7 +1957,10 @@ mod tests {
             let content = m.content();
             content.contains("[CONTEXT COMPACTION]")
         });
-        assert!(has_summary, "LLM compression should produce a summary message");
+        assert!(
+            has_summary,
+            "LLM compression should produce a summary message"
+        );
 
         let stats = compressor.stats();
         assert_eq!(stats.compression_count, 1);
@@ -1972,8 +1974,7 @@ mod tests {
     async fn test_compress_async_falls_back_when_llm_fails() {
         let provider = std::sync::Arc::new(MockLlmProvider { response: None });
 
-        let mut compressor = ContextCompressor::new(1000)
-            .with_llm_provider(provider, "mock-model");
+        let mut compressor = ContextCompressor::new(1000).with_llm_provider(provider, "mock-model");
 
         let messages = vec![
             Message::system("You are a helpful assistant."),

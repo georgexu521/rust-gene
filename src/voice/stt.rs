@@ -61,9 +61,10 @@ impl WhisperSttBackend {
             cmd.arg("--language").arg(&self.language);
         }
 
-        let output = cmd.output().await.with_context(|| {
-            format!("Failed to run whisper command: {}", self.whisper_cmd)
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .with_context(|| format!("Failed to run whisper command: {}", self.whisper_cmd))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -75,7 +76,12 @@ impl WhisperSttBackend {
         let text = if txt_path.exists() {
             tokio::fs::read_to_string(&txt_path)
                 .await
-                .with_context(|| format!("Failed to read transcription output: {}", txt_path.display()))?
+                .with_context(|| {
+                    format!(
+                        "Failed to read transcription output: {}",
+                        txt_path.display()
+                    )
+                })?
         } else {
             // 如果 whisper 输出到 stdout，直接使用
             String::from_utf8_lossy(&output.stdout).to_string()
@@ -86,7 +92,10 @@ impl WhisperSttBackend {
             return Err(anyhow::anyhow!("Transcription result is empty"));
         }
 
-        debug!("Transcription result: {}", &trimmed[..trimmed.len().min(100)]);
+        debug!(
+            "Transcription result: {}",
+            &trimmed[..trimmed.len().min(100)]
+        );
         Ok(trimmed)
     }
 
@@ -97,7 +106,11 @@ impl WhisperSttBackend {
         duration_secs: u64,
     ) -> Result<()> {
         let path = output_path.as_ref();
-        debug!("Recording audio for {}s to {}", duration_secs, path.display());
+        debug!(
+            "Recording audio for {}s to {}",
+            duration_secs,
+            path.display()
+        );
 
         let platform = detect_platform();
         match platform {
@@ -106,9 +119,16 @@ impl WhisperSttBackend {
                 if command_exists("rec").await {
                     let output = tokio::process::Command::new("rec")
                         .args([
-                            "-r", "16000", "-c", "1", "-b", "16",
+                            "-r",
+                            "16000",
+                            "-c",
+                            "1",
+                            "-b",
+                            "16",
                             path.to_str().unwrap_or("/tmp/recorded.wav"),
-                            "trim", "0", &format!("{}", duration_secs),
+                            "trim",
+                            "0",
+                            &format!("{}", duration_secs),
                         ])
                         .stdout(Stdio::null())
                         .stderr(Stdio::piped())
@@ -124,11 +144,16 @@ impl WhisperSttBackend {
                 } else if command_exists("ffmpeg").await {
                     let output = tokio::process::Command::new("ffmpeg")
                         .args([
-                            "-f", "avfoundation",
-                            "-i", ":0",
-                            "-t", &format!("{}", duration_secs),
-                            "-ar", "16000",
-                            "-ac", "1",
+                            "-f",
+                            "avfoundation",
+                            "-i",
+                            ":0",
+                            "-t",
+                            &format!("{}", duration_secs),
+                            "-ar",
+                            "16000",
+                            "-ac",
+                            "1",
                             path.to_str().unwrap_or("/tmp/recorded.wav"),
                             "-y",
                         ])
@@ -153,11 +178,16 @@ impl WhisperSttBackend {
                 if command_exists("arecord").await {
                     let output = tokio::process::Command::new("arecord")
                         .args([
-                            "-D", "plughw:1,0",
-                            "-f", "S16_LE",
-                            "-r", "16000",
-                            "-c", "1",
-                            "-d", &format!("{}", duration_secs),
+                            "-D",
+                            "plughw:1,0",
+                            "-f",
+                            "S16_LE",
+                            "-r",
+                            "16000",
+                            "-c",
+                            "1",
+                            "-d",
+                            &format!("{}", duration_secs),
                             path.to_str().unwrap_or("/tmp/recorded.wav"),
                         ])
                         .stdout(Stdio::null())
@@ -174,11 +204,16 @@ impl WhisperSttBackend {
                 } else if command_exists("ffmpeg").await {
                     let output = tokio::process::Command::new("ffmpeg")
                         .args([
-                            "-f", "alsa",
-                            "-i", "default",
-                            "-t", &format!("{}", duration_secs),
-                            "-ar", "16000",
-                            "-ac", "1",
+                            "-f",
+                            "alsa",
+                            "-i",
+                            "default",
+                            "-t",
+                            &format!("{}", duration_secs),
+                            "-ar",
+                            "16000",
+                            "-ac",
+                            "1",
                             path.to_str().unwrap_or("/tmp/recorded.wav"),
                             "-y",
                         ])

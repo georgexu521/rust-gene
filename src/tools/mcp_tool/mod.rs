@@ -75,8 +75,8 @@ impl Tool for McpAuthTool {
     }
 
     fn description(&self) -> &str {
-        "Authenticate with an MCP server. \
-         Note: OAuth flows are not fully implemented in this version."
+        "Authenticate with an MCP server using configured OAuth settings. \
+         This stores token for subsequent MCP requests."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -92,17 +92,27 @@ impl Tool for McpAuthTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let server_name = params["server_name"].as_str().unwrap_or("");
         if server_name.is_empty() {
             return ToolResult::error("server_name is required");
         }
 
-        ToolResult::success(format!(
-            "MCP authentication for '{}' is not implemented. \
-             Servers using stdio transport typically do not require OAuth.",
-            server_name
-        ))
+        let manager = match &context.mcp_manager {
+            Some(m) => m,
+            None => return ToolResult::error("MCP manager not available"),
+        };
+
+        match manager.authenticate_server(server_name).await {
+            Ok(_) => ToolResult::success(format!(
+                "MCP authentication succeeded for '{}'.",
+                server_name
+            )),
+            Err(e) => ToolResult::error(format!(
+                "MCP authentication failed for '{}': {}",
+                server_name, e
+            )),
+        }
     }
 }
 

@@ -113,9 +113,10 @@ impl TaskParser {
 
             let parts: Vec<&str> = line.split('|').collect();
             if parts.len() < 2 {
-                return Err(ParseError::InvalidFormat(
-                    format!("Line must have at least id and name: {}", line)
-                ));
+                return Err(ParseError::InvalidFormat(format!(
+                    "Line must have at least id and name: {}",
+                    line
+                )));
             }
 
             let mut task = RawTask::new(parts[0].trim(), parts[1].trim());
@@ -180,8 +181,7 @@ impl TaskParser {
         children_map: &HashMap<String, Vec<RawTask>>,
     ) -> Result<Task, ParseError> {
         let weight = raw.weight.unwrap_or(1.0);
-        let mut task = Task::new(&raw.id, &raw.name)
-            .with_weight(weight);
+        let mut task = Task::new(&raw.id, &raw.name).with_weight(weight);
 
         if let Some(desc) = &raw.description {
             task = task.with_description(desc.clone());
@@ -212,14 +212,11 @@ impl TaskParser {
         let mut recursion_stack = HashMap::new();
 
         for task in &self.raw_tasks {
-            if self.has_cycle(
-                &task.id,
-                &mut visited,
-                &mut recursion_stack,
-            )? {
-                return Err(ParseError::CircularDependency(
-                    format!("Cycle detected starting from task: {}", task.id)
-                ));
+            if self.has_cycle(&task.id, &mut visited, &mut recursion_stack)? {
+                return Err(ParseError::CircularDependency(format!(
+                    "Cycle detected starting from task: {}",
+                    task.id
+                )));
             }
         }
 
@@ -246,10 +243,11 @@ impl TaskParser {
         recursion_stack.insert(task_id.to_string(), true);
 
         // 找到这个任务的依赖
-        let task = self.raw_tasks.iter().find(|t| t.id == task_id)
-            .ok_or_else(|| ParseError::InvalidFormat(
-                format!("Task not found: {}", task_id)
-            ))?;
+        let task = self
+            .raw_tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| ParseError::InvalidFormat(format!("Task not found: {}", task_id)))?;
 
         for dep_id in &task.dependencies {
             if self.has_cycle(dep_id, visited, recursion_stack)? {
@@ -300,8 +298,10 @@ task2|Second Task|0.5||task1
     #[test]
     fn test_duplicate_id_error() {
         let mut parser = TaskParser::new();
-        parser.add_raw_task(RawTask::new("task1", "Task 1")).unwrap();
-        
+        parser
+            .add_raw_task(RawTask::new("task1", "Task 1"))
+            .unwrap();
+
         let result = parser.add_raw_task(RawTask::new("task1", "Task 1 Duplicate"));
         assert!(matches!(result, Err(ParseError::DuplicateId(_))));
     }

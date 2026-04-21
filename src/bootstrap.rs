@@ -119,8 +119,15 @@ pub fn cleanup_old_snapshots() {
     let mut cleaned = 0usize;
     let mut failed = 0usize;
 
-    fn visit_dir(dir: &std::path::Path, cutoff: std::time::SystemTime, cleaned: &mut usize, failed: &mut usize) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+    fn visit_dir(
+        dir: &std::path::Path,
+        cutoff: std::time::SystemTime,
+        cleaned: &mut usize,
+        failed: &mut usize,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             let is_old = entry
@@ -298,36 +305,19 @@ pub async fn init_components(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
-    use std::sync::Mutex as StdMutex;
-
-    static ENV_LOCK: Lazy<StdMutex<()>> = Lazy::new(|| StdMutex::new(()));
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     fn with_env_vars(vars: &[(&str, Option<&str>)], f: impl FnOnce()) {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let keys: Vec<&str> = vars.iter().map(|(k, _)| *k).collect();
-        let old: Vec<(String, Option<String>)> = keys
-            .iter()
-            .map(|k| (k.to_string(), std::env::var(k).ok()))
-            .collect();
-
+        let mut env = EnvVarGuard::acquire_blocking();
         for (k, v) in vars {
             if let Some(val) = v {
-                std::env::set_var(k, val);
+                env.set(k, val);
             } else {
-                std::env::remove_var(k);
+                env.remove(k);
             }
         }
 
         f();
-
-        for (k, v) in old {
-            if let Some(val) = v {
-                std::env::set_var(k, val);
-            } else {
-                std::env::remove_var(k);
-            }
-        }
     }
 
     #[test]
@@ -377,10 +367,7 @@ mod tests {
         std::fs::write(&old_file, "old").unwrap();
 
         // 获取 old_file 的修改时间
-        let old_mtime = std::fs::metadata(&old_file)
-            .unwrap()
-            .modified()
-            .unwrap();
+        let old_mtime = std::fs::metadata(&old_file).unwrap().modified().unwrap();
 
         // 创建新文件（确保 mtime 更晚）
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -413,7 +400,9 @@ mod tests {
         cleaned: &mut usize,
         failed: &mut usize,
     ) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             let is_old = entry

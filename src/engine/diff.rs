@@ -158,10 +158,22 @@ fn parse_diff_output(diff_text: &str, old_path: &str, new_path: &str) -> Result<
                 hunks.push(h);
             }
 
-            let old_start: u32 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(1);
-            let old_count: u32 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(1);
-            let new_start: u32 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(1);
-            let new_count: u32 = caps.get(4).and_then(|m| m.as_str().parse().ok()).unwrap_or(1);
+            let old_start: u32 = caps
+                .get(1)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(1);
+            let old_count: u32 = caps
+                .get(2)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(1);
+            let new_start: u32 = caps
+                .get(3)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(1);
+            let new_count: u32 = caps
+                .get(4)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(1);
 
             current_hunk = Some(Hunk {
                 header: HunkHeader {
@@ -174,7 +186,10 @@ fn parse_diff_output(diff_text: &str, old_path: &str, new_path: &str) -> Result<
             });
             current_lines = Vec::new();
 
-            debug!("Found hunk: @@ -{},{} +{},{} @@", old_start, old_count, new_start, new_count);
+            debug!(
+                "Found hunk: @@ -{},{} +{},{} @@",
+                old_start, old_count, new_start, new_count
+            );
             continue;
         }
 
@@ -227,7 +242,10 @@ pub fn get_patch_for_display(diff: &FileDiff, options: &DiffOptions) -> String {
     let mut output = Vec::new();
 
     // 文件头
-    output.push(format!("diff --git a/{} b/{}", diff.old_path, diff.new_path));
+    output.push(format!(
+        "diff --git a/{} b/{}",
+        diff.old_path, diff.new_path
+    ));
     output.push(format!("--- a/{}\n+++ b/{}", diff.old_path, diff.new_path));
 
     // 统计信息
@@ -243,8 +261,10 @@ pub fn get_patch_for_display(diff: &FileDiff, options: &DiffOptions) -> String {
         // Hunk 头
         output.push(format!(
             "@@ -{},{} +{},{} @@",
-            hunk.header.old_start, hunk.header.old_count,
-            hunk.header.new_start, hunk.header.new_count
+            hunk.header.old_start,
+            hunk.header.old_count,
+            hunk.header.new_start,
+            hunk.header.new_count
         ));
 
         for line in &hunk.lines {
@@ -332,7 +352,12 @@ pub fn simple_diff(old_content: &str, new_content: &str) -> Vec<(DiffLineType, S
 /// 使用 git diff 对文件生成 patch
 pub async fn get_file_diff(old_path: &Path, new_path: &Path) -> Result<String, String> {
     let output = Command::new("git")
-        .args(["diff", "--no-color", old_path.to_string_lossy().as_ref(), new_path.to_string_lossy().as_ref()])
+        .args([
+            "diff",
+            "--no-color",
+            old_path.to_string_lossy().as_ref(),
+            new_path.to_string_lossy().as_ref(),
+        ])
         .output()
         .await
         .map_err(|e| format!("git diff failed: {}", e))?;
@@ -422,8 +447,14 @@ mod tests {
 
         assert!(diff_lines.len() >= 3);
         // Check we have at least one addition and one deletion
-        let additions = diff_lines.iter().filter(|(t, _)| t == &DiffLineType::Addition).count();
-        let deletions = diff_lines.iter().filter(|(t, _)| t == &DiffLineType::Deletion).count();
+        let additions = diff_lines
+            .iter()
+            .filter(|(t, _)| t == &DiffLineType::Addition)
+            .count();
+        let deletions = diff_lines
+            .iter()
+            .filter(|(t, _)| t == &DiffLineType::Deletion)
+            .count();
         assert!(additions >= 1 && deletions >= 1);
     }
 }

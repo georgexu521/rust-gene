@@ -150,11 +150,7 @@ fn do_rename(
 
         if new_content != content {
             if let Err(e) = std::fs::write(file, &new_content) {
-                return ToolResult::error(format!(
-                    "Failed to write {}: {}",
-                    file.display(),
-                    e
-                ));
+                return ToolResult::error(format!("Failed to write {}: {}", file.display(), e));
             }
             let count = count_replacements(&content, symbol_name, new_name);
             total_replacements += count;
@@ -233,8 +229,8 @@ fn is_word_at(bytes: &[u8], pos: usize, word: &str) -> bool {
     // 检查前后不是词字符
     let is_word_char = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let before_ok = pos == 0 || !is_word_char(bytes[pos - 1]);
-    let after_ok = pos + word_bytes.len() == bytes.len()
-        || !is_word_char(bytes[pos + word_bytes.len()]);
+    let after_ok =
+        pos + word_bytes.len() == bytes.len() || !is_word_char(bytes[pos + word_bytes.len()]);
     before_ok && after_ok
 }
 
@@ -263,7 +259,9 @@ fn count_replacements(content: &str, old: &str, new: &str) -> usize {
 }
 
 fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -314,10 +312,7 @@ fn do_extract_function(params: &serde_json::Value, path: &std::path::Path) -> To
     // 分析使用了哪些外部变量（简单启发式）
     let declared = extract_declared_vars(extracted_lines);
     let used = extract_used_vars(extracted_lines);
-    let params_needed: Vec<String> = used
-        .difference(&declared)
-        .cloned()
-        .collect();
+    let params_needed: Vec<String> = used.difference(&declared).cloned().collect();
 
     // 构建新函数
     let param_list = if params_needed.is_empty() {
@@ -333,22 +328,13 @@ fn do_extract_function(params: &serde_json::Value, path: &std::path::Path) -> To
         )
     };
 
-    let new_function = format!(
-        "fn {}{} {{\n{}\n}}\n",
-        function_name,
-        param_list,
-        body
-    );
+    let new_function = format!("fn {}{} {{\n{}\n}}\n", function_name, param_list, body);
 
     // 在原位置替换为函数调用
     let call_expr = if params_needed.is_empty() {
         format!("{}();", function_name)
     } else {
-        format!(
-            "{}({});",
-            function_name,
-            params_needed.join(", ")
-        )
+        format!("{}({});", function_name, params_needed.join(", "))
     };
 
     let mut new_lines = lines[..line_start - 1].to_vec();
@@ -408,12 +394,11 @@ fn extract_declared_vars(lines: &[&str]) -> std::collections::HashSet<String> {
 fn extract_used_vars(lines: &[&str]) -> std::collections::HashSet<String> {
     let mut vars = std::collections::HashSet::new();
     let keywords: std::collections::HashSet<&str> = [
-        "fn", "let", "mut", "if", "else", "match", "for", "while", "loop",
-        "return", "break", "continue", "use", "mod", "pub", "struct", "enum",
-        "trait", "impl", "type", "const", "static", "async", "await", "move",
-        "where", "ref", "self", "Self", "true", "false", "None", "Some", "Ok",
-        "Err", "println", "format", "vec", "String", "str", "i32", "u32", "i64",
-        "u64", "f32", "f64", "bool", "char", "usize", "isize",
+        "fn", "let", "mut", "if", "else", "match", "for", "while", "loop", "return", "break",
+        "continue", "use", "mod", "pub", "struct", "enum", "trait", "impl", "type", "const",
+        "static", "async", "await", "move", "where", "ref", "self", "Self", "true", "false",
+        "None", "Some", "Ok", "Err", "println", "format", "vec", "String", "str", "i32", "u32",
+        "i64", "u64", "f32", "f64", "bool", "char", "usize", "isize",
     ]
     .iter()
     .copied()
@@ -492,8 +477,7 @@ fn do_add_impl_method(params: &serde_json::Value, path: &std::path::Path) -> Too
 
     let method_code = format!(
         "\n    pub fn {}() {{\n        {}\n    }}\n",
-        function_name,
-        method_body
+        function_name, method_body
     );
 
     let new_content = if let Some(end) = impl_end {

@@ -219,4 +219,28 @@ mod tests {
             assert!(content.contains("omitted"));
         }
     }
+
+    #[test]
+    fn test_manage_unicode_heavy_messages_does_not_panic() {
+        let mut mgr = ContextManager::new(300).with_thresholds(0.2, 0.3);
+        let unicode_chunk = "你好🚀".repeat(120);
+        let mut msgs = vec![
+            Message::system("sys"),
+            Message::user(format!("需求: {}", unicode_chunk)),
+            Message::assistant_with_tools(
+                "准备执行",
+                vec![ToolCall {
+                    id: "c2".into(),
+                    name: "grep".into(),
+                    arguments: serde_json::json!({"pattern":"x"}),
+                }],
+            ),
+            Message::tool("c2", unicode_chunk.clone()),
+            Message::assistant("继续"),
+        ];
+
+        let actions = mgr.manage(&mut msgs);
+        assert!(!actions.is_empty());
+        assert!(!msgs.is_empty());
+    }
 }

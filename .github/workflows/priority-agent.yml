@@ -1,0 +1,250 @@
+name: Priority Agent
+
+on:
+  issue_comment:
+    types: [created, edited]
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Prompt for the agent (used when no issue context is provided)
+        required: false
+        type: string
+      issue_number:
+        description: Optional issue/PR number to post the result back to
+        required: false
+        type: string
+      model:
+        description: Optional model override
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  run-agent:
+    name: Run Priority Agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.sender.type != 'Bot' &&
+       contains(github.event.comment.body, '@priority-agent')) ||
+      (github.event_name == 'issues' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'priority-agent')
+    concurrency:
+      group: priority-agent-${{ github.event.issue.number || inputs.issue_number || github.ref }}
+      cancel-in-progress: true
+
+    env:
+      CARGO_TERM_COLOR: always
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ inputs.model || vars.PRIORITY_AGENT_GH_MODEL || 'gpt-4o-mini' }}
+      PRIORITY_AGENT_PRE_TOOL_HOOK: ./.github/scripts/ci_tool_whitelist_hook.sh
+      PRIORITY_AGENT_HOOK_TIMEOUT_MS: "3000"
+      PRIORITY_AGENT_HOOK_FAIL_CLOSED: "1"
+      PRIORITY_AGENT_ALLOWED_TOOLS: file_read,glob,grep,project_list,web_search,web_fetch,memory_load,skills_list,skill_view,todo_write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-priority-agent-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Ensure API key exists
+        run: |
+          if [[ -z "${OPENAI_API_KEY}" && -z "${MOONSHOT_API_KEY}" && -z "${MINIMAX_API_KEY}" ]]; then
+            echo "No LLM key configured. Set one of OPENAI_API_KEY / MOONSHOT_API_KEY / MINIMAX_API_KEY in repository secrets."
+            exit 1
+          fi
+
+      - name: Build release binary (API mode)
+        run: cargo build --release --features experimental-api-server
+
+      - name: Start API server
+        run: |
+          chmod +x .github/scripts/ci_tool_whitelist_hook.sh
+          ./target/release/priority-agent --api --port 8787 > /tmp/priority-agent-api.log 2>&1 &
+          echo $! > /tmp/priority-agent-api.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8787/api/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API server did not become healthy in time."
+          cat /tmp/priority-agent-api.log || true
+          exit 1
+
+      - name: Prepare prompt/context
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          event="${GITHUB_EVENT_NAME}"
+          issue_number=""
+          trigger_type="$event"
+          trigger_ref=""
+
+          if [[ "$event" == "issue_comment" ]]; then
+            issue_number="$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
+            issue_title="$(jq -r '.issue.title // ""' "$GITHUB_EVENT_PATH")"
+            issue_body="$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")"
+            comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
+            trigger_ref="$(jq -r '.comment.html_url // ""' "$GITHUB_EVENT_PATH")"
+            cat > /tmp/priority-agent-prompt.txt <<'EOF'
+You are running in GitHub Action as Priority Agent. Reply in Chinese and use this exact Markdown structure:
+
+## 结论
+## 改动建议
+## 验证步骤
+## 风险与边界
+## 下一步
+
+Keep it concise and actionable.
+EOF
+            {
+              echo
+              echo "Repository: ${GITHUB_REPOSITORY}"
+              echo "Issue/PR #${issue_number}: ${issue_title}"
+              echo "Issue/PR Body:"
+              echo "${issue_body}"
+              echo
+              echo "Trigger Comment (contains @priority-agent):"
+              echo "${comment_body}"
+            } >> /tmp/priority-agent-prompt.txt
+          elif [[ "$event" == "issues" ]]; then
+            issue_number="$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
+            issue_title="$(jq -r '.issue.title // ""' "$GITHUB_EVENT_PATH")"
+            issue_body="$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")"
+            label_name="$(jq -r '.label.name // ""' "$GITHUB_EVENT_PATH")"
+            trigger_ref="$(jq -r '.issue.html_url // ""' "$GITHUB_EVENT_PATH")"
+            cat > /tmp/priority-agent-prompt.txt <<EOF
+You are running in GitHub Action as Priority Agent. The issue got label "${label_name}".
+Reply in Chinese and use this exact Markdown structure:
+
+## 结论
+## 改动建议
+## 验证步骤
+## 风险与边界
+## 下一步
+
+Repository: ${GITHUB_REPOSITORY}
+Issue #${issue_number}: ${issue_title}
+Issue Body:
+${issue_body}
+EOF
+          else
+            issue_number="${{ inputs.issue_number }}"
+            dispatch_prompt="${{ inputs.prompt }}"
+            if [[ -z "${dispatch_prompt}" ]]; then
+              echo "workflow_dispatch requires inputs.prompt when issue context is absent."
+              exit 1
+            fi
+            trigger_ref="workflow_dispatch"
+            cat > /tmp/priority-agent-prompt.txt <<EOF
+You are running in GitHub Action as Priority Agent.
+Reply in Chinese and use this exact Markdown structure:
+
+## 结论
+## 改动建议
+## 验证步骤
+## 风险与边界
+## 下一步
+
+Repository: ${GITHUB_REPOSITORY}
+Manual Prompt:
+${dispatch_prompt}
+EOF
+          fi
+
+          # Budget guard: keep prompt bounded for CI cost control.
+          python3 - <<'PY'
+from pathlib import Path
+p = Path("/tmp/priority-agent-prompt.txt")
+txt = p.read_text(encoding="utf-8")
+max_chars = 12000
+if len(txt) > max_chars:
+    p.write_text(txt[:max_chars] + "\n\n[Truncated by CI budget guard]\n", encoding="utf-8")
+PY
+
+          echo "issue_number=${issue_number}" >> "$GITHUB_OUTPUT"
+          echo "trigger_type=${trigger_type}" >> "$GITHUB_OUTPUT"
+          echo "trigger_ref=${trigger_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Invoke Priority Agent API
+        id: invoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          session_id="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          payload="$(jq -Rs --arg sid "$session_id" '{message: ., session_id: $sid}' < /tmp/priority-agent-prompt.txt)"
+          response="$(curl -fsS -X POST http://127.0.0.1:8787/api/chat \
+            -H 'Content-Type: application/json' \
+            -d "$payload")"
+          echo "$response" > /tmp/priority-agent-response.json
+          content="$(jq -r '.content // ""' /tmp/priority-agent-response.json)"
+          if [[ -z "$content" ]]; then
+            echo "Empty response content from /api/chat"
+            cat /tmp/priority-agent-response.json
+            exit 1
+          fi
+
+          {
+            echo "## 🤖 Priority Agent Report"
+            echo
+            echo "- Trigger: \`${{ steps.prep.outputs.trigger_type }}\`"
+            echo "- Ref: ${{ steps.prep.outputs.trigger_ref }}"
+            echo "- Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "---"
+            echo
+            echo "$content"
+          } > /tmp/priority-agent-comment.md
+
+      - name: Post result comment
+        if: ${{ steps.prep.outputs.issue_number != '' }}
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ steps.prep.outputs.issue_number }}
+          body-path: /tmp/priority-agent-comment.md
+
+      - name: Upload logs/artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: priority-agent-gha-${{ github.run_id }}
+          path: |
+            /tmp/priority-agent-api.log
+            /tmp/priority-agent-prompt.txt
+            /tmp/priority-agent-response.json
+            /tmp/priority-agent-comment.md
+          if-no-files-found: ignore
+
+      - name: Stop API server
+        if: always()
+        run: |
+          if [[ -f /tmp/priority-agent-api.pid ]]; then
+            kill "$(cat /tmp/priority-agent-api.pid)" 2>/dev/null || true
+          fi
+

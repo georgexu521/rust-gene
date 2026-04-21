@@ -290,7 +290,9 @@ impl Tool for LSPTool {
                 let character = params["character"].as_u64().unwrap_or(0) as u32;
 
                 if file_path.is_empty() {
-                    return ToolResult::error("file_path is required for implementation".to_string());
+                    return ToolResult::error(
+                        "file_path is required for implementation".to_string(),
+                    );
                 }
 
                 let path =
@@ -300,7 +302,10 @@ impl Tool for LSPTool {
                     };
                 let uri = crate::engine::lsp::path_to_uri(&path);
 
-                match client.text_document_implementation(&uri, line, character).await {
+                match client
+                    .text_document_implementation(&uri, line, character)
+                    .await
+                {
                     Ok(result) => {
                         let formatted = format_locations(&result);
                         ToolResult::success_with_data(
@@ -317,7 +322,9 @@ impl Tool for LSPTool {
                 let character = params["character"].as_u64().unwrap_or(0) as u32;
 
                 if file_path.is_empty() {
-                    return ToolResult::error("file_path is required for call_hierarchy".to_string());
+                    return ToolResult::error(
+                        "file_path is required for call_hierarchy".to_string(),
+                    );
                 }
 
                 let path =
@@ -338,15 +345,16 @@ impl Tool for LSPTool {
                             json!({ "items": result, "uri": uri, "line": line, "character": character }),
                         )
                     }
-                    Err(e) => {
-                        ToolResult::error(format!("Call hierarchy request failed: {}", e))
-                    }
+                    Err(e) => ToolResult::error(format!("Call hierarchy request failed: {}", e)),
                 }
             }
             "incoming_calls" => {
                 let item = params["item"].clone();
                 if item.is_null() {
-                    ToolResult::error("item is required for incoming_calls (use call_hierarchy first)".to_string())
+                    ToolResult::error(
+                        "item is required for incoming_calls (use call_hierarchy first)"
+                            .to_string(),
+                    )
                 } else {
                     match client.call_hierarchy_incoming_calls(&item).await {
                         Ok(result) => {
@@ -373,7 +381,10 @@ impl Tool for LSPTool {
                     match client.call_hierarchy_outgoing_calls(&item).await {
                         Ok(result) => {
                             let formatted = format_outgoing_calls(&result);
-                            ToolResult::success_with_data(formatted.clone(), json!({ "calls": result }))
+                            ToolResult::success_with_data(
+                                formatted.clone(),
+                                json!({ "calls": result }),
+                            )
                         }
                         Err(e) => {
                             ToolResult::error(format!("Outgoing calls request failed: {}", e))
@@ -397,7 +408,11 @@ impl Tool for LSPTool {
                         })
                         .collect();
                     ToolResult::success_with_data(
-                        format!("Registered LSP servers ({}):\n{}", status.len(), lines.join("\n")),
+                        format!(
+                            "Registered LSP servers ({}):\n{}",
+                            status.len(),
+                            lines.join("\n")
+                        ),
                         json!({ "servers": status.iter().map(|s| json!({
                             "name": s.name,
                             "connected": s.connected
@@ -427,7 +442,9 @@ impl Tool for LSPTool {
                     .unwrap_or_else(|| {
                         format!(
                             "file://{}",
-                            context.working_dir.canonicalize()
+                            context
+                                .working_dir
+                                .canonicalize()
                                 .unwrap_or_else(|_| context.working_dir.clone())
                                 .display()
                         )
@@ -627,7 +644,10 @@ fn format_call_hierarchy_items(value: &serde_json::Value) -> String {
             let uri = item["uri"].as_str().unwrap_or("unknown");
             let range = &item["range"];
             let start_line = range["start"]["line"].as_u64().map(|l| l + 1).unwrap_or(0);
-            let start_char = range["start"]["character"].as_u64().map(|c| c + 1).unwrap_or(0);
+            let start_char = range["start"]["character"]
+                .as_u64()
+                .map(|c| c + 1)
+                .unwrap_or(0);
             let path = crate::engine::lsp::uri_to_path(uri);
             lines.push(format!(
                 "  {}. [{}] {} at {}:{}:{}",

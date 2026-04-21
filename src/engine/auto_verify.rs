@@ -45,11 +45,7 @@ impl VerificationResult {
             return format!("[{} verification] {}", self.language, summary);
         }
 
-        let errors = self
-            .issues
-            .iter()
-            .filter(|i| i.severity == "error")
-            .count();
+        let errors = self.issues.iter().filter(|i| i.severity == "error").count();
         let warnings = self
             .issues
             .iter()
@@ -71,10 +67,7 @@ impl VerificationResult {
         }
 
         if self.issues.len() > 20 {
-            lines.push(format!(
-                "  ... and {} more issues",
-                self.issues.len() - 20
-            ));
+            lines.push(format!("  ... and {} more issues", self.issues.len() - 20));
         }
 
         if !self.summary.is_empty() {
@@ -302,7 +295,11 @@ async fn verify_rust(working_dir: &Path, changed_files: &[PathBuf]) -> Option<Ve
                 all_success &= result.success;
                 all_issues.extend(result.issues);
                 if !result.raw_output.is_empty() {
-                    all_raw.push_str(&format!("\n--- {} ---\n{}", manifest.display(), result.raw_output));
+                    all_raw.push_str(&format!(
+                        "\n--- {} ---\n{}",
+                        manifest.display(),
+                        result.raw_output
+                    ));
                 }
             }
         }
@@ -379,7 +376,10 @@ async fn run_cargo_check(
 }
 
 /// Rust 测试：cargo test --no-fail-fast
-async fn run_rust_tests(working_dir: &Path, changed_files: &[PathBuf]) -> Option<VerificationResult> {
+async fn run_rust_tests(
+    working_dir: &Path,
+    changed_files: &[PathBuf],
+) -> Option<VerificationResult> {
     let targets = resolve_workspace_targets(working_dir, changed_files);
 
     if targets.is_empty() {
@@ -402,7 +402,11 @@ async fn run_rust_tests(working_dir: &Path, changed_files: &[PathBuf]) -> Option
                 all_success &= result.success;
                 all_issues.extend(result.issues);
                 if !result.raw_output.is_empty() {
-                    all_raw.push_str(&format!("\n--- {} ---\n{}", manifest.display(), result.raw_output));
+                    all_raw.push_str(&format!(
+                        "\n--- {} ---\n{}",
+                        manifest.display(),
+                        result.raw_output
+                    ));
                 }
                 if !result.summary.is_empty() {
                     summaries.push(result.summary);
@@ -422,10 +426,7 @@ async fn run_rust_tests(working_dir: &Path, changed_files: &[PathBuf]) -> Option
 }
 
 /// 执行 cargo test
-async fn run_cargo_test(
-    working_dir: &Path,
-    manifest: Option<&Path>,
-) -> Option<VerificationResult> {
+async fn run_cargo_test(working_dir: &Path, manifest: Option<&Path>) -> Option<VerificationResult> {
     let mut cmd = Command::new("cargo");
     cmd.args(["test", "--no-fail-fast", "--color=never"]);
     if let Some(m) = manifest {
@@ -766,8 +767,7 @@ fn is_python_project(working_dir: &Path) -> bool {
 }
 
 fn is_typescript_project(working_dir: &Path) -> bool {
-    working_dir.join("package.json").exists()
-        || working_dir.join("tsconfig.json").exists()
+    working_dir.join("package.json").exists() || working_dir.join("tsconfig.json").exists()
 }
 
 // ────────────────────────────────────────────────
@@ -1443,10 +1443,16 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored
         let (issues, summary) = parse_cargo_test_output(output);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, "error");
-        assert_eq!(issues[0].message, "Test 'tests::test_b' failed: assertion failed: x == y");
+        assert_eq!(
+            issues[0].message,
+            "Test 'tests::test_b' failed: assertion failed: x == y"
+        );
         assert_eq!(issues[0].file, Some("src/main.rs".to_string()));
         assert_eq!(issues[0].line, Some(42));
-        assert_eq!(summary, "test result: FAILED. 2 passed; 1 failed; 0 ignored");
+        assert_eq!(
+            summary,
+            "test result: FAILED. 2 passed; 1 failed; 0 ignored"
+        );
     }
 
     #[test]
@@ -1475,17 +1481,26 @@ test result: FAILED. 1 passed; 2 failed; 0 ignored
         let (issues, summary) = parse_cargo_test_output(output);
         assert_eq!(issues.len(), 2);
 
-        let a = issues.iter().find(|i| i.message.contains("test_a")).unwrap();
+        let a = issues
+            .iter()
+            .find(|i| i.message.contains("test_a"))
+            .unwrap();
         assert_eq!(a.file, Some("src/lib.rs".to_string()));
         assert_eq!(a.line, Some(10));
         assert!(a.message.contains("assertion `left == right` failed"));
 
-        let b = issues.iter().find(|i| i.message.contains("test_b")).unwrap();
+        let b = issues
+            .iter()
+            .find(|i| i.message.contains("test_b"))
+            .unwrap();
         assert_eq!(b.file, Some("src/lib.rs".to_string()));
         assert_eq!(b.line, Some(20));
         assert!(b.message.contains("expected 42, got 0"));
 
-        assert_eq!(summary, "test result: FAILED. 1 passed; 2 failed; 0 ignored");
+        assert_eq!(
+            summary,
+            "test result: FAILED. 1 passed; 2 failed; 0 ignored"
+        );
     }
 
     #[test]

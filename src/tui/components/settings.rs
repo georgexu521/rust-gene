@@ -666,7 +666,12 @@ fn render_settings_list(
     }
 }
 
-fn render_help_bar(f: &mut Frame, state: &SettingsState, area: Rect, theme: &crate::tui::theme::Theme) {
+fn render_help_bar(
+    f: &mut Frame,
+    state: &SettingsState,
+    area: Rect,
+    theme: &crate::tui::theme::Theme,
+) {
     let help_text = if state.edit_mode {
         "Enter: Save | Esc: Cancel"
     } else {

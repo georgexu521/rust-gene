@@ -54,9 +54,7 @@ pub fn render_diff_viewer(
         } else if raw_line.starts_with("diff --git") {
             Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default()
-                    .fg(theme.text)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ))
         } else if raw_line.starts_with("index ") {
             Line::from(Span::styled(

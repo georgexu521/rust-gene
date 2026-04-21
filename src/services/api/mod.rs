@@ -76,13 +76,19 @@ impl ProviderHook {
     }
 
     /// 设置请求前 Hook
-    pub fn with_pre_hook(mut self, hook: impl Fn(ChatRequest) -> ChatRequest + Send + Sync + 'static) -> Self {
+    pub fn with_pre_hook(
+        mut self,
+        hook: impl Fn(ChatRequest) -> ChatRequest + Send + Sync + 'static,
+    ) -> Self {
         self.pre_hook = Some(Box::new(hook));
         self
     }
 
     /// 设置响应后 Hook
-    pub fn with_post_hook(mut self, hook: impl Fn(&ChatRequest, &ChatResponse) + Send + Sync + 'static) -> Self {
+    pub fn with_post_hook(
+        mut self,
+        hook: impl Fn(&ChatRequest, &ChatResponse) + Send + Sync + 'static,
+    ) -> Self {
         self.post_hook = Some(Box::new(hook));
         self
     }

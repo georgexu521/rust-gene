@@ -77,10 +77,7 @@ impl ReviewResult {
         }
 
         if self.issues.len() > 15 {
-            lines.push(format!(
-                "  ... and {} more issues",
-                self.issues.len() - 15
-            ));
+            lines.push(format!("  ... and {} more issues", self.issues.len() - 15));
         }
 
         lines.join("\n")
@@ -108,7 +105,10 @@ pub fn review_changed_files(working_dir: &Path, changed_files: &[PathBuf]) -> Re
         };
     }
 
-    info!("Running code review on {} changed file(s)", changed_files.len());
+    info!(
+        "Running code review on {} changed file(s)",
+        changed_files.len()
+    );
 
     let mut all_issues = Vec::new();
     let mut seen = HashSet::new(); // 去重：(file, line, rule)
@@ -196,7 +196,11 @@ fn review_rust(file: &str, content: &str) -> Vec<ReviewIssue> {
 
         // unwrap() / expect()
         if !is_comment && (line.contains("unwrap()") || line.contains(".expect(")) {
-            let severity = if line.contains("unwrap()") { "critical" } else { "warning" };
+            let severity = if line.contains("unwrap()") {
+                "critical"
+            } else {
+                "warning"
+            };
             issues.push(ReviewIssue {
                 severity: severity.to_string(),
                 rule: "unwrap_or_expect".to_string(),
@@ -204,7 +208,11 @@ fn review_rust(file: &str, content: &str) -> Vec<ReviewIssue> {
                 line: line_num,
                 message: format!(
                     "Use of {} may cause panic. Consider using `?`, `match`, or `if let`.",
-                    if line.contains("unwrap()") { "unwrap()" } else { "expect()" }
+                    if line.contains("unwrap()") {
+                        "unwrap()"
+                    } else {
+                        "expect()"
+                    }
                 ),
                 snippet: trim_snippet(line),
             });
@@ -217,7 +225,8 @@ fn review_rust(file: &str, content: &str) -> Vec<ReviewIssue> {
                 rule: "panic".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "Hard panic. Consider returning Result or using a typed error.".to_string(),
+                message: "Hard panic. Consider returning Result or using a typed error."
+                    .to_string(),
                 snippet: trim_snippet(line),
             });
         }
@@ -247,7 +256,8 @@ fn review_rust(file: &str, content: &str) -> Vec<ReviewIssue> {
         }
 
         // Command 拼接风险
-        if !is_comment && line.contains("Command")
+        if !is_comment
+            && line.contains("Command")
             && (line.contains("format!") || line.contains("+") || line.contains("push"))
         {
             issues.push(ReviewIssue {
@@ -255,7 +265,9 @@ fn review_rust(file: &str, content: &str) -> Vec<ReviewIssue> {
                 rule: "command_injection".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "Potential command injection: Command argument may be constructed dynamically.".to_string(),
+                message:
+                    "Potential command injection: Command argument may be constructed dynamically."
+                        .to_string(),
                 snippet: trim_snippet(line),
             });
         }
@@ -267,7 +279,8 @@ fn review_rust(file: &str, content: &str) -> Vec<ReviewIssue> {
                 rule: "destructive_fs".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "Destructive file operation. Ensure path is validated and confirmed.".to_string(),
+                message: "Destructive file operation. Ensure path is validated and confirmed."
+                    .to_string(),
                 snippet: trim_snippet(line),
             });
         }
@@ -279,7 +292,8 @@ fn review_rust(file: &str, content: &str) -> Vec<ReviewIssue> {
                 rule: "debug_residual".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "Debug print statement. Consider using tracing::debug! or removing.".to_string(),
+                message: "Debug print statement. Consider using tracing::debug! or removing."
+                    .to_string(),
                 snippet: trim_snippet(line),
             });
         }
@@ -317,7 +331,8 @@ fn review_python(file: &str, content: &str) -> Vec<ReviewIssue> {
 
         // os.system() / subprocess with shell=True
         if !is_comment
-            && (line.contains("os.system(") || (line.contains("subprocess") && line.contains("shell=True")))
+            && (line.contains("os.system(")
+                || (line.contains("subprocess") && line.contains("shell=True")))
         {
             issues.push(ReviewIssue {
                 severity: "critical".to_string(),
@@ -354,7 +369,11 @@ fn review_python(file: &str, content: &str) -> Vec<ReviewIssue> {
         }
 
         // yaml.load without Loader
-        if !is_comment && line.contains("yaml.load") && !line.contains("Loader=") && !line.contains("SafeLoader") {
+        if !is_comment
+            && line.contains("yaml.load")
+            && !line.contains("Loader=")
+            && !line.contains("SafeLoader")
+        {
             issues.push(ReviewIssue {
                 severity: "warning".to_string(),
                 rule: "unsafe_yaml".to_string(),
@@ -398,20 +417,27 @@ fn review_javascript(file: &str, content: &str) -> Vec<ReviewIssue> {
 
         // eval() / new Function() / setTimeout string
         if !is_comment
-            && (line.contains("eval(") || line.contains("new Function(") || line.contains("setTimeout(") && line.contains("\""))
+            && (line.contains("eval(")
+                || line.contains("new Function(")
+                || line.contains("setTimeout(") && line.contains("\""))
         {
             issues.push(ReviewIssue {
                 severity: "critical".to_string(),
                 rule: "dangerous_eval".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "eval() and new Function() can execute arbitrary code. Avoid or sanitize input.".to_string(),
+                message:
+                    "eval() and new Function() can execute arbitrary code. Avoid or sanitize input."
+                        .to_string(),
                 snippet: trim_snippet(line),
             });
         }
 
         // == instead of ===
-        if !is_comment && (line.contains(" == ") || line.contains(" ==") || line.contains("== ")) && !line.contains("===") {
+        if !is_comment
+            && (line.contains(" == ") || line.contains(" ==") || line.contains("== "))
+            && !line.contains("===")
+        {
             issues.push(ReviewIssue {
                 severity: "warning".to_string(),
                 rule: "loose_equality".to_string(),
@@ -429,7 +455,8 @@ fn review_javascript(file: &str, content: &str) -> Vec<ReviewIssue> {
                 rule: "var_usage".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "var has function scope and hoisting issues. Use let or const instead.".to_string(),
+                message: "var has function scope and hoisting issues. Use let or const instead."
+                    .to_string(),
                 snippet: trim_snippet(line),
             });
         }
@@ -453,7 +480,8 @@ fn review_javascript(file: &str, content: &str) -> Vec<ReviewIssue> {
                 rule: "document_write".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "document.write can overwrite the entire document and is discouraged.".to_string(),
+                message: "document.write can overwrite the entire document and is discouraged."
+                    .to_string(),
                 snippet: trim_snippet(line),
             });
         }
@@ -520,7 +548,8 @@ fn review_go(file: &str, content: &str) -> Vec<ReviewIssue> {
                 rule: "debug_residual".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "Debug print statement. Consider using a proper logger or removing.".to_string(),
+                message: "Debug print statement. Consider using a proper logger or removing."
+                    .to_string(),
                 snippet: trim_snippet(line),
             });
         }
@@ -552,7 +581,13 @@ fn check_generic_rules(file: &str, line: &str, line_num: u32, issues: &mut Vec<R
     let trimmed = line.trim();
 
     // 破坏性文件操作
-    let destructive = ["remove_dir_all", "remove_file", "os.remove", "fs.unlink", "fs.rmdir"];
+    let destructive = [
+        "remove_dir_all",
+        "remove_file",
+        "os.remove",
+        "fs.unlink",
+        "fs.rmdir",
+    ];
     for op in &destructive {
         if line.contains(op) {
             issues.push(ReviewIssue {
@@ -560,7 +595,8 @@ fn check_generic_rules(file: &str, line: &str, line_num: u32, issues: &mut Vec<R
                 rule: "destructive_fs".to_string(),
                 file: file.to_string(),
                 line: line_num,
-                message: "Destructive file operation. Ensure path is validated and confirmed.".to_string(),
+                message: "Destructive file operation. Ensure path is validated and confirmed."
+                    .to_string(),
                 snippet: trim_snippet(line),
             });
             break;
@@ -569,7 +605,10 @@ fn check_generic_rules(file: &str, line: &str, line_num: u32, issues: &mut Vec<R
 
     // 硬编码敏感信息
     let lower = line.to_lowercase();
-    if (lower.contains("password") || lower.contains("secret") || lower.contains("api_key") || lower.contains("token"))
+    if (lower.contains("password")
+        || lower.contains("secret")
+        || lower.contains("api_key")
+        || lower.contains("token"))
         && (line.contains('"') || line.contains('\''))
     {
         issues.push(ReviewIssue {
@@ -577,15 +616,23 @@ fn check_generic_rules(file: &str, line: &str, line_num: u32, issues: &mut Vec<R
             rule: "hardcoded_secret".to_string(),
             file: file.to_string(),
             line: line_num,
-            message: "Possible hardcoded sensitive value. Use environment variables or a secret manager.".to_string(),
+            message:
+                "Possible hardcoded sensitive value. Use environment variables or a secret manager."
+                    .to_string(),
             snippet: trim_snippet(line),
         });
     }
 
     // TODO / FIXME / HACK / XXX 注释
     let upper = trimmed.to_uppercase();
-    if (upper.contains("TODO") || upper.contains("FIXME") || upper.contains("HACK") || upper.contains("XXX"))
-        && (trimmed.starts_with("//") || trimmed.starts_with("#") || trimmed.starts_with("/*") || trimmed.starts_with("*"))
+    if (upper.contains("TODO")
+        || upper.contains("FIXME")
+        || upper.contains("HACK")
+        || upper.contains("XXX"))
+        && (trimmed.starts_with("//")
+            || trimmed.starts_with("#")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with("*"))
     {
         issues.push(ReviewIssue {
             severity: "suggestion".to_string(),
@@ -627,7 +674,9 @@ fn risky() {
         let issues = review_file_content("src/lib.rs", content);
         assert!(!issues.is_empty());
 
-        let has_unwrap = issues.iter().any(|i| i.rule == "unwrap_or_expect" && i.severity == "critical");
+        let has_unwrap = issues
+            .iter()
+            .any(|i| i.rule == "unwrap_or_expect" && i.severity == "critical");
         let has_panic = issues.iter().any(|i| i.rule == "panic");
         let has_unsafe = issues.iter().any(|i| i.rule == "unsafe_block");
         let has_todo = issues.iter().any(|i| i.rule == "incomplete_code");
@@ -679,10 +728,7 @@ fn safe() -> Result<T, E> {
     #[test]
     fn test_review_result_empty_when_disabled() {
         // 默认不启用
-        let result = review_changed_files(
-            Path::new("."),
-            &[PathBuf::from("src/main.rs")],
-        );
+        let result = review_changed_files(Path::new("."), &[PathBuf::from("src/main.rs")]);
         assert!(result.success);
         assert!(result.issues.is_empty());
     }

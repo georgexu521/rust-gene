@@ -277,7 +277,11 @@ impl TuiApp {
         };
 
         Self {
-            mode: if is_first_run { AppMode::Onboarding } else { AppMode::Chat },
+            mode: if is_first_run {
+                AppMode::Onboarding
+            } else {
+                AppMode::Chat
+            },
             input: InputState::new(),
             messages: vec![welcome_message],
             tasks: Vec::new(),
@@ -609,7 +613,9 @@ impl TuiApp {
                 req.tool_call.name,
                 serde_json::to_string(&req.tool_call.arguments).unwrap_or_default()
             );
-            let _ = self.session_manager.add_message(MessageRole::System, &log_msg);
+            let _ = self
+                .session_manager
+                .add_message(MessageRole::System, &log_msg);
         }
         if let Some(tx) = self.permission_response_tx.take() {
             let _ = tx.send(approved);
@@ -1223,7 +1229,10 @@ mod tests {
         assert_eq!(app.messages[1].content, "Hi there!");
 
         // 验证当前会话 ID 已更新
-        assert_eq!(app.session_manager.current_session_id(), Some(session_id.as_str()));
+        assert_eq!(
+            app.session_manager.current_session_id(),
+            Some(session_id.as_str())
+        );
     }
 
     #[tokio::test]
@@ -1237,14 +1246,15 @@ mod tests {
     fn test_respond_to_permission() {
         let mut app = TuiApp::new();
         let (tx, mut rx) = tokio::sync::oneshot::channel();
-        app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
-            tool_call: crate::services::api::ToolCall {
-                id: "tc_1".to_string(),
-                name: "bash".to_string(),
-                arguments: serde_json::json!({"command": "echo hello"}),
-            },
-            prompt: "Approve bash?".to_string(),
-        });
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tc_1".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({"command": "echo hello"}),
+                },
+                prompt: "Approve bash?".to_string(),
+            });
         app.permission_response_tx = Some(tx);
         app.mode = AppMode::PermissionApproval;
 
@@ -1259,17 +1269,18 @@ mod tests {
     #[test]
     fn test_compute_permission_diff_file_write() {
         let mut app = TuiApp::new();
-        app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
-            tool_call: crate::services::api::ToolCall {
-                id: "tc_1".to_string(),
-                name: "file_write".to_string(),
-                arguments: serde_json::json!({
-                    "path": "src/main.rs",
-                    "content": "fn main() {\n    println!(\"hello\");\n}"
-                }),
-            },
-            prompt: "Approve file write?".to_string(),
-        });
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tc_1".to_string(),
+                    name: "file_write".to_string(),
+                    arguments: serde_json::json!({
+                        "path": "src/main.rs",
+                        "content": "fn main() {\n    println!(\"hello\");\n}"
+                    }),
+                },
+                prompt: "Approve file write?".to_string(),
+            });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
         assert_eq!(title, "Preview: src/main.rs");
@@ -1282,18 +1293,19 @@ mod tests {
     fn test_compute_permission_diff_file_edit_replace() {
         let mut app = TuiApp::new();
         // 使用不存在的文件路径确保回退到旧行为
-        app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
-            tool_call: crate::services::api::ToolCall {
-                id: "tc_1".to_string(),
-                name: "file_edit".to_string(),
-                arguments: serde_json::json!({
-                    "path": "nonexistent_file.rs",
-                    "old_string": "println!(\"hello\");",
-                    "new_string": "println!(\"world\");"
-                }),
-            },
-            prompt: "Approve file edit?".to_string(),
-        });
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tc_1".to_string(),
+                    name: "file_edit".to_string(),
+                    arguments: serde_json::json!({
+                        "path": "nonexistent_file.rs",
+                        "old_string": "println!(\"hello\");",
+                        "new_string": "println!(\"world\");"
+                    }),
+                },
+                prompt: "Approve file edit?".to_string(),
+            });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
         assert_eq!(title, "Preview: nonexistent_file.rs");
@@ -1307,18 +1319,19 @@ mod tests {
     fn test_compute_permission_diff_file_edit_insert() {
         let mut app = TuiApp::new();
         // 使用不存在的文件路径确保回退到旧行为
-        app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
-            tool_call: crate::services::api::ToolCall {
-                id: "tc_1".to_string(),
-                name: "file_edit".to_string(),
-                arguments: serde_json::json!({
-                    "path": "nonexistent_file.rs",
-                    "insert_after": "fn main() {",
-                    "new_string": "    // new line"
-                }),
-            },
-            prompt: "Approve file edit?".to_string(),
-        });
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tc_1".to_string(),
+                    name: "file_edit".to_string(),
+                    arguments: serde_json::json!({
+                        "path": "nonexistent_file.rs",
+                        "insert_after": "fn main() {",
+                        "new_string": "    // new line"
+                    }),
+                },
+                prompt: "Approve file edit?".to_string(),
+            });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
         assert_eq!(title, "Preview: nonexistent_file.rs");
@@ -1330,18 +1343,19 @@ mod tests {
     #[test]
     fn test_compute_permission_diff_bash() {
         let mut app = TuiApp::new();
-        app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
-            tool_call: crate::services::api::ToolCall {
-                id: "tc_1".to_string(),
-                name: "bash".to_string(),
-                arguments: serde_json::json!({
-                    "command": "cargo test",
-                    "working_dir": "/tmp",
-                    "timeout": 60
-                }),
-            },
-            prompt: "Approve bash?".to_string(),
-        });
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tc_1".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({
+                        "command": "cargo test",
+                        "working_dir": "/tmp",
+                        "timeout": 60
+                    }),
+                },
+                prompt: "Approve bash?".to_string(),
+            });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
         assert_eq!(title, "Preview: bash command");
@@ -1353,14 +1367,15 @@ mod tests {
     #[test]
     fn test_compute_permission_diff_unsupported_tool() {
         let mut app = TuiApp::new();
-        app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
-            tool_call: crate::services::api::ToolCall {
-                id: "tc_1".to_string(),
-                name: "grep".to_string(),
-                arguments: serde_json::json!({"pattern": "foo"}),
-            },
-            prompt: "Approve grep?".to_string(),
-        });
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tc_1".to_string(),
+                    name: "grep".to_string(),
+                    arguments: serde_json::json!({"pattern": "foo"}),
+                },
+                prompt: "Approve grep?".to_string(),
+            });
 
         assert!(app.compute_permission_diff().is_none());
     }

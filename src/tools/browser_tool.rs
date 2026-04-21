@@ -6,8 +6,8 @@
 //! 依赖项目已有的 reqwest 和 tokio-tungstenite，无需额外 crate。
 
 use crate::tools::{Tool, ToolContext, ToolResult};
-use async_trait::async_trait;
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::Value;
@@ -82,7 +82,10 @@ find specific elements, or run JavaScript in a browser context."
                 } else {
                     script.to_string()
                 };
-                Some(format!("Allow browser to execute JavaScript: '{}'?", preview))
+                Some(format!(
+                    "Allow browser to execute JavaScript: '{}'?",
+                    preview
+                ))
             }
             _ => None,
         }
@@ -225,10 +228,7 @@ impl BrowserSession {
         let params = serde_json::json!({ "url": url });
         let res = self.client.send("Page.navigate", params).await?;
         if res["errorText"].as_str().is_some() {
-            anyhow::bail!(
-                "Navigation error: {}",
-                res["errorText"].as_str().unwrap()
-            );
+            anyhow::bail!("Navigation error: {}", res["errorText"].as_str().unwrap());
         }
         // 等待页面加载
         sleep(Duration::from_millis(500)).await;
@@ -267,7 +267,9 @@ impl BrowserSession {
         let b64 = res["data"]
             .as_str()
             .context("Screenshot data missing from CDP response")?;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(b64).context("Failed to decode base64 screenshot")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .context("Failed to decode base64 screenshot")?;
         Ok(bytes)
     }
 
@@ -282,10 +284,7 @@ impl BrowserSession {
                 }),
             )
             .await?;
-        let text = res["result"]["value"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let text = res["result"]["value"].as_str().unwrap_or("").to_string();
         Ok(text)
     }
 
@@ -442,11 +441,7 @@ impl CdpClient {
                 Ok(Some(resp)) => {
                     if resp.id == id {
                         if resp.error.is_object() {
-                            anyhow::bail!(
-                                "CDP error for {}: {}",
-                                method,
-                                resp.error
-                            );
+                            anyhow::bail!("CDP error for {}: {}", method, resp.error);
                         }
                         return Ok(resp.result);
                     }
@@ -568,7 +563,10 @@ mod tests {
         let schema = tool.parameters();
         assert_eq!(tool.name(), "browser");
         assert!(schema.get("properties").is_some());
-        assert!(!schema["properties"]["action"]["enum"].as_array().unwrap().is_empty());
+        assert!(!schema["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

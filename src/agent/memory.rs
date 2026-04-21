@@ -65,15 +65,15 @@ impl AgentMemory {
             .as_secs();
 
         let mut entries = self.entries.write().await;
-        let entry = entries.entry(key.to_string()).or_insert_with(|| {
-            MemoryEntry {
+        let entry = entries
+            .entry(key.to_string())
+            .or_insert_with(|| MemoryEntry {
                 key: key.to_string(),
                 value: value.to_string(),
                 created_at: now,
                 updated_at: now,
                 tags: tags.clone(),
-            }
-        });
+            });
 
         // 更新现有条目
         if entry.value != value || entry.tags != tags {
@@ -203,8 +203,8 @@ impl AgentMemory {
 
     /// 从 JSON 导入记忆
     pub async fn import_json(&self, json: &str) -> Result<(), String> {
-        let entries_vec: Vec<MemoryEntry> = serde_json::from_str(json)
-            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+        let entries_vec: Vec<MemoryEntry> =
+            serde_json::from_str(json).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
         let mut entries = self.entries.write().await;
         entries.clear();
@@ -256,8 +256,8 @@ impl AgentMemory {
         let json = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| format!("Failed to read snapshots from {}: {}", path.display(), e))?;
-        let loaded: Vec<MemorySnapshot> = serde_json::from_str(&json)
-            .map_err(|e| format!("Failed to parse snapshots: {}", e))?;
+        let loaded: Vec<MemorySnapshot> =
+            serde_json::from_str(&json).map_err(|e| format!("Failed to parse snapshots: {}", e))?;
         let mut snapshots = self.snapshots.write().await;
         *snapshots = loaded;
         Ok(())
@@ -430,14 +430,18 @@ mod tests {
         // 并发写入
         let handle1 = tokio::spawn(async move {
             for i in 0..100 {
-                memory_clone.save(&format!("key{}", i), &format!("value{}", i)).await;
+                memory_clone
+                    .save(&format!("key{}", i), &format!("value{}", i))
+                    .await;
             }
         });
 
         let memory_clone2 = memory.clone();
         let handle2 = tokio::spawn(async move {
             for i in 100..200 {
-                memory_clone2.save(&format!("key{}", i), &format!("value{}", i)).await;
+                memory_clone2
+                    .save(&format!("key{}", i), &format!("value{}", i))
+                    .await;
             }
         });
 
@@ -454,7 +458,9 @@ mod tests {
 
         // 创建超过限制的快照
         for i in 0..150 {
-            memory.save(&format!("key{}", i), &format!("value{}", i)).await;
+            memory
+                .save(&format!("key{}", i), &format!("value{}", i))
+                .await;
             memory.snapshot().await;
         }
 
@@ -471,7 +477,9 @@ mod tests {
         // 保存一些数据
         memory.save("key1", "value1").await;
         memory.save("key2", "value2").await;
-        memory.save_with_tags("key3", "value3", vec!["tag1".to_string()]).await;
+        memory
+            .save_with_tags("key3", "value3", vec!["tag1".to_string()])
+            .await;
 
         // 保存到文件
         memory.save_to_file(&tmp).await.unwrap();

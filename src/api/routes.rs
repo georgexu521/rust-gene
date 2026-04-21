@@ -757,9 +757,11 @@ async fn bridge_auth_middleware(req: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::api::{
+        ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
+    };
     use async_openai::types::ChatCompletionResponseStream;
     use axum::body::to_bytes;
-    use crate::services::api::{ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage};
     use std::time::Instant;
     use tower::util::ServiceExt;
 
@@ -830,7 +832,9 @@ mod tests {
             )),
             start_time: Instant::now(),
             request_count: Arc::new(tokio::sync::RwLock::new(0)),
-            audit_tracker: Arc::new(tokio::sync::RwLock::new(crate::cost_tracker::CostTracker::new())),
+            audit_tracker: Arc::new(tokio::sync::RwLock::new(
+                crate::cost_tracker::CostTracker::new(),
+            )),
             lsp_manager: None,
             worktree_manager: None,
         });
@@ -857,8 +861,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("read response body");
-        let value: serde_json::Value =
-            serde_json::from_slice(&body).expect("valid json response");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("valid json response");
         let cq = &value["coding_quality"];
         assert!(cq.is_object(), "coding_quality should be an object");
         let rate = cq["first_pass_rate_pct"]

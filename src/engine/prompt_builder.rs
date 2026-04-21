@@ -158,9 +158,7 @@ fn render_task_focus_prompt(base: &str, task_type: TaskType) -> String {
         TaskType::General => "",
     };
 
-    format!(
-        "{base}\n\n<task-focus type=\"{task_type:?}\">\n{extra}\n</task-focus>"
-    )
+    format!("{base}\n\n<task-focus type=\"{task_type:?}\">\n{extra}\n</task-focus>")
 }
 
 fn score_hits(text: &str, keywords: &[&str]) -> i32 {
@@ -206,7 +204,10 @@ mod tests {
 
     #[test]
     fn test_infer_task_type_architecture() {
-        assert_eq!(infer_task_type("讨论一下系统架构 tradeoff"), TaskType::Architecture);
+        assert_eq!(
+            infer_task_type("讨论一下系统架构 tradeoff"),
+            TaskType::Architecture
+        );
     }
 
     #[test]

@@ -449,9 +449,7 @@ impl crate::tools::Tool for SwarmTool {
                 let tasks_array = match params["tasks"].as_array() {
                     Some(arr) if !arr.is_empty() => arr,
                     _ => {
-                        return crate::tools::ToolResult::error(
-                            "Tasks required for 'spawn' action",
-                        )
+                        return crate::tools::ToolResult::error("Tasks required for 'spawn' action")
                     }
                 };
 

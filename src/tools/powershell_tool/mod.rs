@@ -140,11 +140,12 @@ impl Tool for PowerShellTool {
                     }
                 }
 
-                self.execute_ps(command, script_path, &work_dir, timeout).await
+                self.execute_ps(command, script_path, &work_dir, timeout)
+                    .await
             }
             _ => ToolResult::error(format!("Unknown PowerShell action: {}", action)),
         }
-}
+    }
 
     fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
         match params["action"].as_str().unwrap_or("") {
@@ -266,10 +267,7 @@ impl PowerShellTool {
             };
 
             if !resolved.exists() {
-                return ToolResult::error(format!(
-                    "Script file not found: {}",
-                    resolved.display()
-                ));
+                return ToolResult::error(format!("Script file not found: {}", resolved.display()));
             }
 
             cmd.args(["-File", &resolved.to_string_lossy()]);
@@ -330,7 +328,10 @@ mod tests {
     async fn test_powershell_version() {
         let tool = PowerShellTool;
         let result = tool
-            .execute(json!({ "action": "version" }), ToolContext::new(".", "test"))
+            .execute(
+                json!({ "action": "version" }),
+                ToolContext::new(".", "test"),
+            )
             .await;
         // PowerShell 可能未安装，但应该返回结果
         assert!(

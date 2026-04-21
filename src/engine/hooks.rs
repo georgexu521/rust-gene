@@ -187,7 +187,10 @@ impl ToolHookManager {
 
     pub async fn run_pre_tool(&self, tool_call: &ToolCall, context: &ToolContext) -> HookDecision {
         let mut all_empty = self.pre_tool_hooks.is_empty();
-        if let Some(specific_hooks) = self.tool_specific_pre_hooks.get(&tool_call.name.to_lowercase()) {
+        if let Some(specific_hooks) = self
+            .tool_specific_pre_hooks
+            .get(&tool_call.name.to_lowercase())
+        {
             all_empty = all_empty && specific_hooks.is_empty();
         }
 
@@ -228,7 +231,10 @@ impl ToolHookManager {
         }
 
         // 再运行特定工具钩子
-        if let Some(specific_hooks) = self.tool_specific_pre_hooks.get(&tool_call.name.to_lowercase()) {
+        if let Some(specific_hooks) = self
+            .tool_specific_pre_hooks
+            .get(&tool_call.name.to_lowercase())
+        {
             for hook in specific_hooks {
                 debug!(
                     "Running tool-specific pre-hook '{}' for tool '{}'",
@@ -260,7 +266,10 @@ impl ToolHookManager {
         context: &ToolContext,
     ) {
         let mut all_empty = self.post_tool_hooks.is_empty();
-        if let Some(specific_hooks) = self.tool_specific_post_hooks.get(&tool_call.name.to_lowercase()) {
+        if let Some(specific_hooks) = self
+            .tool_specific_post_hooks
+            .get(&tool_call.name.to_lowercase())
+        {
             all_empty = all_empty && specific_hooks.is_empty();
         }
 
@@ -291,7 +300,10 @@ impl ToolHookManager {
         }
 
         // 再运行特定工具钩子
-        if let Some(specific_hooks) = self.tool_specific_post_hooks.get(&tool_call.name.to_lowercase()) {
+        if let Some(specific_hooks) = self
+            .tool_specific_post_hooks
+            .get(&tool_call.name.to_lowercase())
+        {
             for hook in specific_hooks {
                 debug!(
                     "Running tool-specific post-hook '{}' for tool '{}'",
@@ -403,6 +415,7 @@ impl ToolHookManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     fn test_manager_with_pre(
         command: &str,
@@ -424,16 +437,15 @@ mod tests {
 
     #[test]
     fn test_from_env_none_when_empty() {
-        unsafe {
-            std::env::remove_var("PRIORITY_AGENT_PRE_TOOL_HOOK");
-            std::env::remove_var("PRIORITY_AGENT_POST_TOOL_HOOK");
-            // 清理可能的细粒度钩子环境变量
-            for (key, _) in std::env::vars() {
-                if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_")
-                    || key.starts_with("PRIORITY_AGENT_TOOL_HOOK_AFTER_")
-                {
-                    std::env::remove_var(&key);
-                }
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_PRE_TOOL_HOOK");
+        env.remove("PRIORITY_AGENT_POST_TOOL_HOOK");
+        // 清理可能的细粒度钩子环境变量
+        for (key, _) in std::env::vars() {
+            if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_")
+                || key.starts_with("PRIORITY_AGENT_TOOL_HOOK_AFTER_")
+            {
+                env.remove(&key);
             }
         }
         assert!(ToolHookManager::from_env().is_none());

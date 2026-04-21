@@ -589,10 +589,7 @@ impl LspClient {
     }
 
     /// Call Hierarchy Incoming Calls
-    pub async fn call_hierarchy_incoming_calls(
-        &self,
-        item: &Value,
-    ) -> anyhow::Result<Value> {
+    pub async fn call_hierarchy_incoming_calls(&self, item: &Value) -> anyhow::Result<Value> {
         self.initialize().await?;
         self.request(
             "callHierarchy/incomingCalls",
@@ -604,10 +601,7 @@ impl LspClient {
     }
 
     /// Call Hierarchy Outgoing Calls
-    pub async fn call_hierarchy_outgoing_calls(
-        &self,
-        item: &Value,
-    ) -> anyhow::Result<Value> {
+    pub async fn call_hierarchy_outgoing_calls(&self, item: &Value) -> anyhow::Result<Value> {
         self.initialize().await?;
         self.request(
             "callHierarchy/outgoingCalls",

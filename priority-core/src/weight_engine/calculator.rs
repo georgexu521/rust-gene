@@ -43,7 +43,9 @@ impl PartialOrd for ExecutableTask {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         // BinaryHeap 是最大堆，默认 pop() 返回最大元素
         // 所以这里使用正序，让高权重任务被视为"更大"
-        self.absolute_weight.value().partial_cmp(&other.absolute_weight.value())
+        self.absolute_weight
+            .value()
+            .partial_cmp(&other.absolute_weight.value())
     }
 }
 
@@ -104,7 +106,7 @@ impl WeightCalculator {
             // 子任务层级：直接使用父权重乘以本地权重
             parent_absolute_weight * task.local_weight.value()
         };
-        
+
         weights.insert(task.id.clone(), Weight::new(absolute_weight));
 
         // 递归计算子任务的权重
@@ -129,18 +131,11 @@ impl WeightCalculator {
                     .copied()
                     .unwrap_or(Weight::new(0.0));
 
-                let mut exec_task = ExecutableTask::new(
-                    task.id.clone(),
-                    task.name.clone(),
-                    weight,
-                );
+                let mut exec_task = ExecutableTask::new(task.id.clone(), task.name.clone(), weight);
 
                 // 计算优先级分数
-                exec_task.priority_score = self.calculate_priority_score(
-                    &exec_task,
-                    task,
-                    &absolute_weights,
-                );
+                exec_task.priority_score =
+                    self.calculate_priority_score(&exec_task, task, &absolute_weights);
 
                 // 计算阻塞的任务数
                 exec_task.blocking_count = self.count_blocked_tasks(project, &task.id);
@@ -265,9 +260,13 @@ impl ProgressReport {
             }
         }
 
-        let next_task = calculator
-            .next_task(project)
-            .map(|t| format!("{} (权重: {:.1}%)", t.task_name, t.absolute_weight.as_percentage()));
+        let next_task = calculator.next_task(project).map(|t| {
+            format!(
+                "{} (权重: {:.1}%)",
+                t.task_name,
+                t.absolute_weight.as_percentage()
+            )
+        });
 
         Self {
             overall_progress: project.overall_progress(),

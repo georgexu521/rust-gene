@@ -2,10 +2,10 @@
 //!
 //! 提供任务解析、依赖图构建和关键路径分析
 
-pub mod parser;
-pub mod dependency_graph;
 pub mod analyzer;
+pub mod dependency_graph;
+pub mod parser;
 
-pub use parser::{TaskParser, ParseError};
-pub use dependency_graph::{DependencyGraph, CycleError};
-pub use analyzer::{TaskAnalyzer, AnalysisResult, CriticalPath};
+pub use analyzer::{AnalysisResult, CriticalPath, TaskAnalyzer};
+pub use dependency_graph::{CycleError, DependencyGraph};
+pub use parser::{ParseError, TaskParser};

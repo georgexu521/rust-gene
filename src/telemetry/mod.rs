@@ -135,10 +135,7 @@ impl TelemetryCollector {
     }
 
     /// 记录会话结束数据
-    pub fn record_session(
-        &self,
-        session: SessionTelemetry,
-    ) {
+    pub fn record_session(&self, session: SessionTelemetry) {
         if !self.is_enabled() {
             return;
         }
@@ -250,6 +247,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     #[test]
     fn test_telemetry_consent_from_env() {
@@ -273,7 +271,8 @@ mod tests {
 
     #[test]
     fn test_telemetry_collector_disabled_by_default() {
-        std::env::remove_var("PRIORITY_AGENT_TELEMETRY");
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_TELEMETRY");
         let collector = TelemetryCollector::new();
         assert!(!collector.is_enabled());
     }

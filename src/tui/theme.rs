@@ -219,10 +219,7 @@ mod tests {
 
     #[test]
     fn test_theme_preset_parse() {
-        assert_eq!(
-            "dark".parse::<ThemePreset>().unwrap(),
-            ThemePreset::Dark
-        );
+        assert_eq!("dark".parse::<ThemePreset>().unwrap(), ThemePreset::Dark);
         assert_eq!(
             "high-contrast".parse::<ThemePreset>().unwrap(),
             ThemePreset::HighContrast

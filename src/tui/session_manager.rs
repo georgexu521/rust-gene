@@ -599,7 +599,11 @@ mod tests {
             .join(&session_id)
             .join("edits.json");
         std::fs::create_dir_all(edits_path.parent().unwrap()).unwrap();
-        std::fs::write(&edits_path, serde_json::to_string_pretty(&edit_record).unwrap()).unwrap();
+        std::fs::write(
+            &edits_path,
+            serde_json::to_string_pretty(&edit_record).unwrap(),
+        )
+        .unwrap();
 
         // 验证列出编辑
         let edits = manager.list_edits(&session_id).unwrap();
@@ -609,12 +613,18 @@ mod tests {
 
         // 修改文件
         std::fs::write(&test_file, "modified content").unwrap();
-        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "modified content");
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "modified content"
+        );
 
         // 回滚
         let result = manager.rewind_last_edit(&session_id).unwrap();
         assert!(result.contains("Rewound file_edit"));
-        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "original content");
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "original content"
+        );
 
         // 验证 edits.json 已更新
         let edits = manager.list_edits(&session_id).unwrap();
@@ -667,7 +677,11 @@ mod tests {
             .join(&session_id)
             .join("edits.json");
         std::fs::create_dir_all(edits_path.parent().unwrap()).unwrap();
-        std::fs::write(&edits_path, serde_json::to_string_pretty(&edit_records).unwrap()).unwrap();
+        std::fs::write(
+            &edits_path,
+            serde_json::to_string_pretty(&edit_records).unwrap(),
+        )
+        .unwrap();
 
         // 修改两个文件
         std::fs::write(&file_a, "A modified").unwrap();

@@ -83,13 +83,10 @@ pub async fn load_skill_from_url(url: &str) -> anyhow::Result<Skill> {
 
 /// 批量从 URL 列表加载 skills
 pub async fn load_skills_from_urls(urls: &[String]) -> Vec<anyhow::Result<Skill>> {
-    use futures::StreamExt;
     use futures::stream::FuturesUnordered;
+    use futures::StreamExt;
 
-    let futures: FuturesUnordered<_> = urls
-        .iter()
-        .map(|url| load_skill_from_url(url))
-        .collect();
+    let futures: FuturesUnordered<_> = urls.iter().map(|url| load_skill_from_url(url)).collect();
 
     futures.collect().await
 }
@@ -180,8 +177,14 @@ async fn load_skill_file(path: &std::path::Path) -> anyhow::Result<Skill> {
     let raw_content = tokio::fs::read_to_string(path).await?;
     let (meta, content) = parse_skill_md(&raw_content)?;
 
-    let skill_dir = path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
-    let modified = tokio::fs::metadata(path).await.ok().and_then(|m| m.modified().ok());
+    let skill_dir = path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+    let modified = tokio::fs::metadata(path)
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok());
 
     Ok(Skill {
         meta,

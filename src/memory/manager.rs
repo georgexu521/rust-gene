@@ -238,7 +238,10 @@ impl MemoryManager {
                     let new_content = format!("{}{}", existing, entry);
                     let _ = std::fs::write(&path, new_content);
                 }
-                debug!("Forked mode: wrote {} heuristic memory bullets as cache hit", heuristic.len());
+                debug!(
+                    "Forked mode: wrote {} heuristic memory bullets as cache hit",
+                    heuristic.len()
+                );
             }
 
             // 然后调用 LLM 进行增强提取（forked 模式）或备用提取（默认模式）
@@ -279,8 +282,11 @@ Return exactly the word NONE if there is nothing critical to remember.";
                             })
                             .filter(|l| !l.is_empty())
                             .collect();
-                        debug!("Background LLM extracted {} memory bullets (forked: {})",
-                               bullets.len(), forked_mode);
+                        debug!(
+                            "Background LLM extracted {} memory bullets (forked: {})",
+                            bullets.len(),
+                            forked_mode
+                        );
 
                         // 写入文件（不依赖 MemoryManager 内部状态）
                         for bullet in bullets {
@@ -362,10 +368,17 @@ Return exactly the word NONE if there is nothing critical to remember.";
         };
 
         let existing = std::fs::read_to_string(path).unwrap_or_default();
-        let normalized_existing = existing.to_lowercase().replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
-        let normalized_content = content.to_lowercase().replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+        let normalized_existing = existing
+            .to_lowercase()
+            .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+        let normalized_content = content
+            .to_lowercase()
+            .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
         if normalized_existing.contains(&normalized_content) {
-            debug!("Skipping duplicate learning (already in file): {}", &content[..content.len().min(50)]);
+            debug!(
+                "Skipping duplicate learning (already in file): {}",
+                &content[..content.len().min(50)]
+            );
             return;
         }
 
@@ -404,10 +417,17 @@ Return exactly the word NONE if there is nothing critical to remember.";
         };
 
         let existing = tokio::fs::read_to_string(path).await.unwrap_or_default();
-        let normalized_existing = existing.to_lowercase().replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
-        let normalized_content = content.to_lowercase().replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+        let normalized_existing = existing
+            .to_lowercase()
+            .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+        let normalized_content = content
+            .to_lowercase()
+            .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
         if normalized_existing.contains(&normalized_content) {
-            debug!("Skipping duplicate learning (already in file, async): {}", &content[..content.len().min(50)]);
+            debug!(
+                "Skipping duplicate learning (already in file, async): {}",
+                &content[..content.len().min(50)]
+            );
             return;
         }
 
@@ -484,7 +504,10 @@ Return exactly the word NONE if there is nothing critical to remember.";
             return;
         }
 
-        info!("Running trailing memory extraction for {} messages", messages.len());
+        info!(
+            "Running trailing memory extraction for {} messages",
+            messages.len()
+        );
 
         // 收集会话中的 user/assistant 对话内容
         let mut conversation_context = String::new();
@@ -527,9 +550,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
                         let bullets: Vec<String> = text
                             .lines()
                             .filter(|l| !l.trim().is_empty())
-                            .map(|l| {
-                                l.strip_prefix("- ").unwrap_or(l).to_string()
-                            })
+                            .map(|l| l.strip_prefix("- ").unwrap_or(l).to_string())
                             .filter(|l| !l.is_empty())
                             .collect();
 
@@ -570,7 +591,11 @@ Return exactly the word NONE if there is nothing critical to remember.";
 
     /// 获取 telemetry 统计
     pub fn extraction_stats(&self) -> (usize, usize, usize) {
-        (self.llm_extraction_count, self.turn_count, self.last_llm_extraction_turn)
+        (
+            self.llm_extraction_count,
+            self.turn_count,
+            self.last_llm_extraction_turn,
+        )
     }
 
     /// 获取缓存命中率统计
@@ -741,7 +766,10 @@ impl Default for MemoryManager {
 fn hash_learning(text: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    let normalized = text.to_lowercase().trim().replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+    let normalized = text
+        .to_lowercase()
+        .trim()
+        .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
     let mut hasher = DefaultHasher::new();
     normalized.hash(&mut hasher);
     hasher.finish()
@@ -1013,7 +1041,11 @@ Always check logs first.
         // 轮数未到 interval，不应提取
         for i in 1..5 {
             mgr.increment_turn();
-            assert!(!mgr.should_extract_with_llm(), "turn {} should not trigger", i);
+            assert!(
+                !mgr.should_extract_with_llm(),
+                "turn {} should not trigger",
+                i
+            );
         }
 
         // 第 5 轮应该触发
@@ -1031,11 +1063,17 @@ Always check logs first.
         }
 
         // 主 agent 未写时，throttled 提取可触发
-        assert!(mgr.should_extract_with_llm(), "should trigger when throttled");
+        assert!(
+            mgr.should_extract_with_llm(),
+            "should trigger when throttled"
+        );
 
         // 主 agent 写入后，阻止后台 LLM 提取（mutual exclusion）
         mgr.mark_main_agent_wrote();
-        assert!(!mgr.should_extract_with_llm(), "main agent wrote blocks extraction");
+        assert!(
+            !mgr.should_extract_with_llm(),
+            "main agent wrote blocks extraction"
+        );
     }
 
     #[test]

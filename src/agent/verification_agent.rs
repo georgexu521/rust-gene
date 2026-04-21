@@ -142,18 +142,14 @@ impl VerificationAgent {
             .await;
 
         match output {
-            Ok(output) if output.status.success() => {
-                ProbeResult::success(
-                    ProbeType::Build,
-                    String::from_utf8_lossy(&output.stdout).to_string(),
-                )
-            }
-            Ok(output) => {
-                ProbeResult::failure(
-                    ProbeType::Build,
-                    String::from_utf8_lossy(&output.stderr).to_string(),
-                )
-            }
+            Ok(output) if output.status.success() => ProbeResult::success(
+                ProbeType::Build,
+                String::from_utf8_lossy(&output.stdout).to_string(),
+            ),
+            Ok(output) => ProbeResult::failure(
+                ProbeType::Build,
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ),
             Err(e) => ProbeResult::failure(ProbeType::Build, format!("Build failed: {}", e)),
         }
     }
@@ -166,7 +162,9 @@ impl VerificationAgent {
             ProjectType::Rust => ("cargo", vec!["test"]),
             ProjectType::Node => ("npm", vec!["test"]),
             ProjectType::Python => ("pytest", vec![]),
-            ProjectType::Other => return ProbeResult::failure(ProbeType::Test, "Unknown project type".to_string()),
+            ProjectType::Other => {
+                return ProbeResult::failure(ProbeType::Test, "Unknown project type".to_string())
+            }
         };
 
         let output = Command::new(cmd)
@@ -176,18 +174,14 @@ impl VerificationAgent {
             .await;
 
         match output {
-            Ok(output) if output.status.success() => {
-                ProbeResult::success(
-                    ProbeType::Test,
-                    String::from_utf8_lossy(&output.stdout).to_string(),
-                )
-            }
-            Ok(output) => {
-                ProbeResult::failure(
-                    ProbeType::Test,
-                    String::from_utf8_lossy(&output.stderr).to_string(),
-                )
-            }
+            Ok(output) if output.status.success() => ProbeResult::success(
+                ProbeType::Test,
+                String::from_utf8_lossy(&output.stdout).to_string(),
+            ),
+            Ok(output) => ProbeResult::failure(
+                ProbeType::Test,
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ),
             Err(e) => ProbeResult::failure(ProbeType::Test, format!("Test failed: {}", e)),
         }
     }
@@ -200,7 +194,9 @@ impl VerificationAgent {
             ProjectType::Rust => ("cargo", vec!["clippy", "--", "-D", "warnings"]),
             ProjectType::Node => ("npm", vec!["run", "lint"]),
             ProjectType::Python => ("ruff", vec!["check", "."]),
-            ProjectType::Other => return ProbeResult::failure(ProbeType::Lint, "Unknown project type".to_string()),
+            ProjectType::Other => {
+                return ProbeResult::failure(ProbeType::Lint, "Unknown project type".to_string())
+            }
         };
 
         let output = Command::new(cmd)
@@ -210,18 +206,14 @@ impl VerificationAgent {
             .await;
 
         match output {
-            Ok(output) if output.status.success() => {
-                ProbeResult::success(
-                    ProbeType::Lint,
-                    String::from_utf8_lossy(&output.stdout).to_string(),
-                )
-            }
-            Ok(output) => {
-                ProbeResult::failure(
-                    ProbeType::Lint,
-                    String::from_utf8_lossy(&output.stderr).to_string(),
-                )
-            }
+            Ok(output) if output.status.success() => ProbeResult::success(
+                ProbeType::Lint,
+                String::from_utf8_lossy(&output.stdout).to_string(),
+            ),
+            Ok(output) => ProbeResult::failure(
+                ProbeType::Lint,
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ),
             Err(e) => ProbeResult::failure(ProbeType::Lint, format!("Lint failed: {}", e)),
         }
     }
@@ -245,17 +237,18 @@ impl VerificationAgent {
             .await;
 
         match output {
-            Ok(output) if output.status.success() => {
-                ProbeResult::success(
-                    ProbeType::Concurrency,
-                    format!("Concurrency test passed ({} runs)", count),
-                )
-            }
+            Ok(output) if output.status.success() => ProbeResult::success(
+                ProbeType::Concurrency,
+                format!("Concurrency test passed ({} runs)", count),
+            ),
             Ok(output) => ProbeResult::failure(
                 ProbeType::Concurrency,
                 String::from_utf8_lossy(&output.stderr).to_string(),
             ),
-            Err(e) => ProbeResult::failure(ProbeType::Concurrency, format!("Concurrency test failed: {}", e)),
+            Err(e) => ProbeResult::failure(
+                ProbeType::Concurrency,
+                format!("Concurrency test failed: {}", e),
+            ),
         }
     }
 
@@ -332,7 +325,9 @@ impl ProjectType {
             ProjectType::Rust
         } else if working_dir.join("package.json").exists() {
             ProjectType::Node
-        } else if working_dir.join("pyproject.toml").exists() || working_dir.join("setup.py").exists() {
+        } else if working_dir.join("pyproject.toml").exists()
+            || working_dir.join("setup.py").exists()
+        {
             ProjectType::Python
         } else {
             ProjectType::Other

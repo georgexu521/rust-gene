@@ -44,12 +44,12 @@ fn check_file_size_limit(path: &Path, operation: &str) -> Result<(), String> {
 /// 处理文件中的智能引号 vs 模型输出的直引号差异
 fn normalize_quotes(input: &str) -> String {
     input
-        .replace('\u{2018}', "'")  // LEFT SINGLE QUOTATION MARK → '
-        .replace('\u{2019}', "'")  // RIGHT SINGLE QUOTATION MARK → '
+        .replace('\u{2018}', "'") // LEFT SINGLE QUOTATION MARK → '
+        .replace('\u{2019}', "'") // RIGHT SINGLE QUOTATION MARK → '
         .replace('\u{201C}', "\"") // LEFT DOUBLE QUOTATION MARK → "
         .replace('\u{201D}', "\"") // RIGHT DOUBLE QUOTATION MARK → "
-        .replace('\u{201A}', "'")  // SINGLE LOW-9 QUOTATION MARK → '
-        .replace('\u{201B}', "'")  // SINGLE HIGH-REVERSED-9 QUOTATION MARK → '
+        .replace('\u{201A}', "'") // SINGLE LOW-9 QUOTATION MARK → '
+        .replace('\u{201B}', "'") // SINGLE HIGH-REVERSED-9 QUOTATION MARK → '
 }
 
 /// 反转义处理（Claude Code 使用 &lt;fnr&gt; 等转义）
@@ -63,12 +63,15 @@ fn desanitize(input: &str) -> String {
 
 /// 文件读取状态跟踪（用于 must-read-before-edit 检查）
 /// 全局读取文件状态跟踪（按会话）
-static READ_FILES: Lazy<Mutex<HashMap<String, HashSet<String>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static READ_FILES: Lazy<Mutex<HashMap<String, HashSet<String>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// 标记文件已被读取（用于 must-read-before-edit 检查）
 pub fn mark_file_read(session_id: &str, file_path: &str) {
     let mut tracker = READ_FILES.lock().unwrap();
-    let session_files = tracker.entry(session_id.to_string()).or_insert_with(HashSet::new);
+    let session_files = tracker
+        .entry(session_id.to_string())
+        .or_insert_with(HashSet::new);
     session_files.insert(file_path.to_string());
 }
 
@@ -94,7 +97,8 @@ struct FileState {
     content_hash: u64,
 }
 
-static FILE_STATES: Lazy<Mutex<HashMap<String, FileState>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static FILE_STATES: Lazy<Mutex<HashMap<String, FileState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn compute_content_hash(content: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -103,18 +107,31 @@ fn compute_content_hash(content: &str) -> u64 {
 }
 
 /// 标记文件已被读取并记录状态（用于变更检测）
-pub fn mark_file_read_with_state(session_id: &str, file_path: &str, content: &str, mtime: std::time::SystemTime) {
+pub fn mark_file_read_with_state(
+    session_id: &str,
+    file_path: &str,
+    content: &str,
+    mtime: std::time::SystemTime,
+) {
     mark_file_read(session_id, file_path);
     let mut states = FILE_STATES.lock().unwrap();
     let key = format!("{}:{}", session_id, file_path);
-    states.insert(key, FileState {
-        mtime,
-        content_hash: compute_content_hash(content),
-    });
+    states.insert(
+        key,
+        FileState {
+            mtime,
+            content_hash: compute_content_hash(content),
+        },
+    );
 }
 
 /// 检查文件是否在读取后被外部修改
-pub fn is_file_modified_since_read(session_id: &str, file_path: &str, current_content: &str, current_mtime: std::time::SystemTime) -> bool {
+pub fn is_file_modified_since_read(
+    session_id: &str,
+    file_path: &str,
+    current_content: &str,
+    current_mtime: std::time::SystemTime,
+) -> bool {
     let states = FILE_STATES.lock().unwrap();
     let key = format!("{}:{}", session_id, file_path);
     if let Some(state) = states.get(&key) {
@@ -181,9 +198,13 @@ impl Tool for FileReadTool {
         }
 
         let limit = params["limit"].as_u64().map(|u| u as usize);
-        let offset = params["offset"]
-            .as_u64()
-            .and_then(|o| if o == 0 { None } else { Some((o as usize).saturating_sub(1)) });
+        let offset = params["offset"].as_u64().and_then(|o| {
+            if o == 0 {
+                None
+            } else {
+                Some((o as usize).saturating_sub(1))
+            }
+        });
 
         let path = match resolve_path(path_str, &context.working_dir) {
             Ok(path) => path,
@@ -447,7 +468,10 @@ fn fuzzy_find_occurrences(content: &str, target: &str) -> Vec<(usize, usize)> {
             // 计算在原始内容中的实际起始位置
             let mut pos = 0;
             for _ in 0..line_idx {
-                pos = content[pos..].find('\n').map(|p| pos + p + 1).unwrap_or(pos);
+                pos = content[pos..]
+                    .find('\n')
+                    .map(|p| pos + p + 1)
+                    .unwrap_or(pos);
             }
             let line_start = pos;
             let line_end = line_start + line.len();
@@ -500,7 +524,11 @@ fn find_occurrences_normalized(content: &str, target: &str) -> Vec<(usize, usize
 }
 
 /// 构建匹配位置的上下文提示
-fn build_match_context(content: &str, occurrences: &[(usize, usize)], context_lines: usize) -> String {
+fn build_match_context(
+    content: &str,
+    occurrences: &[(usize, usize)],
+    context_lines: usize,
+) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
     let mut parts = vec![format!("Found {} occurrence(s):", occurrences.len())];
@@ -508,8 +536,17 @@ fn build_match_context(content: &str, occurrences: &[(usize, usize)], context_li
         let start_line = content[..*start].matches('\n').count();
         let ctx_start = start_line.saturating_sub(context_lines);
         let ctx_end = (start_line + 1 + context_lines).min(lines.len());
-        parts.push(format!("\n  Match #{} at line {}:", occ_idx + 1, start_line + 1));
-        for (li, line) in lines.iter().enumerate().skip(ctx_start).take(ctx_end - ctx_start) {
+        parts.push(format!(
+            "\n  Match #{} at line {}:",
+            occ_idx + 1,
+            start_line + 1
+        ));
+        for (li, line) in lines
+            .iter()
+            .enumerate()
+            .skip(ctx_start)
+            .take(ctx_end - ctx_start)
+        {
             parts.push(format!("    {:4} | {}", li + 1, line));
         }
     }
@@ -588,7 +625,12 @@ async fn save_snapshot(
     };
     edits.push(edit_record);
 
-    if let Err(e) = tokio::fs::write(&edits_path, serde_json::to_string_pretty(&edits).unwrap_or_default()).await {
+    if let Err(e) = tokio::fs::write(
+        &edits_path,
+        serde_json::to_string_pretty(&edits).unwrap_or_default(),
+    )
+    .await
+    {
         warn!("Failed to write edits history: {}", e);
     }
 
@@ -713,8 +755,12 @@ impl Tool for FileEditTool {
         // ── Smart Edit 检查 ───────────────────────────────────────────
         // 1. Must-read-before-edit: 检查文件是否已被读取
         // 仅在 PRIORITY_AGENT_SMART_EDIT=1 时启用此检查
-        if std::env::var("PRIORITY_AGENT_SMART_EDIT").as_ref().map(|v| v.as_str()) == Ok("1")
-           && !is_file_read(&context.session_id, path_str) {
+        if std::env::var("PRIORITY_AGENT_SMART_EDIT")
+            .as_ref()
+            .map(|v| v.as_str())
+            == Ok("1")
+            && !is_file_read(&context.session_id, path_str)
+        {
             return ToolResult::error(
                 format!(
                     "File '{}' has not been read yet. You must read a file before editing it. Use file_read tool first.",
@@ -733,7 +779,11 @@ impl Tool for FileEditTool {
         }
 
         // 2. 对 old_string 和 new_string 应用 desanitize 和 quote normalization（仅在 PRIORITY_AGENT_SMART_EDIT=1 时）
-        let (old_string, new_string) = if std::env::var("PRIORITY_AGENT_SMART_EDIT").as_ref().map(|v| v.as_str()) == Ok("1") {
+        let (old_string, new_string) = if std::env::var("PRIORITY_AGENT_SMART_EDIT")
+            .as_ref()
+            .map(|v| v.as_str())
+            == Ok("1")
+        {
             (
                 desanitize(&normalize_quotes(old_string)),
                 desanitize(&normalize_quotes(new_string)),
@@ -743,13 +793,14 @@ impl Tool for FileEditTool {
         };
 
         // 保存快照
-        let snapshot_path = match save_snapshot(&path, &context.session_id, &content, "file_edit").await {
-            Ok(p) => Some(p),
-            Err(e) => {
-                warn!("Failed to save snapshot: {}", e);
-                None
-            }
-        };
+        let snapshot_path =
+            match save_snapshot(&path, &context.session_id, &content, "file_edit").await {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    warn!("Failed to save snapshot: {}", e);
+                    None
+                }
+            };
 
         // 确定操作模式
         let result = if let (Some(start), Some(end)) = (line_start, line_end) {
@@ -765,7 +816,13 @@ impl Tool for FileEditTool {
                         .to_string(),
                 );
             }
-            Self::do_replace(content, &old_string, &new_string, expected_replacements, normalize_ws)
+            Self::do_replace(
+                content,
+                &old_string,
+                &new_string,
+                expected_replacements,
+                normalize_ws,
+            )
         };
 
         match result {
@@ -786,7 +843,10 @@ impl Tool for FileEditTool {
                             data["snapshot_path"] = json!(sp.to_string_lossy().to_string());
                         }
                         ToolResult::success_with_data(
-                            format!("File edited successfully: {} ({} replacement(s))", path_str, replacements),
+                            format!(
+                                "File edited successfully: {} ({} replacement(s))",
+                                path_str, replacements
+                            ),
                             data,
                         )
                     }
@@ -1221,7 +1281,9 @@ mod tests {
     async fn test_file_edit_success() {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_success.txt";
-        tokio::fs::write(path, "hello world\nfoo bar\n").await.unwrap();
+        tokio::fs::write(path, "hello world\nfoo bar\n")
+            .await
+            .unwrap();
 
         let params = json!({
             "path": path,
@@ -1365,22 +1427,26 @@ mod tests {
 
         assert!(result.success, "edit failed: {:?}", result.error);
         let data = result.data.unwrap_or_default();
-        let snap_path = data["snapshot_path"].as_str().expect("snapshot_path should exist");
+        let snap_path = data["snapshot_path"]
+            .as_str()
+            .expect("snapshot_path should exist");
         assert!(std::path::Path::new(snap_path).exists());
         let snap_content = tokio::fs::read_to_string(snap_path).await.unwrap();
         assert_eq!(snap_content, original);
 
         let _ = tokio::fs::remove_file(path).await;
-        let _ = tokio::fs::remove_dir_all(
-            std::path::Path::new(snap_path).ancestors().nth(2).unwrap()
-        ).await;
+        let _ =
+            tokio::fs::remove_dir_all(std::path::Path::new(snap_path).ancestors().nth(2).unwrap())
+                .await;
     }
 
     #[tokio::test]
     async fn test_file_edit_line_range() {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_lines.txt";
-        tokio::fs::write(path, "line1\nline2\nline3\nline4\n").await.unwrap();
+        tokio::fs::write(path, "line1\nline2\nline3\nline4\n")
+            .await
+            .unwrap();
 
         let params = json!({
             "path": path,
@@ -1402,7 +1468,9 @@ mod tests {
     async fn test_file_edit_normalize_whitespace() {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_normws.txt";
-        tokio::fs::write(path, "    hello world    \n").await.unwrap();
+        tokio::fs::write(path, "    hello world    \n")
+            .await
+            .unwrap();
 
         // old_string 有额外空白，但 normalize_whitespace=true 应能匹配
         let params = json!({

@@ -60,8 +60,7 @@ impl FileStorage {
 impl StorageBackend for FileStorage {
     fn save(&self, key: &str, data: &str) -> Result<(), PersistenceError> {
         let path = self.key_to_path(key);
-        std::fs::write(&path, data)
-            .map_err(|e| PersistenceError::IoError(e.to_string()))
+        std::fs::write(&path, data).map_err(|e| PersistenceError::IoError(e.to_string()))
     }
 
     fn load(&self, key: &str) -> Result<Option<String>, PersistenceError> {
@@ -84,20 +83,20 @@ impl StorageBackend for FileStorage {
 
     fn list_keys(&self) -> Result<Vec<String>, PersistenceError> {
         let mut keys = Vec::new();
-        
+
         for entry in std::fs::read_dir(&self.base_path)
             .map_err(|e| PersistenceError::IoError(e.to_string()))?
         {
             let entry = entry.map_err(|e| PersistenceError::IoError(e.to_string()))?;
             let path = entry.path();
-            
+
             if path.extension().map_or(false, |ext| ext == "json") {
                 if let Some(stem) = path.file_stem() {
                     keys.push(stem.to_string_lossy().to_string());
                 }
             }
         }
-        
+
         Ok(keys)
     }
 }
@@ -202,7 +201,9 @@ mod tests {
 
     impl StorageBackend for MemoryStorage {
         fn save(&self, key: &str, data: &str) -> Result<(), PersistenceError> {
-            self.data.borrow_mut().insert(key.to_string(), data.to_string());
+            self.data
+                .borrow_mut()
+                .insert(key.to_string(), data.to_string());
             Ok(())
         }
 
@@ -224,10 +225,10 @@ mod tests {
     fn test_persistence_manager() {
         let storage = Box::new(MemoryStorage::new());
         let mut manager = PersistenceManager::new(storage);
-        
+
         let state = SessionState::new();
         manager.save_state(&state).unwrap();
-        
+
         let loaded = manager.load_state().unwrap();
         assert!(loaded.is_some());
     }

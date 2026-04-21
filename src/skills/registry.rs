@@ -51,7 +51,10 @@ impl SkillRegistry {
                 if !path.is_empty() {
                     let p = PathBuf::from(path);
                     if !self.search_paths.contains(&p) {
-                        info!("Adding skill search path from PRIORITY_AGENT_SKILLS_PATH: {}", path);
+                        info!(
+                            "Adding skill search path from PRIORITY_AGENT_SKILLS_PATH: {}",
+                            path
+                        );
                         self.add_search_path(p);
                     }
                 }
@@ -62,7 +65,10 @@ impl SkillRegistry {
         if let Ok(urls) = std::env::var("PRIORITY_AGENT_SKILLS_URL") {
             for url in urls.split(':') {
                 if !url.is_empty() {
-                    info!("Adding remote skill URL from PRIORITY_AGENT_SKILLS_URL: {}", url);
+                    info!(
+                        "Adding remote skill URL from PRIORITY_AGENT_SKILLS_URL: {}",
+                        url
+                    );
                     self.remote_urls.push(url.to_string());
                 }
             }
@@ -294,7 +300,10 @@ impl SkillRegistry {
         let raw_content = tokio::fs::read_to_string(path).await?;
         let (meta, content) = parse_skill_md(&raw_content)?;
         let skill_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let modified = tokio::fs::metadata(path).await.ok().and_then(|m| m.modified().ok());
+        let modified = tokio::fs::metadata(path)
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok());
 
         Ok(Skill {
             meta,
@@ -351,7 +360,10 @@ impl SkillRegistry {
             }
 
             // 短语匹配
-            if phrases.iter().any(|p| name_lower.contains(p) || desc_lower.contains(p)) {
+            if phrases
+                .iter()
+                .any(|p| name_lower.contains(p) || desc_lower.contains(p))
+            {
                 matched.push(skill.meta.name.clone());
             }
         }

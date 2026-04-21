@@ -36,7 +36,11 @@ impl CheckResult {
         }
     }
 
-    pub fn warn(name: impl Into<String>, message: impl Into<String>, suggestion: impl Into<String>) -> Self {
+    pub fn warn(
+        name: impl Into<String>,
+        message: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             status: CheckStatus::Warning,
@@ -45,7 +49,11 @@ impl CheckResult {
         }
     }
 
-    pub fn error(name: impl Into<String>, message: impl Into<String>, suggestion: impl Into<String>) -> Self {
+    pub fn error(
+        name: impl Into<String>,
+        message: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             status: CheckStatus::Error,
@@ -201,10 +209,18 @@ pub async fn check_network_connectivity() -> CheckResult {
 pub fn check_toolchain() -> CheckResult {
     let mut missing = Vec::new();
 
-    if std::process::Command::new("cargo").arg("--version").output().is_err() {
+    if std::process::Command::new("cargo")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         missing.push("cargo");
     }
-    if std::process::Command::new("rustc").arg("--version").output().is_err() {
+    if std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         missing.push("rustc");
     }
 
@@ -268,7 +284,10 @@ pub fn check_session_store() -> CheckResult {
         .unwrap_or_else(|| std::path::PathBuf::from(".priority-agent/sessions.db"));
 
     if db_path.exists() {
-        CheckResult::ok("session_store", format!("Session store exists at {:?}", db_path))
+        CheckResult::ok(
+            "session_store",
+            format!("Session store exists at {:?}", db_path),
+        )
     } else {
         CheckResult::info(
             "session_store",
@@ -366,8 +385,7 @@ mod tests {
     #[test]
     fn test_report_json_roundtrip() {
         let checks = vec![CheckResult::ok("git", "git version 2.43")];
-        let report = DiagnosticReport::new(checks)
-            .with_metadata("working_dir", "/tmp");
+        let report = DiagnosticReport::new(checks).with_metadata("working_dir", "/tmp");
         let json = report.to_json();
         assert!(json.contains("git"));
         assert!(json.contains("/tmp"));

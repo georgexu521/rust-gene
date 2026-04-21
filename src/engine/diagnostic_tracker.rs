@@ -64,7 +64,11 @@ impl DiagnosticTracker {
         }
 
         let path_str = file_path.to_string_lossy().to_string();
-        info!("Capturing diagnostic baseline for: {} ({} diagnostics)", path_str, current_diagnostics.len());
+        info!(
+            "Capturing diagnostic baseline for: {} ({} diagnostics)",
+            path_str,
+            current_diagnostics.len()
+        );
 
         let mut baselines = self.baselines.write().await;
         baselines.insert(path_str, current_diagnostics);
@@ -72,7 +76,11 @@ impl DiagnosticTracker {
 
     /// 编辑后获取新增的 diagnostics（对比 baseline）
     /// 注意：需要外部提供当前 LSP diagnostics 数据
-    pub async fn get_new_diagnostics(&self, file_path: &Path, current_diagnostics: Vec<DiagnosticEntry>) -> Vec<DiagnosticEntry> {
+    pub async fn get_new_diagnostics(
+        &self,
+        file_path: &Path,
+        current_diagnostics: Vec<DiagnosticEntry>,
+    ) -> Vec<DiagnosticEntry> {
         if !self.enabled {
             return Vec::new();
         }
@@ -101,7 +109,9 @@ impl DiagnosticTracker {
 
     /// 检查两个 diagnostic 是否是同一个
     fn is_same_diagnostic(&self, a: &DiagnosticEntry, b: &DiagnosticEntry) -> bool {
-        a.message == b.message && a.range.start_line == b.range.start_line && a.range.start_col == b.range.start_col
+        a.message == b.message
+            && a.range.start_line == b.range.start_line
+            && a.range.start_col == b.range.start_col
     }
 
     /// 清除文件的 baseline
@@ -140,7 +150,9 @@ mod tests {
     async fn test_diagnostic_tracker_no_baseline() {
         let tracker = DiagnosticTracker::new();
         // 没有 baseline 时，应该返回空
-        let new_diags = tracker.get_new_diagnostics(Path::new("test.rs"), vec![]).await;
+        let new_diags = tracker
+            .get_new_diagnostics(Path::new("test.rs"), vec![])
+            .await;
         assert!(new_diags.is_empty());
     }
 

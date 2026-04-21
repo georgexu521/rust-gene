@@ -108,10 +108,7 @@ impl ContextCollapseService {
     /// 执行折叠：将早期消息写入磁盘，保留最近的消息
     ///
     /// 返回被折叠的消息数量
-    pub async fn apply_collapses_if_needed(
-        &self,
-        messages: &mut Vec<Message>,
-    ) -> Result<usize> {
+    pub async fn apply_collapses_if_needed(&self, messages: &mut Vec<Message>) -> Result<usize> {
         if !self.should_collapse(messages.len()) {
             return Ok(0);
         }
@@ -123,8 +120,7 @@ impl ContextCollapseService {
 
         info!(
             "Applying context collapse: {} messages will be collapsed, {} kept",
-            collapse_count,
-            self.config.window_size
+            collapse_count, self.config.window_size
         );
 
         // 将要折叠的消息分离出来
@@ -217,7 +213,10 @@ impl ContextCollapseService {
 
     /// 将折叠的消息持久化到磁盘
     async fn persist_collapsed_messages(&self, messages: &[Message]) -> Result<PathBuf> {
-        let session_prefix = self.session_id.clone().unwrap_or_else(|| "default".to_string());
+        let session_prefix = self
+            .session_id
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
         let entry_id = uuid::Uuid::new_v4().to_string();
         let file_name = format!("{}_{}.jsonl", session_prefix, entry_id);
         let file_path = self.config.storage_dir.join(&file_name);
@@ -236,8 +235,13 @@ impl ContextCollapseService {
 
     /// 获取折叠文件的路径
     fn get_collapse_file_path(&self, entry_id: &str) -> PathBuf {
-        let session_prefix = self.session_id.clone().unwrap_or_else(|| "default".to_string());
-        self.config.storage_dir.join(format!("{}_{}.jsonl", session_prefix, entry_id))
+        let session_prefix = self
+            .session_id
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        self.config
+            .storage_dir
+            .join(format!("{}_{}.jsonl", session_prefix, entry_id))
     }
 
     /// 计算消息内容的哈希值
@@ -255,7 +259,15 @@ impl ContextCollapseService {
     /// 清理旧的折叠文件（保留最近 N 个）
     pub async fn prune_old_entries(&self, keep_recent: usize) -> Result<usize> {
         let mut removed = 0;
-        let entries: Vec<_> = self.entries.read().await.iter().rev().skip(keep_recent).cloned().collect();
+        let entries: Vec<_> = self
+            .entries
+            .read()
+            .await
+            .iter()
+            .rev()
+            .skip(keep_recent)
+            .cloned()
+            .collect();
 
         for entry in entries {
             match entry {
@@ -386,7 +398,10 @@ mod tests {
             Message::user("msg3"),
         ];
 
-        let collapsed = service.apply_collapses_if_needed(&mut messages).await.unwrap();
+        let collapsed = service
+            .apply_collapses_if_needed(&mut messages)
+            .await
+            .unwrap();
         assert_eq!(collapsed, 3); // 5 - 2 = 3 messages collapsed
         assert_eq!(messages.len(), 2); // only window kept
     }

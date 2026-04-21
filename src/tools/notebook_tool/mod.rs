@@ -136,28 +136,23 @@ impl NotebookTool {
     /// 读取整个 Notebook
     async fn read_notebook(&self, path: &Path) -> ToolResult {
         match tokio::fs::read_to_string(path).await {
-            Ok(content) => {
-                match serde_json::from_str::<Notebook>(&content) {
-                    Ok(notebook) => {
-                        let mut lines = vec![format!(
-                            "Notebook: {} cells",
-                            notebook.cells.len()
-                        )];
-                        for (i, cell) in notebook.cells.iter().enumerate() {
-                            let cell_type = &cell.cell_type;
-                            let preview: String = cell.source.join("");
-                            let preview = if preview.len() > 80 {
-                                format!("{}...", &preview[..77])
-                            } else {
-                                preview
-                            };
-                            lines.push(format!("  [{}] {}: {}", i, cell_type, preview));
-                        }
-                        ToolResult::success(lines.join("\n"))
+            Ok(content) => match serde_json::from_str::<Notebook>(&content) {
+                Ok(notebook) => {
+                    let mut lines = vec![format!("Notebook: {} cells", notebook.cells.len())];
+                    for (i, cell) in notebook.cells.iter().enumerate() {
+                        let cell_type = &cell.cell_type;
+                        let preview: String = cell.source.join("");
+                        let preview = if preview.len() > 80 {
+                            format!("{}...", &preview[..77])
+                        } else {
+                            preview
+                        };
+                        lines.push(format!("  [{}] {}: {}", i, cell_type, preview));
                     }
-                    Err(e) => ToolResult::error(format!("Failed to parse notebook: {}", e)),
+                    ToolResult::success(lines.join("\n"))
                 }
-            }
+                Err(e) => ToolResult::error(format!("Failed to parse notebook: {}", e)),
+            },
             Err(e) => ToolResult::error(format!("Failed to read file: {}", e)),
         }
     }
@@ -199,20 +194,16 @@ impl NotebookTool {
                         notebook.cells.len() - 1
                     ));
                 }
-                
+
                 // 将内容按行分割为 Vec<String>
-                let new_source: Vec<String> = content
-                    .lines()
-                    .map(|l| format!("{}\n", l))
-                    .collect();
-                
+                let new_source: Vec<String> = content.lines().map(|l| format!("{}\n", l)).collect();
+
                 notebook.cells[cell_index].source = new_source;
-                
+
                 match self.save_notebook(path, &notebook).await {
-                    Ok(_) => ToolResult::success(format!(
-                        "Edited cell {} successfully",
-                        cell_index
-                    )),
+                    Ok(_) => {
+                        ToolResult::success(format!("Edited cell {} successfully", cell_index))
+                    }
                     Err(e) => e,
                 }
             }

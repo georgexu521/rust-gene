@@ -136,11 +136,13 @@ impl SessionState {
     /// 创建上下文快照
     pub fn create_snapshot(&self, description: impl Into<String>) -> ContextSnapshot {
         ContextSnapshot {
-            id: format!("snapshot_{}", 
+            id: format!(
+                "snapshot_{}",
                 SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_secs()),
+                    .as_secs()
+            ),
             created_at: Some(SystemTime::now()),
             project: self.current_project.clone(),
             completed_tasks: self.completed_tasks.clone(),
@@ -197,10 +199,10 @@ mod tests {
     fn test_complete_task() {
         let mut state = SessionState::new();
         let task_id = TaskId::new("task1");
-        
+
         state.complete_task(task_id.clone());
         assert_eq!(state.completed_tasks.len(), 1);
-        
+
         // 重复完成不应添加
         state.complete_task(task_id);
         assert_eq!(state.completed_tasks.len(), 1);

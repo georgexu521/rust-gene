@@ -3,8 +3,8 @@
 //! 对标 Claude Code 的 `toolOrchestration.ts`
 //! 读工具并行执行，写工具串行执行
 
-use crate::tools::{ToolContext, ToolResult};
 use crate::services::api::ToolCall;
+use crate::tools::{ToolContext, ToolResult};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -173,12 +173,16 @@ impl ToolOrchestrator {
 
         // 并行执行读工具
         let read_start = std::time::Instant::now();
-        let read_results = self.execute_read_parallel(read_calls, context, tool_registry).await;
+        let read_results = self
+            .execute_read_parallel(read_calls, context, tool_registry)
+            .await;
         let read_duration = read_start.elapsed().as_millis() as u64;
 
         // 串行执行写工具
         let write_start = std::time::Instant::now();
-        let write_results = self.execute_write_serial(write_calls, context, tool_registry).await;
+        let write_results = self
+            .execute_write_serial(write_calls, context, tool_registry)
+            .await;
         let write_duration = write_start.elapsed().as_millis() as u64;
 
         // 合并结果
@@ -207,8 +211,7 @@ impl ToolOrchestrator {
 
         for call in calls {
             let call_start = std::time::Instant::now();
-            let result = ToolOrchestrator::execute_single(&call, context, tool_registry)
-                .await;
+            let result = ToolOrchestrator::execute_single(&call, context, tool_registry).await;
             let duration = call_start.elapsed().as_millis() as u64;
 
             results.push(ToolCallResult {
@@ -240,8 +243,8 @@ impl ToolOrchestrator {
             return Vec::new();
         }
 
-        use futures::StreamExt;
         use futures::stream::FuturesUnordered;
+        use futures::StreamExt;
 
         // 克隆 call IDs 以便后续排序
         let call_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
@@ -298,15 +301,16 @@ impl ToolOrchestrator {
             if let Some(diagnostic_tracker) = &context.diagnostic_tracker {
                 // 获取工具关联的文件路径（如果有）
                 if let Some(path) = self.get_tool_related_path(&call) {
-                    let diags = context.lsp_manager.as_ref()
+                    let diags = context
+                        .lsp_manager
+                        .as_ref()
                         .map(|m| m.get_diagnostics(&path).unwrap_or_default())
                         .unwrap_or_default();
                     diagnostic_tracker.before_edit(&path, diags).await;
                 }
             }
 
-            let result = ToolOrchestrator::execute_single(&call, context, tool_registry)
-                .await;
+            let result = ToolOrchestrator::execute_single(&call, context, tool_registry).await;
             let duration = call_start.elapsed().as_millis() as u64;
 
             results.push(ToolCallResult {
@@ -348,12 +352,12 @@ impl ToolOrchestrator {
     #[cfg(feature = "experimental-priority")]
     fn get_tool_related_path(&self, call: &ToolCall) -> Option<std::path::PathBuf> {
         match call.name.as_str() {
-            "file_write" | "file_edit" => {
-                call.arguments.get("path")
-                    .or_else(|| call.arguments.get("file_path"))
-                    .and_then(|v| v.as_str())
-                    .map(std::path::PathBuf::from)
-            }
+            "file_write" | "file_edit" => call
+                .arguments
+                .get("path")
+                .or_else(|| call.arguments.get("file_path"))
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from),
             _ => None,
         }
     }
@@ -404,7 +408,10 @@ pub fn describe_partition(read_count: usize, write_count: usize) -> String {
     } else if write_count == 0 {
         format!("{} read (parallel)", read_count)
     } else {
-        format!("{} read (parallel) + {} write (serial)", read_count, write_count)
+        format!(
+            "{} read (parallel) + {} write (serial)",
+            read_count, write_count
+        )
     }
 }
 
@@ -493,6 +500,9 @@ mod tests {
         assert_eq!(describe_partition(0, 0), "No tools");
         assert_eq!(describe_partition(0, 3), "3 write (serial)");
         assert_eq!(describe_partition(2, 0), "2 read (parallel)");
-        assert_eq!(describe_partition(2, 3), "2 read (parallel) + 3 write (serial)");
+        assert_eq!(
+            describe_partition(2, 3),
+            "2 read (parallel) + 3 write (serial)"
+        );
     }
 }

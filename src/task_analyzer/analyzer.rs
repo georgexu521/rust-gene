@@ -1,7 +1,7 @@
 //! 任务分析器 - 分析任务结构和关键路径
 
-use priority_core::weight_engine::types::{Project, Task, TaskId, Weight};
 use crate::task_analyzer::dependency_graph::DependencyGraph;
+use priority_core::weight_engine::types::{Project, Task, TaskId, Weight};
 
 /// 关键路径
 #[derive(Debug, Clone)]
@@ -79,12 +79,8 @@ impl TaskAnalyzer {
         let bottleneck_tasks = self.find_bottleneck_tasks(&all_tasks);
 
         // 计算风险评分
-        let risk_score = self.calculate_risk_score(
-            total_tasks,
-            max_depth,
-            &critical_paths,
-            &bottleneck_tasks,
-        );
+        let risk_score =
+            self.calculate_risk_score(total_tasks, max_depth, &critical_paths, &bottleneck_tasks);
 
         AnalysisResult {
             total_tasks,
@@ -99,11 +95,7 @@ impl TaskAnalyzer {
 
     /// 计算任务树的最大深度
     fn calculate_max_depth(&self, tasks: &[&Task]) -> usize {
-        tasks
-            .iter()
-            .map(|t| self.task_depth(t))
-            .max()
-            .unwrap_or(0)
+        tasks.iter().map(|t| self.task_depth(t)).max().unwrap_or(0)
     }
 
     fn task_depth(&self, task: &Task) -> usize {
@@ -165,10 +157,7 @@ impl TaskAnalyzer {
     /// 找到从某个任务开始的最重路径
     fn find_heaviest_path(&self, task: &Task) -> CriticalPath {
         if task.children.is_empty() {
-            return CriticalPath::new(
-                vec![task.id.clone()],
-                task.local_weight.value(),
-            );
+            return CriticalPath::new(vec![task.id.clone()], task.local_weight.value());
         }
 
         // 找到权重最大的子路径
@@ -196,7 +185,9 @@ impl TaskAnalyzer {
     fn find_isolated_tasks(&self, tasks: &[&Task]) -> Vec<TaskId> {
         tasks
             .iter()
-            .filter(|t| t.dependencies.is_empty() && self.dependency_graph.get_dependents(&t.id).is_none())
+            .filter(|t| {
+                t.dependencies.is_empty() && self.dependency_graph.get_dependents(&t.id).is_none()
+            })
             .map(|t| t.id.clone())
             .collect()
     }
@@ -277,10 +268,7 @@ impl TaskAnalyzer {
             "- 平均分支因子: {:.2}\n",
             result.avg_branching_factor
         ));
-        report.push_str(&format!(
-            "- 风险评分: {:.0}%\n",
-            result.risk_score * 100.0
-        ));
+        report.push_str(&format!("- 风险评分: {:.0}%\n", result.risk_score * 100.0));
 
         report.push_str("\n## 关键路径\n");
         for (i, path) in result.critical_paths.iter().enumerate() {

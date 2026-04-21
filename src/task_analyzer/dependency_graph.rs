@@ -127,18 +127,13 @@ impl DependencyGraph {
         if let Some(deps) = self.dependencies.get(task_id) {
             for dep in deps {
                 if !visited.contains(dep) {
-                    if let Some(cycle) = self.dfs_detect_cycle(
-                        dep,
-                        visited,
-                        recursion_stack,
-                        path,
-                    ) {
+                    if let Some(cycle) = self.dfs_detect_cycle(dep, visited, recursion_stack, path)
+                    {
                         return Some(cycle);
                     }
                 } else if recursion_stack.contains(dep) {
                     // 发现循环
-                    let cycle_start = path.iter().position(|p| p == &dep.to_string())
-                        .unwrap_or(0);
+                    let cycle_start = path.iter().position(|p| p == &dep.to_string()).unwrap_or(0);
                     let mut cycle = path[cycle_start..].to_vec();
                     cycle.push(dep.to_string());
                     return Some(cycle);

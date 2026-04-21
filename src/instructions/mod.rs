@@ -131,7 +131,11 @@ pub fn compose_system_prompt(base_prompt: &str, working_dir: &Path) -> String {
 
     let mut used = 0usize;
     for layer in layers {
-        debug!("Applying AGENTS.md layer: [{}] {}", layer.source, layer.path.display());
+        debug!(
+            "Applying AGENTS.md layer: [{}] {}",
+            layer.source,
+            layer.path.display()
+        );
         if used >= TOTAL_CHAR_LIMIT {
             debug!(
                 "AGENTS.md total char limit reached ({}), truncating remaining layers",

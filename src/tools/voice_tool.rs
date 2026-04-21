@@ -92,9 +92,17 @@ Use this when the user wants hands-free interaction or audio output."
                     format!(
                         "Voice status: TTS ({}) = {}, STT ({}) = {}",
                         vm.tts_name(),
-                        if tts_available { "available" } else { "not available" },
+                        if tts_available {
+                            "available"
+                        } else {
+                            "not available"
+                        },
                         vm.stt_name(),
-                        if stt_available { "available" } else { "not available" },
+                        if stt_available {
+                            "available"
+                        } else {
+                            "not available"
+                        },
                     ),
                     data,
                 )
@@ -107,10 +115,7 @@ Use this when the user wants hands-free interaction or audio output."
 
                 let vm = crate::voice::VoiceManager::new();
                 match vm.transcribe_file(&audio_path).await {
-                    Ok(text) => ToolResult::success(format!(
-                        "Transcription result:\n{}",
-                        text
-                    )),
+                    Ok(text) => ToolResult::success(format!("Transcription result:\n{}", text)),
                     Err(e) => ToolResult::error(format!("Transcription failed: {}", e)),
                 }
             }

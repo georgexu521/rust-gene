@@ -274,7 +274,8 @@ impl CostTracker {
         if rounds == 0 {
             return "coding_quality: rounds=0".to_string();
         }
-        let first_pass_rate = (self.coding_quality.first_pass_successes as f64 / rounds as f64) * 100.0;
+        let first_pass_rate =
+            (self.coding_quality.first_pass_successes as f64 / rounds as f64) * 100.0;
         format!(
             "coding_quality: rounds={} first_pass={} ({:.1}%) verify_failures={} repairs={}",
             rounds,

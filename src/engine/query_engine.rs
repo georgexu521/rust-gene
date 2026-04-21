@@ -161,10 +161,7 @@ impl QueryEngine {
     pub async fn query_simple(&self, user_message: impl Into<String>) -> Result<String> {
         let user_message = user_message.into();
         let system_prompt = self.composed_system_prompt_for_user(None, &user_message, None);
-        let messages = vec![
-            Message::system(system_prompt),
-            Message::user(user_message),
-        ];
+        let messages = vec![Message::system(system_prompt), Message::user(user_message)];
 
         let request = ChatRequest::new(&self.model).with_messages(messages);
 

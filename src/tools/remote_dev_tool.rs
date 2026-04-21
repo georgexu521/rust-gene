@@ -2,7 +2,7 @@
 //!
 //! 检测远程环境、管理远程会话、执行远程命令。
 
-use crate::remote::{RemoteEnvDetector, RemoteSessionConfig, RemoteSessionManager, RemoteAuth};
+use crate::remote::{RemoteAuth, RemoteEnvDetector, RemoteSessionConfig, RemoteSessionManager};
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -94,14 +94,21 @@ Use this when working in containers, WSL, Codespaces, or over SSH."
                 let manager = RemoteSessionManager::new();
                 let sessions = manager.list_sessions();
                 if sessions.is_empty() {
-                    return ToolResult::success("No saved remote sessions. Use 'create' to add one.");
+                    return ToolResult::success(
+                        "No saved remote sessions. Use 'create' to add one.",
+                    );
                 }
                 let lines: Vec<String> = sessions
                     .iter()
                     .map(|s| {
                         format!(
                             "[{}] {} ({}@{}:{}) - {:?}",
-                            s.id, s.config.name, s.config.username, s.config.host, s.config.port, s.status
+                            s.id,
+                            s.config.name,
+                            s.config.username,
+                            s.config.host,
+                            s.config.port,
+                            s.status
                         )
                     })
                     .collect();
@@ -144,7 +151,11 @@ Use this when working in containers, WSL, Codespaces, or over SSH."
                 let session = manager.create_session(config);
                 ToolResult::success(format!(
                     "Created remote session [{}] {} ({}@{}:{})",
-                    session.id, session.config.name, session.config.username, session.config.host, session.config.port
+                    session.id,
+                    session.config.name,
+                    session.config.username,
+                    session.config.host,
+                    session.config.port
                 ))
             }
             "remove" => {

@@ -42,9 +42,7 @@ impl SystemTtsBackend {
     pub async fn is_available(&self) -> bool {
         match self.platform {
             Platform::MacOS => command_exists("say").await,
-            Platform::Linux => {
-                command_exists("espeak").await || command_exists("spd-say").await
-            }
+            Platform::Linux => command_exists("espeak").await || command_exists("spd-say").await,
             Platform::Windows => true, // PowerShell 内置于 Windows
             Platform::Unknown => false,
         }
@@ -143,16 +141,11 @@ impl SystemTtsBackend {
 
                     if !output.status.success() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        return Err(anyhow::anyhow!(
-                            "PowerShell TTS command failed: {}",
-                            stderr
-                        ));
+                        return Err(anyhow::anyhow!("PowerShell TTS command failed: {}", stderr));
                     }
                     Ok(())
                 }
-                Platform::Unknown => Err(anyhow::anyhow!(
-                    "TTS not supported on this platform"
-                )),
+                Platform::Unknown => Err(anyhow::anyhow!("TTS not supported on this platform")),
             }
         })
         .await

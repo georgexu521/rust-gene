@@ -8,4 +8,4 @@ pub mod interactive;
 
 pub use commands::{Cli, Commands};
 pub use display::{format_progress, format_task_tree, print_banner};
-pub use interactive::{prompt_task, prompt_project, select_task};
+pub use interactive::{prompt_project, prompt_task, select_task};

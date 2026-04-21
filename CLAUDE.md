@@ -1369,3 +1369,156 @@ priority-agent/ (workspace)
 1. 运行 `cargo test --workspace` 确保不破坏现有测试
 2. 手动测试对应功能
 3. 确认测试数量不减少
+
+---
+
+## 2026-04-21 对标 Claude Code 4 周冲刺清单（按收益排序）
+
+目标：优先补齐「用户体感最明显」和「团队落地最关键」的能力，不追求一次性全量对齐。
+
+### 里程碑指标（4 周结束）
+
+- 冷启动（无 API key 场景）<= 300ms（当前约 2.5s）
+- `cargo test` 全绿且新增回归测试 >= 30 条
+- 发布一个可复用的 GitHub Action 工作流（Issue/PR 自动触发）
+- MCP 可用性增强（至少 1 种非 stdio 连接 + OAuth 流程走通）
+- 形成一套可视化性能/稳定性报告（`/doctor` + benchmark 输出）
+
+### Week 1 任务拆分（Issue 粒度）
+
+#### W1-1 启动路径重排（P0）
+- [x] W1-1.1 提取启动模式识别函数（`detect_startup_mode`）
+- [x] W1-1.2 增加 Help 分支并提前返回（不触发 provider 初始化）
+- [x] W1-1.3 增加 `main.rs` 单元测试（help/api/cli/tui 路径）
+- [x] W1-1.4 验证 release 二进制 `--help` 行为
+
+#### W1-2 测试环境变量隔离（P0）
+- [x] W1-2.1 新增统一 `EnvVarGuard`（串行化 + 自动恢复）
+- [x] W1-2.2 迁移 `conversation_loop` 关键 env 测试
+- [x] W1-2.3 迁移 `hooks` 关键 env 测试
+- [x] W1-2.4 扫描并迁移剩余 env 改写测试（`bootstrap`/`kimi`/`batch_refactor`/`telemetry` 已迁移）
+
+#### W1-3 UTF-8/大输出回归（P0）
+- [x] W1-3.1 UTF-8 截断边界回归测试
+- [x] W1-3.2 小输出不截断回归测试
+- [x] W1-3.3 大输出截断标记完整性测试
+- [x] W1-3.4 上下文压缩链路 Unicode 压测
+
+### Week 1（P0）：启动体验与稳定性底座
+
+- [x] **W1-1 启动路径重排（最高优先级）**
+  - 问题：`--help`/无 key 场景仍走 provider 初始化，拖慢启动且报错噪音大
+  - 改动：`main.rs` 启动流程拆为「参数解析 -> 模式判定 -> 按需初始化 provider」
+  - 验收：
+    - `priority-agent --help` 不触发 provider 初始化
+    - 无 key 时仅在进入需要 LLM 的模式时报错
+    - 基准：3 次取均值，<= 300ms
+
+- [x] **W1-2 全局环境变量测试隔离**
+  - 问题：并行测试修改 env 导致 flaky
+  - 改动：统一 `test_env_guard` 工具（锁 + set/restore helper）
+  - 验收：
+    - 连续跑 5 次 `cargo test` 无随机失败
+    - 所有修改 env 的测试迁移到统一 helper
+
+- [x] **W1-3 UTF-8/大输出防御全面回归**
+  - 问题：工具输出截断、日志拼接边界风险
+  - 改动：为截断、压缩、snip 增加 Unicode/超大输出测试
+  - 验收：
+    - 新增相关测试 >= 10 条
+    - 无 panic
+
+### Week 2（P0）：CI 自动化闭环（对标 Claude Code GitHub Action）
+
+- [x] **W2-1 GitHub Action：Issue/PR 自动唤起 Agent**
+  - 改动：`.github/workflows/priority-agent.yml`（评论触发、标签触发、手动触发）
+  - 能力：拉取上下文 -> 执行任务 -> 评论回写结果
+  - 验收：
+    - 在测试仓库中可通过 `@priority-agent` 触发
+    - 产出包含变更摘要 + 测试结果 + 风险提示
+
+- [x] **W2-2 Action 运行预算与安全门**
+  - 改动：加入 max turns / timeout / 仅允许白名单工具
+  - 验收：
+    - 超预算自动停止并回写原因
+    - 敏感工具默认 deny（需显式开关）
+
+- [x] **W2-3 标准化输出模板**
+  - 改动：统一评论模板（结论、改动、验证、风险、下一步）
+  - 验收：
+    - 人工评审可在 1 分钟内读懂一次运行结果
+
+### Week 3（P1）：MCP 与权限产品化增强
+
+- [x] **W3-1 MCP 非 stdio 通道支持**
+  - 改动：在 `engine/mcp.rs` 增加至少一种远程传输（HTTP/SSE/WebSocket 任选一）
+  - 验收：
+    - 可连接 1 个远程 MCP 服务并成功调用工具
+    - 失败重试与超时可配置
+
+- [x] **W3-2 MCP OAuth 全链路打通**
+  - 改动：从配置到 token 持久化与刷新策略补齐
+  - 验收：
+    - 首次授权、过期刷新、撤销三条链路可演示
+    - 错误提示清晰（不是仅日志）
+
+- [ ] **W3-3 权限 UX 升级**
+  - 改动：`/permissions` 增加 rule explain / 导入导出 / dry-run
+  - 验收：
+    - 用户可解释「为什么 allow/deny」
+    - 项目级权限可一键导出与复用
+
+#### Week 3 实施记录（2026-04-21）
+
+- `McpTransport` 新增 `http`，支持 JSON-RPC over HTTP POST。
+- `McpServerConfig` 新增 `http_url` 字段，`server_summaries`/`endpoint_summary` 已覆盖 `http`。
+- OAuth：
+  - 新增 token 结构与解析逻辑（`access_token/refresh_token/expires_in`）。
+  - 新增 token 本地持久化（`data_local_dir()/priority-agent/mcp_oauth_tokens.json`）。
+  - 连接前自动校验 token，过期时自动 refresh，缺失时执行认证。
+- `mcp_auth` 工具已接通真实认证逻辑（不再是占位提示）。
+- `mcp` 管理工具新增 `auth_server` action。
+
+### Week 4（P1/P2）：性能观测与对比基准
+
+- [x] **W4-1 建立 benchmark 脚本**
+  - 改动：`scripts/benchmark.sh`（启动、首 token、工具调用、100 轮对话）
+  - 验收：
+    - 输出 markdown 报告，可提交到仓库
+    - 支持本机多次对比（before/after）
+
+- [ ] **W4-2 /doctor 增强为性能体检面板**
+  - 改动：接入缓存命中率、工具耗时 P95、失败原因 TopN、上下文压缩触发率
+  - 验收：
+    - 一条命令看到主要性能瓶颈
+    - JSON 输出可用于 CI 归档
+
+- [ ] **W4-3 与桌面 `claude` 项目的持续差距看板**
+  - 改动：新增 `docs/CLAUDE_GAP_SCORECARD.md`
+  - 维度：工具覆盖、命令覆盖、自动化能力、跨端能力、性能
+  - 验收：
+    - 每周更新一次，差距趋势可见（不是静态报告）
+
+#### Week 4 实施记录（2026-04-21）
+
+- W4-1 已完成：
+  - 新增 `scripts/benchmark.sh`，支持：
+    - 冷启动 `--help` 延迟测量
+    - `/api/chat` 首响应延迟测量（有 LLM key 时自动启用）
+    - `/api/tools/call` 工具调用延迟测量
+    - 可选 100 轮对话压测（`--enable-long-chat`）
+    - markdown 报告输出到 `docs/benchmarks/`
+    - 与历史报告对比（`--compare <old_report.md>`）
+  - 已生成示例报告：`docs/benchmarks/report-smoke-20260421-101454.md`
+- 额外修复（支撑 benchmark）：
+  - 修复 `experimental-api-server` 编译失败：`main.rs` 的 `--api` 分支已补齐 provider/tool registry/LSP/worktree 初始化，并正确调用 `api::start_server(...)`。
+
+### 执行规则（必须遵守）
+
+- 每周只追 1-2 个 P0 主目标，避免并行过多导致延期
+- 每个任务必须带「可量化验收」和「最小回归测试」
+- 对外能力优先于内部重构；除非重构能在两周内转化为用户可感知收益
+- 每周末固定输出：
+  - 已完成 / 未完成 / 阻塞项
+  - 指标变化（启动、测试时长、失败率）
+  - 下周范围收敛（删减低收益任务）

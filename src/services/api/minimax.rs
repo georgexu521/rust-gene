@@ -100,4 +100,3 @@ mod tests {
         assert_eq!(client.base_url(), "https://api.minimaxi.com/v1");
     }
 }
-

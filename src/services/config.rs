@@ -35,7 +35,10 @@ impl Clone for ConfigHook {
 
 impl ConfigHook {
     /// 创建 ConfigHook
-    pub fn new(name: impl Into<String>, callback: impl Fn(&AppConfig) + Send + Sync + 'static) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        callback: impl Fn(&AppConfig) + Send + Sync + 'static,
+    ) -> Self {
         Self {
             name: name.into(),
             callback: Some(Box::new(callback)),

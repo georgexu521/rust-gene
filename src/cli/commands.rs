@@ -15,11 +15,11 @@ impl Cli {
     pub fn parse() -> Self {
         // 简化的命令解析
         let args: Vec<String> = std::env::args().collect();
-        
+
         let mut verbose = false;
         let mut config = None;
         let mut command = Commands::Help;
-        
+
         let mut i = 1;
         while i < args.len() {
             match args[i].as_str() {
@@ -35,7 +35,9 @@ impl Cli {
                 "add" => {
                     i += 1;
                     if i < args.len() {
-                        command = Commands::AddTask { name: args[i].clone() };
+                        command = Commands::AddTask {
+                            name: args[i].clone(),
+                        };
                     }
                 }
                 "list" => command = Commands::List,
@@ -43,7 +45,9 @@ impl Cli {
                 "done" => {
                     i += 1;
                     if i < args.len() {
-                        command = Commands::CompleteTask { id: args[i].clone() };
+                        command = Commands::CompleteTask {
+                            id: args[i].clone(),
+                        };
                     }
                 }
                 "progress" => command = Commands::Progress,
@@ -52,7 +56,9 @@ impl Cli {
                 "restore" => {
                     i += 1;
                     if i < args.len() {
-                        command = Commands::Restore { id: args[i].clone() };
+                        command = Commands::Restore {
+                            id: args[i].clone(),
+                        };
                     }
                 }
                 "interactive" | "i" => command = Commands::Interactive,
@@ -60,7 +66,7 @@ impl Cli {
             }
             i += 1;
         }
-        
+
         Self {
             command,
             config,

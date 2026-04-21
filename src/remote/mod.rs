@@ -216,7 +216,11 @@ impl RemoteEnvDetector {
     }
 
     fn detect_docker_env(env_vars: &HashMap<String, String>) -> Option<RemoteEnvType> {
-        if env_vars.get("container").map(|s| s.contains("docker")).unwrap_or(false) {
+        if env_vars
+            .get("container")
+            .map(|s| s.contains("docker"))
+            .unwrap_or(false)
+        {
             return Some(RemoteEnvType::Docker);
         }
         if let Ok(content) = std::fs::read_to_string("/proc/1/cgroup") {
@@ -305,7 +309,9 @@ impl Default for RemoteSessionConfig {
             name: "default".to_string(),
             host: "localhost".to_string(),
             port: 22,
-            username: std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "user".to_string()),
+            username: std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "user".to_string()),
             auth: RemoteAuth::Agent,
             remote_working_dir: None,
             ssh_options: Vec::new(),
@@ -487,7 +493,8 @@ impl RemoteSessionManager {
         cmd.arg(target);
 
         if let Some(dir) = &session.config.remote_working_dir {
-            cmd.arg("-t").arg(format!("cd {} && exec $SHELL -l", dir.display()));
+            cmd.arg("-t")
+                .arg(format!("cd {} && exec $SHELL -l", dir.display()));
         }
 
         Some(cmd)
@@ -539,10 +546,7 @@ impl RemoteSessionManager {
         if output.status.success() {
             self.update_session_status(id, RemoteSessionStatus::Connected);
         } else {
-            self.set_session_error(
-                id,
-                format!("Exit code {}: {}", code, stderr.trim()),
-            );
+            self.set_session_error(id, format!("Exit code {}: {}", code, stderr.trim()));
         }
 
         Ok((stdout, stderr, code))
@@ -591,7 +595,10 @@ mod tests {
         let info = RemoteEnvDetector::detect_with_env(&env);
         assert_eq!(info.env_type, RemoteEnvType::Codespaces);
         assert!(info.is_remote);
-        assert_eq!(info.metadata.get("codespace_name"), Some(&"my-codespace".to_string()));
+        assert_eq!(
+            info.metadata.get("codespace_name"),
+            Some(&"my-codespace".to_string())
+        );
     }
 
     #[test]

@@ -95,7 +95,9 @@ Useful for saving important conversations or sharing them with teammates."
                 });
                 match serde_json::to_string_pretty(&data) {
                     Ok(s) => s,
-                    Err(e) => return ToolResult::error(format!("JSON serialization failed: {}", e)),
+                    Err(e) => {
+                        return ToolResult::error(format!("JSON serialization failed: {}", e))
+                    }
                 }
             }
             _ => return ToolResult::error(format!("Unknown share action: {}", action)),

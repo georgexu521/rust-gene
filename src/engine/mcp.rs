@@ -7,9 +7,11 @@
 //!
 //! 当前支持：
 //! - stdio transport（通过子进程通信）
-//! - websocket transport（配置入口与连接骨架，待完善完整协议实现）
+//! - websocket transport（长连接）
+//! - http transport（JSON-RPC over HTTP POST）
 //! - 工具发现 (tools/list)
 //! - 工具调用 (tools/call)
+//! - OAuth token 获取/刷新/本地持久化
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -26,6 +28,7 @@ pub enum McpTransport {
     #[default]
     Stdio,
     WebSocket,
+    Http,
 }
 
 /// MCP 服务器配置
@@ -48,6 +51,9 @@ pub struct McpServerConfig {
     /// WebSocket URL（用于 websocket transport）
     #[serde(default)]
     pub websocket_url: Option<String>,
+    /// HTTP URL（用于 HTTP transport）
+    #[serde(default)]
+    pub http_url: Option<String>,
     /// WebSocket 请求头（用于 websocket transport）
     #[serde(default)]
     pub headers: HashMap<String, String>,
@@ -74,6 +80,21 @@ pub struct McpOAuthConfig {
     /// OAuth scopes
     #[serde(default)]
     pub scopes: Vec<String>,
+}
+
+/// MCP OAuth token
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpOAuthToken {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub token_type: String,
+    /// Unix timestamp seconds
+    #[serde(default)]
+    pub expires_at: Option<u64>,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 /// MCP 工具定义
@@ -133,6 +154,63 @@ struct McpError {
     message: String,
 }
 
+fn oauth_store_path() -> std::path::PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("priority-agent")
+        .join("mcp_oauth_tokens.json")
+}
+
+fn load_persisted_oauth_token(server_name: &str) -> Option<McpOAuthToken> {
+    let path = oauth_store_path();
+    let text = std::fs::read_to_string(path).ok()?;
+    let map: HashMap<String, McpOAuthToken> = serde_json::from_str(&text).ok()?;
+    map.get(server_name).cloned()
+}
+
+fn save_persisted_oauth_token(server_name: &str, token: &McpOAuthToken) -> anyhow::Result<()> {
+    let path = oauth_store_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut map: HashMap<String, McpOAuthToken> = if path.exists() {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        serde_json::from_str(&text).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+    map.insert(server_name.to_string(), token.clone());
+    std::fs::write(path, serde_json::to_string_pretty(&map)?)?;
+    Ok(())
+}
+
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn parse_oauth_token_response(v: &Value) -> anyhow::Result<McpOAuthToken> {
+    let access_token = v["access_token"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("OAuth response missing access_token"))?
+        .to_string();
+    let refresh_token = v["refresh_token"].as_str().map(str::to_string);
+    let token_type = v["token_type"].as_str().unwrap_or("Bearer").to_string();
+    let expires_at = v["expires_in"]
+        .as_u64()
+        .map(|sec| now_unix_secs().saturating_add(sec));
+    let scope = v["scope"].as_str().map(str::to_string);
+    Ok(McpOAuthToken {
+        access_token,
+        refresh_token,
+        token_type,
+        expires_at,
+        scope,
+    })
+}
+
 /// MCP 传输连接内部实现
 enum McpTransportConnection {
     /// stdio 长连接
@@ -148,6 +226,8 @@ enum McpTransportConnection {
         read_handle: tokio::task::JoinHandle<()>,
         disconnected: Arc<std::sync::atomic::AtomicBool>,
     },
+    /// HTTP 连接（无状态）
+    Http { client: reqwest::Client },
 }
 
 /// MCP 客户端连接状态
@@ -168,16 +248,20 @@ pub struct McpClient {
     request_id: Arc<std::sync::atomic::AtomicU64>,
     /// 已建立的连接（长连接）
     connection: Arc<Mutex<Option<McpConnection>>>,
+    /// OAuth token（可持久化）
+    oauth_token: Arc<Mutex<Option<McpOAuthToken>>>,
 }
 
 impl McpClient {
     /// 创建新的 MCP 客户端
     pub fn new(config: McpServerConfig) -> Self {
+        let server_name = config.name.clone();
         Self {
             config,
             tools: Arc::new(RwLock::new(Vec::new())),
             request_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             connection: Arc::new(Mutex::new(None)),
+            oauth_token: Arc::new(Mutex::new(load_persisted_oauth_token(&server_name))),
         }
     }
 
@@ -189,9 +273,13 @@ impl McpClient {
 
     /// 确保已连接到 MCP 服务器
     async fn ensure_connected(&self) -> anyhow::Result<()> {
+        if self.config.oauth.is_some() {
+            self.ensure_oauth_token_valid().await?;
+        }
         match self.config.transport {
             McpTransport::Stdio => self.ensure_connected_stdio().await,
             McpTransport::WebSocket => self.ensure_connected_websocket().await,
+            McpTransport::Http => self.ensure_connected_http().await,
         }
     }
 
@@ -376,10 +464,24 @@ impl McpClient {
         use tokio_tungstenite::tungstenite::http::HeaderValue;
 
         let mut request = url.into_client_request()?;
-        for (k, v) in &self.config.headers {
+        let mut headers = self.config.headers.clone();
+        if let Some(token) = self.oauth_token.lock().await.as_ref().cloned() {
+            if !token.access_token.is_empty() {
+                headers.insert(
+                    "Authorization".to_string(),
+                    format!("Bearer {}", token.access_token),
+                );
+            }
+        }
+
+        for (k, v) in &headers {
             // 阻止 HTTP header injection：拒绝包含换行或空字符的 header
-            if k.contains('\r') || k.contains('\n') || k.contains('\0')
-                || v.contains('\r') || v.contains('\n') || v.contains('\0')
+            if k.contains('\r')
+                || k.contains('\n')
+                || k.contains('\0')
+                || v.contains('\r')
+                || v.contains('\n')
+                || v.contains('\0')
             {
                 warn!("Skipping MCP server '{}' header '{}' due to forbidden characters (\r / \n / \0)", self.config.name, k);
                 continue;
@@ -475,6 +577,151 @@ impl McpClient {
         Ok(())
     }
 
+    /// 确保已连接到 MCP 服务器（HTTP 无状态）
+    async fn ensure_connected_http(&self) -> anyhow::Result<()> {
+        let mut conn_guard = self.connection.lock().await;
+        if conn_guard.is_some() {
+            return Ok(());
+        }
+
+        let url = self.config.http_url.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "MCP server '{}' uses http transport but http_url is missing",
+                self.config.name
+            )
+        })?;
+
+        info!(
+            "Connecting to MCP server {} via http: {}",
+            self.config.name, url
+        );
+
+        *conn_guard = Some(McpConnection {
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            transport: McpTransportConnection::Http {
+                client: reqwest::Client::builder().no_proxy().build()?,
+            },
+        });
+        Ok(())
+    }
+
+    fn token_expired(token: &McpOAuthToken) -> bool {
+        if let Some(exp) = token.expires_at {
+            let now = now_unix_secs();
+            // 刷新提前量：60s
+            now + 60 >= exp
+        } else {
+            false
+        }
+    }
+
+    async fn ensure_oauth_token_valid(&self) -> anyhow::Result<()> {
+        let has_token = self.oauth_token.lock().await.as_ref().cloned();
+        if let Some(token) = has_token {
+            if !Self::token_expired(&token) {
+                return Ok(());
+            }
+            if token.refresh_token.is_some() {
+                self.refresh_oauth_token().await?;
+                return Ok(());
+            }
+        }
+        self.authenticate_oauth().await?;
+        Ok(())
+    }
+
+    async fn refresh_oauth_token(&self) -> anyhow::Result<()> {
+        let oauth = self
+            .config
+            .oauth
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("OAuth config missing"))?;
+        let refresh_token = self
+            .oauth_token
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|t| t.refresh_token.clone())
+            .ok_or_else(|| anyhow::anyhow!("No refresh token available"))?;
+
+        let token_url = oauth
+            .token_url
+            .clone()
+            .or(self.config.oauth_token_url.clone())
+            .ok_or_else(|| anyhow::anyhow!("OAuth token URL missing"))?;
+
+        let mut form: Vec<(&str, String)> = vec![
+            ("grant_type", "refresh_token".to_string()),
+            ("refresh_token", refresh_token),
+            ("client_id", oauth.client_id.clone()),
+        ];
+        if let Some(secret) = oauth.client_secret.clone() {
+            form.push(("client_secret", secret));
+        }
+
+        let resp = reqwest::Client::new()
+            .post(token_url)
+            .form(&form)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("OAuth refresh failed with status {}", resp.status());
+        }
+        let v: Value = resp.json().await?;
+        let token = parse_oauth_token_response(&v)?;
+        self.set_oauth_token(token).await?;
+        Ok(())
+    }
+
+    pub async fn authenticate_oauth(&self) -> anyhow::Result<()> {
+        let oauth =
+            self.config.oauth.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("OAuth is not configured for '{}'", self.config.name)
+            })?;
+
+        let token_url = oauth
+            .token_url
+            .clone()
+            .or(self.config.oauth_token_url.clone())
+            .ok_or_else(|| anyhow::anyhow!("OAuth token URL missing"))?;
+
+        let mut form: Vec<(&str, String)> = vec![
+            ("grant_type", "client_credentials".to_string()),
+            ("client_id", oauth.client_id.clone()),
+        ];
+        if let Some(secret) = oauth.client_secret.clone() {
+            form.push(("client_secret", secret));
+        }
+        if !oauth.scopes.is_empty() {
+            form.push(("scope", oauth.scopes.join(" ")));
+        }
+
+        let resp = reqwest::Client::new()
+            .post(token_url)
+            .form(&form)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("OAuth authentication failed with status {}", resp.status());
+        }
+
+        let v: Value = resp.json().await?;
+        let token = parse_oauth_token_response(&v)?;
+        self.set_oauth_token(token).await?;
+        Ok(())
+    }
+
+    async fn set_oauth_token(&self, token: McpOAuthToken) -> anyhow::Result<()> {
+        {
+            let mut guard = self.oauth_token.lock().await;
+            *guard = Some(token.clone());
+        }
+        save_persisted_oauth_token(&self.config.name, &token)?;
+        Ok(())
+    }
+
     /// 关闭 MCP 连接并清理资源
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         let mut conn_guard = self.connection.lock().await;
@@ -494,6 +741,7 @@ impl McpClient {
                 McpTransportConnection::WebSocket { read_handle, .. } => {
                     read_handle.abort();
                 }
+                McpTransportConnection::Http { .. } => {}
             }
         }
         Ok(())
@@ -531,6 +779,48 @@ impl McpClient {
             &request_json[..request_json.len().min(200)]
         );
 
+        // HTTP transport: direct JSON-RPC over HTTP POST
+        let http_client = {
+            let conn_guard = self.connection.lock().await;
+            if let Some(McpConnection {
+                transport: McpTransportConnection::Http { client },
+                ..
+            }) = conn_guard.as_ref()
+            {
+                Some(client.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(client) = http_client {
+            let url = self.config.http_url.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "MCP server '{}' uses http transport but http_url is missing",
+                    self.config.name
+                )
+            })?;
+            let mut req = client.post(url).json(&request);
+            for (k, v) in &self.config.headers {
+                req = req.header(k, v);
+            }
+            if let Some(token) = self.oauth_token.lock().await.as_ref().cloned() {
+                if !token.access_token.is_empty() {
+                    req = req.bearer_auth(token.access_token);
+                }
+            }
+            let resp = req.send().await?;
+            if !resp.status().is_success() {
+                anyhow::bail!("MCP HTTP request failed with status {}", resp.status());
+            }
+            let response: McpResponse = resp.json().await?;
+            if let Some(err) = response.error {
+                anyhow::bail!("MCP error ({}): {}", err.code, err.message);
+            }
+            return response
+                .result
+                .ok_or_else(|| anyhow::anyhow!("MCP response has no result"));
+        }
+
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let mut conn_guard = self.connection.lock().await;
@@ -541,20 +831,21 @@ impl McpClient {
             // WebSocket 断线检测：若已断开，清理旧连接并重试一次
             if let McpTransportConnection::WebSocket { disconnected, .. } = &conn.transport {
                 if disconnected.load(std::sync::atomic::Ordering::SeqCst)
-                    && retry_count < MAX_RETRIES {
-                        warn!(
-                            "MCP websocket {} disconnected, reconnecting...",
-                            self.config.name
-                        );
-                        *conn_guard = None;
-                        drop(conn_guard);
-                        return Box::pin(self.send_request_with_retry(
-                            method,
-                            params.clone(),
-                            retry_count + 1,
-                        ))
-                        .await;
-                    }
+                    && retry_count < MAX_RETRIES
+                {
+                    warn!(
+                        "MCP websocket {} disconnected, reconnecting...",
+                        self.config.name
+                    );
+                    *conn_guard = None;
+                    drop(conn_guard);
+                    return Box::pin(self.send_request_with_retry(
+                        method,
+                        params.clone(),
+                        retry_count + 1,
+                    ))
+                    .await;
+                }
             }
 
             conn.pending.lock().await.insert(id, tx);
@@ -587,6 +878,10 @@ impl McpClient {
                         ))
                         .await;
                     }
+                }
+                McpTransportConnection::Http { .. } => {
+                    // handled by HTTP fast-path above
+                    unreachable!("HTTP transport should return before pending channel flow");
                 }
             }
         }
@@ -760,12 +1055,10 @@ impl McpClient {
                     if disconnected.load(std::sync::atomic::Ordering::SeqCst) {
                         // 清理旧连接，下次调用 ensure_connected 会自动重连
                         *conn_guard = None;
-                        anyhow::bail!(
-                            "MCP server '{}' websocket disconnected",
-                            self.config.name
-                        );
+                        anyhow::bail!("MCP server '{}' websocket disconnected", self.config.name);
                     }
                 }
+                McpTransportConnection::Http { .. } => {}
             }
         }
 
@@ -799,6 +1092,13 @@ impl McpClient {
                 "websocket:{}",
                 self.config
                     .websocket_url
+                    .clone()
+                    .unwrap_or_else(|| "<missing_url>".to_string())
+            ),
+            McpTransport::Http => format!(
+                "http:{}",
+                self.config
+                    .http_url
                     .clone()
                     .unwrap_or_else(|| "<missing_url>".to_string())
             ),
@@ -863,7 +1163,9 @@ impl McpManager {
 
     /// 检查服务器是否已批准
     pub fn is_server_approved(&self, name: &str) -> bool {
-        !self.require_server_approval.load(std::sync::atomic::Ordering::SeqCst)
+        !self
+            .require_server_approval
+            .load(std::sync::atomic::Ordering::SeqCst)
             || self
                 .approved_servers
                 .lock()
@@ -1012,13 +1314,20 @@ impl McpManager {
                 let transport = match client.transport() {
                     McpTransport::Stdio => "stdio",
                     McpTransport::WebSocket => "websocket",
+                    McpTransport::Http => "http",
                 };
                 let approved = if self.is_server_approved(name) {
                     "approved"
                 } else {
                     "pending"
                 };
-                format!("- {} [{}] {} ({})", name, transport, client.endpoint_summary(), approved)
+                format!(
+                    "- {} [{}] {} ({})",
+                    name,
+                    transport,
+                    client.endpoint_summary(),
+                    approved
+                )
             })
             .collect();
         rows.sort();
@@ -1028,6 +1337,15 @@ impl McpManager {
     /// 获取指定客户端
     pub fn get_client(&self, name: &str) -> Option<Arc<McpClient>> {
         self.clients.get(name).cloned()
+    }
+
+    /// 对指定服务器执行 OAuth 认证
+    pub async fn authenticate_server(&self, server_name: &str) -> anyhow::Result<()> {
+        if let Some(client) = self.clients.get(server_name) {
+            client.authenticate_oauth().await
+        } else {
+            anyhow::bail!("MCP server '{}' not found", server_name)
+        }
     }
 
     /// 关闭所有 MCP 客户端并清理子进程
@@ -1109,10 +1427,15 @@ impl crate::tools::Tool for McpManageTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list_servers", "list_tools", "call_tool"],
+                    "enum": ["list_servers", "list_tools", "call_tool", "auth_server"],
                     "description": "list_servers: show connected servers. \
                                    list_tools: show all available MCP tools. \
-                                   call_tool: invoke an MCP tool."
+                                   call_tool: invoke an MCP tool. \
+                                   auth_server: authenticate a server with OAuth."
+                },
+                "server_name": {
+                    "type": "string",
+                    "description": "MCP server name (for 'auth_server')"
                 },
                 "tool_name": {
                     "type": "string",
@@ -1192,6 +1515,24 @@ impl crate::tools::Tool for McpManageTool {
                     )),
                 }
             }
+            "auth_server" => {
+                let server_name = params["server_name"].as_str().unwrap_or("");
+                if server_name.is_empty() {
+                    return crate::tools::ToolResult::error(
+                        "server_name is required for 'auth_server'".to_string(),
+                    );
+                }
+                match mcp_manager.authenticate_server(server_name).await {
+                    Ok(_) => crate::tools::ToolResult::success(format!(
+                        "MCP OAuth authentication succeeded for '{}'",
+                        server_name
+                    )),
+                    Err(e) => crate::tools::ToolResult::error(format!(
+                        "MCP OAuth authentication failed for '{}': {}",
+                        server_name, e
+                    )),
+                }
+            }
             _ => crate::tools::ToolResult::error(format!("Unknown action: {}", action)),
         }
     }
@@ -1210,6 +1551,7 @@ mod tests {
             args: vec!["-y".to_string(), "test-mcp".to_string()],
             env: HashMap::new(),
             websocket_url: None,
+            http_url: None,
             headers: HashMap::new(),
             oauth: None,
             oauth_token_url: None,
@@ -1284,6 +1626,42 @@ mod tests {
         assert!(names.contains(&"server-b".to_string()));
     }
 
+    #[test]
+    fn test_parse_oauth_token_response() {
+        let v = json!({
+            "access_token": "acc-1",
+            "refresh_token": "ref-1",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "read write"
+        });
+        let token = parse_oauth_token_response(&v).expect("parse token");
+        assert_eq!(token.access_token, "acc-1");
+        assert_eq!(token.refresh_token.as_deref(), Some("ref-1"));
+        assert_eq!(token.token_type, "Bearer");
+        assert!(token.expires_at.is_some());
+    }
+
+    #[test]
+    fn test_http_endpoint_summary() {
+        let config = McpServerConfig {
+            name: "http-test".to_string(),
+            transport: McpTransport::Http,
+            command: String::new(),
+            args: vec![],
+            env: HashMap::new(),
+            websocket_url: None,
+            http_url: Some("https://mcp.example.com/rpc".to_string()),
+            headers: HashMap::new(),
+            oauth: None,
+            oauth_token_url: None,
+        };
+        let client = McpClient::new(config);
+        assert!(client
+            .endpoint_summary()
+            .contains("http:https://mcp.example.com/rpc"));
+    }
+
     #[tokio::test]
     async fn test_mcp_websocket_disconnect_detected() {
         let config = McpServerConfig {
@@ -1293,6 +1671,7 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             websocket_url: Some("ws://localhost:9999".to_string()),
+            http_url: None,
             headers: HashMap::new(),
             oauth: None,
             oauth_token_url: None,
@@ -1327,5 +1706,61 @@ mod tests {
         // 连接应被清空
         let conn = client.connection.lock().await;
         assert!(conn.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_http_transport_list_tools() {
+        use axum::{extract::Json, routing::post, Router};
+        use std::net::SocketAddr;
+
+        async fn rpc_handler(Json(req): Json<Value>) -> Json<Value> {
+            let id = req["id"].as_u64().unwrap_or(0);
+            let method = req["method"].as_str().unwrap_or("");
+            if method == "tools/list" {
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "tools": [{
+                            "name": "echo_http",
+                            "description": "Echo tool",
+                            "inputSchema": {"type":"object","properties":{"x":{"type":"string"}}}
+                        }]
+                    }
+                }))
+            } else {
+                Json(json!({
+                    "jsonrpc":"2.0",
+                    "id": id,
+                    "error": {"code": -32601, "message": "method not found"}
+                }))
+            }
+        }
+
+        let app = Router::new().route("/rpc", post(rpc_handler));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr: SocketAddr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let config = McpServerConfig {
+            name: "http-local".to_string(),
+            transport: McpTransport::Http,
+            command: String::new(),
+            args: vec![],
+            env: HashMap::new(),
+            websocket_url: None,
+            http_url: Some(format!("http://{}/rpc", addr)),
+            headers: HashMap::new(),
+            oauth: None,
+            oauth_token_url: None,
+        };
+        let client = McpClient::new(config);
+        let tools = client.discover_tools().await.expect("discover tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "echo_http");
     }
 }

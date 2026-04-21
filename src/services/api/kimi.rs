@@ -138,11 +138,8 @@ pub struct KimiClient {
 impl KimiClient {
     /// 创建新的 Kimi 客户端
     pub fn new(config: KimiConfig) -> Self {
-        let thinking_config = ThinkingConfig::new(
-            &config.api_key,
-            &config.base_url,
-            config.thinking_enabled,
-        );
+        let thinking_config =
+            ThinkingConfig::new(&config.api_key, &config.base_url, config.thinking_enabled);
 
         let client = Client::with_config(thinking_config);
 
@@ -184,7 +181,10 @@ impl KimiClient {
 #[async_trait]
 impl LlmProvider for KimiClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        debug!("Sending chat request to Kimi API (thinking: {})", self.config.thinking_enabled);
+        debug!(
+            "Sending chat request to Kimi API (thinking: {})",
+            self.config.thinking_enabled
+        );
 
         let messages: Vec<ChatCompletionRequestMessage> =
             request.messages.into_iter().map(convert_message).collect();
@@ -262,7 +262,10 @@ impl LlmProvider for KimiClient {
             prompt_tokens: u.prompt_tokens,
             completion_tokens: u.completion_tokens,
             total_tokens: u.total_tokens,
-            reasoning_tokens: u.completion_tokens_details.as_ref().and_then(|d| d.reasoning_tokens),
+            reasoning_tokens: u
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens),
         });
 
         Ok(ChatResponse {
@@ -276,7 +279,10 @@ impl LlmProvider for KimiClient {
         &self,
         request: ChatRequest,
     ) -> Result<async_openai::types::ChatCompletionResponseStream> {
-        debug!("Sending streaming chat request to Kimi API (thinking: {})", self.config.thinking_enabled);
+        debug!(
+            "Sending streaming chat request to Kimi API (thinking: {})",
+            self.config.thinking_enabled
+        );
 
         let messages: Vec<ChatCompletionRequestMessage> =
             request.messages.into_iter().map(convert_message).collect();
@@ -380,13 +386,14 @@ fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     #[test]
     fn test_kimi_config_from_env() {
-        // 设置测试环境变量
-        std::env::set_var("MOONSHOT_API_KEY", "test-key");
-        std::env::set_var("MOONSHOT_BASE_URL", "https://test.api/v1");
-        std::env::set_var("MOONSHOT_MODEL", "kimi-k2.5");
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("MOONSHOT_API_KEY", "test-key");
+        env.set("MOONSHOT_BASE_URL", "https://test.api/v1");
+        env.set("MOONSHOT_MODEL", "kimi-k2.5");
 
         let config = KimiConfig::from_env().unwrap();
         assert_eq!(config.api_key, "test-key");

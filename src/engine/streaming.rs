@@ -8,8 +8,8 @@ use anyhow::Result;
 use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
-use tracing::warn;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 /// 流式查询事件
 #[derive(Debug, Clone)]
@@ -408,9 +408,7 @@ impl StreamingQueryEngine {
                     crate::instructions::compose_system_prompt(&engine.system_prompt, &cwd);
                 let composed =
                     crate::engine::prompt_builder::compose_task_aware_system_prompt_with_history(
-                        &layered,
-                        &user_msg,
-                        &hist,
+                        &layered, &user_msg, &hist,
                     );
                 let mut msgs = vec![Message::system(composed)];
                 msgs.extend(hist.clone());
@@ -435,7 +433,10 @@ impl StreamingQueryEngine {
                     let error_type = ErrorType::from_error_str(&err_str);
 
                     // 初始化 fallback_state（如果是第一次错误）
-                    let fb_state = engine.fallback_state.take().unwrap_or_else(FallbackState::new);
+                    let fb_state = engine
+                        .fallback_state
+                        .take()
+                        .unwrap_or_else(FallbackState::new);
                     let mut fb_state = fb_state;
 
                     // 记录错误
@@ -605,8 +606,8 @@ enum ErrorType {
     ModelOverloaded, // 529
     ContextTooLong,  // 413
     Timeout,
-    AuthError,       // 401/403
-    ServerError,     // 500
+    AuthError,   // 401/403
+    ServerError, // 500
     Unknown,
 }
 
@@ -614,13 +615,23 @@ impl ErrorType {
     fn from_error_str(err_str: &str) -> Self {
         if err_str.contains("rate limit") || err_str.contains("429") {
             ErrorType::RateLimit
-        } else if err_str.contains("overloaded") || err_str.contains("529") || err_str.contains("model overloaded") {
+        } else if err_str.contains("overloaded")
+            || err_str.contains("529")
+            || err_str.contains("model overloaded")
+        {
             ErrorType::ModelOverloaded
-        } else if err_str.contains("context") || err_str.contains("413") || err_str.contains("too long") {
+        } else if err_str.contains("context")
+            || err_str.contains("413")
+            || err_str.contains("too long")
+        {
             ErrorType::ContextTooLong
         } else if err_str.contains("timeout") || err_str.contains("timed out") {
             ErrorType::Timeout
-        } else if err_str.contains("401") || err_str.contains("403") || err_str.contains("unauthorized") || err_str.contains("forbidden") {
+        } else if err_str.contains("401")
+            || err_str.contains("403")
+            || err_str.contains("unauthorized")
+            || err_str.contains("forbidden")
+        {
             ErrorType::AuthError
         } else if err_str.contains("500") || err_str.contains("internal server error") {
             ErrorType::ServerError

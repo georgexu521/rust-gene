@@ -398,7 +398,10 @@ impl PermissionContext {
             }
             PermissionMode::Default => {
                 // 根据规则决定
-                matches!(self.rules.check(&effective_tool_name), PermissionDecision::Ask)
+                matches!(
+                    self.rules.check(&effective_tool_name),
+                    PermissionDecision::Ask
+                )
             }
         }
     }
@@ -416,10 +419,8 @@ impl PermissionContext {
 
     /// 授予一次性授权（用于 Once 模式）
     pub fn grant_once(&mut self, tool_name: &str) {
-        self.once_authorizations.insert(
-            tool_name.to_string(),
-            std::time::Instant::now(),
-        );
+        self.once_authorizations
+            .insert(tool_name.to_string(), std::time::Instant::now());
     }
 
     /// 撤销一次性授权
@@ -437,7 +438,8 @@ impl PermissionContext {
 
     /// 清理过期的一次性授权
     pub fn cleanup_expired_once(&mut self) {
-        self.once_authorizations.retain(|_, exp| exp.elapsed().as_secs() < 300);
+        self.once_authorizations
+            .retain(|_, exp| exp.elapsed().as_secs() < 300);
     }
 
     fn risk_level(tool_name: &str, params: &serde_json::Value) -> RiskLevel {

@@ -80,13 +80,25 @@ impl SymbolIndex {
     }
 
     fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 // 跳过常见非源码目录
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if !["target", "node_modules", ".git", "dist", "build", "__pycache__", ".venv"].contains(&name) {
+                if ![
+                    "target",
+                    "node_modules",
+                    ".git",
+                    "dist",
+                    "build",
+                    "__pycache__",
+                    ".venv",
+                ]
+                .contains(&name)
+                {
                     Self::collect_source_files(&path, out);
                 }
             } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -132,15 +144,21 @@ impl SymbolIndex {
         Ok(())
     }
 
-    fn walk_rust_node(&mut self, path: &Path, content: &str, node: &tree_sitter::Node, depth: usize) {
+    fn walk_rust_node(
+        &mut self,
+        path: &Path,
+        content: &str,
+        node: &tree_sitter::Node,
+        depth: usize,
+    ) {
         if depth > 100 {
             return; // 防止无限递归
         }
 
         let kind = node.kind();
         match kind {
-            "function_item" | "struct_item" | "enum_item" | "trait_item"
-            | "impl_item" | "type_item" | "mod_item" | "macro_definition" => {
+            "function_item" | "struct_item" | "enum_item" | "trait_item" | "impl_item"
+            | "type_item" | "mod_item" | "macro_definition" => {
                 if let Some(symbol) = self.extract_rust_symbol(path, content, node, kind) {
                     let idx = self.symbols.len();
                     self.by_name
@@ -177,9 +195,7 @@ impl SymbolIndex {
             return None;
         }
 
-        let line = content[..node.start_byte()]
-            .matches('\n')
-            .count();
+        let line = content[..node.start_byte()].matches('\n').count();
         let column = node.start_position().column;
 
         // 提取签名（整个声明行）
@@ -240,8 +256,12 @@ impl SymbolIndex {
 
         let kind = node.kind();
         match kind {
-            "function_declaration" | "class_declaration" | "interface_declaration"
-            | "type_alias_declaration" | "enum_declaration" | "method_definition" => {
+            "function_declaration"
+            | "class_declaration"
+            | "interface_declaration"
+            | "type_alias_declaration"
+            | "enum_declaration"
+            | "method_definition" => {
                 if let Some(symbol) = self.extract_typescript_symbol(path, content, node, kind) {
                     let idx = self.symbols.len();
                     self.by_name
@@ -441,10 +461,7 @@ impl SymbolIndex {
 
     /// 列出某个文件中的所有符号
     pub fn symbols_in_file(&self, path: &Path) -> Vec<&Symbol> {
-        self.symbols
-            .iter()
-            .filter(|s| s.file == path)
-            .collect()
+        self.symbols.iter().filter(|s| s.file == path).collect()
     }
 
     pub fn len(&self) -> usize {

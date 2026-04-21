@@ -6,8 +6,8 @@
 use crate::agent::agent::AgentConfig;
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
-use crate::tui::app::{AppMode, TuiApp};
 use crate::tools::Tool;
+use crate::tui::app::{AppMode, TuiApp};
 
 // ─── Session Management ───────────────────────────────────────────────
 
@@ -25,10 +25,7 @@ pub async fn handle_resume(app: &mut TuiApp, args: &str) -> String {
                         } else {
                             &session.title
                         };
-                        let msg_count = app
-                            .session_manager
-                            .message_count(&session.id)
-                            .unwrap_or(0);
+                        let msg_count = app.session_manager.message_count(&session.id).unwrap_or(0);
                         lines.push(format!(
                             "{}. [{}] {} ({} msgs) - {}",
                             i + 1,
@@ -38,9 +35,7 @@ pub async fn handle_resume(app: &mut TuiApp, args: &str) -> String {
                             session.updated_at
                         ));
                     }
-                    lines.push(
-                        "\nUse /resume <number> or /resume <id> to restore.".to_string(),
-                    );
+                    lines.push("\nUse /resume <number> or /resume <id> to restore.".to_string());
                     lines.join("\n")
                 }
             }
@@ -124,8 +119,7 @@ pub fn handle_sessions(app: &TuiApp) -> String {
                     } else {
                         &session.title
                     };
-                    let msg_count =
-                        app.session_manager.message_count(&session.id).unwrap_or(0);
+                    let msg_count = app.session_manager.message_count(&session.id).unwrap_or(0);
                     lines.push(format!(
                         "{}. [{}] {} ({} msgs) - {}",
                         i + 1,
@@ -160,8 +154,7 @@ pub async fn handle_session(app: &mut TuiApp, args: &str) -> String {
         match app.session_manager.list_sessions(20) {
             Ok(sessions) => {
                 if index == 0 || index > sessions.len() {
-                    "Invalid session number. Use /sessions to see available sessions."
-                        .to_string()
+                    "Invalid session number. Use /sessions to see available sessions.".to_string()
                 } else {
                     let session = &sessions[index - 1];
                     app.restore_session(&session.id).await
@@ -271,22 +264,21 @@ pub fn handle_stats(app: &TuiApp) -> String {
 
 pub fn handle_status(app: &TuiApp) -> String {
     let msg_count = app.messages.len();
-    let (history_len, model_line, provider_line) =
-        if let Some(ref engine) = app.streaming_engine {
-            let provider_base = app.current_provider_base_url();
-            let provider = app.current_provider_label();
-            (
-                futures::executor::block_on(engine.get_history()).len(),
-                format!("Model: {}", app.current_model_label()),
-                format!("Provider: {} ({})", provider, provider_base),
-            )
-        } else {
-            (
-                0,
-                "Model: unavailable".to_string(),
-                "Provider: unavailable".to_string(),
-            )
-        };
+    let (history_len, model_line, provider_line) = if let Some(ref engine) = app.streaming_engine {
+        let provider_base = app.current_provider_base_url();
+        let provider = app.current_provider_label();
+        (
+            futures::executor::block_on(engine.get_history()).len(),
+            format!("Model: {}", app.current_model_label()),
+            format!("Provider: {} ({})", provider, provider_base),
+        )
+    } else {
+        (
+            0,
+            "Model: unavailable".to_string(),
+            "Provider: unavailable".to_string(),
+        )
+    };
     format!(
         "Messages: {}\nHistory: {} turns\nQuerying: {}\n{}\n{}",
         msg_count, history_len, app.is_querying, model_line, provider_line
@@ -294,21 +286,32 @@ pub fn handle_status(app: &TuiApp) -> String {
 }
 
 pub async fn handle_tasks(app: &TuiApp) -> String {
-    if let Some(manager) = app
-        .streaming_engine
-        .as_ref()
-        .and_then(|e| e.task_manager())
-    {
+    if let Some(manager) = app.streaming_engine.as_ref().and_then(|e| e.task_manager()) {
         let tasks = manager.list_tasks(None).await;
         if tasks.is_empty() {
             "No tracked tasks.".to_string()
         } else {
             use crate::state::TaskStatus;
-            let pending = tasks.iter().filter(|t| t.status == TaskStatus::Pending).count();
-            let running = tasks.iter().filter(|t| t.status == TaskStatus::Running).count();
-            let completed = tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
-            let failed = tasks.iter().filter(|t| t.status == TaskStatus::Failed).count();
-            let killed = tasks.iter().filter(|t| t.status == TaskStatus::Killed).count();
+            let pending = tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Pending)
+                .count();
+            let running = tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Running)
+                .count();
+            let completed = tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Completed)
+                .count();
+            let failed = tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Failed)
+                .count();
+            let killed = tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Killed)
+                .count();
             let mut lines = vec![
                 format!(
                     "Tasks summary: total={} pending={} running={} completed={} failed={} killed={}",
@@ -367,8 +370,7 @@ pub async fn handle_agents(app: &TuiApp) -> String {
 }
 
 pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
-    let working_dir =
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut report = crate::diagnostics::run_full_diagnostics(&working_dir).await;
 
     let mut registry = crate::tools::ToolRegistry::default_registry();
@@ -495,10 +497,7 @@ pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
                     tracker.slowest_tools_line(5),
                     tracker.top_failure_reasons_line(5),
                     tracker.coding_quality_line(),
-                    format!(
-                        "tool_recent_events: {}",
-                        tracker.recent_tool_event_count()
-                    ),
+                    format!("tool_recent_events: {}", tracker.recent_tool_event_count()),
                 ];
                 lines.join("\n")
             }
@@ -512,8 +511,7 @@ pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
                 if events.is_empty() {
                     "No recent tool events.".to_string()
                 } else {
-                    let mut lines =
-                        vec![format!("Recent tool events ({}):", events.len())];
+                    let mut lines = vec![format!("Recent tool events ({}):", events.len())];
                     for e in events {
                         lines.push(format!(
                             "- ts={} tool={} ok={} duration_ms={} reason={}",
@@ -532,8 +530,7 @@ pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
                     .session_manager
                     .current_session_id()
                     .map(|s| s.to_string());
-                let content =
-                    tracker.export_audit_snapshot_json(session_id.as_deref(), 200);
+                let content = tracker.export_audit_snapshot_json(session_id.as_deref(), 200);
                 drop(tracker);
 
                 let path = if let Some(arg_path) = parts.next() {
@@ -574,9 +571,9 @@ pub async fn handle_commit(app: &mut TuiApp) -> String {
             let diff = if result.success {
                 result.content
             } else {
-                result.error.unwrap_or_else(|| {
-                    "No staged changes or unable to read diff.".to_string()
-                })
+                result
+                    .error
+                    .unwrap_or_else(|| "No staged changes or unable to read diff.".to_string())
             };
             let prompt = format!(
                 "{}\n\nStaged changes:\n```diff\n{}\n```",
@@ -604,9 +601,7 @@ pub async fn handle_review_pr(app: &mut TuiApp, args: &str) -> String {
                 .output()
                 .await;
             let diff = match output {
-                Ok(out) if out.status.success() => {
-                    String::from_utf8_lossy(&out.stdout).to_string()
-                }
+                Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
                 Ok(out) => format!(
                     "Failed to fetch PR diff: {}",
                     String::from_utf8_lossy(&out.stderr)
@@ -644,9 +639,9 @@ pub async fn handle_review(app: &mut TuiApp) -> String {
             let diff = if result.success {
                 result.content
             } else {
-                result.error.unwrap_or_else(|| {
-                    "No uncommitted changes or unable to read diff.".to_string()
-                })
+                result
+                    .error
+                    .unwrap_or_else(|| "No uncommitted changes or unable to read diff.".to_string())
             };
             let prompt = format!(
                 "{}\n\nLocal changes diff:\n```diff\n{}\n```",
@@ -679,9 +674,9 @@ pub async fn handle_security_review(app: &mut TuiApp) -> String {
             let diff = if result.success {
                 result.content
             } else {
-                result.error.unwrap_or_else(|| {
-                    "No uncommitted changes or unable to read diff.".to_string()
-                })
+                result
+                    .error
+                    .unwrap_or_else(|| "No uncommitted changes or unable to read diff.".to_string())
             };
             let prompt = format!(
                 "{}\n\nLocal changes diff:\n```diff\n{}\n```",
@@ -700,8 +695,8 @@ pub async fn handle_explain(app: &mut TuiApp, args: &str) -> String {
             let context = if args.is_empty() {
                 "No specific target provided. Please explain the current codebase context or answer generally.".to_string()
             } else {
-                let working_dir = std::env::current_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let working_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 match crate::tools::file_tool::resolve_path(args.trim(), &working_dir) {
                     Ok(path) => {
                         if path.exists() && path.is_file() {
@@ -733,9 +728,9 @@ pub async fn handle_fix(app: &mut TuiApp) -> String {
             let diff = if result.success {
                 result.content
             } else {
-                result.error.unwrap_or_else(|| {
-                    "No uncommitted changes or unable to read diff.".to_string()
-                })
+                result
+                    .error
+                    .unwrap_or_else(|| "No uncommitted changes or unable to read diff.".to_string())
             };
             let prompt = format!(
                 "{}\n\nCurrent changes:\n```diff\n{}\n```",
@@ -899,8 +894,7 @@ pub fn handle_onboarding(app: &mut TuiApp) -> String {
     let _ = manager.reset();
     app.onboarding_state = Some(crate::onboarding::OnboardingState::new());
     app.mode = AppMode::Onboarding;
-    "Onboarding restarted. Press Enter or → to continue, ← to go back, Esc to skip."
-        .to_string()
+    "Onboarding restarted. Press Enter or → to continue, ← to go back, Esc to skip.".to_string()
 }
 
 pub fn handle_skip(app: &mut TuiApp) -> String {
@@ -932,8 +926,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 .as_ref()
                 .map(|e| e.permission_mode())
                 .unwrap_or(PermissionMode::AutoLowRisk);
-            let cwd = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
             format!(
                 "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions <allow|deny|ask> <pattern> [project|global]",
@@ -954,16 +947,12 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 if let Some(mode) = parse_permission_mode(mode_arg) {
                     if let Some(ref engine) = app.streaming_engine {
                         engine.set_permission_mode(mode);
-                        format!(
-                            "Permission mode set to '{}'.",
-                            permission_mode_name(mode)
-                        )
+                        format!("Permission mode set to '{}'.", permission_mode_name(mode))
                     } else {
                         "Cannot set permission mode: engine unavailable.".to_string()
                     }
                 } else {
-                    "Invalid mode. Use: default | auto_low_risk | auto_all | read_only"
-                        .to_string()
+                    "Invalid mode. Use: default | auto_low_risk | auto_all | read_only".to_string()
                 }
             } else {
                 let current = app
@@ -978,8 +967,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             }
         }
         Some("rules") => {
-            let cwd = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
             if let Some(tool_name) = parts.next() {
                 let (decision, details) = ctx.check_with_details(tool_name);
@@ -1026,15 +1014,11 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 Some(s) if s == "global" => RuleSource::Global,
                 Some(s) if s == "project" => RuleSource::Project,
                 Some(other) => {
-                    return format!(
-                        "Invalid scope '{}'. Use 'project' or 'global'.",
-                        other
-                    )
+                    return format!("Invalid scope '{}'. Use 'project' or 'global'.", other)
                 }
                 None => RuleSource::Project,
             };
-            let cwd = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             match persist_permission_rule(scope, action, pattern, &cwd) {
                 Ok(path) => {
                     let path: std::path::PathBuf = path;
@@ -1046,7 +1030,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                         path.display()
                     )
                 }
-Err(e) => format!("Failed to save rule: {}", e),
+                Err(e) => format!("Failed to save rule: {}", e),
             }
         }
         Some(_) => "Usage: /permissions [mode|rules|allow|deny|ask] ...".to_string(),
@@ -1075,13 +1059,17 @@ pub async fn handle_simplify(app: &mut TuiApp, _args: &str) -> String {
             let diff = if result.success {
                 result.content
             } else {
-                result.error.unwrap_or_else(|| {
-                    "No uncommitted changes or unable to read diff.".to_string()
-                })
+                result
+                    .error
+                    .unwrap_or_else(|| "No uncommitted changes or unable to read diff.".to_string())
             };
 
             // Launch 3 parallel sub-agents: Reuse, Quality, Efficiency
-            let agent_manager = match app.streaming_engine.as_ref().and_then(|e| e.agent_manager()) {
+            let agent_manager = match app
+                .streaming_engine
+                .as_ref()
+                .and_then(|e| e.agent_manager())
+            {
                 Some(am) => am,
                 None => {
                     return "Agent manager not available. Cannot run simplify.".to_string();
@@ -1131,8 +1119,16 @@ pub async fn handle_simplify(app: &mut TuiApp, _args: &str) -> String {
 
             let (reuse_result, quality_result, efficiency_result) = tokio::join!(
                 spawn_agent("code-reuse".to_string(), reuse_prompt, AgentRole::Default),
-                spawn_agent("code-quality".to_string(), quality_prompt, AgentRole::Default),
-                spawn_agent("efficiency".to_string(), efficiency_prompt, AgentRole::Default),
+                spawn_agent(
+                    "code-quality".to_string(),
+                    quality_prompt,
+                    AgentRole::Default
+                ),
+                spawn_agent(
+                    "efficiency".to_string(),
+                    efficiency_prompt,
+                    AgentRole::Default
+                ),
             );
 
             let mut report = "# Simplify Report\n\n".to_string();
@@ -1140,7 +1136,11 @@ pub async fn handle_simplify(app: &mut TuiApp, _args: &str) -> String {
 
             match reuse_result {
                 Ok(r) => {
-                    let status = if r.status == crate::agent::types::AgentStatus::Completed { "✓" } else { "✗" };
+                    let status = if r.status == crate::agent::types::AgentStatus::Completed {
+                        "✓"
+                    } else {
+                        "✗"
+                    };
                     report += &format!("## Code Reuse Review {}:\n{}\n\n", status, r.content);
                 }
                 Err(e) => {
@@ -1149,7 +1149,11 @@ pub async fn handle_simplify(app: &mut TuiApp, _args: &str) -> String {
             }
             match quality_result {
                 Ok(r) => {
-                    let status = if r.status == crate::agent::types::AgentStatus::Completed { "✓" } else { "✗" };
+                    let status = if r.status == crate::agent::types::AgentStatus::Completed {
+                        "✓"
+                    } else {
+                        "✗"
+                    };
                     report += &format!("## Code Quality Review {}:\n{}\n\n", status, r.content);
                 }
                 Err(e) => {
@@ -1158,7 +1162,11 @@ pub async fn handle_simplify(app: &mut TuiApp, _args: &str) -> String {
             }
             match efficiency_result {
                 Ok(r) => {
-                    let status = if r.status == crate::agent::types::AgentStatus::Completed { "✓" } else { "✗" };
+                    let status = if r.status == crate::agent::types::AgentStatus::Completed {
+                        "✓"
+                    } else {
+                        "✗"
+                    };
                     report += &format!("## Efficiency Review {}:\n{}\n\n", status, r.content);
                 }
                 Err(e) => {
@@ -1188,7 +1196,9 @@ pub async fn handle_verify(app: &mut TuiApp) -> String {
                 ("cargo test 2>&1", "Rust")
             } else if std::path::Path::new("package.json").exists() {
                 ("npm test 2>&1", "Node.js")
-            } else if std::path::Path::new("pyproject.toml").exists() || std::path::Path::new("setup.py").exists() {
+            } else if std::path::Path::new("pyproject.toml").exists()
+                || std::path::Path::new("setup.py").exists()
+            {
                 ("python -m pytest 2>&1", "Python")
             } else {
                 ("echo 'No recognized project type found'", "Unknown")

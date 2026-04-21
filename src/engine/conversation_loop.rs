@@ -51,7 +51,29 @@ fn read_only_tool_concurrency() -> usize {
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|n| *n > 0)
-.unwrap_or(DEFAULT_READ_ONLY_TOOL_CONCURRENCY)
+        .unwrap_or(DEFAULT_READ_ONLY_TOOL_CONCURRENCY)
+}
+
+fn safe_prefix_by_bytes(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+fn safe_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut start = s.len().saturating_sub(max_bytes);
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    &s[start..]
 }
 
 /// 截断工具结果，如果超过阈值则写入磁盘
@@ -73,16 +95,19 @@ fn truncate_tool_result(result: &mut ToolResult, tool_name: &str, tool_call_id: 
         let file_path = cache_dir.join(&filename);
 
         if std::fs::write(&file_path, &result.content).is_ok() {
-            let original_len = result.content.len();
-            let half = 2048.min(original_len / 2);
+            let original = result.content.clone();
+            let original_len = original.len();
+            let target_half_bytes = 2048.min(original_len / 2);
+            let first = safe_prefix_by_bytes(&original, target_half_bytes);
+            let last = safe_suffix_by_bytes(&original, target_half_bytes);
             result.content = format!(
                 "[Output truncated: {} bytes -> saved to {}]\n\n--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}",
                 original_len,
                 file_path.display(),
-                half,
-                &result.content[..half],
-                half,
-                &result.content[original_len.saturating_sub(half)..]
+                first.len(),
+                first,
+                last.len(),
+                last
             );
         }
     }
@@ -339,7 +364,11 @@ impl ConversationLoop {
                 );
                 drop(compressor); // 释放锁
                 let before_tokens = estimate_messages_tokens(&messages);
-                messages = compressor_mutex.lock().await.compress_async(&messages).await;
+                messages = compressor_mutex
+                    .lock()
+                    .await
+                    .compress_async(&messages)
+                    .await;
                 let after_tokens = estimate_messages_tokens(&messages);
                 if after_tokens >= before_tokens {
                     no_gain_passes += 1;
@@ -433,8 +462,11 @@ impl ConversationLoop {
 
             // ── 响应式压缩循环（遇到 413 等上下文超限自动触发）────────────
             let mut compressed_this_turn = false;
-            let mut api_result: Result<(String, Vec<ToolCall>, std::collections::HashMap<usize, ToolResult>)> =
-                Err(anyhow::anyhow!("initial"));
+            let mut api_result: Result<(
+                String,
+                Vec<ToolCall>,
+                std::collections::HashMap<usize, ToolResult>,
+            )> = Err(anyhow::anyhow!("initial"));
             for compress_retry in 0..3 {
                 api_result = if let Some(tx) = tx {
                     self.call_api_streaming(request.clone(), tx).await
@@ -546,12 +578,10 @@ impl ConversationLoop {
 
             // ── 自动验证闭环 ──────────────────────────────
             if !changed_files.is_empty() {
-                let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let verify_results = super::auto_verify::verify_file_changes(
-                    &working_dir,
-                    &changed_files,
-                )
-                .await;
+                let working_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let verify_results =
+                    super::auto_verify::verify_file_changes(&working_dir, &changed_files).await;
                 let check_passed = verify_results.iter().all(|r| r.success);
                 for result in verify_results {
                     let verify_text = result.to_dialog_text();
@@ -605,12 +635,8 @@ impl ConversationLoop {
                 }
 
                 // ── 自动测试闭环 ──────────────────────────────
-                let test_results = super::auto_verify::run_tests(
-                    &working_dir,
-                    &changed_files,
-                    check_passed,
-                )
-                .await;
+                let test_results =
+                    super::auto_verify::run_tests(&working_dir, &changed_files, check_passed).await;
                 let tests_passed = test_results.iter().all(|r| r.success);
                 for result in test_results {
                     let test_text = result.to_dialog_text();
@@ -624,10 +650,8 @@ impl ConversationLoop {
                 }
 
                 // ── 代码自审查 ────────────────────────────────
-                let review_result = super::code_review::review_changed_files(
-                    &working_dir,
-                    &changed_files,
-                );
+                let review_result =
+                    super::code_review::review_changed_files(&working_dir, &changed_files);
                 if !review_result.success {
                     let review_text = review_result.to_dialog_text();
                     tool_results_text.push('\n');
@@ -692,7 +716,11 @@ impl ConversationLoop {
     async fn call_api(
         &self,
         request: ChatRequest,
-    ) -> Result<(String, Vec<ToolCall>, std::collections::HashMap<usize, ToolResult>)> {
+    ) -> Result<(
+        String,
+        Vec<ToolCall>,
+        std::collections::HashMap<usize, ToolResult>,
+    )> {
         let response = self.provider.chat(request).await?;
         self.record_cost(&response).await;
 
@@ -707,7 +735,11 @@ impl ConversationLoop {
         &self,
         request: ChatRequest,
         tx: &mpsc::Sender<StreamEvent>,
-    ) -> Result<(String, Vec<ToolCall>, std::collections::HashMap<usize, ToolResult>)> {
+    ) -> Result<(
+        String,
+        Vec<ToolCall>,
+        std::collections::HashMap<usize, ToolResult>,
+    )> {
         // 保存 fallback 需要的数据
         let fallback_messages = request.messages.clone();
         let fallback_tools = request.tools.clone();
@@ -728,9 +760,10 @@ impl ConversationLoop {
                 // ── 流式只读工具并行执行 ─────────────────────────────────
                 // 当只读工具的参数开始到达时，在后台并行执行
                 // key: tool index, value: join_handle
-                let mut read_only_tasks:
-                    std::collections::HashMap<usize, tokio::task::JoinHandle<ToolResult>> =
-                    std::collections::HashMap::new();
+                let mut read_only_tasks: std::collections::HashMap<
+                    usize,
+                    tokio::task::JoinHandle<ToolResult>,
+                > = std::collections::HashMap::new();
                 let read_only_concurrency = read_only_tool_concurrency();
                 let tool_registry = self.tool_registry.clone();
                 let tool_context = self.create_tool_context();
@@ -1150,7 +1183,8 @@ impl ConversationLoop {
 
         // 并发执行只读工具（带上限）
         let concurrency = read_only_tool_concurrency();
-        let mut readonly_stream = futures::stream::iter(read_only_jobs).buffer_unordered(concurrency);
+        let mut readonly_stream =
+            futures::stream::iter(read_only_jobs).buffer_unordered(concurrency);
 
         while let Some((tc, result)) = readonly_stream.next().await {
             if let Some(tx) = tx {
@@ -1325,12 +1359,42 @@ impl ConversationLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_openai::types::ChatCompletionResponseStream;
     use crate::services::api::{ChatResponse, ToolCall, Usage};
+    use crate::test_utils::env_guard::EnvVarGuard;
     use crate::tools::FileWriteTool;
+    use async_openai::types::ChatCompletionResponseStream;
     use std::collections::VecDeque;
     use std::sync::Mutex as StdMutex;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_truncate_tool_result_handles_utf8_boundaries() {
+        let mut result = ToolResult::success("中".repeat(20_000));
+        truncate_tool_result(&mut result, "grep", "call_utf8");
+        assert!(result.content.contains("Output truncated"));
+    }
+
+    #[test]
+    fn test_truncate_tool_result_keeps_small_output_unchanged() {
+        let original = "short output".to_string();
+        let mut result = ToolResult::success(original.clone());
+        truncate_tool_result(&mut result, "grep", "call_small");
+        assert_eq!(result.content, original);
+    }
+
+    #[test]
+    fn test_truncate_tool_result_includes_head_and_tail_markers() {
+        let mut result = ToolResult::success(format!(
+            "{}\n{}\n{}",
+            "A".repeat(40_000),
+            "中".repeat(8_000),
+            "Z".repeat(40_000)
+        ));
+        truncate_tool_result(&mut result, "grep", "call_markers");
+        assert!(result.content.contains("--- First"));
+        assert!(result.content.contains("--- Last"));
+        assert!(result.content.contains("Output truncated"));
+    }
 
     struct MockLlmProvider {
         responses: StdMutex<VecDeque<ChatResponse>>,
@@ -1363,6 +1427,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_coding_quality_tracks_fail_then_repair_cycle() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_AUTO_REVIEW", "1");
         let tmp = tempdir().expect("create temp dir");
         let target_file = tmp.path().join("sample.rs");
         let target_path = target_file.to_string_lossy().to_string();
@@ -1444,11 +1510,11 @@ mod tests {
         .with_permission_mode(crate::permissions::PermissionMode::AutoAll)
         .with_max_iterations(4);
 
-        let old = std::env::var("PRIORITY_AGENT_AUTO_REVIEW").ok();
-        std::env::set_var("PRIORITY_AGENT_AUTO_REVIEW", "1");
-
         let run1 = loop_engine
-            .run(vec![Message::system("sys"), Message::user("write failing code")])
+            .run(vec![
+                Message::system("sys"),
+                Message::user("write failing code"),
+            ])
             .await;
         assert!(run1.is_ok(), "first run failed: {:?}", run1.err());
 
@@ -1471,16 +1537,12 @@ mod tests {
             assert_eq!(t.coding_quality.repair_cycles, 1);
             assert_eq!(t.coding_quality.first_pass_successes, 0);
         }
-
-        if let Some(v) = old {
-            std::env::set_var("PRIORITY_AGENT_AUTO_REVIEW", v);
-        } else {
-            std::env::remove_var("PRIORITY_AGENT_AUTO_REVIEW");
-        }
     }
 
     #[tokio::test]
     async fn test_coding_quality_tracks_first_pass_success() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_AUTO_REVIEW", "1");
         let tmp = tempdir().expect("create temp dir");
         let target_file = tmp.path().join("sample_ok.rs");
         let target_path = target_file.to_string_lossy().to_string();
@@ -1533,11 +1595,11 @@ mod tests {
         .with_permission_mode(crate::permissions::PermissionMode::AutoAll)
         .with_max_iterations(3);
 
-        let old = std::env::var("PRIORITY_AGENT_AUTO_REVIEW").ok();
-        std::env::set_var("PRIORITY_AGENT_AUTO_REVIEW", "1");
-
         let run = loop_engine
-            .run(vec![Message::system("sys"), Message::user("write safe code")])
+            .run(vec![
+                Message::system("sys"),
+                Message::user("write safe code"),
+            ])
             .await;
         assert!(run.is_ok(), "run failed: {:?}", run.err());
 
@@ -1547,12 +1609,6 @@ mod tests {
             assert_eq!(t.coding_quality.first_pass_successes, 1);
             assert_eq!(t.coding_quality.verify_failures, 0);
             assert_eq!(t.coding_quality.repair_cycles, 0);
-        }
-
-        if let Some(v) = old {
-            std::env::set_var("PRIORITY_AGENT_AUTO_REVIEW", v);
-        } else {
-            std::env::remove_var("PRIORITY_AGENT_AUTO_REVIEW");
         }
     }
 }

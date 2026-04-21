@@ -112,11 +112,7 @@ impl FormatTool {
                     )
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    ToolResult::error(format!(
-                        "Formatter {} failed: {}",
-                        formatter,
-                        stderr.trim()
-                    ))
+                    ToolResult::error(format!("Formatter {} failed: {}", formatter, stderr.trim()))
                 }
             }
             Err(e) => {
@@ -213,18 +209,12 @@ fn build_format_command(formatter: &str, path: &Path) -> (String, Vec<String>) {
 fn build_check_command(formatter: &str, path: &Path) -> (String, Vec<String>) {
     let path_str = path.to_string_lossy().to_string();
     match formatter {
-        "rustfmt" => (
-            "rustfmt".to_string(),
-            vec!["--check".to_string(), path_str],
-        ),
+        "rustfmt" => ("rustfmt".to_string(), vec!["--check".to_string(), path_str]),
         "prettier" => (
             "prettier".to_string(),
             vec!["--check".to_string(), path_str],
         ),
-        "black" => (
-            "black".to_string(),
-            vec!["--check".to_string(), path_str],
-        ),
+        "black" => ("black".to_string(), vec!["--check".to_string(), path_str]),
         "gofmt" => {
             // gofmt -l 列出需要格式化的文件
             ("gofmt".to_string(), vec!["-l".to_string(), path_str])

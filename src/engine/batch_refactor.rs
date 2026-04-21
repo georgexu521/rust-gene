@@ -133,11 +133,7 @@ impl BatchRefactor {
         for (i, chunk) in file_chunks.iter().enumerate() {
             let unit = RefactorUnit {
                 id: format!("refactor-{}", i + 1),
-                description: format!(
-                    "{} - 处理文件: {}",
-                    task_description,
-                    chunk.len()
-                ),
+                description: format!("{} - 处理文件: {}", task_description, chunk.len()),
                 paths: chunk.clone(),
                 priority: ((self.max_parallel.saturating_sub(i)) as u8).min(10),
                 status: RefactorUnitStatus::Pending,
@@ -156,7 +152,9 @@ impl BatchRefactor {
         files: Vec<String>,
     ) -> Result<BatchRefactorResult, String> {
         if !self.enabled {
-            return Err("Batch refactor is not enabled. Set PRIORITY_AGENT_BATCH_REFACTOR=1".to_string());
+            return Err(
+                "Batch refactor is not enabled. Set PRIORITY_AGENT_BATCH_REFACTOR=1".to_string(),
+            );
         }
 
         let start = std::time::Instant::now();
@@ -171,10 +169,7 @@ impl BatchRefactor {
         let results = self.execute_parallel(units).await;
 
         // Phase 3: 收集 PR URLs
-        let pr_urls: Vec<String> = results
-            .iter()
-            .filter_map(|r| r.pr_url.clone())
-            .collect();
+        let pr_urls: Vec<String> = results.iter().filter_map(|r| r.pr_url.clone()).collect();
 
         let total_duration = start.elapsed().as_millis() as u64;
 
@@ -229,7 +224,10 @@ impl BatchRefactor {
         let start = std::time::Instant::now();
         let unit_id = unit.id.clone();
 
-        info!("Executing refactor unit: {} - {}", unit_id, unit.description);
+        info!(
+            "Executing refactor unit: {} - {}",
+            unit_id, unit.description
+        );
 
         // 创建隔离的 worktree（如果支持）
         let worktree_result = Self::create_isolated_worktree(&unit, &working_dir).await;
@@ -291,13 +289,20 @@ impl BatchRefactor {
         }
 
         // 创建 worktree
-        let worktree_path = base_dir
-            .parent()
-            .unwrap_or(base_dir)
-            .join(format!("{}-wt-{}", base_dir.file_name().unwrap_or_default().to_string_lossy(), unit.id));
+        let worktree_path = base_dir.parent().unwrap_or(base_dir).join(format!(
+            "{}-wt-{}",
+            base_dir.file_name().unwrap_or_default().to_string_lossy(),
+            unit.id
+        ));
 
         let output = tokio::process::Command::new("git")
-            .args(["worktree", "add", "-b", &branch_name, worktree_path.to_string_lossy().as_ref()])
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                &branch_name,
+                worktree_path.to_string_lossy().as_ref(),
+            ])
             .current_dir(base_dir)
             .output()
             .await
@@ -351,6 +356,7 @@ pub struct BatchRefactorStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     #[test]
     fn test_decompose() {
@@ -381,16 +387,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_refactor_disabled() {
-        // 设置环境变量禁用
-        std::env::set_var("PRIORITY_AGENT_BATCH_REFACTOR", "0");
+        let mut env = EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_BATCH_REFACTOR", "0");
 
         let refactor = BatchRefactor::new(PathBuf::from("/tmp"));
         let result = refactor.execute("test", vec!["file1.rs".to_string()]).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not enabled"));
-
-        // 清理
-        std::env::remove_var("PRIORITY_AGENT_BATCH_REFACTOR");
     }
 }

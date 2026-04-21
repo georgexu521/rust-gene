@@ -514,7 +514,8 @@ impl Tool for PluginManageTool {
                     .as_u64()
                     .map(|v| v.clamp(1, 600))
                     .unwrap_or(30);
-                let output = match execute_plugin_process(plugin, timeout_secs, None, &roots).await {
+                let output = match execute_plugin_process(plugin, timeout_secs, None, &roots).await
+                {
                     Ok(o) => o,
                     Err(e) => return ToolResult::error(e),
                 };
@@ -578,10 +579,11 @@ impl Tool for PluginManageTool {
                     );
                 };
 
-                let (public_key_b64, signature_b64) = match plugins::trust::sign_manifest(&plugin.manifest, &key_b64) {
-                    Ok(pair) => pair,
-                    Err(e) => return ToolResult::error(format!("Signing failed: {}", e)),
-                };
+                let (public_key_b64, signature_b64) =
+                    match plugins::trust::sign_manifest(&plugin.manifest, &key_b64) {
+                        Ok(pair) => pair,
+                        Err(e) => return ToolResult::error(format!("Signing failed: {}", e)),
+                    };
 
                 let write_manifest = params["write_manifest"].as_bool().unwrap_or(true);
 
@@ -592,7 +594,12 @@ impl Tool for PluginManageTool {
 
                     let manifest_toml = match toml::to_string_pretty(&updated_manifest) {
                         Ok(s) => s,
-                        Err(e) => return ToolResult::error(format!("Failed to serialize manifest: {}", e)),
+                        Err(e) => {
+                            return ToolResult::error(format!(
+                                "Failed to serialize manifest: {}",
+                                e
+                            ))
+                        }
                     };
 
                     if let Err(e) = std::fs::write(&plugin.manifest_path, manifest_toml) {
@@ -680,10 +687,11 @@ impl Tool for PluginRuntimeTool {
             .unwrap_or(self.default_timeout_secs);
 
         let roots = plugins::default_plugin_roots(&_context.working_dir);
-        let output = match execute_plugin_process(&self.plugin, timeout_secs, Some(&params), &roots).await {
-            Ok(o) => o,
-            Err(e) => return ToolResult::error(e),
-        };
+        let output =
+            match execute_plugin_process(&self.plugin, timeout_secs, Some(&params), &roots).await {
+                Ok(o) => o,
+                Err(e) => return ToolResult::error(e),
+            };
 
         let mut merged = String::new();
         if !output.stdout.is_empty() {
@@ -864,7 +872,9 @@ entry_args = ["-c", "echo hello"]
         let ctx = crate::tools::ToolContext::new(&tmp, "s1");
 
         // 1. generate_key
-        let gen_res = tool.execute(json!({"action":"generate_key"}), ctx.clone()).await;
+        let gen_res = tool
+            .execute(json!({"action":"generate_key"}), ctx.clone())
+            .await;
         assert!(gen_res.success, "generate_key failed: {:?}", gen_res.error);
         let data = gen_res.data.as_ref().unwrap();
         let private_key = data["private_key"].as_str().unwrap();
@@ -884,7 +894,11 @@ entry_args = ["-c", "echo hello"]
                 ctx.clone(),
             )
             .await;
-        assert!(sign_dry.success, "sign dry-run failed: {:?}", sign_dry.error);
+        assert!(
+            sign_dry.success,
+            "sign dry-run failed: {:?}",
+            sign_dry.error
+        );
         let sign_dry_data = sign_dry.data.as_ref().unwrap();
         let sig = sign_dry_data["signature"].as_str().unwrap();
         let pk = sign_dry_data["public_key"].as_str().unwrap();
@@ -903,7 +917,11 @@ entry_args = ["-c", "echo hello"]
                 ctx.clone(),
             )
             .await;
-        assert!(sign_write.success, "sign write failed: {:?}", sign_write.error);
+        assert!(
+            sign_write.success,
+            "sign write failed: {:?}",
+            sign_write.error
+        );
 
         // 4. validate should now report signature valid
         let validate = tool
