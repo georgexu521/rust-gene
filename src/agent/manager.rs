@@ -5,7 +5,7 @@
 use crate::agent::agent::{Agent, AgentConfig, AgentHandle};
 use crate::agent::types::{AgentId, AgentMessage, AgentStatus};
 use crate::engine::QueryEngine;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info};
@@ -17,6 +17,319 @@ pub struct AgentResult {
     pub status: AgentStatus,
     pub content: String,
     pub completed_at: std::time::Instant,
+    /// 执行的工具列表
+    pub tools_used: Vec<String>,
+    /// 置信度评分 (0.0 - 1.0)
+    pub confidence: f32,
+    /// 冲突标记
+    pub has_conflict: bool,
+}
+
+/// DAG 节点状态
+#[derive(Debug, Clone)]
+pub struct DagNode {
+    pub agent_id: AgentId,
+    pub status: AgentStatus,
+    pub dependencies: Vec<AgentId>,
+    pub dependents: Vec<AgentId>,
+    pub result: Option<AgentResult>,
+}
+
+/// Agent 编排 DAG
+#[derive(Debug)]
+pub struct AgentDag {
+    nodes: HashMap<AgentId, DagNode>,
+}
+
+impl AgentDag {
+    pub fn new() -> Self {
+        Self {
+            nodes: HashMap::new(),
+        }
+    }
+
+    /// 添加节点及其依赖
+    pub fn add_node(&mut self, agent_id: AgentId, dependencies: Vec<AgentId>) {
+        let node = DagNode {
+            agent_id: agent_id.clone(),
+            status: AgentStatus::Pending,
+            dependencies: dependencies.clone(),
+            dependents: Vec::new(),
+            result: None,
+        };
+
+        // 添加到 dependents 列表
+        for dep in &dependencies {
+            if let Some(dep_node) = self.nodes.get_mut(dep) {
+                dep_node.dependents.push(agent_id.clone());
+            }
+        }
+
+        self.nodes.insert(agent_id, node);
+    }
+
+    /// 获取可执行的节点（所有依赖都已完成）
+    pub fn get_runnable(&self) -> Vec<AgentId> {
+        self.nodes
+            .iter()
+            .filter(|(_, node)| {
+                node.status == AgentStatus::Pending
+                    && node.dependencies.iter().all(|dep_id| {
+                        self.nodes
+                            .get(dep_id)
+                            .map(|n| n.status.is_terminal())
+                            .unwrap_or(false)
+                    })
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// 更新节点状态
+    pub fn update_status(&mut self, agent_id: &AgentId, status: AgentStatus) {
+        if let Some(node) = self.nodes.get_mut(agent_id) {
+            node.status = status;
+        }
+    }
+
+    /// 设置节点结果
+    pub fn set_result(&mut self, agent_id: &AgentId, result: AgentResult) {
+        if let Some(node) = self.nodes.get_mut(agent_id) {
+            node.result = Some(result);
+        }
+    }
+
+    /// 检查是否有循环依赖
+    pub fn has_cycle(&self) -> bool {
+        let mut visited = HashSet::new();
+        let mut rec_stack = HashSet::new();
+
+        for (_, node) in &self.nodes {
+            if self.detect_cycle_dfs(node, &mut visited, &mut rec_stack) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn detect_cycle_dfs(
+        &self,
+        node: &DagNode,
+        visited: &mut HashSet<AgentId>,
+        rec_stack: &mut HashSet<AgentId>,
+    ) -> bool {
+        if rec_stack.contains(&node.agent_id) {
+            return true;
+        }
+        if visited.contains(&node.agent_id) {
+            return false;
+        }
+
+        visited.insert(node.agent_id.clone());
+        rec_stack.insert(node.agent_id.clone());
+
+        for dep in &node.dependencies {
+            if let Some(dep_node) = self.nodes.get(dep) {
+                if self.detect_cycle_dfs(dep_node, visited, rec_stack) {
+                    return true;
+                }
+            }
+        }
+
+        rec_stack.remove(&node.agent_id);
+        false
+    }
+
+    /// 获取拓扑排序
+    pub fn topological_sort(&self) -> Vec<AgentId> {
+        let mut result = Vec::new();
+        let mut visited = HashSet::new();
+
+        for (id, _) in &self.nodes {
+            if !visited.contains(id) {
+                self.ts_dfs(id, &mut visited, &mut result);
+            }
+        }
+
+        result
+    }
+
+    fn ts_dfs(&self, id: &AgentId, visited: &mut HashSet<AgentId>, result: &mut Vec<AgentId>) {
+        visited.insert(id.clone());
+        if let Some(node) = self.nodes.get(id) {
+            for dep in &node.dependencies {
+                if !visited.contains(dep) {
+                    self.ts_dfs(dep, visited, result);
+                }
+            }
+            result.push(id.clone());
+        }
+    }
+
+    /// 获取所有节点状态
+    pub fn get_all_statuses(&self) -> HashMap<AgentId, AgentStatus> {
+        self.nodes
+            .iter()
+            .map(|(id, node)| (id.clone(), node.status))
+            .collect()
+    }
+}
+
+impl Default for AgentDag {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 结果融合器
+#[derive(Debug, Clone)]
+pub struct ResultFusion {
+    pub conflict_threshold: f32,
+}
+
+impl ResultFusion {
+    pub fn new() -> Self {
+        Self {
+            conflict_threshold: 0.7,
+        }
+    }
+
+    /// 融合多个 Agent 的结果
+    pub fn fuse(&self, results: Vec<AgentResult>) -> FusedResult {
+        if results.is_empty() {
+            return FusedResult {
+                content: String::new(),
+                confidence: 0.0,
+                conflicts: Vec::new(),
+                evidence: HashMap::new(),
+            };
+        }
+
+        if results.len() == 1 {
+            let r = &results[0];
+            return FusedResult {
+                content: r.content.clone(),
+                confidence: r.confidence,
+                conflicts: Vec::new(),
+                evidence: HashMap::new(),
+            };
+        }
+
+        // 检查冲突
+        let mut conflicts = Vec::new();
+        let mut evidence: HashMap<String, Vec<AgentId>> = HashMap::new();
+
+        for result in &results {
+            // 按内容分组作为简单冲突检测
+            let key = result.content.chars().take(100).collect::<String>();
+            evidence.entry(key).or_default().push(result.agent_id.clone());
+        }
+
+        // 检测是否有低置信度冲突
+        let low_conf_results: Vec<_> = results
+            .iter()
+            .filter(|r| r.confidence < self.conflict_threshold)
+            .collect();
+
+        if low_conf_results.len() > 1 {
+            conflicts.push("Multiple low-confidence results detected".to_string());
+        }
+
+        // 计算平均置信度
+        let avg_confidence: f32 =
+            results.iter().map(|r| r.confidence).sum::<f32>() / results.len() as f32;
+
+        // 简单融合：选择最高置信度的结果
+        let best = results
+            .iter()
+            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap())
+            .cloned();
+
+        FusedResult {
+            content: best.map(|r| r.content).unwrap_or_default(),
+            confidence: avg_confidence,
+            conflicts,
+            evidence,
+        }
+    }
+}
+
+impl Default for ResultFusion {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 融合结果
+#[derive(Debug, Clone)]
+pub struct FusedResult {
+    pub content: String,
+    pub confidence: f32,
+    pub conflicts: Vec<String>,
+    pub evidence: HashMap<String, Vec<AgentId>>,
+}
+
+/// Agent 审计记录
+#[derive(Debug, Clone)]
+pub struct AgentAuditRecord {
+    pub agent_id: AgentId,
+    pub action: AgentAuditAction,
+    pub timestamp: std::time::SystemTime,
+    pub details: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentAuditAction {
+    Spawn,
+    StatusChange,
+    Message,
+    Result,
+    Kill,
+    Error,
+}
+
+/// Agent 审计器
+#[derive(Debug)]
+pub struct AgentAuditor {
+    records: Arc<RwLock<Vec<AgentAuditRecord>>>,
+}
+
+impl AgentAuditor {
+    pub fn new() -> Self {
+        Self {
+            records: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    pub async fn log(&self, agent_id: AgentId, action: AgentAuditAction, details: String) {
+        let record = AgentAuditRecord {
+            agent_id,
+            action,
+            timestamp: std::time::SystemTime::now(),
+            details,
+        };
+        let mut records = self.records.write().await;
+        records.push(record);
+    }
+
+    pub async fn get_records(&self, agent_id: Option<&AgentId>) -> Vec<AgentAuditRecord> {
+        let records = self.records.read().await;
+        match agent_id {
+            Some(id) => records.iter().filter(|r| &r.agent_id == id).cloned().collect(),
+            None => records.clone(),
+        }
+    }
+
+    pub async fn clear(&self) {
+        let mut records = self.records.write().await;
+        records.clear();
+    }
+}
+
+impl Default for AgentAuditor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Agent 管理器
@@ -364,5 +677,166 @@ mod tests {
         let result = manager.spawn(AgentConfig::new("test-agent"), None).await;
 
         assert!(result.is_err());
+    }
+
+    // ─── DAG Tests ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_dag_add_node() {
+        let mut dag = AgentDag::new();
+        let id1 = AgentId::new();
+        let id2 = AgentId::new();
+
+        dag.add_node(id1.clone(), Vec::new());
+        dag.add_node(id2.clone(), vec![id1.clone()]);
+
+        let statuses = dag.get_all_statuses();
+        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses.get(&id1), Some(&AgentStatus::Pending));
+        assert_eq!(statuses.get(&id2), Some(&AgentStatus::Pending));
+    }
+
+    #[test]
+    fn test_dag_get_runnable() {
+        let mut dag = AgentDag::new();
+        let id1 = AgentId::new();
+        let id2 = AgentId::new();
+
+        dag.add_node(id1.clone(), Vec::new());
+        dag.add_node(id2.clone(), vec![id1.clone()]);
+
+        // id1 has no dependencies, should be runnable
+        let runnable = dag.get_runnable();
+        assert!(runnable.contains(&id1));
+        assert!(!runnable.contains(&id2));
+    }
+
+    #[test]
+    fn test_dag_topological_sort() {
+        let mut dag = AgentDag::new();
+        let id1 = AgentId::new();
+        let id2 = AgentId::new();
+        let id3 = AgentId::new();
+
+        // id3 depends on id2, id2 depends on id1
+        dag.add_node(id1.clone(), Vec::new());
+        dag.add_node(id2.clone(), vec![id1.clone()]);
+        dag.add_node(id3.clone(), vec![id2.clone()]);
+
+        let sorted = dag.topological_sort();
+
+        // id1 should come before id2, id2 before id3
+        let id1_idx = sorted.iter().position(|x| x == &id1).unwrap();
+        let id2_idx = sorted.iter().position(|x| x == &id2).unwrap();
+        let id3_idx = sorted.iter().position(|x| x == &id3).unwrap();
+
+        assert!(id1_idx < id2_idx);
+        assert!(id2_idx < id3_idx);
+    }
+
+    #[test]
+    fn test_dag_no_cycle() {
+        let mut dag = AgentDag::new();
+        let id1 = AgentId::new();
+        let id2 = AgentId::new();
+
+        dag.add_node(id1.clone(), Vec::new());
+        dag.add_node(id2.clone(), vec![id1.clone()]);
+
+        assert!(!dag.has_cycle());
+    }
+
+    // ─── Result Fusion Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_result_fusion_single() {
+        let fusion = ResultFusion::new();
+        let results = vec![AgentResult {
+            agent_id: AgentId::new(),
+            status: AgentStatus::Completed,
+            content: "test content".to_string(),
+            completed_at: std::time::Instant::now(),
+            tools_used: vec!["bash".to_string()],
+            confidence: 0.9,
+            has_conflict: false,
+        }];
+
+        let fused = fusion.fuse(results);
+        assert_eq!(fused.content, "test content");
+        assert_eq!(fused.confidence, 0.9);
+        assert!(fused.conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_result_fusion_multiple() {
+        let fusion = ResultFusion::new();
+        let results = vec![
+            AgentResult {
+                agent_id: AgentId::new(),
+                status: AgentStatus::Completed,
+                content: "result A".to_string(),
+                completed_at: std::time::Instant::now(),
+                tools_used: vec![],
+                confidence: 0.8,
+                has_conflict: false,
+            },
+            AgentResult {
+                agent_id: AgentId::new(),
+                status: AgentStatus::Completed,
+                content: "result B".to_string(),
+                completed_at: std::time::Instant::now(),
+                tools_used: vec![],
+                confidence: 0.6,
+                has_conflict: false,
+            },
+        ];
+
+        let fused = fusion.fuse(results);
+        // Should pick highest confidence
+        assert_eq!(fused.content, "result A");
+        // Average confidence
+        assert!((fused.confidence - 0.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_result_fusion_empty() {
+        let fusion = ResultFusion::new();
+        let fused = fusion.fuse(Vec::new());
+        assert_eq!(fused.content, "");
+        assert_eq!(fused.confidence, 0.0);
+    }
+
+    // ─── Auditor Tests ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_auditor_log() {
+        let auditor = AgentAuditor::new();
+        let agent_id = AgentId::new();
+
+        auditor
+            .log(
+                agent_id.clone(),
+                AgentAuditAction::Spawn,
+                "Test spawn".to_string(),
+            )
+            .await;
+
+        let records = auditor.get_records(Some(&agent_id)).await;
+        assert_eq!(records.len(), 1);
+        assert!(matches!(records[0].action, AgentAuditAction::Spawn));
+    }
+
+    #[tokio::test]
+    async fn test_auditor_clear() {
+        let auditor = AgentAuditor::new();
+        let agent_id = AgentId::new();
+
+        auditor
+            .log(agent_id, AgentAuditAction::Spawn, "test".to_string())
+            .await;
+        auditor.clear().await;
+
+        let records = auditor.get_records(None).await;
+        assert!(records.is_empty());
     }
 }

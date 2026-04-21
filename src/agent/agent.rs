@@ -232,6 +232,9 @@ impl Agent {
                     .clone()
                     .unwrap_or_else(|| self.task_history.join("\n")),
                 completed_at: std::time::Instant::now(),
+                tools_used: Vec::new(), // 工具历史可在此扩展
+                confidence: 1.0,      // 默认置信度
+                has_conflict: false,    // 默认无冲突
             };
             let _ = result_sender.send(result).await;
         }
