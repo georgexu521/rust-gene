@@ -37,6 +37,10 @@ pub mod task_analyzer;
 pub mod task_manager;
 pub mod team;
 pub mod telemetry;
+pub mod changelog;
+pub mod quality_gates;
+pub mod slo;
+pub mod version;
 #[cfg(test)]
 pub mod test_utils;
 pub mod tools;
