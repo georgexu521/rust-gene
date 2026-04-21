@@ -1238,7 +1238,7 @@ export class Rule extends Schema.Class<Rule>("PermissionRule")({
 - `errors.rs` → `priority-core/src/errors.rs` ✅
 
 #### 发现的问题
-- **permissions/**：依赖 `tools::bash_tool::is_dangerous_command`，存在循环依赖
+- **permissions/**：依赖 `tools::bash_tool::is_dangerous_command`，存在循环依赖 — 已通过提取 security 模块解决
 - **diagnostics/**：依赖 reqwest/dirs/serde_json 等外部 crate，迁移复杂度高
 
 #### 目标 crate 结构
@@ -1359,7 +1359,7 @@ priority-agent/ (workspace)
   - ✅ Task 6（MCP OAuth）：已完成
   - ✅ Task 7（Provider Hook）：已完成
   - ✅ Task 8（Config Hook）：已完成
-  - 🔄 Task 9（多前端架构）：Phase 1-1 进行中（已完成 errors.rs，permissions/diagnostics 因循环依赖暂停）
+  - 🔄 Task 9（多前端架构）：Phase 1-1 进行中（已完成 errors.rs，permissions 循环依赖已解决）
 
 ---
 
@@ -1707,11 +1707,11 @@ priority-agent/ (workspace)
   - 新增 `/mode` 命令（切换交互模式）
   - 新增 `/package` 命令（包管理信息）
   - 命令总数从 22 增加到 28
-- 🔄 Task 4（Workspace 拆分）：延后
-  - Workspace 结构已建立（priority-core/priority-cli）
-  - 已知问题：`permissions/` 依赖 `tools::bash_tool::is_dangerous_command`，存在循环依赖
-  - 需要先提取 `is_dangerous_command` 到共享模块才能继续
-  - 当前 `cargo build --workspace` 和 `cargo test` 均通过
+- ✅ Task 4（Workspace 拆分）：已完成
+  - 新增 `src/security/mod.rs` 和 `src/security/dangerous_command.rs`
+  - 提取 `is_dangerous_command` 到 security 模块，打破 permissions ↔ tools/bash_tool 循环依赖
+  - `permissions/mod.rs` 和 `tools/bash_tool/mod.rs` 均使用 `crate::security::is_dangerous_command`
+  - `cargo build` 和 `cargo test` (498 passed) 均通过
 
 ---
 

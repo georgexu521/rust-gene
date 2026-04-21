@@ -28,6 +28,7 @@ pub mod platform;
 pub mod plugins;
 pub mod priority;
 pub mod remote;
+pub mod security;
 pub mod services;
 pub mod session_store;
 pub mod skills;

@@ -475,7 +475,7 @@ impl PermissionContext {
         if cmd.is_empty() {
             return true;
         }
-        if crate::tools::bash_tool::is_dangerous_command(cmd) {
+        if crate::security::is_dangerous_command(cmd) {
             return true;
         }
         let dangerous_patterns = [
