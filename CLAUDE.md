@@ -1758,7 +1758,9 @@ priority-agent/ (workspace)
 - ✅ Batch 1（10 条）：已完成 (session, undo, redo, retry, stop, reload, share, token, lsp, npm)
 - ✅ Batch 2（10 条）：已完成 (hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color)
 - ✅ Batch 3（10 条）：已完成 (webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker)
-- 🔄 Batch 4（9 条）：进行中 (config, copy, desktop, chrome, effort, preamble, untrap, verbose, write)
+- ✅ Batch 4（9 条）：已完成 (config, copy, desktop, chrome, effort, preamble, untrap, verbose, write)
+
+**Phase 10 完成！共实现 39 条命令。**
 
 ---
 

@@ -9,7 +9,7 @@
 | Dimension | Claude Code | Our Implementation | Gap | Trend |
 |-----------|-------------|-------------------|-----|-------|
 | **Tools** | 64 | 48 | -16 | Improving |
-| **Commands** | 101 | 22 | -79 | Improving |
+| **Commands** | 101 | 61 | -40 | Improving |
 | **Agents** | 7 types | 2 types | -5 | Stable |
 | **Transport** | 3 (stdio/http/ws) | 2 (stdio/http) | -1 | Improving |
 | **Auth** | OAuth/SSO | OAuth (MCP) | Partial | Improving |
@@ -118,7 +118,7 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 ## 2. Commands Coverage
 
 **Claude Code**: 101 commands
-**Our implementation**: 28 commands
+**Our implementation**: 61 commands
 
 | Command | Claude Code | Our Implementation | Status |
 |---------|------------|-------------------|--------|
@@ -316,6 +316,7 @@ Legend: ✅ Complete | 🟡 Partial | ❌ Missing | — N/A
 | Week 3 | -18 | -81 | -5 | 🟡 |
 | Week 4 | -16 | -79 | -5 | 🟡 |
 | Week 5 | -16 | -73 | -3 | 🟡 |
+| Week 6 | -16 | -40 | -5 | 🟢 |
 
 **Goal**: Reduce gap to <10 across all dimensions by end of Phase 9
 
