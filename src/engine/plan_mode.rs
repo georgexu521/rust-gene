@@ -43,6 +43,28 @@ pub struct PlanStep {
     pub tool: Option<String>,
     /// 步骤状态
     pub status: StepStatus,
+    /// 权重分数（归一化到 [0, 100]）
+    #[serde(default)]
+    pub weight: u32,
+    /// 权重解释
+    #[serde(default)]
+    pub weight_explanation: String,
+    /// 依赖的步骤索引
+    #[serde(default)]
+    pub dependent_step_indices: Vec<usize>,
+}
+
+impl PlanStep {
+    pub fn new(description: impl Into<String>, tool: Option<String>) -> Self {
+        Self {
+            description: description.into(),
+            tool,
+            status: StepStatus::Pending,
+            weight: 0,
+            weight_explanation: String::new(),
+            dependent_step_indices: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -78,11 +100,7 @@ impl Plan {
     }
 
     pub fn add_step(mut self, description: impl Into<String>, tool: Option<&str>) -> Self {
-        self.steps.push(PlanStep {
-            description: description.into(),
-            tool: tool.map(String::from),
-            status: StepStatus::Pending,
-        });
+        self.steps.push(PlanStep::new(description, tool.map(String::from)));
         self
     }
 

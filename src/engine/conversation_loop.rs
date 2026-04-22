@@ -7,6 +7,7 @@
 //! - 前置压缩（Preflight）：循环前检查总 token，超阈值提前压缩
 //! - IterationBudget：迭代预算退还机制（只读工具可退还）
 
+use crate::engine::workflow::{Gate, NoOpStepExecutor, WorkflowEngine};
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
@@ -345,6 +346,54 @@ impl ConversationLoop {
         mut messages: Vec<Message>,
         tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<LoopResult> {
+        // ── Workflow 闸门检查 ──────────────────────────
+        // M1: 根据用户输入判定走 Direct 模式还是 Workflow 结构化流程
+        if let Some(last_user_msg) = messages
+            .iter()
+            .rposition(|m| matches!(m, Message::User { .. }))
+            .and_then(|i| match &messages[i] {
+                Message::User { content } => Some(content.as_str()),
+                _ => None,
+            })
+        {
+            let gate = Gate::new();
+            let decision = gate.decide(last_user_msg);
+            if decision.is_workflow() {
+                if let Some(tx) = tx {
+                    let _ = tx
+                        .send(StreamEvent::TextChunk(format!(
+                            "[Workflow mode activated: {}]\n\n",
+                            decision.reason()
+                        )))
+                        .await;
+                }
+                let workflow_engine = WorkflowEngine::new(self.provider.clone());
+                match workflow_engine
+                    .run(last_user_msg, last_user_msg, &NoOpStepExecutor)
+                    .await
+                {
+                    Ok(result) => {
+                        if let Some(tx) = tx {
+                            let _ = tx.send(StreamEvent::Complete).await;
+                        }
+                        return Ok(LoopResult {
+                            content: result.final_report,
+                            tool_calls: Vec::new(),
+                            iterations: 0,
+                            pre_executed_results: std::collections::HashMap::new(),
+                        });
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Workflow execution failed: {}, falling back to direct mode",
+                            e
+                        );
+                        // Fall through to direct mode
+                    }
+                }
+            }
+        }
+
         let tools = self.get_tools();
         let mut final_content = String::new();
         let mut final_tool_calls = Vec::new();
@@ -1610,5 +1659,111 @@ mod tests {
             assert_eq!(t.coding_quality.verify_failures, 0);
             assert_eq!(t.coding_quality.repair_cycles, 0);
         }
+    }
+
+    // ── Workflow Gate 路由集成测试 ──────────────────────────
+
+    #[tokio::test]
+    async fn test_conversation_loop_workflow_routing() {
+        // Mock provider: 4 轮 questioning 回答
+        let responses = VecDeque::from(vec![
+            ChatResponse {
+                content: "实现用户认证系统".into(),
+                tool_calls: None,
+                usage: None,
+            },
+            ChatResponse {
+                content: "需要数据库支持和密码哈希库".into(),
+                tool_calls: None,
+                usage: None,
+            },
+            ChatResponse {
+                content: "密码泄露和 SQL 注入风险".into(),
+                tool_calls: None,
+                usage: None,
+            },
+            ChatResponse {
+                content: "1. 设计数据库表结构\n2. 实现登录接口\n3. 实现注册接口\n4. 编写测试验证".into(),
+                tool_calls: None,
+                usage: None,
+            },
+        ]);
+
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(responses),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let tracker = Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new()));
+
+        let loop_engine = ConversationLoop::new(
+            provider,
+            registry,
+            tracker,
+            "mock-model".to_string(),
+        );
+
+        // 高风险消息 → Workflow 模式
+        let result = loop_engine
+            .run(vec![Message::user("重构整个用户认证系统")])
+            .await;
+        assert!(
+            result.is_ok(),
+            "Workflow routing failed: {:?}",
+            result.err()
+        );
+        let loop_result = result.unwrap();
+
+        assert!(
+            loop_result.content.contains("Workflow 执行报告"),
+            "Expected Workflow report, got: {}",
+            loop_result.content
+        );
+        assert!(
+            loop_result.content.contains("问题本质"),
+            "Expected problem statement in report"
+        );
+        assert!(loop_result.tool_calls.is_empty());
+        assert_eq!(loop_result.iterations, 0);
+    }
+
+    #[tokio::test]
+    async fn test_conversation_loop_direct_routing() {
+        let responses = VecDeque::from(vec![ChatResponse {
+            content: "Sure, let me help with that typo.".into(),
+            tool_calls: None,
+            usage: None,
+        }]);
+
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(responses),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let tracker = Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new()));
+
+        let loop_engine = ConversationLoop::new(
+            provider,
+            registry,
+            tracker,
+            "mock-model".to_string(),
+        );
+
+        // 低风险消息 → Direct 模式
+        let result = loop_engine
+            .run(vec![Message::user("修复一个 typo")])
+            .await;
+        assert!(result.is_ok(), "Direct routing failed: {:?}", result.err());
+        let loop_result = result.unwrap();
+
+        // 应走正常 Direct 链路，返回 LLM 回复而非 Workflow 报告
+        assert!(
+            !loop_result.content.contains("Workflow 执行报告"),
+            "Expected direct response, got Workflow report: {}",
+            loop_result.content
+        );
+        assert!(
+            loop_result.content.contains("Sure, let me help"),
+            "Expected mock LLM response, got: {}",
+            loop_result.content
+        );
     }
 }

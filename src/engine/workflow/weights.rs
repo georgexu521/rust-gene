@@ -758,13 +758,14 @@ mod tests {
 
     #[test]
     fn test_env_multiplier() {
-        std::env::set_var("PRIORITY_AGENT_WEIGHT_RISK_MUL", "2.0");
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_WEIGHT_RISK_MUL", "2.0");
         let rule = RiskRule::new();
         let ctx = test_ctx("删除旧数据", Some("bash"));
         let score = rule.compute(&ctx);
         // bash(4) + delete(5) = 9 raw, * 2.0 = 18 weighted
         assert!(score.weighted_score >= 18.0);
-        std::env::remove_var("PRIORITY_AGENT_WEIGHT_RISK_MUL");
+        // env guard auto-restores on drop
     }
 
     #[test]
