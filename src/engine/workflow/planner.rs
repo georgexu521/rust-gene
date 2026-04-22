@@ -10,16 +10,28 @@
 use crate::engine::plan_mode::{Plan, PlanStep, StepStatus};
 use crate::engine::workflow::questioning::ThinkingResult;
 use crate::engine::workflow::weights::{StepContext, WeightEngine};
+use crate::services::api::{ChatRequest, LlmProvider, Message};
+use std::sync::Arc;
 
 /// Workflow 计划生成器
 pub struct WorkflowPlanner {
     weight_engine: WeightEngine,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
 impl WorkflowPlanner {
     pub fn new() -> Self {
         Self {
             weight_engine: WeightEngine::default(),
+            llm_provider: None,
+        }
+    }
+
+    /// 创建带 LLM 增强的 Planner（M2）
+    pub fn with_llm(llm_provider: Arc<dyn LlmProvider>) -> Self {
+        Self {
+            weight_engine: WeightEngine::default(),
+            llm_provider: Some(llm_provider),
         }
     }
 
@@ -121,6 +133,108 @@ impl WorkflowPlanner {
         }
     }
 
+    /// M2: LLM 增强计划生成
+    ///
+    /// 对复杂计划（>5 步或存在低置信度依赖）调用 LLM 辅助推断依赖关系。
+    pub async fn plan_enhanced(
+        &self,
+        thinking_result: &ThinkingResult,
+        mainline_goal: &str,
+    ) -> Plan {
+        let mut plan = self.plan(thinking_result, mainline_goal);
+
+        // 简单计划跳过 LLM 增强
+        if plan.steps.len() <= 3 {
+            return plan;
+        }
+
+        // 检查是否存在低置信度依赖（孤岛步骤）
+        let has_islands = plan.steps.iter().enumerate().any(|(i, s)| {
+            i > 0 && s.dependent_step_indices.is_empty()
+        });
+
+        if !has_islands && plan.steps.len() <= 5 {
+            return plan;
+        }
+
+        // 尝试 LLM 增强
+        if let Some(ref provider) = self.llm_provider {
+            if let Ok(enhanced_deps) = self
+                .infer_dependencies_with_llm(provider, &plan.steps, mainline_goal)
+                .await
+            {
+                // 合并 LLM 推断的依赖（只添加不删除，保守策略）
+                for (i, extra_deps) in enhanced_deps.iter().enumerate() {
+                    if i < plan.steps.len() {
+                        for dep in extra_deps {
+                            if *dep < i && !plan.steps[i].dependent_step_indices.contains(dep) {
+                                plan.steps[i].dependent_step_indices.push(*dep);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        plan
+    }
+
+    /// M2: 使用 LLM 推断依赖关系
+    ///
+    /// 返回每个步骤额外依赖的步骤索引列表（仅含 LLM 补充的依赖）。
+    async fn infer_dependencies_with_llm(
+        &self,
+        provider: &Arc<dyn LlmProvider>,
+        steps: &[PlanStep],
+        mainline_goal: &str,
+    ) -> anyhow::Result<Vec<Vec<usize>>> {
+        let step_list: String = steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("{}: {}", i, s.description))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = format!(
+            "分析以下任务步骤的依赖关系。主线目标: {}\n\n步骤列表:\n{}\n\n\
+            请输出每个步骤依赖的前序步骤索引（JSON 数组的数组格式，只输出 JSON）。\
+            规则：\n\
+            1. 只输出合法的 JSON，不输出其他文字\n\
+            2. 每个步骤只依赖索引更小的步骤\n\
+            3. 如果没有额外依赖，用空数组 []\n\
+            4. 格式示例：[[],[0],[0,1],[1]]\n\n\
+            输出:",
+            mainline_goal, step_list
+        );
+
+        let request = ChatRequest {
+            model: provider.default_model().to_string(),
+            messages: vec![Message::User { content: prompt }],
+            tools: None,
+            temperature: Some(0.0),
+            max_tokens: Some(500),
+            thinking_budget: None,
+        };
+
+        let response = provider.chat(request).await?;
+        let deps: Vec<Vec<usize>> = serde_json::from_str(&response.content.trim())?;
+
+        // 安全校验：只保留合法的依赖（索引更小且无越界）
+        let validated: Vec<Vec<usize>> = deps
+            .iter()
+            .enumerate()
+            .map(|(i, step_deps)| {
+                step_deps
+                    .iter()
+                    .filter(|dep| **dep < i && **dep < steps.len())
+                    .copied()
+                    .collect()
+            })
+            .collect();
+
+        Ok(validated)
+    }
+
     // ============================================================================
     // 工具推断
     // ============================================================================
@@ -186,10 +300,12 @@ impl WorkflowPlanner {
 
     /// 推断步骤间依赖关系
     ///
-    /// M1 简化规则：
+    /// M1 简化规则 + M2 增强：
     /// 1. 含有"然后/之后/接着/next/then/after"的步骤依赖前一步
     /// 2. 测试/验证步骤依赖最近的实现/编写/修改步骤
     /// 3. 编辑/写入步骤依赖最近的读取步骤（了解上下文）
+    /// 4. (M2) 同文件引用 → 步骤间隐含依赖
+    /// 5. (M2) 语义关键词：基于/依赖/requires/depends on/build on
     ///
     /// 所有依赖只指向更小的索引，天然无环（P-05 保证）。
     fn infer_dependencies(
@@ -199,6 +315,12 @@ impl WorkflowPlanner {
         let n = descriptions.len();
         let mut deps: Vec<Vec<usize>> = vec![vec![]; n];
         let lowered: Vec<String> = descriptions.iter().map(|d| d.to_lowercase()).collect();
+
+        // M2: 预提取每个步骤提到的文件名
+        let file_refs: Vec<Vec<String>> = lowered
+            .iter()
+            .map(|d| Self::extract_file_references(d))
+            .collect();
 
         for i in 0..n {
             let desc = &lowered[i];
@@ -216,6 +338,17 @@ impl WorkflowPlanner {
                 if i > 0 && !deps[i].contains(&(i - 1)) {
                     deps[i].push(i - 1);
                 }
+            }
+
+            // M2 规则 5：语义依赖词 → 依赖前一步（强顺序暗示）
+            let has_semantic_dep = desc.contains("基于")
+                || desc.contains("依赖")
+                || desc.contains("requires")
+                || desc.contains("depends on")
+                || desc.contains("build on")
+                || desc.contains("建立在");
+            if has_semantic_dep && i > 0 && !deps[i].contains(&(i - 1)) {
+                deps[i].push(i - 1);
             }
 
             // 规则 2：测试/验证 → 依赖最近的实现类步骤
@@ -264,9 +397,39 @@ impl WorkflowPlanner {
                     }
                 }
             }
+
+            // M2 规则 4：同文件引用 → 隐含依赖
+            for j in 0..i {
+                let shared_files: Vec<_> = file_refs[i]
+                    .iter()
+                    .filter(|f| file_refs[j].contains(f))
+                    .collect();
+                if !shared_files.is_empty() && !deps[i].contains(&j) {
+                    deps[i].push(j);
+                }
+            }
         }
 
         deps
+    }
+
+    /// M2: 从描述中提取文件名引用
+    ///
+    /// 简单启发式：匹配 `xxx.rs`, `xxx.toml`, `xxx.md`, `xxx.json` 等常见文件扩展名。
+    fn extract_file_references(description: &str) -> Vec<String> {
+        let mut refs = Vec::new();
+        let exts = [".rs", ".toml", ".md", ".json", ".yaml", ".yml", ".js", ".ts", ".py", ".go"];
+
+        for word in description.split_whitespace() {
+            let trimmed = word.trim_matches(|c: char| c.is_ascii_punctuation());
+            for ext in &exts {
+                if trimmed.ends_with(ext) && trimmed.len() > ext.len() {
+                    refs.push(trimmed.to_lowercase());
+                    break;
+                }
+            }
+        }
+        refs
     }
 
     // ============================================================================
@@ -495,6 +658,68 @@ mod tests {
             assert!(
                 plan.steps[1].dependent_step_indices.contains(&0),
                 "Edit step should depend on read step"
+            );
+        }
+    }
+
+    // ============================================================================
+    // M2 增强测试
+    // ============================================================================
+
+    #[test]
+    fn test_extract_file_references() {
+        assert_eq!(
+            WorkflowPlanner::extract_file_references("读取 auth.rs 和 config.toml"),
+            vec!["auth.rs", "config.toml"]
+        );
+        assert_eq!(
+            WorkflowPlanner::extract_file_references("修改 main.js 中的逻辑"),
+            vec!["main.js"]
+        );
+        assert!(WorkflowPlanner::extract_file_references("随便做点什么").is_empty());
+    }
+
+    #[test]
+    fn test_file_based_dependency_inference() {
+        let planner = WorkflowPlanner::new();
+        let thinking = ThinkingResult {
+            problem_statement: "重构代码".into(),
+            key_uncertainties: vec![],
+            // 步骤 0 和步骤 2 都提到 auth.rs → 步骤 2 应隐含依赖步骤 0
+            decision_basis: "1. 读取 auth.rs 了解现状\n2. 设计新接口\n3. 基于 auth.rs 实现新逻辑".into(),
+            question_chain: vec![],
+            total_token_cost: 100,
+            convergence_reason: "test".into(),
+        };
+        let plan = planner.plan(&thinking, "重构认证模块");
+
+        if plan.steps.len() >= 3 {
+            // 步骤 2 因同文件引用应依赖步骤 0
+            assert!(
+                plan.steps[2].dependent_step_indices.contains(&0),
+                "Step 2 should depend on step 0 due to shared file auth.rs"
+            );
+        }
+    }
+
+    #[test]
+    fn test_semantic_dependency_keywords() {
+        let planner = WorkflowPlanner::new();
+        let thinking = ThinkingResult {
+            problem_statement: "构建系统".into(),
+            key_uncertainties: vec![],
+            decision_basis: "1. 设计数据库表\n2. 基于上述设计实现 API".into(),
+            question_chain: vec![],
+            total_token_cost: 100,
+            convergence_reason: "test".into(),
+        };
+        let plan = planner.plan(&thinking, "构建 API 系统");
+
+        if plan.steps.len() >= 2 {
+            // 步骤 1 含"基于"语义词，应依赖步骤 0
+            assert!(
+                plan.steps[1].dependent_step_indices.contains(&0),
+                "Step 1 should depend on step 0 due to semantic keyword '基于'"
             );
         }
     }

@@ -81,8 +81,8 @@ impl WorkflowEngine {
             .await?;
 
         // 2. PLANNING
-        let planner = WorkflowPlanner::new();
-        let mut plan = planner.plan(&thinking_result, mainline_goal);
+        let planner = WorkflowPlanner::with_llm(self.llm_provider.clone());
+        let mut plan = planner.plan_enhanced(&thinking_result, mainline_goal).await;
 
         // 3. EXECUTION
         let executor = WorkflowExecutor::new();

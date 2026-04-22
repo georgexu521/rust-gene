@@ -96,15 +96,19 @@ pub struct FeedbackEngine {
 impl FeedbackEngine {
     /// 从默认路径加载反馈数据
     pub fn load() -> Self {
-        let enabled = std::env::var("PRIORITY_AGENT_WORKFLOW_FEEDBACK")
-            .ok()
-            .map(|v| v != "0")
-            .unwrap_or(true);
-
         let path = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join(".priority-agent")
             .join("workflow_feedback.json");
+        Self::load_at(path)
+    }
+
+    /// 从指定路径加载反馈数据（用于测试隔离）
+    pub fn load_at(path: std::path::PathBuf) -> Self {
+        let enabled = std::env::var("PRIORITY_AGENT_WORKFLOW_FEEDBACK")
+            .ok()
+            .map(|v| v != "0")
+            .unwrap_or(true);
 
         let data = if path.exists() {
             std::fs::read_to_string(&path)
@@ -302,9 +306,15 @@ mod tests {
         }
     }
 
+    fn temp_feedback_engine() -> FeedbackEngine {
+        let temp = std::env::temp_dir().join(format!(
+            "workflow_feedback_test_{}.json", std::process::id()));
+        FeedbackEngine::load_at(temp)
+    }
+
     #[test]
     fn test_feedback_record_and_penalty() {
-        let mut engine = FeedbackEngine::load();
+        let mut engine = temp_feedback_engine();
         engine.clear();
 
         // 模拟 3 次执行：2 次失败，1 次成功
@@ -322,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_drift_multiplier() {
-        let mut engine = FeedbackEngine::load();
+        let mut engine = temp_feedback_engine();
         engine.clear();
 
         // 初始无历史，系数为 1.0
@@ -347,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_no_penalty_for_new_step_type() {
-        let mut engine = FeedbackEngine::load();
+        let mut engine = temp_feedback_engine();
         engine.clear();
 
         // 从未执行过的步骤类型不应有惩罚
@@ -367,11 +377,12 @@ mod tests {
 
     #[test]
     fn test_feedback_disabled() {
-        // 设置环境变量禁用反馈
-        std::env::set_var("PRIORITY_AGENT_WORKFLOW_FEEDBACK", "0");
-        let engine = FeedbackEngine::load();
+        use crate::test_utils::env_guard::EnvVarGuard;
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_WORKFLOW_FEEDBACK", "0");
+
+        let engine = temp_feedback_engine();
         assert_eq!(engine.get_drift_multiplier(), 1.0);
         assert_eq!(engine.get_historical_penalty("anything"), 0.0);
-        std::env::remove_var("PRIORITY_AGENT_WORKFLOW_FEEDBACK");
     }
 }
