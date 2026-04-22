@@ -366,7 +366,137 @@ impl CostTracker {
         self.recent_tool_events.len()
     }
 
-    /// 记录一次“修改代码后验证”结果
+    /// 工具延迟百分位数（基于最近调用明细）
+    /// 返回 Vec<(tool_name, p50_ms, p95_ms, p99_ms, sample_count)>
+    pub fn tool_latency_percentiles(&self, limit: usize) -> Vec<(String, f64, f64, f64, usize)> {
+        let mut by_tool: HashMap<String, Vec<u64>> = HashMap::new();
+        for ev in &self.recent_tool_events {
+            by_tool
+                .entry(ev.tool_name.clone())
+                .or_default()
+                .push(ev.duration_ms);
+        }
+
+        let mut result: Vec<(String, f64, f64, f64, usize)> = Vec::new();
+        for (name, mut durations) in by_tool {
+            if durations.is_empty() {
+                continue;
+            }
+            durations.sort_unstable();
+            let n = durations.len();
+            let p50 = percentile_sorted(&durations, 0.50);
+            let p95 = percentile_sorted(&durations, 0.95);
+            let p99 = percentile_sorted(&durations, 0.99);
+            result.push((name, p50, p95, p99, n));
+        }
+        result.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        result.into_iter().take(limit).collect()
+    }
+
+    /// 模型使用概览（一行摘要）
+    pub fn model_usage_summary(&self) -> String {
+        if self.model_usage.is_empty() {
+            return "model_usage: (no data)".to_string();
+        }
+        let items: Vec<String> = self
+            .model_usage
+            .iter()
+            .map(|(model, stats)| {
+                format!(
+                    "{}: {}req {}tok ${:.3}",
+                    model, stats.requests, stats.tokens.total, stats.estimated_cost
+                )
+            })
+            .collect();
+        format!("model_usage: {}", items.join(", "))
+    }
+
+    /// Token 使用概览
+    pub fn token_summary(&self) -> String {
+        if self.total_tokens.total == 0 {
+            return "tokens: (no data)".to_string();
+        }
+        let prompt = self.total_tokens.prompt;
+        let completion = self.total_tokens.completion;
+        let total = self.total_tokens.total;
+        let prompt_pct = (prompt as f64 / total as f64) * 100.0;
+        format!(
+            "tokens: total={} prompt={} ({:.1}%) completion={} ({:.1}%)",
+            total, prompt, prompt_pct, completion, 100.0 - prompt_pct
+        )
+    }
+
+    /// 编程质量详细报告
+    pub fn coding_quality_detail(&self) -> String {
+        let q = &self.coding_quality;
+        if q.file_change_rounds == 0 {
+            return "coding_quality: no code changes yet".to_string();
+        }
+        let rounds = q.file_change_rounds;
+        let first_pass_rate = (q.first_pass_successes as f64 / rounds as f64) * 100.0;
+        let repair_rate = (q.repair_cycles as f64 / rounds as f64) * 100.0;
+        let fail_rate = (q.verify_failures as f64 / rounds as f64) * 100.0;
+        let health = if first_pass_rate >= 70.0 {
+            "healthy"
+        } else if first_pass_rate >= 40.0 {
+            "needs_improvement"
+        } else {
+            "concerning"
+        };
+        format!(
+            "coding_quality: rounds={} first_pass={:.1}% repairs={:.1}% failures={:.1}% status={}",
+            rounds, first_pass_rate, repair_rate, fail_rate, health
+        )
+    }
+
+    /// 工具质量分数排行摘要
+    pub fn tool_quality_ranking(&self, limit: usize) -> String {
+        let mut scores = self.tool_quality_scores();
+        if scores.is_empty() {
+            return "tool_quality: (no data)".to_string();
+        }
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let items: Vec<String> = scores
+            .into_iter()
+            .take(limit)
+            .map(|(name, score)| format!("{}:{:.0}", name, score))
+            .collect();
+        format!("tool_quality: {}", items.join(", "))
+    }
+
+    /// 导出性能体检面板数据（结构化 JSON）
+    pub fn performance_panel_json(&self) -> serde_json::Value {
+        let latencies = self
+            .tool_latency_percentiles(10)
+            .into_iter()
+            .map(|(name, p50, p95, p99, n)| {
+                serde_json::json!({
+                    "tool": name,
+                    "p50_ms": p50,
+                    "p95_ms": p95,
+                    "p99_ms": p99,
+                    "samples": n
+                })
+            })
+            .collect::<Vec<_>>();
+
+        serde_json::json!({
+            "session_duration_secs": self.session_duration().as_secs(),
+            "total_requests": self.total_requests,
+            "tokens": self.total_tokens,
+            "estimated_cost_usd": self.estimated_cost_usd,
+            "model_usage": self.model_usage,
+            "tool_metrics_summary": {
+                "total_calls": self.tool_metrics.values().map(|s| s.calls).sum::<u64>(),
+                "total_success": self.tool_metrics.values().map(|s| s.success).sum::<u64>(),
+                "total_failed": self.tool_metrics.values().map(|s| s.failed).sum::<u64>(),
+            },
+            "tool_latency_percentiles": latencies,
+            "coding_quality": self.coding_quality,
+        })
+    }
+
+    /// 记录一次"修改代码后验证"结果
     pub fn record_coding_round(&mut self, verification_passed: bool) {
         self.coding_quality.file_change_rounds += 1;
         if verification_passed {
@@ -508,6 +638,21 @@ fn classify_tool_failure_reason(error: Option<&str>) -> String {
     }
 }
 
+fn percentile_sorted(sorted: &[u64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let n = sorted.len();
+    if n == 1 {
+        return sorted[0] as f64;
+    }
+    let idx = (p * (n - 1) as f64).floor() as usize;
+    let frac = p * (n - 1) as f64 - idx as f64;
+    let lower = sorted[idx.min(n - 1)] as f64;
+    let upper = sorted[(idx + 1).min(n - 1)] as f64;
+    lower + frac * (upper - lower)
+}
+
 fn now_epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -600,5 +745,77 @@ mod tests {
         assert_eq!(tracker.coding_quality.repair_cycles, 1);
         assert_eq!(tracker.coding_quality.first_pass_successes, 1);
         assert!(tracker.coding_quality_line().contains("first_pass=1"));
+    }
+
+    #[test]
+    fn test_percentile_sorted() {
+        let data = vec![1u64, 2, 3, 4, 5];
+        assert_eq!(percentile_sorted(&data, 0.0), 1.0);
+        assert_eq!(percentile_sorted(&data, 0.5), 3.0);
+        assert_eq!(percentile_sorted(&data, 1.0), 5.0);
+
+        let data2 = vec![10u64, 20, 30];
+        assert_eq!(percentile_sorted(&data2, 0.5), 20.0);
+    }
+
+    #[test]
+    fn test_tool_latency_percentiles() {
+        let mut tracker = CostTracker::new();
+        for ms in [10u64, 20, 30, 40, 50, 60, 70, 80, 90, 100] {
+            tracker.record_tool_execution("bash", true, ms, None);
+        }
+        let pcts = tracker.tool_latency_percentiles(5);
+        assert_eq!(pcts.len(), 1);
+        let (_name, p50, p95, p99, n) = &pcts[0];
+        assert_eq!(*n, 10);
+        assert!(*p50 >= 50.0 && *p50 <= 60.0); // median ~55
+        assert!(*p95 >= 90.0 && *p95 <= 100.0);
+        assert!(*p99 >= 95.0);
+    }
+
+    #[test]
+    fn test_token_summary() {
+        let mut tracker = CostTracker::new();
+        tracker.record_api_call("kimi-k2.5", 1000, 500);
+        let summary = tracker.token_summary();
+        assert!(summary.contains("total=1500"));
+        assert!(summary.contains("prompt=1000"));
+        assert!(summary.contains("completion=500"));
+    }
+
+    #[test]
+    fn test_model_usage_summary() {
+        let mut tracker = CostTracker::new();
+        tracker.record_api_call("kimi-k2.5", 1000, 500);
+        let summary = tracker.model_usage_summary();
+        assert!(summary.contains("kimi-k2.5"));
+        assert!(summary.contains("1req"));
+    }
+
+    #[test]
+    fn test_coding_quality_detail() {
+        let mut tracker = CostTracker::new();
+        assert!(tracker.coding_quality_detail().contains("no code changes"));
+        tracker.record_coding_round(true);
+        assert!(tracker.coding_quality_detail().contains("status=healthy"));
+    }
+
+    #[test]
+    fn test_tool_quality_ranking() {
+        let mut tracker = CostTracker::new();
+        tracker.record_tool_execution("grep", true, 10, None);
+        tracker.record_tool_execution("grep", true, 20, None);
+        let ranking = tracker.tool_quality_ranking(5);
+        assert!(ranking.contains("grep"));
+    }
+
+    #[test]
+    fn test_performance_panel_json() {
+        let mut tracker = CostTracker::new();
+        tracker.record_api_call("kimi-k2.5", 1000, 500);
+        tracker.record_tool_execution("grep", true, 15, None);
+        let json = tracker.performance_panel_json();
+        assert!(json.get("session_duration_secs").is_some());
+        assert!(json.get("tool_latency_percentiles").is_some());
     }
 }

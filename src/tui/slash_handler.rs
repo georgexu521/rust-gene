@@ -519,6 +519,45 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
             format!("calls={} success={} success_rate={:.1}%", total_calls, total_success, success_rate),
         ));
 
+        // W4-2: Coding quality metrics
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "coding_quality",
+            tracker.coding_quality_detail(),
+        ));
+
+        // W4-2: Model usage
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "model_usage",
+            tracker.model_usage_summary(),
+        ));
+
+        // W4-2: Token summary
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "token_usage",
+            tracker.token_summary(),
+        ));
+
+        // W4-2: Tool latency percentiles (P95)
+        let p95_lines: Vec<String> = tracker
+            .tool_latency_percentiles(5)
+            .into_iter()
+            .map(|(name, p50, p95, _p99, n)| {
+                format!("{}: p50={:.0}ms p95={:.0}ms (n={})", name, p50, p95, n)
+            })
+            .collect();
+        if !p95_lines.is_empty() {
+            report.checks.push(crate::diagnostics::CheckResult::info(
+                "tool_latency_p95",
+                p95_lines.join(", "),
+            ));
+        }
+
+        // W4-2: Tool quality ranking
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "tool_quality",
+            tracker.tool_quality_ranking(5),
+        ));
+
         // W4-2: Memory extraction stats (if available)
         if let Some(ref mem_mgr) = engine.memory_manager() {
             let mem = mem_mgr.lock().await;
@@ -584,9 +623,76 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.first() == Some(&"json") {
         report.to_json()
+    } else if parts.first() == Some(&"gap") {
+        // W4-3: Generate a live gap snapshot based on current implementation
+        generate_gap_snapshot(app, &report).await
     } else {
         report.format_text()
     }
+}
+
+/// Generate a live gap snapshot (W4-3)
+async fn generate_gap_snapshot(app: &TuiApp, report: &crate::diagnostics::DiagnosticReport) -> String {
+    let mut lines = vec![
+        "=== Claude Code Gap Snapshot ===".to_string(),
+        format!("Generated: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
+        "".to_string(),
+    ];
+
+    // Count tools from registry
+    let mut registry = crate::tools::ToolRegistry::default_registry();
+    let _injected = crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    let tool_count = registry.tool_names().len();
+
+    // Count commands
+    let cmd_count = crate::tui::commands::ALL_COMMANDS.len();
+
+    // Engine status
+    let engine_ok = app.streaming_engine.is_some();
+    let model_name = app.streaming_engine.as_ref().map(|e| e.model_name()).unwrap_or_default();
+
+    let tool_gap = if tool_count >= 64 {
+        "0".to_string()
+    } else {
+        format!("-{}", 64i32 - tool_count as i32)
+    };
+    let cmd_gap = if cmd_count >= 101 {
+        "0".to_string()
+    } else {
+        format!("-{}", 101i32 - cmd_count as i32)
+    };
+
+    lines.push("## Dimensions".to_string());
+    lines.push("| Dimension | Ours | Claude | Gap |".to_string());
+    lines.push("|-----------|------|--------|-----|".to_string());
+    lines.push(format!("| Tools     | {}   | 64     | {}  |", tool_count, tool_gap));
+    lines.push(format!("| Commands  | {}   | 101    | {}  |", cmd_count, cmd_gap));
+    lines.push("| Agents    | 7    | 7      | 0   |".to_string());
+    lines.push("| Transport | 3    | 3      | 0   |".to_string());
+    lines.push("| Frontend  | 2    | 4      | -2  |".to_string());
+    lines.push("".to_string());
+
+    // Performance snapshot
+    lines.push("## Performance Snapshot".to_string());
+    for check in &report.checks {
+        if matches!(check.name.as_str(), "tool_latency_p95" | "tool_success_rate" | "coding_quality" | "context_compression" | "memory_cache") {
+            lines.push(format!("- {}: {}", check.name, check.message));
+        }
+    }
+    lines.push("".to_string());
+
+    // Quick assessment
+    lines.push("## Quick Assessment".to_string());
+    if engine_ok {
+        lines.push(format!("- Engine: OK (model={})", model_name));
+    } else {
+        lines.push("- Engine: NOT AVAILABLE".to_string());
+    }
+    lines.push(format!("- Overall diagnostics: {:?}", report.overall));
+    lines.push("".to_string());
+
+    lines.push("Run `/doctor json` for full JSON report.".to_string());
+    lines.join("\n")
 }
 
 pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
@@ -987,7 +1093,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
             format!(
-                "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions explain <tool_name> - explain why a decision was made\n  /permissions export [path] - export rules to a file\n  /permissions import <path> [project|global] - import rules from a file\n  /permissions dry-run <allow|deny|ask> <pattern> - test a rule without saving\n  /permissions <allow|deny|ask> <pattern> [project|global]",
+                "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions explain <tool_name> - explain why a decision was made (with confidence & warnings)\n  /permissions export [path] - export rules to a file\n  /permissions import <path> [project|global] [merge] - import rules (merge to append)\n  /permissions dry-run <allow|deny|ask> <pattern> - test a rule against all registered tools\n  /permissions <allow|deny|ask> <pattern> [project|global]",
                 permission_mode_name(mode),
                 ctx.rules.always_allow.len(),
                 ctx.rules.always_deny.len(),
@@ -1007,26 +1113,9 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             };
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
-            let (decision, details) = ctx.check_with_details(tool_name);
-
-            // Build explanation based on risk level and matching rules
-            let risk = ctx.rules.check(tool_name);
-            let mut lines = vec![
-                format!("Permission explanation for '{}':", tool_name),
-                format!("  Decision: {:?}", decision),
-                format!("  Risk level: {:?}", risk),
-            ];
-
-            if details.is_empty() {
-                lines.push("  Reason: No explicit rules matched - using default policy".to_string());
-                lines.push("  Default behavior: ask (prompt before execution)".to_string());
-            } else {
-                lines.push("  Matched rules:".to_string());
-                for d in &details {
-                    lines.push(format!("    - {}", d));
-                }
-                lines.push("  Priority: deny > allow > ask (first match wins)".to_string());
-            }
+            // Use ExplainableDecision for rich output (confidence, warnings, matched rules)
+            let explainable = ctx.explain_decision(tool_name, &serde_json::Value::Null);
+            let mut output = explainable.format();
 
             // Add mode context
             let mode = app
@@ -1034,16 +1123,15 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 .as_ref()
                 .map(|e| e.permission_mode())
                 .unwrap_or(PermissionMode::AutoLowRisk);
-            lines.push(format!("\n  Current mode: {}", permission_mode_name(mode)));
+            output.push_str(&format!("\n\nCurrent mode: {}", permission_mode_name(mode)));
             match mode {
-                PermissionMode::AutoAll => lines.push("    (all operations auto-allowed - rules ignored)".to_string()),
-                PermissionMode::AutoLowRisk => lines.push("    (low-risk operations auto-allowed, others follow rules)".to_string()),
-                PermissionMode::ReadOnly => lines.push("    (all write operations denied)".to_string()),
-                PermissionMode::Once => lines.push("    (each operation allowed once then denied)".to_string()),
+                PermissionMode::AutoAll => output.push_str("\n  (all operations auto-allowed - rules ignored)"),
+                PermissionMode::AutoLowRisk => output.push_str("\n  (low-risk operations auto-allowed, others follow rules)"),
+                PermissionMode::ReadOnly => output.push_str("\n  (all write operations denied)"),
+                PermissionMode::Once => output.push_str("\n  (each operation allowed once then denied)"),
                 _ => {}
             }
-
-            lines.join("\n")
+            output
         }
         Some("export") => {
             let path = parts.next().map(|p| {
@@ -1106,7 +1194,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
         Some("import") => {
             let file_path = match parts.next() {
                 Some(p) if !p.trim().is_empty() => p.trim(),
-                _ => return "Usage: /permissions import <path> [project|global]".to_string(),
+                _ => return "Usage: /permissions import <path> [project|global] [merge]".to_string(),
             };
             let scope = match parts.next().map(|s| s.to_ascii_lowercase()) {
                 Some(s) if s == "global" => RuleSource::Global,
@@ -1114,8 +1202,13 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 Some(other) => return format!("Invalid scope '{}'. Use 'project' or 'global'.", other),
                 None => RuleSource::Project,
             };
+            let merge = match parts.next().map(|s| s.to_ascii_lowercase()) {
+                Some(s) if s == "merge" => true,
+                Some(other) => return format!("Invalid option '{}'. Use 'merge' or omit.", other),
+                None => false,
+            };
 
-            let content = match std::fs::read_to_string(file_path) {
+            let import_content = match std::fs::read_to_string(file_path) {
                 Ok(c) => c,
                 Err(e) => return format!("Failed to read file: {}", e),
             };
@@ -1135,8 +1228,22 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 let _ = std::fs::create_dir_all(parent);
             }
 
-            match std::fs::write(&target_path, &content) {
-                Ok(_) => format!("Rules imported from '{}' to: {}", file_path, target_path.display()),
+            let final_content = if merge && target_path.exists() {
+                // Read existing rules and merge with imported rules
+                let existing = std::fs::read_to_string(&target_path).unwrap_or_default();
+                match merge_permission_toml(&existing, &import_content) {
+                    Ok(merged) => merged,
+                    Err(e) => return format!("Failed to merge rules: {}", e),
+                }
+            } else {
+                import_content
+            };
+
+            match std::fs::write(&target_path, &final_content) {
+                Ok(_) => {
+                    let action = if merge { "merged into" } else { "imported to" };
+                    format!("Rules {} '{}' -> {}", action, file_path, target_path.display())
+                }
                 Err(e) => format!("Failed to import: {}", e),
             }
         }
@@ -1164,7 +1271,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 _ => unreachable!(),
             }
 
-            // Show what tools would match
+            // Show what tools would match using full registry + explainable decisions
             let mut lines = vec![
                 format!("Dry-run: {} '{}'", action, pattern),
                 format!("Config path: {}/.priority-agent/permissions.toml", cwd.display()),
@@ -1172,13 +1279,30 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 "This rule would affect:".to_string(),
             ];
 
-            // Check some common tools
-            let test_tools = ["file_read", "file_write", "bash", "grep", "glob", "agent", "mcp"];
-            for tool in test_tools {
+            // Test against all registered tools
+            let registry = crate::tools::ToolRegistry::default_registry();
+            let mut affected = 0;
+            for tool in &registry.tool_names() {
                 if match_wildcard(pattern, tool) {
+                    affected += 1;
                     let decision = test_rules.check(tool);
-                    lines.push(format!("  {} -> {:?}", tool, decision));
+                    let explainable = ctx.explain_decision(tool, &serde_json::Value::Null);
+                    let conf = (explainable.confidence * 100.0) as u32;
+                    let warn = if explainable.warnings.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!(" ⚠️ {}", explainable.warnings.join(", "))
+                    };
+                    lines.push(format!(
+                        "  {} -> {:?} (confidence: {}%){}",
+                        tool, decision, conf, warn
+                    ));
                 }
+            }
+            if affected == 0 {
+                lines.push("  (no registered tools match this pattern)".to_string());
+            } else {
+                lines.push(format!("\nTotal affected tools: {}", affected));
             }
 
             lines.join("\n")
@@ -1628,6 +1752,29 @@ pub async fn handle_remember(app: &mut TuiApp, _args: &str) -> String {
         }
         None => "Skill 'remember' not found.".to_string(),
     }
+}
+
+/// Merge two permission TOML configs, deduplicating by pattern
+fn merge_permission_toml(existing: &str, imported: &str) -> Result<String, String> {
+    let mut existing_rules: crate::permissions::PermissionRules =
+        toml::from_str(existing).map_err(|e| format!("Parse existing: {}", e))?;
+    let imported_rules: crate::permissions::PermissionRules =
+        toml::from_str(imported).map_err(|e| format!("Parse imported: {}", e))?;
+
+    // Deduplicate helper
+    let mut seen = std::collections::HashSet::new();
+    let mut dedup = |rules: &mut Vec<crate::permissions::SourcedRule>| {
+        rules.retain(|r| seen.insert(r.pattern.clone()));
+    };
+
+    existing_rules.always_allow.extend(imported_rules.always_allow);
+    dedup(&mut existing_rules.always_allow);
+    existing_rules.always_deny.extend(imported_rules.always_deny);
+    dedup(&mut existing_rules.always_deny);
+    existing_rules.always_ask.extend(imported_rules.always_ask);
+    dedup(&mut existing_rules.always_ask);
+
+    toml::to_string_pretty(&existing_rules).map_err(|e| format!("Serialize: {}", e))
 }
 
 pub fn handle_keybindings(app: &mut TuiApp, args: &str) -> String {
