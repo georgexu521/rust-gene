@@ -128,8 +128,15 @@ impl Gate {
 
     /// 判定输入请求的路径
     ///
-    /// 判定顺序：Fast Lane → Heuristic → (LLM Classifier，如果启用)
+    /// 判定顺序：环境变量开关 → Fast Lane → Heuristic → (LLM Classifier，如果启用)
     pub fn decide(&self, input: &str) -> GateDecision {
+        // 0. 环境变量全局开关
+        if !Self::is_workflow_enabled() {
+            return GateDecision::Direct {
+                reason: "Workflow disabled by PRIORITY_AGENT_WORKFLOW_ENABLED".into(),
+            };
+        }
+
         // 1. Fast Lane 检查
         if let Some(decision) = fast_lane_check(input) {
             return decision;
@@ -154,6 +161,14 @@ impl Gate {
                 confidence: 0.5,
             }
         }
+    }
+
+    /// 检查 Workflow 是否被环境变量启用（默认启用）
+    pub fn is_workflow_enabled() -> bool {
+        std::env::var("PRIORITY_AGENT_WORKFLOW_ENABLED")
+            .ok()
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true)
     }
 
     /// 批量判定（用于测试和基准）
@@ -273,5 +288,41 @@ mod tests {
                 d
             );
         }
+    }
+
+    #[test]
+    fn test_workflow_disabled_env_var() {
+        use crate::test_utils::env_guard::EnvVarGuard;
+
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_WORKFLOW_ENABLED", "0");
+
+        let gate = Gate::new();
+        // 即使是高风险任务，也应返回 Direct
+        let d = gate.decide("重构整个模块架构");
+        assert!(
+            matches!(d, GateDecision::Direct { .. }),
+            "Expected Direct when workflow disabled, got: {:?}",
+            d
+        );
+        assert!(d.reason().contains("disabled"));
+
+        // 默认不匹配任何规则的任务也应返回 Direct
+        let d2 = gate.decide("分析代码结构并优化");
+        assert!(
+            matches!(d2, GateDecision::Direct { .. }),
+            "Expected Direct when workflow disabled, got: {:?}",
+            d2
+        );
+    }
+
+    #[test]
+    fn test_workflow_enabled_by_default() {
+        use crate::test_utils::env_guard::EnvVarGuard;
+
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
+
+        assert!(Gate::is_workflow_enabled(), "Workflow should be enabled by default");
     }
 }

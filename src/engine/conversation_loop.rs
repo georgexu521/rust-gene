@@ -192,6 +192,8 @@ pub struct ConversationLoop {
     approval_channel: Option<Arc<ToolApprovalChannel>>,
     /// 工具白名单（用于子 Agent 隔离；None 表示不限制）
     allowed_tools: Option<HashSet<String>>,
+    /// 本轮是否已触发过 Workflow（每轮最多一次）
+    workflow_triggered_this_turn: std::sync::atomic::AtomicBool,
 }
 
 /// 对话循环结果
@@ -228,6 +230,7 @@ impl ConversationLoop {
             llm_memory_extraction: false,
             approval_channel: None,
             allowed_tools: None,
+            workflow_triggered_this_turn: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -348,47 +351,53 @@ impl ConversationLoop {
     ) -> Result<LoopResult> {
         // ── Workflow 闸门检查 ──────────────────────────
         // M1: 根据用户输入判定走 Direct 模式还是 Workflow 结构化流程
-        if let Some(last_user_msg) = messages
-            .iter()
-            .rposition(|m| matches!(m, Message::User { .. }))
-            .and_then(|i| match &messages[i] {
-                Message::User { content } => Some(content.as_str()),
-                _ => None,
-            })
-        {
-            let gate = Gate::new();
-            let decision = gate.decide(last_user_msg);
-            if decision.is_workflow() {
-                if let Some(tx) = tx {
-                    let _ = tx
-                        .send(StreamEvent::TextChunk(format!(
-                            "[Workflow mode activated: {}]\n\n",
-                            decision.reason()
-                        )))
-                        .await;
-                }
-                let workflow_engine = WorkflowEngine::new(self.provider.clone());
-                match workflow_engine
-                    .run(last_user_msg, last_user_msg, &NoOpStepExecutor)
-                    .await
-                {
-                    Ok(result) => {
-                        if let Some(tx) = tx {
-                            let _ = tx.send(StreamEvent::Complete).await;
-                        }
-                        return Ok(LoopResult {
-                            content: result.final_report,
-                            tool_calls: Vec::new(),
-                            iterations: 0,
-                            pre_executed_results: std::collections::HashMap::new(),
-                        });
+        // 每轮最多触发一次 workflow（防止递归或重复触发）
+        let already_triggered = self
+            .workflow_triggered_this_turn
+            .swap(true, std::sync::atomic::Ordering::SeqCst);
+        if !already_triggered {
+            if let Some(last_user_msg) = messages
+                .iter()
+                .rposition(|m| matches!(m, Message::User { .. }))
+                .and_then(|i| match &messages[i] {
+                    Message::User { content } => Some(content.as_str()),
+                    _ => None,
+                })
+            {
+                let gate = Gate::new();
+                let decision = gate.decide(last_user_msg);
+                if decision.is_workflow() {
+                    if let Some(tx) = tx {
+                        let _ = tx
+                            .send(StreamEvent::TextChunk(format!(
+                                "[Workflow mode activated: {}]\n\n",
+                                decision.reason()
+                            )))
+                            .await;
                     }
-                    Err(e) => {
-                        warn!(
-                            "Workflow execution failed: {}, falling back to direct mode",
-                            e
-                        );
-                        // Fall through to direct mode
+                    let workflow_engine = WorkflowEngine::new(self.provider.clone());
+                    match workflow_engine
+                        .run(last_user_msg, last_user_msg, &NoOpStepExecutor)
+                        .await
+                    {
+                        Ok(result) => {
+                            if let Some(tx) = tx {
+                                let _ = tx.send(StreamEvent::Complete).await;
+                            }
+                            return Ok(LoopResult {
+                                content: result.final_report,
+                                tool_calls: Vec::new(),
+                                iterations: 0,
+                                pre_executed_results: std::collections::HashMap::new(),
+                            });
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Workflow execution failed: {}, falling back to direct mode",
+                                e
+                            );
+                            // Fall through to direct mode
+                        }
                     }
                 }
             }
@@ -1764,6 +1773,63 @@ mod tests {
             loop_result.content.contains("Sure, let me help"),
             "Expected mock LLM response, got: {}",
             loop_result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_conversation_loop_workflow_trigger_limit() {
+        // Mock 响应：第一次 workflow 消耗 1 个（thinking 在第 1 个问题后收敛），
+        // 第二次 direct 消耗第 2 个
+        let responses = VecDeque::from(vec![
+            ChatResponse {
+                content: "实现用户认证系统".into(),
+                tool_calls: None,
+                usage: None,
+            },
+            ChatResponse {
+                content: "Direct mode response after workflow limit.".into(),
+                tool_calls: None,
+                usage: None,
+            },
+        ]);
+
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(responses),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let tracker = Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new()));
+
+        let loop_engine = ConversationLoop::new(
+            provider,
+            registry,
+            tracker,
+            "mock-model".to_string(),
+        );
+
+        // 第一次调用：高风险消息 → Workflow 模式
+        let result1 = loop_engine
+            .run(vec![Message::user("重构整个用户认证系统")])
+            .await
+            .unwrap();
+        assert!(
+            result1.content.contains("Workflow 执行报告"),
+            "First call should trigger workflow"
+        );
+
+        // 第二次调用：同样高风险消息，但应走 Direct（每轮最多一次 workflow）
+        let result2 = loop_engine
+            .run(vec![Message::user("重构整个用户认证系统")])
+            .await
+            .unwrap();
+        assert!(
+            !result2.content.contains("Workflow 执行报告"),
+            "Second call should not trigger workflow, got: {}",
+            result2.content
+        );
+        assert!(
+            result2.content.contains("Direct mode response"),
+            "Expected direct response, got: {}",
+            result2.content
         );
     }
 }

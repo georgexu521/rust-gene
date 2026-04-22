@@ -393,6 +393,39 @@ Return exactly the word NONE if there is nothing critical to remember.";
         }
     }
 
+    /// 保存 Workflow 决策到记忆
+    ///
+    /// 将 Gate 决策、计划审批结果、执行结果等工作流关键决策
+    /// 写入 Project Memory，供未来会话参考。
+    pub fn save_workflow_decision(
+        &mut self,
+        decision_type: &str,
+        task: &str,
+        outcome: &str,
+        reasoning: &str,
+    ) {
+        let content = format!(
+            "[{}] Task: {} | Outcome: {} | Reason: {}",
+            decision_type, task, outcome, reasoning
+        );
+        self.add_learning(&content, "workflow");
+    }
+
+    /// 异步保存 Workflow 决策
+    pub async fn save_workflow_decision_async(
+        &self,
+        decision_type: &str,
+        task: &str,
+        outcome: &str,
+        reasoning: &str,
+    ) {
+        let content = format!(
+            "[{}] Task: {} | Outcome: {} | Reason: {}",
+            decision_type, task, outcome, reasoning
+        );
+        self.add_learning_async(&content, "workflow").await;
+    }
+
     /// 添加学习内容（同步版本）
     pub fn add_learning(&mut self, content: &str, category: &str) {
         let path = match category {
@@ -1104,10 +1137,13 @@ Always check logs first.
     #[test]
     fn test_frozen_snapshot() {
         let mut mgr = MemoryManager::new();
+        // 清除可能由其他测试留下的内容，确保测试独立
+        let _ = std::fs::remove_file(&mgr.memory_path);
+        let _ = std::fs::remove_file(&mgr.user_path);
         mgr.freeze_snapshot();
         let snapshot = mgr.get_snapshot();
         // 无记忆文件时应返回空
-        assert!(snapshot.is_empty() || snapshot.contains("[Memory Context]"));
+        assert!(snapshot.is_empty());
     }
 
     #[test]
@@ -1205,5 +1241,39 @@ Always check logs first.
         assert_eq!(count, 0); // 尚未触发 LLM 提取
         assert_eq!(turns, 3);
         assert_eq!(last, 0);
+    }
+
+    #[test]
+    fn test_save_workflow_decision() {
+        let mut mgr = MemoryManager::new();
+        // 清除可能由其他测试留下的内容
+        let _ = std::fs::remove_file(&mgr.memory_path);
+
+        // 1. 写入 workflow 决策
+        mgr.save_workflow_decision("gate", "implement auth", "Workflow", "Complex task with 5+ steps");
+
+        let memory = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+        assert!(
+            memory.contains("[gate] Task: implement auth | Outcome: Workflow"),
+            "Memory should contain workflow decision"
+        );
+        assert!(memory.contains("[WORKFLOW]"), "Should be categorized under WORKFLOW");
+
+        // 2. 去重：相同内容再次写入不应追加
+        let first_len = memory.len();
+        mgr.save_workflow_decision("gate", "implement auth", "Workflow", "Complex task with 5+ steps");
+        let second = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+        assert_eq!(
+            first_len, second.len(),
+            "Duplicate workflow decision should not be appended"
+        );
+
+        // 3. 写入另一条不同的决策
+        mgr.save_workflow_decision("execution", "fix bug", "Success", "All tests passed");
+        let third = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+        assert!(
+            third.contains("[execution] Task: fix bug | Outcome: Success"),
+            "Different decision should be appended"
+        );
     }
 }
