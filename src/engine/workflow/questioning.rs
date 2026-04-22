@@ -85,7 +85,7 @@ impl ThinkingResult {
             {
                 let cleaned = trimmed
                     .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ')
-                    .trim_start_matches(|c: char| c == '-' || c == '*' || c == ' ');
+                    .trim_start_matches(['-', '*', ' ']);
                 if !cleaned.is_empty() && cleaned.len() > 10 {
                     steps.push(cleaned.to_string());
                 }
@@ -481,14 +481,14 @@ fn extract_uncertainties(nodes: &[QuestionNode]) -> Vec<String> {
         {
             for line in node.answer.lines() {
                 let trimmed = line.trim();
-                if trimmed.contains("不确定")
+                if (trimmed.contains("不确定")
                     || trimmed.contains("可能")
                     || trimmed.contains("风险")
-                    || trimmed.contains("问题")
+                    || trimmed.contains("问题"))
+                    && trimmed.len() > 10
+                    && trimmed.len() < 200
                 {
-                    if trimmed.len() > 10 && trimmed.len() < 200 {
-                        uncertainties.push(trimmed.to_string());
-                    }
+                    uncertainties.push(trimmed.to_string());
                 }
             }
         }

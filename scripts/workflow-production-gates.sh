@@ -13,6 +13,7 @@ run_gate() {
 }
 
 run_gate "cargo-check" "cargo check -q"
+run_gate "cargo-clippy" "cargo clippy -q -- -D warnings"
 run_gate "workflow-param-replay" "bash scripts/workflow-param-replay.sh"
 run_gate "workflow-weekly-report" "bash scripts/workflow-weekly-report.sh 8"
 run_gate "workflow-m1-acceptance" "bash scripts/workflow-m1-acceptance.sh"

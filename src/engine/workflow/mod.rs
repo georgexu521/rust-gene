@@ -202,6 +202,16 @@ impl WorkflowEngine {
         sm.transition(WorkflowState::Planning);
         let mut plan = self.run_planning(&thinking_result, mainline_goal).await;
 
+        // 规划后强校验：依赖索引越界视为计划错误，避免静默执行顺序错乱。
+        let invalid_deps = WorkflowExecutor::find_invalid_dependency_indices(&plan);
+        if !invalid_deps.is_empty() {
+            sm.transition(WorkflowState::FallbackDirect);
+            return Err(format!(
+                "Invalid dependency indices detected in plan: {:?}",
+                invalid_deps
+            ));
+        }
+
         // 4. WEIGHTING（planning 已包含权重计算，这里作为显式状态记录）
         sm.transition(WorkflowState::Weighting);
 
@@ -228,7 +238,17 @@ impl WorkflowEngine {
             let planner = WorkflowPlanner::with_llm(self.llm_provider.clone());
             planner.reweight(&mut plan, mainline_goal);
 
-            // 补充执行：对 NeedsRefactor 步骤重新尝试
+            // 补充执行：对 [重构] 失败步骤进行“受控重试”。
+            // 先把 [重构] + Failed 的步骤转回 Pending，然后仅执行这一轮。
+            for step in &mut plan.steps {
+                if step.description.starts_with("[重构]")
+                    && matches!(step.status, crate::engine::plan_mode::StepStatus::Failed(_))
+                {
+                    step.status = crate::engine::plan_mode::StepStatus::Pending;
+                }
+            }
+
+            // 只执行当前 Pending，避免无限循环。
             let remaining = plan
                 .steps
                 .iter()
@@ -245,6 +265,23 @@ impl WorkflowEngine {
                 let extra_log = self.run_executing(&mut plan, step_executor, &mut sm).await?;
                 execution_log.extend(extra_log);
             }
+        }
+
+        // 进入 Done 前强校验：不能在仍有 Pending 时宣告完成。
+        let pending_steps: Vec<(usize, String)> = plan
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.status == crate::engine::plan_mode::StepStatus::Pending)
+            .map(|(i, s)| (i, s.description.clone()))
+            .collect();
+        if !pending_steps.is_empty() {
+            sm.transition(WorkflowState::FallbackDirect);
+            return Err(format!(
+                "Workflow incomplete: {} pending step(s) remain: {:?}",
+                pending_steps.len(),
+                pending_steps
+            ));
         }
 
         // M2: 记录执行反馈
@@ -274,17 +311,12 @@ impl WorkflowEngine {
     async fn run_gate(&self, task: &str, _mainline_goal: &str) -> Result<(), String> {
         // GATE 状态：与 ConversationLoop 保持一致的闸门判定。
         // 即使外部直接调用 WorkflowEngine，也会进行一次准入检查。
-        let gate = Gate::new().with_llm_classifier(
-            std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
-                .ok()
-                .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
-                .unwrap_or(false),
-        );
-        let decision = if std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
+        let gate_llm_enabled = std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
             .ok()
-            .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
-            .unwrap_or(false)
-        {
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false);
+        let gate = Gate::new().with_llm_classifier(gate_llm_enabled);
+        let decision = if gate_llm_enabled {
             gate.decide_with_llm(
                 task,
                 self.llm_provider.as_ref(),
@@ -333,31 +365,26 @@ impl WorkflowEngine {
         let executor = WorkflowExecutor::new();
         let mut all_records = Vec::new();
 
-        loop {
-            match executor.find_next_executable(plan) {
-                Some(idx) => {
-                    // 更新状态机执行进度
-                    let completed = plan
-                        .steps
-                        .iter()
-                        .filter(|s| {
-                            matches!(
-                                s.status,
-                                crate::engine::plan_mode::StepStatus::Completed
-                                    | crate::engine::plan_mode::StepStatus::Skipped
-                            )
-                        })
-                        .count();
-                    sm.current_state = WorkflowState::Executing {
-                        current_step: completed + 1,
-                        total: plan.steps.len(),
-                    };
+        while let Some(idx) = executor.find_next_executable(plan) {
+            // 更新状态机执行进度
+            let completed = plan
+                .steps
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.status,
+                        crate::engine::plan_mode::StepStatus::Completed
+                            | crate::engine::plan_mode::StepStatus::Skipped
+                    )
+                })
+                .count();
+            sm.current_state = WorkflowState::Executing {
+                current_step: completed + 1,
+                total: plan.steps.len(),
+            };
 
-                    let record = executor.execute_single_step(plan, idx, step_executor).await;
-                    all_records.push(record);
-                }
-                None => break,
-            }
+            let record = executor.execute_single_step(plan, idx, step_executor).await;
+            all_records.push(record);
         }
 
         Ok(all_records)

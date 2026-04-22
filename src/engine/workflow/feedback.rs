@@ -114,7 +114,7 @@ impl FeedbackEngine {
             std::fs::read_to_string(&path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_else(FeedbackData::new)
+                .unwrap_or_default()
         } else {
             FeedbackData::new()
         };
@@ -262,6 +262,12 @@ impl HistoricalFailureRule {
     }
 }
 
+impl Default for HistoricalFailureRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WeightRule for HistoricalFailureRule {
     fn dimension(&self) -> WeightDimension {
         // 使用 Risk 维度作为载体（历史失败本质上是风险的一种）
@@ -294,6 +300,7 @@ impl WeightRule for HistoricalFailureRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     fn make_record(description: &str, outcome: ExecutionOutcome) -> ExecutionRecord {
         ExecutionRecord {
@@ -314,6 +321,8 @@ mod tests {
 
     #[test]
     fn test_feedback_record_and_penalty() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_WORKFLOW_FEEDBACK", "1");
         let mut engine = temp_feedback_engine();
         engine.clear();
 
@@ -332,6 +341,8 @@ mod tests {
 
     #[test]
     fn test_drift_multiplier() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_WORKFLOW_FEEDBACK", "1");
         let mut engine = temp_feedback_engine();
         engine.clear();
 
@@ -357,6 +368,8 @@ mod tests {
 
     #[test]
     fn test_no_penalty_for_new_step_type() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_WORKFLOW_FEEDBACK", "1");
         let mut engine = temp_feedback_engine();
         engine.clear();
 
@@ -377,7 +390,6 @@ mod tests {
 
     #[test]
     fn test_feedback_disabled() {
-        use crate::test_utils::env_guard::EnvVarGuard;
         let mut env = EnvVarGuard::acquire_blocking();
         env.set("PRIORITY_AGENT_WORKFLOW_FEEDBACK", "0");
 

@@ -215,17 +215,31 @@ impl WorkflowRealStepExecutor {
         step: &crate::engine::plan_mode::PlanStep,
         schema: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        const MAX_SCHEMA_HINT_BYTES: usize = 2048;
+        const MAX_PROMPT_BYTES: usize = 4096;
+        let schema_hint = build_schema_hint(schema, MAX_SCHEMA_HINT_BYTES);
         let prompt = format!(
-            "你是工具参数生成器。根据 step 描述和 JSON schema 生成工具参数。\n\
+            "你是工具参数生成器。根据 step 描述和 schema 摘要生成工具参数。\n\
              只输出 JSON object，不要 markdown，不要解释。\n\
              step: {}\n\
              tool: {}\n\
-             schema: {}\n\
+             schema_hint: {}\n\
              输出:",
             step.description,
             step.tool.as_deref().unwrap_or("unknown"),
-            schema
+            schema_hint
         );
+        let prompt = if prompt.len() > MAX_PROMPT_BYTES {
+            warn!(
+                "llm_build_params prompt truncated: {} -> {} bytes (tool={})",
+                prompt.len(),
+                MAX_PROMPT_BYTES,
+                step.tool.as_deref().unwrap_or("unknown")
+            );
+            safe_prefix_by_bytes(&prompt, MAX_PROMPT_BYTES).to_string()
+        } else {
+            prompt
+        };
         let mut req = ChatRequest::new(&self.model)
             .with_messages(vec![
                 Message::system("只输出严格 JSON 对象，禁止多余文本。"),
@@ -654,6 +668,57 @@ fn extract_path_hint(step: &str) -> Option<String> {
     None
 }
 
+fn build_schema_hint(schema: &serde_json::Value, max_bytes: usize) -> String {
+    let required = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| v.as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
+    let mut prop_hints = Vec::new();
+    let props = schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    for (name, prop) in props.iter().take(16) {
+        let ty = prop
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let enum_vals = prop
+            .get("enum")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().take(6).filter_map(|x| x.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let default = prop.get("default").cloned().unwrap_or(serde_json::Value::Null);
+        let desc = prop
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        prop_hints.push(serde_json::json!({
+            "name": name,
+            "type": ty,
+            "required": required.iter().any(|r| r == name),
+            "enum": enum_vals,
+            "default": default,
+            "description": safe_prefix_by_bytes(desc, 120),
+        }));
+    }
+    let hint = serde_json::json!({
+        "required": required,
+        "properties": prop_hints,
+    });
+    let raw = serde_json::to_string(&hint).unwrap_or_else(|_| "{}".to_string());
+    if raw.len() <= max_bytes {
+        raw
+    } else {
+        safe_prefix_by_bytes(&raw, max_bytes).to_string()
+    }
+}
+
 fn extract_command(step: &str) -> Option<String> {
     let lower = step.to_lowercase();
     for marker in ["`", "cmd:", "command:"] {
@@ -1027,7 +1092,7 @@ impl ConversationLoop {
             {
                 let gate_llm_enabled = std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
                     .ok()
-                    .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+                    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
                     .unwrap_or(false);
                 let gate = Gate::new().with_llm_classifier(gate_llm_enabled);
                 if is_drift_interruption_signal(last_user_msg) {

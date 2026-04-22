@@ -65,16 +65,9 @@ impl WorkflowExecutor {
     ) -> Result<Vec<ExecutionRecord>, String> {
         let mut records = Vec::new();
 
-        loop {
-            match self.find_next_executable(plan) {
-                Some(idx) => {
-                    let record = self
-                        .execute_single_step(plan, idx, step_executor)
-                        .await;
-                    records.push(record);
-                }
-                None => break,
-            }
+        while let Some(idx) = self.find_next_executable(plan) {
+            let record = self.execute_single_step(plan, idx, step_executor).await;
+            records.push(record);
         }
 
         Ok(records)
@@ -102,12 +95,26 @@ impl WorkflowExecutor {
                         dep_step.status == StepStatus::Completed
                             || dep_step.status == StepStatus::Skipped
                     } else {
-                        true // 依赖索引越界视为已满足（防御性）
+                        false // 依赖索引越界：视为阻塞，避免执行顺序错误
                     }
                 })
             })
             .max_by_key(|(_, s)| s.weight)
             .map(|(idx, _)| idx)
+    }
+
+    /// 返回所有越界依赖索引（step_idx, dep_idx）
+    pub fn find_invalid_dependency_indices(plan: &Plan) -> Vec<(usize, usize)> {
+        let n = plan.steps.len();
+        let mut invalid = Vec::new();
+        for (step_idx, step) in plan.steps.iter().enumerate() {
+            for dep_idx in &step.dependent_step_indices {
+                if *dep_idx >= n {
+                    invalid.push((step_idx, *dep_idx));
+                }
+            }
+        }
+        invalid
     }
 
     /// 执行单个步骤（含重试逻辑）
@@ -158,14 +165,18 @@ impl WorkflowExecutor {
                         if !step.description.starts_with("[重构]") {
                             step.description = format!("[重构] {}", step.description);
                         }
-                        // M1 中标记为 Pending 并附带 NeedsRefactor 结果
-                        // 不设置为 Failed，以便上层 WorkflowEngine 可决定重新 plan
+                        // 根修：不能回到 Pending，否则调度器会无限重复选中同一步骤。
+                        // 这里直接标记为 Failed，由上层 WorkflowEngine 在 reweight 阶段
+                        // 决定是否把 [重构] 步骤重新转回 Pending 再尝试。
                         (
                             ExecutionOutcome::NeedsRefactor(format!(
                                 "首次: {}; 重试: {}",
                                 err1, err2
                             )),
-                            StepStatus::Pending,
+                            StepStatus::Failed(format!(
+                                "[重构] after retry failed: first='{}', retry='{}'",
+                                err1, err2
+                            )),
                         )
                     }
                 }
@@ -406,6 +417,10 @@ mod tests {
             plan.steps[0].description.starts_with("[重构]"),
             "Step description should be prefixed with [重构]"
         );
+        assert!(
+            matches!(plan.steps[0].status, StepStatus::Failed(_)),
+            "Refactor-needed step should be marked Failed to avoid infinite retry loop"
+        );
     }
 
     #[tokio::test]
@@ -429,6 +444,17 @@ mod tests {
         assert_eq!(records[0].step_index, 1);
         assert_eq!(records[1].step_index, 2);
         assert_eq!(records.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_dependency_index_blocks_execution() {
+        let executor = WorkflowExecutor::new();
+        let mut plan = make_plan_with_weights(vec![("步骤 0".into(), 100, vec![99])]);
+        let mock = MockStepExecutor::new(vec![Ok("ok".into())]);
+        let records = executor.execute(&mut plan, &mock).await.unwrap();
+        assert!(records.is_empty(), "invalid dependency should block execution");
+        assert!(WorkflowExecutor::find_invalid_dependency_indices(&plan).contains(&(0, 99)));
+        assert_eq!(plan.steps[0].status, StepStatus::Pending);
     }
 
     #[tokio::test]

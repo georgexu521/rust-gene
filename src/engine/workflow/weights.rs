@@ -124,6 +124,12 @@ impl RiskRule {
     }
 }
 
+impl Default for RiskRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WeightRule for RiskRule {
     fn dimension(&self) -> WeightDimension {
         WeightDimension::Risk
@@ -202,6 +208,12 @@ impl ImpactRule {
         }
 
         score.min(20)
+    }
+}
+
+impl Default for ImpactRule {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -286,6 +298,12 @@ impl ComplexityRule {
     }
 }
 
+impl Default for ComplexityRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WeightRule for ComplexityRule {
     fn dimension(&self) -> WeightDimension {
         WeightDimension::Complexity
@@ -319,6 +337,12 @@ impl BlockerValueRule {
     }
 }
 
+impl Default for BlockerValueRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WeightRule for BlockerValueRule {
     fn dimension(&self) -> WeightDimension {
         WeightDimension::BlockerValue
@@ -349,6 +373,12 @@ impl DependencyPenaltyRule {
         Self {
             multiplier: env_mul("PRIORITY_AGENT_WEIGHT_DEPENDENCY_MUL", 1.0),
         }
+    }
+}
+
+impl Default for DependencyPenaltyRule {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -445,6 +475,12 @@ impl DriftPenaltyRule {
         }
 
         (ratio < 0.2, format!("low_overlap({:.0}%)", ratio * 100.0))
+    }
+}
+
+impl Default for DriftPenaltyRule {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

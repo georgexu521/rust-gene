@@ -331,7 +331,7 @@ impl WorkflowPlanner {
         };
 
         let response = provider.chat(request).await?;
-        let descriptions: Vec<String> = serde_json::from_str(&response.content.trim())?;
+        let descriptions: Vec<String> = serde_json::from_str(response.content.trim())?;
 
         if descriptions.is_empty() {
             return Err(anyhow::anyhow!("LLM returned empty step list"));
@@ -484,7 +484,7 @@ impl WorkflowPlanner {
         };
 
         let response = provider.chat(request).await?;
-        let deps: Vec<Vec<usize>> = serde_json::from_str(&response.content.trim())?;
+        let deps: Vec<Vec<usize>> = serde_json::from_str(response.content.trim())?;
 
         // 安全校验：只保留合法的依赖（索引更小且无越界）
         let validated: Vec<Vec<usize>> = deps
@@ -508,13 +508,17 @@ impl WorkflowPlanner {
 
     fn infer_tool(description: &str) -> Option<String> {
         let d = description.to_lowercase();
+        let is_edit = d.contains("修改")
+            || d.contains("修复")
+            || d.contains("fix")
+            || d.contains("edit")
+            || d.contains("update")
+            || d.contains("改");
+        let is_search = d.contains("搜索") || d.contains("grep") || d.contains("find");
 
         // 读取类
         if d.contains("读取") || d.contains("查看") || d.contains("read") || d.contains("cat ") {
             return Some("file_read".into());
-        }
-        if d.contains("搜索") || d.contains("grep") || d.contains("find") {
-            return Some("grep".into());
         }
         if d.contains("glob") || d.contains("列出文件") || d.contains("list files") {
             return Some("glob".into());
@@ -527,10 +531,13 @@ impl WorkflowPlanner {
         }
 
         // 编辑类
-        if d.contains("修改") || d.contains("修复") || d.contains("fix") || d.contains("edit")
-            || d.contains("update") || d.contains("改")
-        {
+        if is_edit {
             return Some("file_edit".into());
+        }
+
+        // 搜索类（优先级低于编辑类，避免“find + fix”落到 grep）
+        if is_search {
+            return Some("grep".into());
         }
 
         // 执行类
@@ -593,18 +600,18 @@ impl WorkflowPlanner {
             let desc = &lowered[i];
 
             // 规则 1：顺序词 → 依赖前一步
-            if desc.contains("然后")
+            if (desc.contains("然后")
                 || desc.contains("之后")
                 || desc.contains("接着")
                 || desc.contains("next")
                 || desc.contains("then")
                 || desc.contains("after")
                 || desc.contains("finally")
-                || desc.contains("最后")
+                || desc.contains("最后"))
+                && i > 0
+                && !deps[i].contains(&(i - 1))
             {
-                if i > 0 && !deps[i].contains(&(i - 1)) {
-                    deps[i].push(i - 1);
-                }
+                deps[i].push(i - 1);
             }
 
             // M2 规则 5：语义依赖词 → 依赖前一步（强顺序暗示）

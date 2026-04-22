@@ -262,10 +262,13 @@ impl Default for Gate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
     use serde::Deserialize;
 
     #[test]
     fn test_fast_lane_help() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         let d = gate.decide("/help");
         assert!(matches!(d, GateDecision::Direct { .. }));
@@ -274,6 +277,8 @@ mod tests {
 
     #[test]
     fn test_fast_lane_git_status() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         let d = gate.decide("git status");
         assert!(matches!(d, GateDecision::Direct { .. }));
@@ -281,6 +286,8 @@ mod tests {
 
     #[test]
     fn test_fast_lane_greeting() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         assert!(matches!(gate.decide("你好"), GateDecision::Direct { .. }));
         assert!(matches!(gate.decide("hello"), GateDecision::Direct { .. }));
@@ -289,6 +296,8 @@ mod tests {
 
     #[test]
     fn test_heuristic_high_risk() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         let d = gate.decide("重构整个模块架构");
         assert!(matches!(d, GateDecision::Workflow { .. }));
@@ -297,6 +306,8 @@ mod tests {
 
     #[test]
     fn test_heuristic_low_risk() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         let d = gate.decide("修复一个 typo");
         assert!(matches!(d, GateDecision::Direct { .. }));
@@ -305,6 +316,8 @@ mod tests {
 
     #[test]
     fn test_default_to_workflow() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         // 既不匹配 Fast Lane 也不匹配 Heuristic
         let d = gate.decide("请帮我分析一下这个项目的代码结构");
@@ -313,6 +326,8 @@ mod tests {
 
     #[test]
     fn test_batch_decide() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         let inputs = vec!["/help", "重构模块", "修复 bug", "分析代码"];
         let results = gate.decide_batch(&inputs);
@@ -325,6 +340,8 @@ mod tests {
 
     #[test]
     fn test_complex_task_workflow() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         let cases = vec![
             "新增一个完整的用户认证系统",
@@ -345,6 +362,8 @@ mod tests {
 
     #[test]
     fn test_simple_task_direct() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
         let gate = Gate::new();
         let cases = vec![
             "更新版本号",
@@ -365,8 +384,6 @@ mod tests {
 
     #[test]
     fn test_workflow_disabled_env_var() {
-        use crate::test_utils::env_guard::EnvVarGuard;
-
         let mut env = EnvVarGuard::acquire_blocking();
         env.set("PRIORITY_AGENT_WORKFLOW_ENABLED", "0");
 
@@ -391,8 +408,6 @@ mod tests {
 
     #[test]
     fn test_workflow_enabled_by_default() {
-        use crate::test_utils::env_guard::EnvVarGuard;
-
         let mut env = EnvVarGuard::acquire_blocking();
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
 
