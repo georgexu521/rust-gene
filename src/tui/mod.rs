@@ -6,6 +6,7 @@ pub mod app;
 pub mod commands;
 pub mod components;
 pub mod keybindings;
+pub mod notify;
 pub mod screens;
 pub mod session_manager;
 pub mod slash_handler;
@@ -245,6 +246,7 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 f,
                 &app.diff_content,
                 &app.diff_title,
+                app.diff_scroll_offset,
                 f.area(),
                 &app.theme,
             );
@@ -263,15 +265,42 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return handle_ask_user_key_event(key, app).await;
     }
 
-    // Diff 查看器模式：只响应 Cancel/Quit
+    // Diff 查看器模式：滚动 + Cancel/Quit
     if app.mode == app::AppMode::DiffViewer {
         let action = app.keybindings.action_for(key, app.mode);
-        if matches!(action, AppAction::Cancel | AppAction::Quit) {
-            if app.pending_permission_request.is_some() {
-                app.mode = app::AppMode::PermissionApproval;
-            } else {
-                app.mode = app::AppMode::Chat;
+        match action {
+            AppAction::Cancel | AppAction::Quit => {
+                if app.pending_permission_request.is_some() {
+                    app.mode = app::AppMode::PermissionApproval;
+                } else {
+                    app.mode = app::AppMode::Chat;
+                }
             }
+            AppAction::ScrollUp => {
+                app.diff_scroll_offset = app.diff_scroll_offset.saturating_sub(1);
+            }
+            AppAction::ScrollDown => {
+                app.diff_scroll_offset = app.diff_scroll_offset.saturating_add(1);
+            }
+            AppAction::ScrollTop => {
+                app.diff_scroll_offset = 0;
+            }
+            AppAction::ScrollBottom => {
+                // 设置一个较大的值，渲染时会 clamp
+                app.diff_scroll_offset = u16::MAX;
+            }
+            _ => {}
+        }
+        // 也处理 PageUp/PageDown（直接通过 KeyCode 检查，不依赖 keybindings）
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::PageUp => {
+                app.diff_scroll_offset = app.diff_scroll_offset.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                app.diff_scroll_offset = app.diff_scroll_offset.saturating_add(10);
+            }
+            _ => {}
         }
         return Ok(false);
     }
@@ -313,6 +342,19 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     // 设置模式特殊处理（编辑模式不使用 action 映射）
     if app.mode == app::AppMode::Settings {
         return handle_settings_key_event(key, app).await;
+    }
+
+    // VimNormal 模式：添加 Ctrl+D/U 半页滚动（直接处理，不经过 action_for）
+    if app.mode == app::AppMode::VimNormal {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        if key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            app.scroll_down_half_page();
+            return Ok(false);
+        }
+        if key.code == KeyCode::Char('u') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            app.scroll_up_half_page();
+            return Ok(false);
+        }
     }
 
     // 其他模式统一通过 action_for 分发

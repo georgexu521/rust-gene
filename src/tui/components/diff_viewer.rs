@@ -15,6 +15,7 @@ pub fn render_diff_viewer(
     f: &mut Frame,
     diff_text: &str,
     title: &str,
+    scroll_offset: u16,
     area: Rect,
     theme: &crate::tui::theme::Theme,
 ) {
@@ -91,25 +92,35 @@ pub fn render_diff_viewer(
     lines.push(Line::from(vec![
         Span::styled("Press ", Style::default().fg(theme.border)),
         Span::styled(
-            "Esc",
+            "Esc/q",
             Style::default()
                 .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" or ", Style::default().fg(theme.border)),
+        Span::styled(" close  ", Style::default().fg(theme.border)),
         Span::styled(
-            "q",
+            "↑/↓",
             Style::default()
-                .fg(theme.warning)
+                .fg(theme.info)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" to close", Style::default().fg(theme.border)),
+        Span::styled(" scroll  ", Style::default().fg(theme.border)),
+        Span::styled(
+            "PgUp/PgDn",
+            Style::default()
+                .fg(theme.info)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" page", Style::default().fg(theme.border)),
     ]));
+
+    let total_lines = lines.len().saturating_sub(1) as u16;
+    let scroll = scroll_offset.min(total_lines);
 
     let text = Text::from(lines);
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: false })
-        .scroll((0, 0))
+        .scroll((scroll, 0))
         .block(block);
 
     f.render_widget(Clear, popup_area);

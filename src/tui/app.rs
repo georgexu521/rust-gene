@@ -205,6 +205,8 @@ pub struct TuiApp {
     pub diff_content: String,
     /// Diff 查看器标题
     pub diff_title: String,
+    /// Diff 查看器滚动偏移
+    pub diff_scroll_offset: u16,
     /// LSP 管理器
     pub lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     /// Worktree 管理器
@@ -318,6 +320,7 @@ impl TuiApp {
             question_response_tx: None,
             diff_content: String::new(),
             diff_title: String::new(),
+            diff_scroll_offset: 0,
             lsp_manager,
             worktree_manager,
             bundled_skills: {
@@ -930,15 +933,25 @@ impl TuiApp {
             "/token" => slash::handle_token(self),
             "/diff" => {
                 let tool = crate::tools::GitTool;
-                let params = serde_json::json!({ "action": "diff", "range": "HEAD~3..HEAD" });
+                let range = if args.trim().is_empty() {
+                    "HEAD~3..HEAD".to_string()
+                } else {
+                    args.trim().to_string()
+                };
+                let params = serde_json::json!({ "action": "diff", "range": range });
                 let result = tool.execute(params, self.build_tool_context().await).await;
                 if result.success {
-                    self.diff_title = "Recent changes (last 3 commits)".to_string();
+                    self.diff_title = format!("Diff: {}", args.trim());
+                    if args.trim().is_empty() {
+                        self.diff_title = "Recent changes (last 3 commits)".to_string();
+                    }
                     self.diff_content = result.content;
+                    self.diff_scroll_offset = 0;
                     self.mode = AppMode::DiffViewer;
                 } else {
                     self.diff_title = "Error".to_string();
                     self.diff_content = result.error.unwrap_or_else(|| "Unknown error".to_string());
+                    self.diff_scroll_offset = 0;
                     self.mode = AppMode::DiffViewer;
                 }
                 String::new()
@@ -1258,6 +1271,20 @@ impl TuiApp {
     /// 滚动到底部
     pub fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0; // 0 表示底部
+    }
+
+    /// 向上滚动半页（Vim Ctrl+U）
+    pub fn scroll_up_half_page(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_add(5);
+    }
+
+    /// 向下滚动半页（Vim Ctrl+D）
+    pub fn scroll_down_half_page(&mut self) {
+        if self.scroll_offset > 5 {
+            self.scroll_offset -= 5;
+        } else {
+            self.scroll_offset = 0;
+        }
     }
 
     /// 获取可见消息数量
