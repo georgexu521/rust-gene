@@ -29,6 +29,7 @@
 //! ### Stats & Health
 //! - `GET /api/stats` - 获取统计
 //! - `GET /api/workflow/metrics/weekly?limit=8` - 获取 workflow 每周汇总
+//! - `GET /api/workflow/metrics/calibration/weekly?limit=8` - 获取 workflow 每周人工校准偏差
 //! - `GET /api/audit/summary` - 获取审计概览
 //! - `GET /api/audit/recent?limit=50` - 获取最近工具审计事件
 //! - `POST /api/audit/export` - 导出审计快照

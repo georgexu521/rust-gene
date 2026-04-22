@@ -470,9 +470,33 @@ impl ApiState {
                 mainline_hit_rate: r.mainline_hit_rate,
                 avg_first_plan_coverage: r.avg_first_plan_coverage,
                 avg_rework_rate: r.avg_rework_rate,
+                avg_objective_score: r.avg_objective_score,
             })
             .collect();
         Ok(WorkflowWeeklyMetricsResponse {
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            weeks,
+        })
+    }
+
+    /// 获取 workflow 每周校准偏差指标（自动 vs 人工抽样）
+    pub async fn get_workflow_weekly_calibration(
+        &self,
+        limit_weeks: usize,
+    ) -> anyhow::Result<WorkflowWeeklyCalibrationResponse> {
+        let rows = crate::engine::workflow::metrics::load_weekly_calibration_summary(limit_weeks)
+            .map_err(anyhow::Error::msg)?;
+        let weeks = rows
+            .into_iter()
+            .map(|r| WorkflowWeeklyCalibrationItem {
+                week_key: r.week_key,
+                samples: r.samples,
+                avg_mainline_bias_abs: r.avg_mainline_bias_abs,
+                avg_coverage_bias_abs: r.avg_coverage_bias_abs,
+                avg_objective_bias_abs: r.avg_objective_bias_abs,
+            })
+            .collect();
+        Ok(WorkflowWeeklyCalibrationResponse {
             generated_at: chrono::Utc::now().to_rfc3339(),
             weeks,
         })
