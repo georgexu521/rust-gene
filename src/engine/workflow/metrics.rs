@@ -48,6 +48,8 @@ pub struct WorkflowMetrics {
     pub by_tool: std::collections::HashMap<String, StepTypeStats>,
     /// 北极星指标（当前为运行时近似值）
     pub north_star: NorthStarMetrics,
+    /// 当前策略版本（用于门禁对齐）
+    pub policy_version: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -56,11 +58,16 @@ pub struct NorthStarMetrics {
     pub drift_interruption_rate: f64,
     pub first_plan_coverage: f64,
     pub rework_rate: f64,
+    /// 统一目标函数得分（0-100）
+    pub objective_score: f64,
 }
 
 impl WorkflowMetrics {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            policy_version: "v1".to_string(),
+            ..Self::default()
+        }
     }
 
     /// 从执行记录列表聚合指标
@@ -84,6 +91,7 @@ impl WorkflowMetrics {
             .unwrap_or(false);
         metrics.north_star.first_plan_coverage = estimate_plan_coverage(plan, mainline_goal);
         metrics.north_star.drift_interruption_rate = global_drift_interruption_rate();
+        metrics.north_star.objective_score = metrics.compute_objective_score();
         metrics
     }
 
@@ -195,8 +203,26 @@ impl WorkflowMetrics {
             "- Rework Rate: {:.1}%\n",
             self.north_star.rework_rate
         ));
+        output.push_str(&format!(
+            "- Objective Score: {:.1}\n",
+            self.north_star.objective_score
+        ));
 
         output
+    }
+
+    /// 统一目标函数（第一性原理版本）
+    /// Score = MainlineHit*0.4 + FirstPassQuality*0.35 + CostEfficiency*0.25
+    fn compute_objective_score(&self) -> f64 {
+        let mainline_hit = if self.north_star.mainline_hit {
+            100.0
+        } else {
+            0.0
+        };
+        let first_pass_quality = (self.success_rate() - self.refactor_rate()).clamp(0.0, 100.0);
+        let cost_efficiency = cost_efficiency_score(self.avg_duration_ms());
+        (0.4 * mainline_hit + 0.35 * first_pass_quality + 0.25 * cost_efficiency)
+            .clamp(0.0, 100.0)
     }
 }
 
@@ -254,13 +280,39 @@ CREATE TABLE IF NOT EXISTS workflow_metrics_runs (
     rework_rate REAL NOT NULL,
     mainline_hit INTEGER NOT NULL,
     drift_interruption_rate REAL NOT NULL,
-    first_plan_coverage REAL NOT NULL
+    first_plan_coverage REAL NOT NULL,
+    objective_score REAL NOT NULL DEFAULT 0.0,
+    policy_version TEXT NOT NULL DEFAULT 'v1'
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_metrics_runs_week ON workflow_metrics_runs(week_key);
 CREATE INDEX IF NOT EXISTS idx_workflow_metrics_runs_run_at ON workflow_metrics_runs(run_at DESC);
+
+CREATE TABLE IF NOT EXISTS workflow_metrics_audits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audit_at TEXT NOT NULL DEFAULT (datetime('now')),
+    week_key TEXT NOT NULL,
+    task TEXT NOT NULL,
+    auto_mainline_hit INTEGER NOT NULL,
+    manual_mainline_hit INTEGER NOT NULL,
+    auto_coverage REAL NOT NULL,
+    manual_coverage REAL NOT NULL,
+    auto_objective_score REAL NOT NULL,
+    manual_objective_score REAL NOT NULL,
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_metrics_audits_week ON workflow_metrics_audits(week_key);
 "#,
     )
     .map_err(|e| format!("init metrics schema failed: {}", e))?;
+    // 兼容旧表结构：尝试补列（重复列错误可忽略）
+    let _ = conn.execute(
+        "ALTER TABLE workflow_metrics_runs ADD COLUMN objective_score REAL NOT NULL DEFAULT 0.0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workflow_metrics_runs ADD COLUMN policy_version TEXT NOT NULL DEFAULT 'v1'",
+        [],
+    );
     Ok(conn)
 }
 
@@ -274,8 +326,8 @@ pub fn persist_workflow_metrics(task: &str, goal: &str, metrics: &WorkflowMetric
 INSERT INTO workflow_metrics_runs (
     week_key, task, goal, total_steps, success, failed, needs_refactor, skipped,
     total_duration_ms, total_retries, success_rate, rework_rate, mainline_hit,
-    drift_interruption_rate, first_plan_coverage
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+    drift_interruption_rate, first_plan_coverage, objective_score, policy_version
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
 "#,
         params![
             week_key,
@@ -292,7 +344,9 @@ INSERT INTO workflow_metrics_runs (
             metrics.refactor_rate(),
             if metrics.north_star.mainline_hit { 1 } else { 0 },
             metrics.north_star.drift_interruption_rate,
-            metrics.north_star.first_plan_coverage
+            metrics.north_star.first_plan_coverage,
+            metrics.north_star.objective_score,
+            metrics.policy_version
         ],
     )
     .map_err(|e| format!("insert workflow metrics failed: {}", e))?;
@@ -306,6 +360,28 @@ pub struct WeeklyMetricSummary {
     pub mainline_hit_rate: f64,
     pub avg_first_plan_coverage: f64,
     pub avg_rework_rate: f64,
+    pub avg_objective_score: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeeklyCalibrationSummary {
+    pub week_key: String,
+    pub samples: usize,
+    pub avg_mainline_bias_abs: f64,
+    pub avg_coverage_bias_abs: f64,
+    pub avg_objective_bias_abs: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManualCalibrationInput {
+    pub task: String,
+    pub auto_mainline_hit: bool,
+    pub manual_mainline_hit: bool,
+    pub auto_coverage: f64,
+    pub manual_coverage: f64,
+    pub auto_objective_score: f64,
+    pub manual_objective_score: f64,
+    pub note: Option<String>,
 }
 
 /// 读取最近 N 周的指标汇总（按周降序）。
@@ -327,7 +403,8 @@ SELECT
   COUNT(*) AS runs,
   AVG(mainline_hit) * 100.0 AS mainline_hit_rate,
   AVG(first_plan_coverage) AS avg_first_plan_coverage,
-  AVG(rework_rate) AS avg_rework_rate
+  AVG(rework_rate) AS avg_rework_rate,
+  AVG(objective_score) AS avg_objective_score
 FROM workflow_metrics_runs
 GROUP BY week_key
 ORDER BY week_key DESC
@@ -343,6 +420,7 @@ LIMIT ?1
                 mainline_hit_rate: row.get(2)?,
                 avg_first_plan_coverage: row.get(3)?,
                 avg_rework_rate: row.get(4)?,
+                avg_objective_score: row.get(5)?,
             })
         })
         .map_err(|e| format!("query weekly summary failed: {}", e))?;
@@ -350,6 +428,76 @@ LIMIT ?1
     let mut out = Vec::new();
     for item in rows {
         out.push(item.map_err(|e| format!("read weekly summary row failed: {}", e))?);
+    }
+    Ok(out)
+}
+
+/// 记录人工抽样校准结果（自动指标 vs 人工标注）
+pub fn persist_manual_calibration(
+    input: &ManualCalibrationInput,
+) -> Result<(), String> {
+    let path = default_metrics_db_path();
+    let conn = open_metrics_db(&path)?;
+    let week_key = chrono::Local::now().format("%Y-W%W").to_string();
+    conn.execute(
+        r#"
+INSERT INTO workflow_metrics_audits (
+    week_key, task, auto_mainline_hit, manual_mainline_hit, auto_coverage, manual_coverage,
+    auto_objective_score, manual_objective_score, note
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+"#,
+        params![
+            week_key,
+            input.task,
+            if input.auto_mainline_hit { 1 } else { 0 },
+            if input.manual_mainline_hit { 1 } else { 0 },
+            input.auto_coverage,
+            input.manual_coverage,
+            input.auto_objective_score,
+            input.manual_objective_score,
+            input.note.as_deref().unwrap_or("")
+        ],
+    )
+    .map_err(|e| format!("insert workflow calibration failed: {}", e))?;
+    Ok(())
+}
+
+/// 读取最近 N 周人工校准偏差汇总。
+pub fn load_weekly_calibration_summary(
+    limit_weeks: usize,
+) -> Result<Vec<WeeklyCalibrationSummary>, String> {
+    let path = default_metrics_db_path();
+    let conn = open_metrics_db(&path)?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+SELECT
+  week_key,
+  COUNT(*) AS samples,
+  AVG(ABS(manual_mainline_hit - auto_mainline_hit)) * 100.0 AS avg_mainline_bias_abs,
+  AVG(ABS(manual_coverage - auto_coverage)) AS avg_coverage_bias_abs,
+  AVG(ABS(manual_objective_score - auto_objective_score)) AS avg_objective_bias_abs
+FROM workflow_metrics_audits
+GROUP BY week_key
+ORDER BY week_key DESC
+LIMIT ?1
+"#,
+        )
+        .map_err(|e| format!("prepare weekly calibration query failed: {}", e))?;
+    let rows = stmt
+        .query_map(params![limit_weeks as i64], |row| {
+            Ok(WeeklyCalibrationSummary {
+                week_key: row.get(0)?,
+                samples: row.get::<_, i64>(1)? as usize,
+                avg_mainline_bias_abs: row.get(2)?,
+                avg_coverage_bias_abs: row.get(3)?,
+                avg_objective_bias_abs: row.get(4)?,
+            })
+        })
+        .map_err(|e| format!("query weekly calibration failed: {}", e))?;
+    let mut out = Vec::new();
+    for item in rows {
+        out.push(item.map_err(|e| format!("read weekly calibration row failed: {}", e))?);
     }
     Ok(out)
 }
@@ -380,6 +528,14 @@ fn estimate_plan_coverage(plan: &Plan, mainline_goal: &str) -> f64 {
         .filter(|s| relevance_score(&s.description, mainline_goal) >= 0.2)
         .count();
     (aligned as f64 / plan.steps.len() as f64) * 100.0
+}
+
+fn cost_efficiency_score(avg_duration_ms: f64) -> f64 {
+    if avg_duration_ms <= 0.0 {
+        return 100.0;
+    }
+    // 经验映射：平均 200ms 约 80 分，1000ms 约 50 分，3000ms 约 25 分
+    (100.0 / (1.0 + avg_duration_ms / 1000.0)).clamp(0.0, 100.0)
 }
 
 // ============================================================================
@@ -516,26 +672,28 @@ CREATE TABLE workflow_metrics_runs (
     rework_rate REAL NOT NULL,
     mainline_hit INTEGER NOT NULL,
     drift_interruption_rate REAL NOT NULL,
-    first_plan_coverage REAL NOT NULL
+    first_plan_coverage REAL NOT NULL,
+    objective_score REAL NOT NULL,
+    policy_version TEXT NOT NULL
 );
 "#,
         )
         .expect("create table");
         conn.execute(
-            "INSERT INTO workflow_metrics_runs (week_key, task, goal, total_steps, success, failed, needs_refactor, skipped, total_duration_ms, total_retries, success_rate, rework_rate, mainline_hit, drift_interruption_rate, first_plan_coverage)
-             VALUES ('2026-W16','a','a',3,2,0,1,0,1000,1,66.7,33.3,1,10.0,70.0)",
+            "INSERT INTO workflow_metrics_runs (week_key, task, goal, total_steps, success, failed, needs_refactor, skipped, total_duration_ms, total_retries, success_rate, rework_rate, mainline_hit, drift_interruption_rate, first_plan_coverage, objective_score, policy_version)
+             VALUES ('2026-W16','a','a',3,2,0,1,0,1000,1,66.7,33.3,1,10.0,70.0,72.0,'v1')",
             [],
         )
         .expect("insert row1");
         conn.execute(
-            "INSERT INTO workflow_metrics_runs (week_key, task, goal, total_steps, success, failed, needs_refactor, skipped, total_duration_ms, total_retries, success_rate, rework_rate, mainline_hit, drift_interruption_rate, first_plan_coverage)
-             VALUES ('2026-W16','b','b',4,3,0,1,0,1200,1,75.0,25.0,0,20.0,80.0)",
+            "INSERT INTO workflow_metrics_runs (week_key, task, goal, total_steps, success, failed, needs_refactor, skipped, total_duration_ms, total_retries, success_rate, rework_rate, mainline_hit, drift_interruption_rate, first_plan_coverage, objective_score, policy_version)
+             VALUES ('2026-W16','b','b',4,3,0,1,0,1200,1,75.0,25.0,0,20.0,80.0,68.0,'v1')",
             [],
         )
         .expect("insert row2");
         conn.execute(
-            "INSERT INTO workflow_metrics_runs (week_key, task, goal, total_steps, success, failed, needs_refactor, skipped, total_duration_ms, total_retries, success_rate, rework_rate, mainline_hit, drift_interruption_rate, first_plan_coverage)
-             VALUES ('2026-W15','c','c',2,2,0,0,0,600,0,100.0,0.0,1,0.0,90.0)",
+            "INSERT INTO workflow_metrics_runs (week_key, task, goal, total_steps, success, failed, needs_refactor, skipped, total_duration_ms, total_retries, success_rate, rework_rate, mainline_hit, drift_interruption_rate, first_plan_coverage, objective_score, policy_version)
+             VALUES ('2026-W15','c','c',2,2,0,0,0,600,0,100.0,0.0,1,0.0,90.0,92.0,'v1')",
             [],
         )
         .expect("insert row3");
@@ -546,5 +704,34 @@ CREATE TABLE workflow_metrics_runs (
         assert_eq!(summary[0].runs, 2);
         assert!((summary[0].mainline_hit_rate - 50.0).abs() < 0.1);
         assert!((summary[0].avg_first_plan_coverage - 75.0).abs() < 0.1);
+        assert!((summary[0].avg_objective_score - 70.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_manual_calibration_roundtrip() {
+        let tmp = tempdir().expect("tmp dir");
+        let db_path = tmp.path().join("workflow_metrics.db");
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set(
+            "PRIORITY_AGENT_WORKFLOW_METRICS_DB",
+            db_path.to_string_lossy().as_ref(),
+        );
+
+        let input = ManualCalibrationInput {
+            task: "task-1".to_string(),
+            auto_mainline_hit: true,
+            manual_mainline_hit: false,
+            auto_coverage: 80.0,
+            manual_coverage: 60.0,
+            auto_objective_score: 75.0,
+            manual_objective_score: 55.0,
+            note: Some("sample audit".to_string()),
+        };
+        persist_manual_calibration(&input).expect("persist calibration");
+
+        let rows = load_weekly_calibration_summary(4).expect("load calibration summary");
+        assert!(!rows.is_empty());
+        assert!(rows[0].samples >= 1);
+        assert!(rows[0].avg_mainline_bias_abs >= 0.0);
     }
 }

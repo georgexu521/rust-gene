@@ -778,3 +778,64 @@
 - ✅ 已完成：S1 首步落地，`metrics-storage-spec.md` + SQLite 持久化接线（`workflow_metrics_runs`）
 - ✅ 已完成：`/api/workflow/metrics/weekly` 查询接口（支持 `limit`）
 - ✅ 已完成：`workflow-weekly-report.sh` 周报脚本升级（含 WoW 环比列）
+
+---
+
+## 13. 第一性原理与顶层设计修正计划（详细版）
+
+> 背景：当前“权重 + 主动提问式深思（Socratic）”主链路已可运行，下一阶段重点从“功能存在”升级到“策略可校准、结果可证明、发布可持续”。
+
+### 13.1 总体目标（North Star）
+1. 在固定成本预算下，最大化主线推进效率与一次通过率。
+2. 降低“看似完成但质量不闭环”的假阳性。
+3. 让 Gate / Weight / Questioning / Executor 的决策在同一策略语义下可解释、可对账。
+
+### 13.2 顶层修正方向 A：统一目标函数与策略语义
+1. 新增统一评分口径：`Score = MainlineHit * 0.4 + FirstPassQuality * 0.35 + CostEfficiency * 0.25`。
+2. 将 `fallback/retry/reweight/abort` 定义为互斥状态转移，禁止同一错误路径多语义解释。
+3. 在 `docs/workflow/` 新增 `policy-spec.md`，统一 Gate、权重、提问、执行的触发阈值说明。
+4. 验收：任意一次 workflow run 都能输出“为什么进 workflow / 为什么重算 / 为什么降级”的同口径解释。
+
+### 13.3 顶层修正方向 B：策略中心化（Policy Layer）
+1. 引入 `WorkflowPolicy`（集中读取 env、阈值、启发式开关），避免阈值散落多模块。
+2. Gate/Questioning/Weights 统一依赖 `WorkflowPolicy`，减少隐藏耦合。
+3. 所有策略变更通过单一配置快照记录到指标（便于回放对比）。
+4. 验收：策略参数变更后，可在周报中直接关联到指标变化（非人工猜测）。
+
+### 13.4 顶层修正方向 C：Socratic 从“问得多”升级到“证据驱动”
+1. 为每轮提问增加 `evidence_required` 字段：必须产出可执行证据（文件/命令/断言/风险项）。
+2. 若未形成证据，允许继续提问；若达到预算仍无证据，强制降级为 Direct 并输出缺失证据列表。
+3. 把“收敛条件”从仅文本长度/不确定性，升级为“证据闭环度 + 主线相关度 + 风险覆盖度”。
+4. 验收：复杂任务中，`question_chain` 至少 70% 节点附带可执行证据项。
+
+### 13.5 顶层修正方向 D：权重从静态规则升级为“规则 + 反馈校准”
+1. 保留六维规则作为保底排序，新增 `feedback_adjustment`（基于历史失败签名、返工率、工具失败率）。
+2. 对高返工步骤自动提升 DriftPenalty 或 BlockerValue，避免重复跑偏。
+3. 新增“排序稳定性”指标：相同输入在同策略版本下排序一致率应接近 100%。
+4. 验收：连续两周 `Rework Rate` 降低且 `Mainline Hit` 不下降。
+
+### 13.6 顶层修正方向 E：指标可信度升级（从近似到可运营）
+1. 将 `MainlineHit` 与 `FirstPlanCoverage` 拆为“启发式值 + 人工抽样校准值”双轨。
+2. 每周固定抽样（建议 20-30 条）做人审对账，记录偏差率。
+3. 报告中显式展示“自动指标置信区间”，避免仅看单点百分比。
+4. 验收：自动指标与人工抽样偏差率持续收敛（目标 <= 10%）。
+
+### 13.7 顶层修正方向 F：生产门禁与运行时一致性
+1. 将 clippy/test/replay/real-devflow 与策略版本绑定，避免“代码绿但策略漂移”。
+2. 门禁报告增加 `policy_version`、`gate_mode`、`questioning_budget`、`weight_multipliers` 快照。
+3. 新增“失败语义一致性测试”：同类错误触发的状态转移必须一致。
+4. 验收：门禁失败可直接定位是“代码回归”还是“策略回归”。
+
+### 13.8 6 周落地节奏（从设计修正到可运行）
+1. Week 1: 冻结 `policy-spec.md` + 失败语义状态机图 + 指标口径字典 v2。
+2. Week 2: 完成 `WorkflowPolicy` 接线（Gate/Weights/Questioning 三模块）。
+3. Week 3: Socratic 证据字段与收敛规则升级，加入缺失证据降级路径。
+4. Week 4: 权重反馈校准上线，补排序稳定性与回归测试。
+5. Week 5: 指标双轨校准与周报升级（自动值 + 抽样值）。
+6. Week 6: 全量门禁联调，产出 `top-level-design-readiness-report.md`。
+
+### 13.9 DoD（本章节完成定义）
+1. 代码层：Policy Layer 落地并替代散落阈值读取。
+2. 指标层：自动指标与人工抽样对账机制常态化。
+3. 发布层：门禁报告能定位策略回归来源。
+4. 业务层：复杂编程任务的主线命中与返工率趋势稳定改善。
