@@ -104,6 +104,74 @@ impl SocraticSession {
         self
     }
 
+    /// 自动思考模式（active-triggering）
+    ///
+    /// 根据任务特征自动判断是否启动 Socratic 分析：
+    /// - 如果满足触发条件，生成初始问题并返回 true
+    /// - 否则返回 false，跳过分析
+    ///
+    /// 触发条件可通过环境变量覆盖：
+    /// - `PRIORITY_AGENT_AUTO_THINK=0` — 禁用自动触发
+    pub fn auto_think(&mut self) -> bool {
+        if Self::should_auto_trigger(&self.task) {
+            self.generate_initial_questions();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 判断任务是否应该自动触发 Socratic 分析
+    ///
+    /// 触发条件（满足任一）：
+    /// 1. 任务描述长度 > 50 字符
+    /// 2. 包含复杂关键词（设计/重构/架构/分析/评估/优化）
+    /// 3. 涉及多个子领域（数据库+前端+后端等）
+    /// 4. 包含不确定/模糊词汇（"看看"/"研究"/"调研"）
+    pub fn should_auto_trigger(task: &str) -> bool {
+        // 环境变量禁用
+        if std::env::var("PRIORITY_AGENT_AUTO_THINK")
+            .ok()
+            .map(|v| v == "0")
+            .unwrap_or(false)
+        {
+            return false;
+        }
+
+        let t = task.to_lowercase();
+
+        // 条件 1：长度
+        if t.chars().count() > 50 {
+            return true;
+        }
+
+        // 条件 2：复杂关键词
+        let complex_keywords = [
+            "设计", "重构", "架构", "分析", "评估", "优化",
+            "design", "refactor", "architecture", "analyze", "evaluate", "optimize",
+            "系统", "模块", "集成", "方案", "策略",
+            "system", "module", "integration", "strategy",
+        ];
+        if complex_keywords.iter().any(|kw| t.contains(kw)) {
+            return true;
+        }
+
+        // 条件 3：多领域暗示
+        let domains = ["数据库", "前端", "后端", "api", "ui", "测试", "deploy"];
+        let domain_hits = domains.iter().filter(|d| t.contains(*d)).count();
+        if domain_hits >= 2 {
+            return true;
+        }
+
+        // 条件 4：模糊/探索性词汇
+        let fuzzy_keywords = ["看看", "研究", "调研", "调查", "review", "research", "investigate"];
+        if fuzzy_keywords.iter().any(|kw| t.contains(kw)) {
+            return true;
+        }
+
+        false
+    }
+
     /// 生成初始问题
     pub fn generate_initial_questions(&mut self) {
         let seq = QuestionType::exploration_sequence();
@@ -575,5 +643,49 @@ mod tests {
         let answer = "这个任务的风险是数据丢失。需要做好备份。主要问题是并发处理。";
         let followups = session.extract_followups(answer, &QuestionType::RiskAssessment);
         assert!(!followups.is_empty());
+    }
+
+    // ============================================================================
+    // Auto-think 测试
+    // ============================================================================
+
+    #[test]
+    fn test_should_auto_trigger_long_task() {
+        let task = "这是一个非常长的任务描述，涉及多个模块的设计和实现，需要仔细分析";
+        assert!(SocraticSession::should_auto_trigger(task));
+    }
+
+    #[test]
+    fn test_should_auto_trigger_complex_keyword() {
+        assert!(SocraticSession::should_auto_trigger("重构用户认证模块"));
+        assert!(SocraticSession::should_auto_trigger("优化数据库查询性能"));
+        assert!(SocraticSession::should_auto_trigger("design new api"));
+    }
+
+    #[test]
+    fn test_should_auto_trigger_multi_domain() {
+        assert!(SocraticSession::should_auto_trigger("设计数据库表并编写前端界面"));
+    }
+
+    #[test]
+    fn test_should_not_auto_trigger_simple_task() {
+        assert!(!SocraticSession::should_auto_trigger("修 bug"));
+        assert!(!SocraticSession::should_auto_trigger("hello"));
+    }
+
+    #[test]
+    fn test_auto_think_triggers_when_appropriate() {
+        let mut session = SocraticSession::new("重构整个认证系统并优化数据库查询".to_string());
+        let triggered = session.auto_think();
+        assert!(triggered, "Complex task should trigger auto-think");
+        assert!(!session.pending_questions.is_empty());
+    }
+
+    #[test]
+    fn test_auto_think_skips_simple_task() {
+        let mut session = SocraticSession::new("hi".to_string());
+        let triggered = session.auto_think();
+        assert!(!triggered, "Simple greeting should not trigger auto-think");
+        assert!(session.pending_questions.is_empty());
     }
 }
