@@ -12,6 +12,7 @@ pub mod executor;
 pub mod feedback;
 pub mod gate;
 pub mod metrics;
+pub mod policy;
 pub mod planner;
 pub mod questioning;
 pub mod weights;
@@ -19,6 +20,7 @@ pub mod weights;
 pub use executor::{ExecutionOutcome, ExecutionRecord, NoOpStepExecutor, StepExecutor, WorkflowExecutor};
 pub use feedback::{FeedbackEngine, HistoricalFailureRule};
 pub use metrics::WorkflowMetrics;
+pub use policy::{GatePolicy, SocraticPolicy, WeightMultipliers, WorkflowPolicy};
 pub use gate::{Gate, GateDecision};
 pub use planner::WorkflowPlanner;
 pub use questioning::{ActiveQuestioningEngine, QuestionNode, ThinkingResult};
@@ -154,11 +156,20 @@ impl Default for WorkflowStateMachine {
 /// VERIFYING → (REWEIGHT → EXECUTING)* → DONE → REPORT
 pub struct WorkflowEngine {
     llm_provider: Arc<dyn LlmProvider>,
+    policy: WorkflowPolicy,
 }
 
 impl WorkflowEngine {
     pub fn new(llm_provider: Arc<dyn LlmProvider>) -> Self {
-        Self { llm_provider }
+        Self {
+            llm_provider,
+            policy: WorkflowPolicy::from_env(),
+        }
+    }
+
+    pub fn with_policy(mut self, policy: WorkflowPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 
     /// 运行完整 Workflow（状态机驱动）
@@ -235,7 +246,10 @@ impl WorkflowEngine {
         // 7. REWEIGHT（如有 NeedsRefactor 的步骤）
         if needs_reweight {
             sm.transition(WorkflowState::Reweight);
-            let planner = WorkflowPlanner::with_llm(self.llm_provider.clone());
+            let planner = WorkflowPlanner::with_llm_and_policy(
+                self.llm_provider.clone(),
+                &self.policy,
+            );
             planner.reweight(&mut plan, mainline_goal);
 
             // 补充执行：对 [重构] 失败步骤进行“受控重试”。
@@ -293,7 +307,8 @@ impl WorkflowEngine {
 
         // 9. REPORT
         sm.transition(WorkflowState::Report);
-        let final_report = Self::build_report(&thinking_result, &plan, &execution_log, &sm);
+        let final_report =
+            Self::build_report(&thinking_result, &plan, &execution_log, &sm, &self.policy);
 
         Ok(WorkflowResult {
             thinking_result,
@@ -311,12 +326,8 @@ impl WorkflowEngine {
     async fn run_gate(&self, task: &str, _mainline_goal: &str) -> Result<(), String> {
         // GATE 状态：与 ConversationLoop 保持一致的闸门判定。
         // 即使外部直接调用 WorkflowEngine，也会进行一次准入检查。
-        let gate_llm_enabled = std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
-            .ok()
-            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-            .unwrap_or(false);
-        let gate = Gate::new().with_llm_classifier(gate_llm_enabled);
-        let decision = if gate_llm_enabled {
+        let gate = Gate::new().with_policy(self.policy.gate.clone());
+        let decision = if self.policy.gate.llm_classifier_enabled {
             gate.decide_with_llm(
                 task,
                 self.llm_provider.as_ref(),
@@ -342,7 +353,7 @@ impl WorkflowEngine {
         let mut questioning = ActiveQuestioningEngine::new(task.into(), mainline_goal.into());
         let model = self.llm_provider.default_model();
         questioning
-            .think(self.llm_provider.as_ref(), model)
+            .think_with_policy(self.llm_provider.as_ref(), model, &self.policy.socratic)
             .await
             .map_err(|e| format!("Thinking failed: {}", e))
     }
@@ -352,7 +363,10 @@ impl WorkflowEngine {
         thinking_result: &ThinkingResult,
         mainline_goal: &str,
     ) -> Plan {
-        let planner = WorkflowPlanner::with_llm(self.llm_provider.clone());
+        let planner = WorkflowPlanner::with_llm_and_policy(
+            self.llm_provider.clone(),
+            &self.policy,
+        );
         planner.plan_with_recursion(thinking_result, mainline_goal).await
     }
 
@@ -407,6 +421,7 @@ impl WorkflowEngine {
         plan: &Plan,
         execution_log: &[ExecutionRecord],
         sm: &WorkflowStateMachine,
+        policy: &WorkflowPolicy,
     ) -> String {
         let mut output = String::new();
         output.push_str("# Workflow 执行报告\n\n");
@@ -429,7 +444,8 @@ impl WorkflowEngine {
         output.push_str(&WorkflowExecutor::format_report(execution_log));
         output.push('\n');
         // M1: 追加执行指标聚合
-        let metrics = WorkflowMetrics::from_workflow(plan, execution_log, &plan.goal);
+        let mut metrics = WorkflowMetrics::from_workflow(plan, execution_log, &plan.goal);
+        metrics.policy_version = "workflow-policy-v1".to_string();
         output.push_str(&metrics.summary());
         match crate::engine::workflow::metrics::persist_workflow_metrics(
             &thinking.problem_statement,
@@ -442,6 +458,28 @@ impl WorkflowEngine {
         output.push('\n');
         // 状态机历史
         output.push_str(&sm.format_history());
+        output.push_str("\n## Policy Snapshot\n\n");
+        output.push_str(&format!(
+            "- Gate: workflow_enabled={}, llm_classifier_enabled={}\n",
+            policy.gate.workflow_enabled, policy.gate.llm_classifier_enabled
+        ));
+        output.push_str(&format!(
+            "- Socratic: max_rounds={}, max_answer_tokens={}, max_total_tokens={}, max_depth={}\n",
+            policy.socratic.max_rounds,
+            policy.socratic.max_answer_tokens,
+            policy.socratic.max_total_tokens,
+            policy.socratic.max_depth
+        ));
+        output.push_str(&format!(
+            "- Weight Multipliers: risk={:.2}, impact={:.2}, complexity={:.2}, blocker={:.2}, dependency={:.2}, drift={:.2}, historical_failure={:.2}\n",
+            policy.weights.risk,
+            policy.weights.impact,
+            policy.weights.complexity,
+            policy.weights.blocker,
+            policy.weights.dependency,
+            policy.weights.drift,
+            policy.weights.historical_failure
+        ));
         output
     }
 }
@@ -556,5 +594,34 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_gate_disabled_returns_direct_fallback_error() {
+        let policy = WorkflowPolicy {
+            gate: GatePolicy {
+                workflow_enabled: false,
+                llm_classifier_enabled: false,
+            },
+            ..WorkflowPolicy::default()
+        };
+        let engine = WorkflowEngine::new(Arc::new(MockLlmProvider)).with_policy(policy);
+        let result = engine
+            .run("重构整个认证系统", "重构整个认证系统", &MockStepExecutor)
+            .await;
+        assert!(result.is_err());
+        let err = result.err().unwrap_or_default();
+        assert!(err.contains("Gate decided Direct mode"));
+    }
+
+    #[tokio::test]
+    async fn test_workflow_report_contains_policy_snapshot() {
+        let engine = WorkflowEngine::new(Arc::new(MockLlmProvider));
+        let result = engine
+            .run("实现用户认证系统", "实现用户认证系统", &MockStepExecutor)
+            .await
+            .expect("workflow should complete");
+        assert!(result.final_report.contains("Policy Snapshot"));
+        assert!(result.final_report.contains("Weight Multipliers"));
     }
 }

@@ -9,6 +9,7 @@
 //!   经 sigmoid 映射到 [0, 100]
 
 use super::feedback::{FeedbackEngine, HistoricalFailureRule};
+use super::policy::WeightMultipliers;
 
 /// 计算权重所需的环境变量系数
 fn env_mul(name: &str, default: f64) -> f64 {
@@ -90,6 +91,10 @@ impl RiskRule {
         Self {
             multiplier: env_mul("PRIORITY_AGENT_WEIGHT_RISK_MUL", 1.0),
         }
+    }
+
+    pub fn with_multiplier(multiplier: f64) -> Self {
+        Self { multiplier }
     }
 
     fn tool_risk_score(tool: &str) -> i32 {
@@ -177,6 +182,10 @@ impl ImpactRule {
         }
     }
 
+    pub fn with_multiplier(multiplier: f64) -> Self {
+        Self { multiplier }
+    }
+
     fn desc_impact_score(desc: &str) -> i32 {
         let d = desc.to_lowercase();
         let mut score = 0;
@@ -247,6 +256,10 @@ impl ComplexityRule {
         Self {
             multiplier: env_mul("PRIORITY_AGENT_WEIGHT_COMPLEXITY_MUL", 1.0),
         }
+    }
+
+    pub fn with_multiplier(multiplier: f64) -> Self {
+        Self { multiplier }
     }
 
     fn desc_complexity_score(desc: &str) -> i32 {
@@ -335,6 +348,10 @@ impl BlockerValueRule {
             multiplier: env_mul("PRIORITY_AGENT_WEIGHT_BLOCKER_MUL", 1.0),
         }
     }
+
+    pub fn with_multiplier(multiplier: f64) -> Self {
+        Self { multiplier }
+    }
 }
 
 impl Default for BlockerValueRule {
@@ -373,6 +390,10 @@ impl DependencyPenaltyRule {
         Self {
             multiplier: env_mul("PRIORITY_AGENT_WEIGHT_DEPENDENCY_MUL", 1.0),
         }
+    }
+
+    pub fn with_multiplier(multiplier: f64) -> Self {
+        Self { multiplier }
     }
 }
 
@@ -420,6 +441,13 @@ impl DriftPenaltyRule {
     pub fn new() -> Self {
         Self {
             multiplier: env_mul("PRIORITY_AGENT_WEIGHT_DRIFT_MUL", 1.0),
+            feedback: FeedbackEngine::load(),
+        }
+    }
+
+    pub fn with_multiplier(multiplier: f64) -> Self {
+        Self {
+            multiplier,
             feedback: FeedbackEngine::load(),
         }
     }
@@ -545,6 +573,21 @@ impl WeightEngine {
             Box::new(DependencyPenaltyRule::new()),
             Box::new(DriftPenaltyRule::new()),
             Box::new(HistoricalFailureRule::new()),
+        ];
+        Self { rules }
+    }
+
+    pub fn from_multipliers(multipliers: &WeightMultipliers) -> Self {
+        let rules: Vec<Box<dyn WeightRule>> = vec![
+            Box::new(RiskRule::with_multiplier(multipliers.risk)),
+            Box::new(ImpactRule::with_multiplier(multipliers.impact)),
+            Box::new(ComplexityRule::with_multiplier(multipliers.complexity)),
+            Box::new(BlockerValueRule::with_multiplier(multipliers.blocker)),
+            Box::new(DependencyPenaltyRule::with_multiplier(multipliers.dependency)),
+            Box::new(DriftPenaltyRule::with_multiplier(multipliers.drift)),
+            Box::new(HistoricalFailureRule::with_multiplier(
+                multipliers.historical_failure,
+            )),
         ];
         Self { rules }
     }

@@ -7,7 +7,7 @@
 //! - 前置压缩（Preflight）：循环前检查总 token，超阈值提前压缩
 //! - IterationBudget：迭代预算退还机制（只读工具可退还）
 
-use crate::engine::workflow::{Gate, StepExecutor, WorkflowEngine};
+use crate::engine::workflow::{Gate, StepExecutor, WorkflowEngine, WorkflowPolicy};
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
@@ -1090,15 +1090,12 @@ impl ConversationLoop {
                     _ => None,
                 })
             {
-                let gate_llm_enabled = std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
-                    .ok()
-                    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-                    .unwrap_or(false);
-                let gate = Gate::new().with_llm_classifier(gate_llm_enabled);
+                let workflow_policy = WorkflowPolicy::from_env();
+                let gate = Gate::new().with_policy(workflow_policy.gate.clone());
                 if is_drift_interruption_signal(last_user_msg) {
                     crate::engine::workflow::metrics::record_drift_interruption();
                 }
-                let decision = if gate_llm_enabled {
+                let decision = if workflow_policy.gate.llm_classifier_enabled {
                     gate.decide_with_llm(last_user_msg, self.provider.as_ref(), &self.model)
                         .await
                 } else {
@@ -1129,7 +1126,8 @@ impl ConversationLoop {
                         model: self.model.clone(),
                         base_context: self.create_tool_context(),
                     };
-                    let workflow_engine = WorkflowEngine::new(self.provider.clone());
+                    let workflow_engine = WorkflowEngine::new(self.provider.clone())
+                        .with_policy(workflow_policy);
                     match workflow_engine
                         .run(last_user_msg, last_user_msg, &workflow_executor)
                         .await

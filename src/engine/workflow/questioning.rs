@@ -3,6 +3,7 @@
 //! 改造现有 SocraticSession，新增主动触发、动态生成、自问自答能力。
 //! M1 范围：固定模板 fallback + 简化版 LLM 动态生成 + Budget 控制。
 
+use super::policy::SocraticPolicy;
 use crate::engine::socratic::QuestionType;
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,8 @@ pub struct QuestionNode {
     pub child_ids: Vec<String>,
     pub mainline_relevance: f64,
     pub token_cost: usize,
+    /// 从回答中提取的可执行证据项（命令/路径/断言）
+    pub evidence_items: Vec<String>,
 }
 
 /// 思考成果
@@ -56,6 +59,13 @@ impl ThinkingResult {
                     "**Q{}** [{}]: {}\n\n{}",
                     node.id, node.question_type.label(), node.question, node.answer
                 ));
+                if !node.evidence_items.is_empty() {
+                    output.push_str("\n证据项:\n");
+                    for e in &node.evidence_items {
+                        output.push_str(&format!("- {}\n", e));
+                    }
+                }
+                output.push('\n');
             }
         }
 
@@ -131,6 +141,16 @@ impl BudgetTracker {
         }
     }
 
+    pub fn from_policy(policy: &SocraticPolicy) -> Self {
+        Self {
+            max_rounds: policy.max_rounds,
+            max_answer_tokens: policy.max_answer_tokens,
+            max_total_tokens: policy.max_total_tokens,
+            used_rounds: 0,
+            used_tokens: 0,
+        }
+    }
+
     pub fn can_proceed(&self) -> bool {
         self.used_rounds < self.max_rounds && self.used_tokens < self.max_total_tokens
     }
@@ -190,11 +210,18 @@ impl ActiveQuestioningEngine {
         llm_provider: &dyn LlmProvider,
         model: &str,
     ) -> Result<ThinkingResult, String> {
-        let mut budget = BudgetTracker::from_env();
-        let max_depth = std::env::var("PRIORITY_AGENT_SOCRATIC_MAX_DEPTH")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(3);
+        self.think_with_policy(llm_provider, model, &SocraticPolicy::default())
+            .await
+    }
+
+    pub async fn think_with_policy(
+        &mut self,
+        llm_provider: &dyn LlmProvider,
+        model: &str,
+        policy: &SocraticPolicy,
+    ) -> Result<ThinkingResult, String> {
+        let mut budget = BudgetTracker::from_policy(policy);
+        let max_depth = policy.max_depth;
         let mut queue = self.generate_seed_questions();
 
         while let Some(pending) = queue.pop_front() {
@@ -330,6 +357,7 @@ impl ActiveQuestioningEngine {
 
         let relevance = compute_mainline_relevance(&question, &self.mainline_goal);
         let cost = estimate_token_cost(&question, &answer);
+        let evidence_items = extract_evidence_items(&answer);
 
         let node = QuestionNode {
             id: id.clone(),
@@ -341,6 +369,7 @@ impl ActiveQuestioningEngine {
             child_ids: Vec::new(),
             mainline_relevance: relevance,
             token_cost: cost,
+            evidence_items,
         };
 
         self.nodes.push(node.clone());
@@ -408,7 +437,8 @@ impl ActiveQuestioningEngine {
         // Reflection 类型的问题如果答案包含步骤列表，视为可执行
         if node.question_type == QuestionType::Reflection {
             let a = &node.answer;
-            a.contains("1.") || a.contains("2.") || a.contains("-") || a.contains("*")
+            (a.contains("1.") || a.contains("2.") || a.contains("-") || a.contains("*"))
+                && !node.evidence_items.is_empty()
         } else {
             false
         }
@@ -509,6 +539,34 @@ fn estimate_token_cost(question: &str, answer: &str) -> usize {
     (chinese_chars / 2 + english_words).max(1)
 }
 
+fn extract_evidence_items(answer: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in answer.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let lower = t.to_lowercase();
+        let has_cmd = lower.contains("cargo ")
+            || lower.contains("git ")
+            || lower.contains("bash ")
+            || lower.contains("test ")
+            || lower.contains("run ");
+        let has_path = t.contains('/') || t.ends_with(".rs") || t.ends_with(".md");
+        let has_assert = lower.contains("必须")
+            || lower.contains("should")
+            || lower.contains("assert")
+            || lower.contains("验收");
+        if has_cmd || has_path || has_assert {
+            out.push(t.to_string());
+        }
+        if out.len() >= 5 {
+            break;
+        }
+    }
+    out
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
@@ -600,6 +658,7 @@ mod tests {
             child_ids: vec![],
             mainline_relevance: 0.8,
             token_cost: 10,
+            evidence_items: vec![],
         }];
         let u = extract_uncertainties(&nodes);
         assert!(!u.is_empty());

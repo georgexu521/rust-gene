@@ -252,12 +252,24 @@ use super::weights::{DimensionScore, StepContext, WeightDimension, WeightRule};
 /// 或者把容易失败的步骤提前以留出更多重试时间）。
 pub struct HistoricalFailureRule {
     feedback: FeedbackEngine,
+    multiplier: f64,
 }
 
 impl HistoricalFailureRule {
     pub fn new() -> Self {
         Self {
             feedback: FeedbackEngine::load(),
+            multiplier: std::env::var("PRIORITY_AGENT_WEIGHT_HIST_FAIL_MUL")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(1.0),
+        }
+    }
+
+    pub fn with_multiplier(multiplier: f64) -> Self {
+        Self {
+            feedback: FeedbackEngine::load(),
+            multiplier,
         }
     }
 }
@@ -277,9 +289,13 @@ impl WeightRule for HistoricalFailureRule {
     fn compute(&self, ctx: &StepContext) -> DimensionScore {
         let penalty = self.feedback.get_historical_penalty(&ctx.description);
 
-        let raw_score = -(penalty as i32);
+        let weighted_penalty = penalty * self.multiplier;
+        let raw_score = -(weighted_penalty as i32);
         let explanation = if penalty > 0.0 {
-            format!("历史失败惩罚: -{:.1}", penalty)
+            format!(
+                "历史失败惩罚: -{:.1} (base={:.1}, mul={:.2}x)",
+                weighted_penalty, penalty, self.multiplier
+            )
         } else {
             "无历史失败记录".to_string()
         };

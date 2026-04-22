@@ -8,6 +8,7 @@
 //! - 输出带 weight / weight_explanation / dependent_step_indices 的 Plan
 
 use crate::engine::plan_mode::{Plan, PlanStep, StepStatus};
+use crate::engine::workflow::policy::WorkflowPolicy;
 use crate::engine::workflow::questioning::ThinkingResult;
 use crate::engine::workflow::weights::{StepContext, WeightEngine};
 use crate::services::api::{ChatRequest, LlmProvider, Message};
@@ -31,6 +32,20 @@ impl WorkflowPlanner {
     pub fn with_llm(llm_provider: Arc<dyn LlmProvider>) -> Self {
         Self {
             weight_engine: WeightEngine::default(),
+            llm_provider: Some(llm_provider),
+        }
+    }
+
+    pub fn with_policy(policy: &WorkflowPolicy) -> Self {
+        Self {
+            weight_engine: WeightEngine::from_multipliers(&policy.weights),
+            llm_provider: None,
+        }
+    }
+
+    pub fn with_llm_and_policy(llm_provider: Arc<dyn LlmProvider>, policy: &WorkflowPolicy) -> Self {
+        Self {
+            weight_engine: WeightEngine::from_multipliers(&policy.weights),
             llm_provider: Some(llm_provider),
         }
     }

@@ -5,6 +5,7 @@
 //! 2. Heuristic（关键词，O(n)）
 //! 3. LLM Classifier（可选，M1 中暂不提供默认实现）
 
+use super::policy::GatePolicy;
 use std::sync::LazyLock;
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 
@@ -113,12 +114,15 @@ fn heuristic_scan(input: &str) -> Option<GateDecision> {
 pub struct Gate {
     /// 是否启用 LLM 分类器（M1 默认 false）
     enable_llm_classifier: bool,
+    /// workflow 总开关（由 policy 层统一提供）
+    workflow_enabled: bool,
 }
 
 impl Gate {
     pub fn new() -> Self {
         Self {
             enable_llm_classifier: false,
+            workflow_enabled: true,
         }
     }
 
@@ -127,12 +131,18 @@ impl Gate {
         self
     }
 
+    pub fn with_policy(mut self, policy: GatePolicy) -> Self {
+        self.enable_llm_classifier = policy.llm_classifier_enabled;
+        self.workflow_enabled = policy.workflow_enabled;
+        self
+    }
+
     /// 判定输入请求的路径
     ///
     /// 判定顺序：环境变量开关 → Fast Lane → Heuristic → (LLM Classifier，如果启用)
     pub fn decide(&self, input: &str) -> GateDecision {
         // 0. 环境变量全局开关
-        if !Self::is_workflow_enabled() {
+        if !self.workflow_enabled {
             return GateDecision::Direct {
                 reason: "Workflow disabled by PRIORITY_AGENT_WORKFLOW_ENABLED".into(),
             };
@@ -166,7 +176,7 @@ impl Gate {
         provider: &dyn LlmProvider,
         model: &str,
     ) -> GateDecision {
-        if !Self::is_workflow_enabled() {
+        if !self.workflow_enabled {
             return GateDecision::Direct {
                 reason: "Workflow disabled by PRIORITY_AGENT_WORKFLOW_ENABLED".into(),
             };
@@ -211,14 +221,6 @@ impl Gate {
                 confidence: 0.5,
             },
         }
-    }
-
-    /// 检查 Workflow 是否被环境变量启用（默认启用）
-    pub fn is_workflow_enabled() -> bool {
-        std::env::var("PRIORITY_AGENT_WORKFLOW_ENABLED")
-            .ok()
-            .map(|v| v != "0" && v.to_lowercase() != "false")
-            .unwrap_or(true)
     }
 
     /// 批量判定（用于测试和基准）
@@ -384,11 +386,11 @@ mod tests {
 
     #[test]
     fn test_workflow_disabled_env_var() {
-        let mut env = EnvVarGuard::acquire_blocking();
-        env.set("PRIORITY_AGENT_WORKFLOW_ENABLED", "0");
-
-        let gate = Gate::new();
-        // 即使是高风险任务，也应返回 Direct
+        let gate = Gate::new().with_policy(GatePolicy {
+            workflow_enabled: false,
+            llm_classifier_enabled: false,
+        });
+        // 即使是高风险任务，也应返回 Direct（策略层关闭）
         let d = gate.decide("重构整个模块架构");
         assert!(
             matches!(d, GateDecision::Direct { .. }),
@@ -408,10 +410,8 @@ mod tests {
 
     #[test]
     fn test_workflow_enabled_by_default() {
-        let mut env = EnvVarGuard::acquire_blocking();
-        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-
-        assert!(Gate::is_workflow_enabled(), "Workflow should be enabled by default");
+        let d = Gate::new().decide("重构整个模块架构");
+        assert!(d.is_workflow(), "Workflow should be enabled by default");
     }
 
     #[derive(Debug, Deserialize)]
