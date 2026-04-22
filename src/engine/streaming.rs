@@ -41,6 +41,7 @@ pub enum StreamEvent {
         prompt_tokens: u32,
         completion_tokens: u32,
         reasoning_tokens: Option<u32>,
+        cached_tokens: Option<u32>,
     },
     /// 完成
     Complete,

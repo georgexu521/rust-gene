@@ -2150,6 +2150,7 @@ mod tests {
                         completion_tokens: 50,
                         total_tokens: 150,
                         reasoning_tokens: None,
+                    cached_tokens: None,
                     }),
                 }),
                 None => Err(anyhow::anyhow!("Mock LLM error")),

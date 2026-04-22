@@ -930,7 +930,7 @@ impl TuiApp {
             "/stop" => slash::handle_stop(self, args),
             "/reload" => slash::handle_reload(self, args).await,
             "/share" => slash::handle_share(self, args),
-            "/token" => slash::handle_token(self),
+            "/cost" | "/token" => slash::handle_token(self),
             "/diff" => {
                 let tool = crate::tools::GitTool;
                 let range = if args.trim().is_empty() {

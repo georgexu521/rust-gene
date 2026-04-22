@@ -1885,6 +1885,7 @@ impl ConversationLoop {
                 &self.model,
                 usage.prompt_tokens as u64,
                 usage.completion_tokens as u64,
+                usage.cached_tokens.map(|t| t as u64),
             );
         }
     }
@@ -2426,6 +2427,7 @@ mod tests {
                     completion_tokens: 5,
                     total_tokens: 15,
                     reasoning_tokens: None,
+                    cached_tokens: None,
                 }),
             },
             ChatResponse {
@@ -2436,6 +2438,7 @@ mod tests {
                     completion_tokens: 3,
                     total_tokens: 8,
                     reasoning_tokens: None,
+                    cached_tokens: None,
                 }),
             },
             ChatResponse {
@@ -2453,6 +2456,7 @@ mod tests {
                     completion_tokens: 5,
                     total_tokens: 15,
                     reasoning_tokens: None,
+                    cached_tokens: None,
                 }),
             },
             ChatResponse {
@@ -2463,6 +2467,7 @@ mod tests {
                     completion_tokens: 3,
                     total_tokens: 8,
                     reasoning_tokens: None,
+                    cached_tokens: None,
                 }),
             },
         ]);
@@ -2545,6 +2550,7 @@ mod tests {
                     completion_tokens: 5,
                     total_tokens: 15,
                     reasoning_tokens: None,
+                    cached_tokens: None,
                 }),
             },
             ChatResponse {
@@ -2555,6 +2561,7 @@ mod tests {
                     completion_tokens: 3,
                     total_tokens: 8,
                     reasoning_tokens: None,
+                    cached_tokens: None,
                 }),
             },
         ]);

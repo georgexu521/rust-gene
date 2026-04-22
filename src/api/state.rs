@@ -99,6 +99,7 @@ impl ApiState {
                 model,
                 usage.prompt_tokens as u64,
                 usage.completion_tokens as u64,
+                usage.cached_tokens.map(|t| t as u64),
             );
         }
 

@@ -79,6 +79,10 @@ pub fn convert_response(response: CreateChatCompletionResponse) -> Result<ChatRe
             .completion_tokens_details
             .as_ref()
             .and_then(|d| d.reasoning_tokens),
+        cached_tokens: u
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens),
     });
 
     Ok(ChatResponse {

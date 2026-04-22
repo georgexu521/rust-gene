@@ -36,6 +36,8 @@ pub struct TokenCount {
     pub prompt: u64,
     pub completion: u64,
     pub total: u64,
+    /// Cached prompt tokens (prefix cache hits from provider)
+    pub cached: u64,
 }
 
 /// 模型统计
@@ -174,15 +176,22 @@ impl CostTracker {
         Self::default()
     }
 
-    /// 记录 API 调用
-    pub fn record_api_call(&mut self, model: &str, prompt_tokens: u64, completion_tokens: u64) {
+    /// 记录 API 调用（含缓存 token）
+    pub fn record_api_call(
+        &mut self,
+        model: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cached_tokens: Option<u64>,
+    ) {
         self.total_requests += 1;
+        let cached = cached_tokens.unwrap_or(0);
         self.total_tokens.prompt += prompt_tokens;
         self.total_tokens.completion += completion_tokens;
         self.total_tokens.total += prompt_tokens + completion_tokens;
+        self.total_tokens.cached += cached;
 
-        // 计算成本（使用 Kimi K2.5 定价作为参考）
-        let cost = calculate_cost(model, prompt_tokens, completion_tokens);
+        let cost = calculate_cost(model, prompt_tokens, completion_tokens, cached);
         self.estimated_cost_usd += cost;
 
         // 更新模型统计
@@ -191,6 +200,7 @@ impl CostTracker {
         stats.tokens.prompt += prompt_tokens;
         stats.tokens.completion += completion_tokens;
         stats.tokens.total += prompt_tokens + completion_tokens;
+        stats.tokens.cached += cached;
         stats.estimated_cost += cost;
     }
 
@@ -419,10 +429,25 @@ impl CostTracker {
         let prompt = self.total_tokens.prompt;
         let completion = self.total_tokens.completion;
         let total = self.total_tokens.total;
+        let cached = self.total_tokens.cached;
         let prompt_pct = (prompt as f64 / total as f64) * 100.0;
+        let cached_info = if cached > 0 {
+            format!(
+                " cached={} ({:.1}% saved)",
+                cached,
+                (cached as f64 / prompt as f64) * 100.0
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "tokens: total={} prompt={} ({:.1}%) completion={} ({:.1}%)",
-            total, prompt, prompt_pct, completion, 100.0 - prompt_pct
+            "tokens: total={} prompt={} ({:.1}%) completion={} ({:.1}%){}",
+            total,
+            prompt,
+            prompt_pct,
+            completion,
+            100.0 - prompt_pct,
+            cached_info
         )
     }
 
@@ -597,9 +622,17 @@ Tool Usage:
         self.model_usage
             .iter()
             .map(|(model, stats)| {
+                let cached_info = if stats.tokens.cached > 0 {
+                    format!(
+                        " (cached: {})",
+                        stats.tokens.cached
+                    )
+                } else {
+                    String::new()
+                };
                 format!(
-                    "  {}: {} requests, {} tokens, ${:.4}",
-                    model, stats.requests, stats.tokens.total, stats.estimated_cost
+                    "  {}: {} requests, {} tokens{}, ${:.4}",
+                    model, stats.requests, stats.tokens.total, cached_info, stats.estimated_cost
                 )
             })
             .collect::<Vec<_>>()
@@ -661,7 +694,7 @@ fn now_epoch_ms() -> u64 {
 }
 
 /// 计算成本（基于 Kimi API 定价）
-fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64) -> f64 {
+fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64, cached_tokens: u64) -> f64 {
     // 价格（每 1K tokens）
     let (prompt_price, completion_price) = match model {
         "kimi-k2.5" => (0.0015, 0.0060), // $1.5 / $6.0 per 1M tokens
@@ -669,7 +702,11 @@ fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64) -> f6
         _ => (0.0015, 0.0060), // 默认
     };
 
-    let prompt_cost = (prompt_tokens as f64 / 1000.0) * prompt_price;
+    // Cached tokens discount: 25% of normal prompt price (75% savings)
+    let cached_discount = 0.25;
+    let uncached_prompt = prompt_tokens.saturating_sub(cached_tokens);
+    let prompt_cost = (uncached_prompt as f64 / 1000.0) * prompt_price
+        + (cached_tokens as f64 / 1000.0) * prompt_price * cached_discount;
     let completion_cost = (completion_tokens as f64 / 1000.0) * completion_price;
 
     prompt_cost + completion_cost
@@ -683,7 +720,7 @@ mod tests {
     fn test_cost_tracker() {
         let mut tracker = CostTracker::new();
 
-        tracker.record_api_call("kimi-k2.5", 1000, 500);
+        tracker.record_api_call("kimi-k2.5", 1000, 500, None);
         tracker.record_tool_call("file_read");
         tracker.record_tool_execution(
             "bash",
@@ -701,8 +738,12 @@ mod tests {
 
     #[test]
     fn test_cost_calculation() {
-        let cost = calculate_cost("kimi-k2.5", 1000, 500);
+        let cost = calculate_cost("kimi-k2.5", 1000, 500, 0);
         assert!(cost > 0.0);
+
+        // Test cached token discount
+        let cost_cached = calculate_cost("kimi-k2.5", 1000, 500, 800);
+        assert!(cost_cached < cost, "Cached tokens should reduce cost");
     }
 
     #[test]
@@ -776,7 +817,7 @@ mod tests {
     #[test]
     fn test_token_summary() {
         let mut tracker = CostTracker::new();
-        tracker.record_api_call("kimi-k2.5", 1000, 500);
+        tracker.record_api_call("kimi-k2.5", 1000, 500, None);
         let summary = tracker.token_summary();
         assert!(summary.contains("total=1500"));
         assert!(summary.contains("prompt=1000"));
@@ -786,7 +827,7 @@ mod tests {
     #[test]
     fn test_model_usage_summary() {
         let mut tracker = CostTracker::new();
-        tracker.record_api_call("kimi-k2.5", 1000, 500);
+        tracker.record_api_call("kimi-k2.5", 1000, 500, None);
         let summary = tracker.model_usage_summary();
         assert!(summary.contains("kimi-k2.5"));
         assert!(summary.contains("1req"));
@@ -812,7 +853,7 @@ mod tests {
     #[test]
     fn test_performance_panel_json() {
         let mut tracker = CostTracker::new();
-        tracker.record_api_call("kimi-k2.5", 1000, 500);
+        tracker.record_api_call("kimi-k2.5", 1000, 500, None);
         tracker.record_tool_execution("grep", true, 15, None);
         let json = tracker.performance_panel_json();
         assert!(json.get("session_duration_secs").is_some());

@@ -258,4 +258,7 @@ pub struct Usage {
     /// Reasoning tokens (from extended thinking models like Kimi K2.5)
     /// These tokens are used for the model's internal reasoning process
     pub reasoning_tokens: Option<u32>,
+    /// Cached tokens (prompt prefix cache hits from the provider)
+    /// Providers like OpenAI, Kimi K2, MiniMax return this in usage.prompt_tokens_details.cached_tokens
+    pub cached_tokens: Option<u32>,
 }
