@@ -91,7 +91,7 @@ impl WorkflowExecutor {
     /// - 所有依赖步骤都已完成（Completed 或 Skipped）
     ///
     /// 在可执行步骤中选择权重最高的（E-01）。
-    fn find_next_executable(&self, plan: &Plan) -> Option<usize> {
+    pub(crate) fn find_next_executable(&self, plan: &Plan) -> Option<usize> {
         plan.steps
             .iter()
             .enumerate()
@@ -115,7 +115,7 @@ impl WorkflowExecutor {
     /// # 重试策略（M1）
     /// - 首次执行失败 → 重试 1 次（E-04）
     /// - 重试仍失败 → 标记 [重构]（E-05），返回 NeedsRefactor
-    async fn execute_single_step(
+    pub(crate) async fn execute_single_step(
         &self,
         plan: &mut Plan,
         step_index: usize,

@@ -46,11 +46,110 @@ pub struct WorkflowResult {
     pub execution_log: Vec<ExecutionRecord>,
     /// 最终报告
     pub final_report: String,
+    /// 状态机历史
+    pub state_history: Vec<WorkflowStateSnapshot>,
 }
 
-/// WorkflowEngine — M1 最小可运行闭环
+// ============================================================================
+// Workflow 状态机
+// ============================================================================
+
+/// Workflow 执行状态
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkflowState {
+    /// 空闲 / 初始状态
+    Idle,
+    /// 闸门判断（Direct vs Workflow）
+    Gate,
+    /// 主动提问式深思
+    Thinking,
+    /// 计划生成
+    Planning,
+    /// 权重计算 / 重新计算
+    Weighting,
+    /// 计划执行中
+    Executing { current_step: usize, total: usize },
+    /// 结果验证
+    Verifying,
+    /// 重新权重（基于执行反馈调整）
+    Reweight,
+    /// 执行完成
+    Done,
+    /// 报告生成
+    Report,
+}
+
+/// 状态快照（用于审计和调试）
+#[derive(Debug, Clone)]
+pub struct WorkflowStateSnapshot {
+    pub state: WorkflowState,
+    pub entered_at: String,
+    pub duration_ms: u64,
+}
+
+/// Workflow 状态机
 ///
-/// 链路：THINKING → PLANNING → EXECUTION → REPORT
+/// 追踪 WorkflowEngine 执行过程中的状态流转，
+/// 提供可观测性和调试能力。
+#[derive(Debug, Clone)]
+pub struct WorkflowStateMachine {
+    pub current_state: WorkflowState,
+    pub history: Vec<WorkflowStateSnapshot>,
+    state_entered_at: std::time::Instant,
+}
+
+impl WorkflowStateMachine {
+    pub fn new() -> Self {
+        Self {
+            current_state: WorkflowState::Idle,
+            history: Vec::new(),
+            state_entered_at: std::time::Instant::now(),
+        }
+    }
+
+    /// 推进到下一个状态
+    pub fn transition(&mut self, next: WorkflowState) {
+        let now = std::time::Instant::now();
+        let duration = now.duration_since(self.state_entered_at).as_millis() as u64;
+
+        self.history.push(WorkflowStateSnapshot {
+            state: self.current_state.clone(),
+            entered_at: chrono::Local::now().to_rfc3339(),
+            duration_ms: duration,
+        });
+
+        self.current_state = next;
+        self.state_entered_at = now;
+    }
+
+    /// 格式化状态历史为可读文本
+    pub fn format_history(&self) -> String {
+        let mut output = String::from("## Workflow 状态流转\n\n");
+        for (i, snap) in self.history.iter().enumerate() {
+            let state_label = format!("{:?}", snap.state);
+            output.push_str(&format!(
+                "{}. {} — {}ms\n",
+                i + 1,
+                state_label,
+                snap.duration_ms
+            ));
+        }
+        output.push('\n');
+        output
+    }
+}
+
+impl Default for WorkflowStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// WorkflowEngine — M1/M2 完整闭环
+///
+/// 状态机链路：
+/// IDLE → GATE → THINKING → PLANNING → WEIGHTING → EXECUTING →
+/// VERIFYING → (REWEIGHT → EXECUTING)* → DONE → REPORT
 pub struct WorkflowEngine {
     llm_provider: Arc<dyn LlmProvider>,
 }
@@ -60,53 +159,185 @@ impl WorkflowEngine {
         Self { llm_provider }
     }
 
-    /// 运行完整 Workflow
+    /// 运行完整 Workflow（状态机驱动）
     ///
-    /// # M1 行为
-    /// 1. 主动提问式深思（ActiveQuestioningEngine）→ ThinkingResult
-    /// 2. 计划生成（WorkflowPlanner）→ Plan
-    /// 3. 按权重执行（WorkflowExecutor + StepExecutor）→ ExecutionRecord[]
-    /// 4. 格式化报告
+    /// # 状态机行为
+    /// 1. GATE — 快速检查（当前直接通过，未来可接入 Gate 判断）
+    /// 2. THINKING — 主动提问式深思
+    /// 3. PLANNING — 递归计划生成
+    /// 4. WEIGHTING — 权重计算（在 planning 中完成）
+    /// 5. EXECUTING — 按权重执行步骤
+    /// 6. VERIFYING — 检查执行结果（NeedsRefactor 检测）
+    /// 7. REWEIGHT — 如有需要，重新计算权重并补充执行
+    /// 8. DONE — 标记完成
+    /// 9. REPORT — 生成最终报告
     pub async fn run(
         &self,
         task: &str,
         mainline_goal: &str,
         step_executor: &dyn StepExecutor,
     ) -> Result<WorkflowResult, String> {
-        // 1. THINKING
-        let mut questioning = ActiveQuestioningEngine::new(task.into(), mainline_goal.into());
-        let model = self.llm_provider.default_model();
-        let thinking_result = questioning
-            .think(self.llm_provider.as_ref(), model)
-            .await?;
+        let mut sm = WorkflowStateMachine::new();
 
-        // 2. PLANNING (with recursive splitting)
-        let planner = WorkflowPlanner::with_llm(self.llm_provider.clone());
-        let mut plan = planner.plan_with_recursion(&thinking_result, mainline_goal).await;
+        // 1. GATE
+        sm.transition(WorkflowState::Gate);
+        self.run_gate(task, mainline_goal)?;
 
-        // 3. EXECUTION
-        let executor = WorkflowExecutor::new();
-        let execution_log = executor.execute(&mut plan, step_executor).await?;
+        // 2. THINKING
+        sm.transition(WorkflowState::Thinking);
+        let thinking_result = self.run_thinking(task, mainline_goal).await?;
 
-        // M2: 记录执行反馈（用于后续权重调整）
+        // 3. PLANNING
+        sm.transition(WorkflowState::Planning);
+        let mut plan = self.run_planning(&thinking_result, mainline_goal).await;
+
+        // 4. WEIGHTING（planning 已包含权重计算，这里作为显式状态记录）
+        sm.transition(WorkflowState::Weighting);
+
+        // 5. EXECUTING
+        sm.transition(WorkflowState::Executing {
+            current_step: 0,
+            total: plan.steps.len(),
+        });
+        let mut execution_log = self.run_executing(&mut plan, step_executor, &mut sm).await?;
+
+        // 6. VERIFYING
+        sm.transition(WorkflowState::Verifying);
+        let needs_reweight = self.run_verifying(&plan, &execution_log);
+
+        // 7. REWEIGHT（如有 NeedsRefactor 的步骤）
+        if needs_reweight {
+            sm.transition(WorkflowState::Reweight);
+            let planner = WorkflowPlanner::with_llm(self.llm_provider.clone());
+            planner.reweight(&mut plan, mainline_goal);
+
+            // 补充执行：对 NeedsRefactor 步骤重新尝试
+            let remaining = plan
+                .steps
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| {
+                    matches!(s.status, crate::engine::plan_mode::StepStatus::Pending)
+                })
+                .count();
+            if remaining > 0 {
+                sm.transition(WorkflowState::Executing {
+                    current_step: 0,
+                    total: remaining,
+                });
+                let extra_log = self.run_executing(&mut plan, step_executor, &mut sm).await?;
+                execution_log.extend(extra_log);
+            }
+        }
+
+        // M2: 记录执行反馈
         let mut feedback = FeedbackEngine::load();
         feedback.record_execution(&execution_log);
 
-        // 4. REPORT
-        let final_report = Self::build_report(&thinking_result, &plan, &execution_log);
+        // 8. DONE
+        sm.transition(WorkflowState::Done);
+
+        // 9. REPORT
+        sm.transition(WorkflowState::Report);
+        let final_report = Self::build_report(&thinking_result, &plan, &execution_log, &sm);
 
         Ok(WorkflowResult {
             thinking_result,
             plan,
             execution_log,
             final_report,
+            state_history: sm.history,
         })
+    }
+
+    // ============================================================================
+    // 状态步骤方法
+    // ============================================================================
+
+    fn run_gate(&self, _task: &str, _mainline_goal: &str) -> Result<(), String> {
+        // GATE 状态：快速准入检查
+        // 当前直接通过；未来可接入 Gate::decide() 做 Direct vs Workflow 路由
+        Ok(())
+    }
+
+    async fn run_thinking(
+        &self,
+        task: &str,
+        mainline_goal: &str,
+    ) -> Result<ThinkingResult, String> {
+        let mut questioning = ActiveQuestioningEngine::new(task.into(), mainline_goal.into());
+        let model = self.llm_provider.default_model();
+        questioning
+            .think(self.llm_provider.as_ref(), model)
+            .await
+            .map_err(|e| format!("Thinking failed: {}", e))
+    }
+
+    async fn run_planning(
+        &self,
+        thinking_result: &ThinkingResult,
+        mainline_goal: &str,
+    ) -> Plan {
+        let planner = WorkflowPlanner::with_llm(self.llm_provider.clone());
+        planner.plan_with_recursion(thinking_result, mainline_goal).await
+    }
+
+    async fn run_executing(
+        &self,
+        plan: &mut Plan,
+        step_executor: &dyn StepExecutor,
+        sm: &mut WorkflowStateMachine,
+    ) -> Result<Vec<ExecutionRecord>, String> {
+        let executor = WorkflowExecutor::new();
+        let mut all_records = Vec::new();
+
+        loop {
+            match executor.find_next_executable(plan) {
+                Some(idx) => {
+                    // 更新状态机执行进度
+                    let completed = plan
+                        .steps
+                        .iter()
+                        .filter(|s| {
+                            matches!(
+                                s.status,
+                                crate::engine::plan_mode::StepStatus::Completed
+                                    | crate::engine::plan_mode::StepStatus::Skipped
+                            )
+                        })
+                        .count();
+                    sm.current_state = WorkflowState::Executing {
+                        current_step: completed + 1,
+                        total: plan.steps.len(),
+                    };
+
+                    let record = executor.execute_single_step(plan, idx, step_executor).await;
+                    all_records.push(record);
+                }
+                None => break,
+            }
+        }
+
+        Ok(all_records)
+    }
+
+    fn run_verifying(&self, plan: &Plan, execution_log: &[ExecutionRecord]) -> bool {
+        // 检查是否有 NeedsRefactor 或仍 Pending 的步骤
+        let has_refactor = execution_log
+            .iter()
+            .any(|r| matches!(r.outcome, ExecutionOutcome::NeedsRefactor(_)));
+        let has_pending = plan
+            .steps
+            .iter()
+            .any(|s| s.status == crate::engine::plan_mode::StepStatus::Pending);
+        has_refactor || has_pending
     }
 
     fn build_report(
         thinking: &ThinkingResult,
         plan: &Plan,
         execution_log: &[ExecutionRecord],
+        sm: &WorkflowStateMachine,
     ) -> String {
         let mut output = String::new();
         output.push_str("# Workflow 执行报告\n\n");
@@ -131,6 +362,9 @@ impl WorkflowEngine {
         // M1: 追加执行指标聚合
         let metrics = WorkflowMetrics::from_records(execution_log);
         output.push_str(&metrics.summary());
+        output.push('\n');
+        // 状态机历史
+        output.push_str(&sm.format_history());
         output
     }
 }
