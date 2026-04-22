@@ -52,6 +52,9 @@ pub struct PlanStep {
     /// 依赖的步骤索引
     #[serde(default)]
     pub dependent_step_indices: Vec<usize>,
+    /// 递归深度（0 = 顶层，L3 时达到 max_depth）
+    #[serde(default)]
+    pub depth: u32,
 }
 
 impl PlanStep {
@@ -63,7 +66,13 @@ impl PlanStep {
             weight: 0,
             weight_explanation: String::new(),
             dependent_step_indices: Vec::new(),
+            depth: 0,
         }
+    }
+
+    pub fn with_depth(mut self, depth: u32) -> Self {
+        self.depth = depth;
+        self
     }
 }
 
@@ -87,6 +96,12 @@ pub struct Plan {
     pub steps: Vec<PlanStep>,
     /// 预估复杂度
     pub estimated_complexity: String,
+    /// 递归深度（0 = 顶层用户任务）
+    #[serde(default)]
+    pub depth: u32,
+    /// 最大允许递归深度（环境变量可覆盖，默认 3）
+    #[serde(default)]
+    pub max_depth: u32,
 }
 
 impl Plan {
@@ -96,6 +111,8 @@ impl Plan {
             goal: goal.into(),
             steps: Vec::new(),
             estimated_complexity: "medium".to_string(),
+            depth: 0,
+            max_depth: Self::default_max_depth(),
         }
     }
 
@@ -107,6 +124,23 @@ impl Plan {
     pub fn with_complexity(mut self, complexity: impl Into<String>) -> Self {
         self.estimated_complexity = complexity.into();
         self
+    }
+
+    pub fn with_depth(mut self, depth: u32) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    pub fn with_max_depth(mut self, max_depth: u32) -> Self {
+        self.max_depth = max_depth;
+        self
+    }
+
+    pub fn default_max_depth() -> u32 {
+        std::env::var("PRIORITY_AGENT_WORKFLOW_MAX_DEPTH")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3)
     }
 
     /// 格式化为可读文本

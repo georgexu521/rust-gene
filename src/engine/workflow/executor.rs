@@ -301,6 +301,7 @@ mod tests {
                 weight,
                 weight_explanation: format!("weight={}", weight),
                 dependent_step_indices: deps,
+                depth: 0,
             })
             .collect();
 
@@ -309,6 +310,8 @@ mod tests {
             goal: "Test".into(),
             steps: plan_steps,
             estimated_complexity: "low".into(),
+            depth: 0,
+            max_depth: Plan::default_max_depth(),
         }
     }
 

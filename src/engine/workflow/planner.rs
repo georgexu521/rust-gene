@@ -85,6 +85,7 @@ impl WorkflowPlanner {
                 weight: weighted.normalized_score,
                 weight_explanation: weighted.explanation,
                 dependent_step_indices: dependencies[i].clone(),
+                depth: 0,
             });
         }
 
@@ -93,6 +94,8 @@ impl WorkflowPlanner {
             goal: thinking_result.problem_statement.clone(),
             steps,
             estimated_complexity: Self::estimate_complexity(descriptions.len()),
+            depth: 0,
+            max_depth: Plan::default_max_depth(),
         }
     }
 
@@ -177,6 +180,270 @@ impl WorkflowPlanner {
         }
 
         plan
+    }
+
+    // ============================================================================
+    // 递归计划拆分（Gap #1）
+    // ============================================================================
+
+    /// 递归计划生成：当计划复杂时自动拆分，达到 max_depth 时强制原子化
+    ///
+    /// 规则：
+    /// 1. 先生成初始计划（plan_enhanced）
+    /// 2. 若满足拆分条件且 depth < max_depth，调用 LLM 细化步骤 → depth + 1
+    /// 3. 若 depth >= max_depth，调用 flatten_to_atomic 强制原子化
+    pub async fn plan_with_recursion(
+        &self,
+        thinking_result: &ThinkingResult,
+        mainline_goal: &str,
+    ) -> Plan {
+        let mut plan = self.plan_enhanced(thinking_result, mainline_goal).await;
+        let max_depth = plan.max_depth;
+
+        // 递归细化：最多 max_depth 层
+        while plan.depth < max_depth && Self::needs_recursive_split(&plan) {
+            if let Some(ref provider) = self.llm_provider {
+                match self.refine_plan_with_llm(provider, &plan).await {
+                    Ok(refined) => {
+                        plan = refined;
+                    }
+                    Err(_) => break,
+                }
+            } else {
+                break;
+            }
+        }
+
+        // L3（或 max_depth）强制原子化
+        if plan.depth >= max_depth.saturating_sub(1) {
+            Self::flatten_to_atomic(&mut plan);
+        }
+
+        plan
+    }
+
+    /// 判断计划是否需要递归拆分
+    ///
+    /// 触发条件（满足任一）：
+    /// - 引用文件数 >= 5
+    /// - 预估复杂度为 high
+    /// - 涉及 >= 2 个子领域（通过关键词简单推断）
+    fn needs_recursive_split(plan: &Plan) -> bool {
+        // 简单计划不拆分
+        if plan.steps.len() <= 3 {
+            return false;
+        }
+
+        // 条件 1：引用文件数 >= 5
+        let total_files: usize = plan
+            .steps
+            .iter()
+            .map(|s| Self::extract_file_references(&s.description).len())
+            .sum();
+        if total_files >= 5 {
+            return true;
+        }
+
+        // 条件 2：预估复杂度为 high
+        if plan.estimated_complexity == "high" {
+            return true;
+        }
+
+        // 条件 3：涉及 >= 2 个子领域
+        if Self::count_subdomains(plan) >= 2 {
+            return true;
+        }
+
+        false
+    }
+
+    /// 简单子领域计数（通过领域关键词推断）
+    fn count_subdomains(plan: &Plan) -> usize {
+        let domains = [
+            ("数据库", vec!["数据库", "db", "sql", "表", "schema", "migration"]),
+            ("前端", vec!["前端", "ui", "界面", "react", "vue", "html", "css"]),
+            ("后端", vec!["后端", "api", "接口", "路由", "controller", "handler"]),
+            ("测试", vec!["测试", "test", "unit", "integration", "mock"]),
+            ("安全", vec!["安全", "auth", "认证", "加密", "permission", "login"]),
+            ("部署", vec!["部署", "deploy", "docker", "ci", "cd", "k8s"]),
+        ];
+
+        let mut matched = std::collections::HashSet::new();
+        for step in &plan.steps {
+            let desc = step.description.to_lowercase();
+            for (domain_name, keywords) in &domains {
+                for kw in keywords {
+                    if desc.contains(kw) {
+                        matched.insert(*domain_name);
+                        break;
+                    }
+                }
+            }
+        }
+        matched.len()
+    }
+
+    /// 使用 LLM 细化计划：将复杂步骤拆分为更细粒度的子步骤
+    ///
+    /// 返回的新 plan depth 自动 +1。
+    async fn refine_plan_with_llm(
+        &self,
+        provider: &Arc<dyn LlmProvider>,
+        plan: &Plan,
+    ) -> anyhow::Result<Plan> {
+        let step_list: String = plan
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                format!(
+                    "{}: {} (tool: {:?}, deps: {:?})",
+                    i, s.description, s.tool, s.dependent_step_indices
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = format!(
+            "请将以下执行计划细化为更具体的步骤。主线目标: {}\n\n\
+            当前计划（{} 步）:\n{}\n\n\
+            请输出细化后的步骤列表（JSON 格式），要求：\n\
+            1. 保持原有步骤的逻辑顺序\n\
+            2. 将每个复杂步骤拆分为 2-4 个更细粒度的原子步骤\n\
+            3. 输出格式为 JSON 字符串数组，例如：[\"步骤1\", \"步骤2\", \"步骤3\"]\n\
+            4. 只输出 JSON，不输出其他文字\n\
+            5. 步骤总数应在 {} ~ {} 之间\n\n\
+            输出:",
+            plan.goal,
+            plan.steps.len(),
+            step_list,
+            plan.steps.len() + 1,
+            plan.steps.len() * 3
+        );
+
+        let request = ChatRequest {
+            model: provider.default_model().to_string(),
+            messages: vec![Message::User { content: prompt }],
+            tools: None,
+            temperature: Some(0.1),
+            max_tokens: Some(1000),
+            thinking_budget: None,
+        };
+
+        let response = provider.chat(request).await?;
+        let descriptions: Vec<String> = serde_json::from_str(&response.content.trim())?;
+
+        if descriptions.is_empty() {
+            return Err(anyhow::anyhow!("LLM returned empty step list"));
+        }
+
+        // 用新的描述重新构建计划
+        let tools: Vec<Option<String>> =
+            descriptions.iter().map(|d| Self::infer_tool(d)).collect();
+        let dependencies = Self::infer_dependencies(&descriptions, &tools);
+
+        let mut steps = Vec::new();
+        for (i, desc) in descriptions.iter().enumerate() {
+            let ctx = StepContext {
+                description: desc.clone(),
+                tool: tools[i].clone(),
+                step_index: i,
+                total_steps: descriptions.len(),
+                mainline_goal: plan.goal.clone(),
+                completed_steps: vec![],
+                dependent_steps: dependencies[i].clone(),
+                unlocks_count: 0,
+            };
+
+            let weighted = self.weight_engine.compute(&ctx);
+
+            steps.push(PlanStep {
+                description: desc.clone(),
+                tool: tools[i].clone(),
+                status: StepStatus::Pending,
+                weight: weighted.normalized_score,
+                weight_explanation: weighted.explanation,
+                dependent_step_indices: dependencies[i].clone(),
+                depth: plan.depth + 1,
+            });
+        }
+
+        Ok(Plan {
+            title: plan.title.clone(),
+            goal: plan.goal.clone(),
+            steps,
+            estimated_complexity: Self::estimate_complexity(descriptions.len()),
+            depth: plan.depth + 1,
+            max_depth: plan.max_depth,
+        })
+    }
+
+    /// L3 原子化展平：将读/搜类步骤合并，写/改类保持原子
+    ///
+    /// 规则：
+    /// - file_read / grep / glob → 合并为单个 "combined_read" 步骤
+    /// - file_write / file_edit → 保持为独立原子步骤
+    /// - 其他工具 → 保持为独立步骤
+    fn flatten_to_atomic(plan: &mut Plan) {
+        let mut read_steps: Vec<String> = Vec::new();
+        let mut atomic_steps: Vec<PlanStep> = Vec::new();
+
+        for step in plan.steps.drain(..) {
+            match step.tool.as_deref() {
+                Some("file_read") | Some("grep") | Some("glob") => {
+                    read_steps.push(step.description.clone());
+                }
+                _ => {
+                    atomic_steps.push(step);
+                }
+            }
+        }
+
+        // 标记是否有读/搜步骤（在 read_steps 被消费前记录）
+        let has_read_steps = !read_steps.is_empty();
+
+        // 如果有读/搜步骤，合并为一个
+        if has_read_steps {
+            let combined_desc = if read_steps.len() == 1 {
+                read_steps.into_iter().next().unwrap()
+            } else {
+                format!(
+                    "合并读取/搜索: {}",
+                    read_steps.join("; ")
+                )
+            };
+
+            let read_step = PlanStep {
+                description: combined_desc,
+                tool: Some("file_read".into()),
+                status: StepStatus::Pending,
+                weight: 50,
+                weight_explanation: "L3 合并读取步骤".into(),
+                dependent_step_indices: vec![],
+                depth: plan.depth,
+            };
+            atomic_steps.insert(0, read_step);
+        }
+
+        // 重新计算依赖（简单策略：写/改依赖合并后的 read 步骤）
+        let read_step_idx = if has_read_steps { Some(0usize) } else { None };
+        for (i, step) in atomic_steps.iter_mut().enumerate() {
+            if matches!(
+                step.tool.as_deref(),
+                Some("file_write") | Some("file_edit")
+            ) {
+                if let Some(read_idx) = read_step_idx {
+                    if i != read_idx && !step.dependent_step_indices.contains(&read_idx) {
+                        step.dependent_step_indices.push(read_idx);
+                    }
+                }
+            }
+            // 确保 depth 为 max_depth（原子层）
+            step.depth = plan.max_depth;
+        }
+
+        plan.steps = atomic_steps;
+        plan.depth = plan.max_depth;
     }
 
     /// M2: 使用 LLM 推断依赖关系
@@ -456,6 +723,7 @@ impl WorkflowPlanner {
             weight: weighted.normalized_score,
             weight_explanation: weighted.explanation,
             dependent_step_indices: vec![],
+            depth: 0,
         };
 
         Plan {
@@ -463,6 +731,8 @@ impl WorkflowPlanner {
             goal: problem.into(),
             steps: vec![step],
             estimated_complexity: "low".into(),
+            depth: 0,
+            max_depth: Plan::default_max_depth(),
         }
     }
 
@@ -722,5 +992,144 @@ mod tests {
                 "Step 1 should depend on step 0 due to semantic keyword '基于'"
             );
         }
+    }
+
+    // ============================================================================
+    // 递归拆分测试 (Gap #1)
+    // ============================================================================
+
+    #[test]
+    fn test_needs_recursive_split_simple_plan() {
+        let plan = Plan::new("简单任务", "修一个 bug")
+            .add_step("修改一行代码", Some("file_edit".into()));
+        assert!(
+            !WorkflowPlanner::needs_recursive_split(&plan),
+            "Simple plan should not split"
+        );
+    }
+
+    #[test]
+    fn test_needs_recursive_split_high_complexity() {
+        let mut plan = Plan::new("复杂重构", "重构整个模块").with_complexity("high");
+        plan.steps = (0..6)
+            .map(|i| PlanStep::new(format!("步骤 {}", i), None))
+            .collect();
+        assert!(
+            WorkflowPlanner::needs_recursive_split(&plan),
+            "High complexity plan should split"
+        );
+    }
+
+    #[test]
+    fn test_needs_recursive_split_many_files() {
+        let mut plan = Plan::new("多文件改动", "改很多文件");
+        plan.steps = vec![
+            PlanStep::new("读取 auth.rs", Some("file_read".into())),
+            PlanStep::new("读取 config.toml", Some("file_read".into())),
+            PlanStep::new("读取 main.rs", Some("file_read".into())),
+            PlanStep::new("读取 lib.rs", Some("file_read".into())),
+            PlanStep::new("读取 utils.rs", Some("file_read".into())),
+            PlanStep::new("修改 auth.rs", Some("file_edit".into())),
+        ];
+        assert!(
+            WorkflowPlanner::needs_recursive_split(&plan),
+            "Plan with >=5 files should split"
+        );
+    }
+
+    #[test]
+    fn test_needs_recursive_split_multi_domain() {
+        let mut plan = Plan::new("全栈任务", "前后端一起改");
+        plan.steps = vec![
+            PlanStep::new("设计数据库表", Some("bash".into())),
+            PlanStep::new("实现 API 接口", Some("file_write".into())),
+            PlanStep::new("编写前端组件", Some("file_write".into())),
+            PlanStep::new("部署到 Docker", Some("bash".into())),
+        ];
+        assert!(
+            WorkflowPlanner::needs_recursive_split(&plan),
+            "Multi-domain plan should split"
+        );
+    }
+
+    #[test]
+    fn test_flatten_to_atomic_merges_read_steps() {
+        let mut plan = Plan::new("测试", "测试").with_max_depth(3);
+        plan.depth = 3;
+        plan.steps = vec![
+            PlanStep::new("读取 auth.rs", Some("file_read".into())),
+            PlanStep::new("搜索 TODO", Some("grep".into())),
+            PlanStep::new("列出文件", Some("glob".into())),
+            PlanStep::new("修改 auth.rs", Some("file_edit".into())),
+            PlanStep::new("创建新文件", Some("file_write".into())),
+        ];
+        for step in &mut plan.steps {
+            step.depth = 3;
+        }
+
+        WorkflowPlanner::flatten_to_atomic(&mut plan);
+
+        // Read/grep/glob should be merged into 1 step
+        assert_eq!(
+            plan.steps.len(),
+            3,
+            "Expected 3 atomic steps: 1 read + 2 write/edit"
+        );
+
+        // First step should be combined read
+        assert_eq!(plan.steps[0].tool, Some("file_read".into()));
+        assert!(plan.steps[0].description.contains("合并读取/搜索"));
+
+        // Write/edit should remain atomic
+        assert_eq!(plan.steps[1].tool, Some("file_edit".into()));
+        assert_eq!(plan.steps[2].tool, Some("file_write".into()));
+
+        // All steps should have depth == max_depth
+        for step in &plan.steps {
+            assert_eq!(step.depth, 3, "Atomic step depth should be max_depth");
+        }
+    }
+
+    #[test]
+    fn test_flatten_to_atomic_adds_read_dependency() {
+        let mut plan = Plan::new("测试", "测试").with_max_depth(3);
+        plan.depth = 3;
+        plan.steps = vec![
+            PlanStep::new("读取 auth.rs", Some("file_read".into())),
+            PlanStep::new("修改 auth.rs", Some("file_edit".into())),
+        ];
+        for step in &mut plan.steps {
+            step.depth = 3;
+        }
+        // Clear initial dependencies
+        plan.steps[1].dependent_step_indices.clear();
+
+        WorkflowPlanner::flatten_to_atomic(&mut plan);
+
+        // Edit step should now depend on combined read step (index 0)
+        assert!(
+            plan.steps[1].dependent_step_indices.contains(&0),
+            "Edit step should depend on read step after flattening"
+        );
+    }
+
+    #[test]
+    fn test_flatten_to_atomic_no_read_steps() {
+        let mut plan = Plan::new("测试", "测试").with_max_depth(3);
+        plan.depth = 3;
+        plan.steps = vec![
+            PlanStep::new("修改 auth.rs", Some("file_edit".into())),
+            PlanStep::new("创建新文件", Some("file_write".into())),
+        ];
+        for step in &mut plan.steps {
+            step.depth = 3;
+        }
+
+        WorkflowPlanner::flatten_to_atomic(&mut plan);
+
+        // No read steps to merge, should keep both
+        assert_eq!(plan.steps.len(), 2);
+        assert_eq!(plan.steps[0].tool, Some("file_edit".into()));
+        assert_eq!(plan.steps[1].tool, Some("file_write".into()));
     }
 }

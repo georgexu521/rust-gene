@@ -80,9 +80,9 @@ impl WorkflowEngine {
             .think(self.llm_provider.as_ref(), model)
             .await?;
 
-        // 2. PLANNING
+        // 2. PLANNING (with recursive splitting)
         let planner = WorkflowPlanner::with_llm(self.llm_provider.clone());
-        let mut plan = planner.plan_enhanced(&thinking_result, mainline_goal).await;
+        let mut plan = planner.plan_with_recursion(&thinking_result, mainline_goal).await;
 
         // 3. EXECUTION
         let executor = WorkflowExecutor::new();
