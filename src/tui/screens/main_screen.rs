@@ -69,8 +69,18 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             height: (msg_height as u16).min(max_y - current_y),
         };
 
-        // 渲染消息
-        let paragraph = message::render_message(msg, inner_area.width as usize, &app.theme);
+        // 渲染消息（带左侧颜色竖条区分角色）
+        let border_color = match msg.role {
+            crate::state::MessageRole::User => app.theme.user_message,
+            crate::state::MessageRole::Assistant => app.theme.assistant_message,
+            crate::state::MessageRole::System => app.theme.system_message,
+            crate::state::MessageRole::Tool => app.theme.tool_message,
+        };
+        let block = Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(border_color));
+        let paragraph = message::render_message(msg, inner_area.width as usize, &app.theme)
+            .block(block);
         f.render_widget(paragraph, msg_area);
 
         current_y += msg_height as u16;
@@ -109,7 +119,8 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.border))
+        .border_style(Style::default().fg(app.theme.border_active))
+        .style(Style::default().bg(app.theme.bg))
         .title(title);
 
     let inner_area = block.inner(area);
