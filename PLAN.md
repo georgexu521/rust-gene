@@ -839,3 +839,119 @@
 2. 指标层：自动指标与人工抽样对账机制常态化。
 3. 发布层：门禁报告能定位策略回归来源。
 4. 业务层：复杂编程任务的主线命中与返工率趋势稳定改善。
+
+
+---
+
+## 14. Claude Code 源码差距分析与追赶计划（2026-04-23 新增）
+
+> 基于 Claude Code v2.1.76 源码（桌面 `claude` 文件夹）+ 2026 年最新公开资料的系统调研。
+
+### 14.1 核心发现：Claude Code 强在哪里？
+
+Claude Code 的核心竞争力不是单一功能，而是 **"Harness 完整性"**——工具、提示、上下文、安全、Agent 编排形成高度协同的体系。
+
+| 维度 | Claude Code | Priority Agent | 差距 |
+|------|-------------|----------------|------|
+| **工具数量** | 43 | 29 | **-14** |
+| **上下文压缩** | 6 种策略 + compact_boundary 标记 | ✅ CompactMetadata + Boundary Marker + SessionMemoryCompact | 差距缩小 |
+| **File Checkpointing** | ✅ 自动快照 + diff + 回滚 | ✅ 系统级 CheckpointManager + `/checkpoints` + `/restore` | 差距缩小 |
+| **Agent 系统** | 5 种内置角色 + fork/in-process/remote 三模式 + 记忆隔离 | ✅ 9 种角色 + `RoleMemoryStore` 记忆隔离 | 差距缩小 |
+| **Plan Mode** | Enter/Exit/AskQuestion 三位一体 + Ultra-plan | ✅ Clarifying 状态 + `ask_user` 集成 + 状态栏实时显示 | 差距缩小 |
+| **LSP 集成** | LSPClient + DiagnosticRegistry + ServerManager | 基础 LspManager | 诊断深度差距 |
+| **Security** | Security Classifier + Denial Tracking + 工具级风险分析 | 危险命令检测 + 规则系统 | 分类器缺失 |
+| **Skills** | 18 内置 skills + marketplace + /batch 大规模并行 | ✅ 内置 `/batch` skill + Agent 并行执行 | 差距缩小 |
+| **Git/Worktree** | worktree 隔离 + commit-push-pr 自动化 | /diff 命令 | 工作流闭环差距 |
+| **TUI** | 自研 ink 渲染引擎（331 文件）+ Vim 模式 + 终端通知 | ratatui 基础界面 | 体验差距 |
+| **Remote** | `claude ssh <host>` | ❌ | 远程执行缺失 |
+| **VS Code** | 原生插件 inline edit | HTTP API | IDE 集成差距 |
+| **Prompt Caching** | ✅ 成本降低 90% | ❌ | 成本优化缺失 |
+| **Voice** | 语音输入 | ✅ STT/TTS | **我们领先** |
+| **权重+Socratic** | ❌ | ✅ 独特优势 | **我们领先** |
+
+### 14.2 关键差距详解
+
+#### 🔴 P0：File Checkpointing（文件快照系统）✅
+
+Claude Code 每次工具执行前自动创建文件快照，最多保留 100 个，支持 diff 对比和任意状态恢复。这是让 Agent "大胆自动执行" 的安全网。
+
+**已实现**：`CheckpointManager` 系统级检查点管理（`src/engine/checkpoint.rs`，26KB）。`file_write`/`file_edit` 修改前自动调用 `CheckpointManager::create()` 创建快照。支持 `restore()` 回滚、`diff_checkpoints()` unified diff 对比、`prune()` 清理旧快照（最多保留 100 个）。TUI 斜杠命令 `/checkpoints`（列出最近 20 个）、`/restore <id>`（恢复到历史状态）。
+
+#### 🔴 P0：Agent 角色化与记忆隔离 ✅
+
+Claude Code 的 AgentTool 有 5 种内置角色（plan/verification/guide/advisor/fast），每个角色有独立的记忆文件、权限上下文、模型选择。
+
+**已实现**：`AgentRole` 扩展至 9 种角色（`Default/Teammate/Specialist/DreamTask/Plan/Verify/Fast/Guide/Advisor`），每种角色有独立的 `system_prompt()`。`AgentConfig::from_role()` 自动注入角色提示词。`RoleMemoryStore`（`src/agent/memory.rs`）按角色隔离持久化存储，路径 `~/.priority-agent/memories/<role>.json`。
+
+#### 🟠 P1：上下文压缩升级 ✅
+
+Claude Code 有 6 种压缩策略（snip / micro / auto / session memory / grouping / post-cleanup），在消息流中插入 `compact_boundary` 标记保留恢复信息，有基于对话时长的动态配置。
+
+**已实现**：`CompactMetadata` 压缩边界元数据（sequence, boundary_id, preserved_tail_count, messages_before/after, tokens_before/after, timestamp）。`COMPACT_BOUNDARY_MARKER` 标记 `[COMPACT_BOUNDARY:id=...|seq=N|...]` 嵌入摘要消息保留恢复信息。`SessionMemoryCompact` 基于会话阶段的智能压缩策略（探索/实现/验证/收尾四阶段）。
+
+#### 🟠 P1：Skills 内置库与 /batch ✅
+
+Claude Code 有 18 个内置 skills，`/batch` 可以并行修改 5-30 个独立代码单元。支持 marketplace 和变量替换。
+
+**已实现**：内置 `batch.md` skill（`src/skills/bundled/batch.md`）：大规模并行代码修改流程（研究→分解→5-30 单元→并行执行→PR）。`BatchRefactor` 增强（`src/engine/batch_refactor.rs`）：集成 `AgentManager` 真正调用 Agent 执行每个单元，支持 git worktree 隔离执行。TUI 斜杠命令 `/batch <description>` 自动发现前 50 个文件并分解为并行单元。
+
+#### 🟠 P1：Plan Mode 交互式提问 ✅
+
+Claude Code 的 Plan Mode 有 `AskUserQuestionTool`，在规划阶段主动向用户澄清需求，避免"做出来才发现不对"。
+
+**已实现**：
+- `EnterPlanModeTool` 描述增强：明确指示 Agent 在不确定时使用 `ask_user` 工具提问
+- `PlanTool` 描述增强：提示提交计划前先用 `ask_user` 澄清模糊需求
+- `PlanModeState::Clarifying { question }` 新状态：追踪 Agent 正在向用户提问
+- TUI 状态栏实时显示 Plan Mode 子状态：`[PLAN: generating]`、`[PLAN: clarifying "..."]`、`[PLAN: awaiting approval]`、`[PLAN: step N]`
+- PlanModeManager 新增 `start_clarifying()` / `finish_clarifying()` 方法
+
+#### 🟡 P2：Security Classifier
+
+Claude Code 每个工具有 `toAutoClassifierInput`，Bash/PowerShell 有专门的安全分析器（regex + 语义分析），权限拒绝有追踪学习机制。
+
+**我们的现状**：BashTool 有关键词检测，但没有系统级 security classifier，没有 denial tracking。
+
+#### 🟡 P2：Git Worktree 与 commit/PR 自动化
+
+Claude Code 支持 `--worktree` 自动创建 git worktree 隔离执行，`commit-push-pr.ts` 自动完成代码提交和 PR 创建。
+
+**我们的现状**：有 `/diff` 命令，但没有 worktree 隔离和自动 commit/PR。
+
+#### 🟢 P3：TUI 体验
+
+Claude Code 的 ink 渲染引擎支持 Ghostty/iTerm2/kitty 原生特性、Vim 模式、文件 diff 可视化、上下文可视化。
+
+**我们的现状**：ratatui 基础界面，有设置页面和斜杠命令，但没有 Vim 模式、没有 diff 可视化。
+
+### 14.3 追赶优先级与排期
+
+| 优先级 | 方向 | 预估工作量 | 预期影响 | 计划章节 |
+|--------|------|-----------|---------|---------|
+| 🔴 **P0** | **File Checkpointing** | 2 周 | 安全网，支撑自动模式 | 14.4 |
+| 🔴 **P0** | **Agent 角色化 + 记忆隔离** | 3-4 周 | 核心差异化能力 | 14.5 |
+| 🟠 **P1** | **上下文压缩升级**（compact_boundary + time-based + session memory） | 2-3 周 | 长对话稳定性 | 14.6 |
+| 🟠 **P1** | **Skills 内置库 + /batch** | 2 周 | 大规模代码修改能力 | 14.7 |
+| 🟠 **P1** | **Plan Mode 交互式提问** | 1-2 周 | 减少返工 | 14.8 |
+| 🟡 **P2** | **Security Classifier + Denial Tracking** | 1-2 周 | 安全提升 | 14.9 |
+| 🟡 **P2** | **Git worktree + commit/PR** | 1-2 周 | 工作流闭环 | 14.10 |
+| 🟡 **P2** | **工具补充到 35+** | 2 周 | 功能补齐 | 14.11 |
+| 🟢 **P3** | **TUI diff 可视化 + Vim** | 2-3 周 | 体验提升 | 14.12 |
+| 🟢 **P3** | **Prompt Caching** | 1-2 周 | 成本优化 | 14.13 |
+
+### 14.4 执行状态追踪
+
+| 任务 | 状态 | 开始日期 | 完成日期 | 备注 |
+|------|------|---------|---------|------|
+| File Checkpointing | ✅ 已完成 | 2026-04-23 | 2026-04-23 | 14.4.1 |
+| Agent 角色化 | ✅ 已完成 | 2026-04-23 | 2026-04-23 | 14.5 |
+| 上下文压缩升级 | ✅ 已完成 | 2026-04-23 | 2026-04-23 | 14.6 |
+| Skills 内置库 | ✅ 已完成 | 2026-04-23 | 2026-04-23 | 14.7 |
+| Plan Mode 提问 | ✅ 已完成 | 2026-04-23 | 2026-04-23 | 14.8 |
+| Security Classifier | ⏳ 待启动 | — | — | 14.9 |
+| Git Worktree | ⏳ 待启动 | — | — | 14.10 |
+| 工具补齐 35+ | ⏳ 待启动 | — | — | 14.11 |
+| TUI 增强 | ⏳ 待启动 | — | — | 14.12 |
+| Prompt Caching | ⏳ 待启动 | — | — | 14.13 |
+
+---
