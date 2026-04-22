@@ -36,8 +36,20 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         return;
     }
 
-    // 计算可见消息
-    let messages: Vec<_> = app.visible_messages().iter().collect();
+    // 计算可见消息（focus_mode 下仅显示 user/assistant）
+    let messages: Vec<_> = if app.focus_mode {
+        app.visible_messages()
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.role,
+                    crate::state::MessageRole::User | crate::state::MessageRole::Assistant
+                )
+            })
+            .collect()
+    } else {
+        app.visible_messages().iter().collect()
+    };
 
     // 渲染每条消息
     let mut current_y = inner_area.y;
@@ -209,6 +221,20 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             Style::default().fg(app.theme.text_dim),
         ));
     } else {
+        if app.paused {
+            right_text.push(Span::styled(
+                "[PAUSED]",
+                Style::default().fg(app.theme.warning).add_modifier(Modifier::BOLD),
+            ));
+            right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
+        }
+        if app.focus_mode {
+            right_text.push(Span::styled(
+                "[FOCUS]",
+                Style::default().fg(app.theme.info).add_modifier(Modifier::BOLD),
+            ));
+            right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
+        }
         right_text.push(Span::styled(
             format!(
                 "{} / {}",

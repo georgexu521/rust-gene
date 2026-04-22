@@ -158,6 +158,22 @@ impl TuiSessionManager {
         Ok(())
     }
 
+    /// 用给定消息完整替换会话消息（先删后写）
+    pub fn replace_messages(&self, session_id: &str, messages: &[MessageItem]) -> anyhow::Result<()> {
+        self.store.delete_messages(session_id)?;
+        for msg in messages {
+            let role_str = match msg.role {
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::System => "system",
+                MessageRole::Tool => "tool",
+            };
+            self.store
+                .add_message(session_id, role_str, &msg.content, None, None)?;
+        }
+        Ok(())
+    }
+
     /// 加载会话消息
     pub fn load_messages(&self, session_id: &str) -> anyhow::Result<Vec<MessageItem>> {
         let records = self.store.get_messages(session_id)?;
@@ -344,32 +360,7 @@ impl TuiSessionManager {
 
     /// 获取会话的编辑历史
     pub fn list_edits(&self, session_id: &str) -> anyhow::Result<Vec<EditRecord>> {
-        let edits_path = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".priority-agent")
-            .join("snapshots")
-            .join(session_id)
-            .join("edits.json");
-
-        if !edits_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let content = std::fs::read_to_string(&edits_path)?;
-        let records: Vec<serde_json::Value> = serde_json::from_str(&content)?;
-
-        let edits = records
-            .into_iter()
-            .map(|r| EditRecord {
-                timestamp: r["timestamp"].as_str().unwrap_or("").to_string(),
-                file_path: r["file_path"].as_str().unwrap_or("").to_string(),
-                tool_name: r["tool_name"].as_str().unwrap_or("").to_string(),
-                snapshot_dir: r["snapshot_dir"].as_str().unwrap_or("").to_string(),
-                snapshot_file: r["snapshot_file"].as_str().unwrap_or("").to_string(),
-            })
-            .collect();
-
-        Ok(edits)
+        self.load_edit_records(&self.edits_path(session_id))
     }
 
     /// 回滚最后一次编辑
@@ -389,31 +380,13 @@ impl TuiSessionManager {
             ));
         }
 
+        let current_content = std::fs::read_to_string(&last_edit.file_path)?;
         let content = std::fs::read_to_string(&snap_path)?;
+
+        // Save current state into redo stack before rewinding.
+        self.push_redo_record(session_id, &last_edit, &current_content)?;
         std::fs::write(&last_edit.file_path, content)?;
-
-        // 更新 edits.json 移除回滚的记录
-        let edits_path = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".priority-agent")
-            .join("snapshots")
-            .join(session_id)
-            .join("edits.json");
-
-        let remaining: Vec<serde_json::Value> = edits
-            .into_iter()
-            .map(|e| {
-                serde_json::json!({
-                    "timestamp": e.timestamp,
-                    "file_path": e.file_path,
-                    "tool_name": e.tool_name,
-                    "snapshot_dir": e.snapshot_dir,
-                    "snapshot_file": e.snapshot_file,
-                })
-            })
-            .collect();
-
-        std::fs::write(&edits_path, serde_json::to_string_pretty(&remaining)?)?;
+        self.save_edit_records(&self.edits_path(session_id), &edits)?;
 
         Ok(format!(
             "Rewound {} on {}",
@@ -444,22 +417,110 @@ impl TuiSessionManager {
             ));
         }
 
+        let current_content = std::fs::read_to_string(&target_edit.file_path)?;
         let content = std::fs::read_to_string(&snap_path)?;
+
+        // Save current state into redo stack before rewinding.
+        self.push_redo_record(session_id, &target_edit, &current_content)?;
         std::fs::write(&target_edit.file_path, content)?;
 
         // 移除该条记录并更新 edits.json
         let mut remaining = edits;
         remaining.remove(file_edit_idx);
 
-        let edits_path = dirs::home_dir()
+        self.save_edit_records(&self.edits_path(session_id), &remaining)?;
+
+        Ok(format!(
+            "Rewound {} on {}",
+            target_edit.tool_name, target_edit.file_path
+        ))
+    }
+
+    /// 重做最后一次被撤销的编辑
+    pub fn redo_last_edit(&self, session_id: &str) -> anyhow::Result<String> {
+        let redo_path = self.redo_edits_path(session_id);
+        let mut redo_edits = self.load_edit_records(&redo_path)?;
+        if redo_edits.is_empty() {
+            return Err(anyhow::anyhow!("No edits to redo"));
+        }
+
+        let redo_edit = redo_edits.pop().unwrap();
+        let redo_snap_path = redo_edit.snapshot_path();
+        if !redo_snap_path.exists() {
+            return Err(anyhow::anyhow!(
+                "Redo snapshot not found: {}",
+                redo_snap_path.display()
+            ));
+        }
+
+        let current_content = std::fs::read_to_string(&redo_edit.file_path)?;
+        let redo_content = std::fs::read_to_string(&redo_snap_path)?;
+
+        // Re-add an undo record so /undo can reverse this /redo.
+        let undo_record = self.create_runtime_snapshot_record(
+            session_id,
+            &redo_edit.file_path,
+            &format!("redo:{}", redo_edit.tool_name),
+            &current_content,
+            "runtime_undo",
+        )?;
+        let mut edits = self.list_edits(session_id)?;
+        edits.push(undo_record);
+        self.save_edit_records(&self.edits_path(session_id), &edits)?;
+
+        // Apply redone content and consume redo stack top.
+        std::fs::write(&redo_edit.file_path, redo_content)?;
+        self.save_edit_records(&redo_path, &redo_edits)?;
+
+        Ok(format!(
+            "Redid {} on {}",
+            redo_edit.tool_name, redo_edit.file_path
+        ))
+    }
+
+    fn snapshots_session_dir(&self, session_id: &str) -> PathBuf {
+        dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".priority-agent")
             .join("snapshots")
             .join(session_id)
-            .join("edits.json");
+    }
 
-        let json_records: Vec<serde_json::Value> = remaining
+    fn edits_path(&self, session_id: &str) -> PathBuf {
+        self.snapshots_session_dir(session_id).join("edits.json")
+    }
+
+    fn redo_edits_path(&self, session_id: &str) -> PathBuf {
+        self.snapshots_session_dir(session_id).join("redo_edits.json")
+    }
+
+    fn load_edit_records(&self, path: &PathBuf) -> anyhow::Result<Vec<EditRecord>> {
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = std::fs::read_to_string(path)?;
+        let records: Vec<serde_json::Value> = serde_json::from_str(&content)?;
+
+        Ok(records
             .into_iter()
+            .map(|r| EditRecord {
+                timestamp: r["timestamp"].as_str().unwrap_or("").to_string(),
+                file_path: r["file_path"].as_str().unwrap_or("").to_string(),
+                tool_name: r["tool_name"].as_str().unwrap_or("").to_string(),
+                snapshot_dir: r["snapshot_dir"].as_str().unwrap_or("").to_string(),
+                snapshot_file: r["snapshot_file"].as_str().unwrap_or("").to_string(),
+            })
+            .collect())
+    }
+
+    fn save_edit_records(&self, path: &PathBuf, edits: &[EditRecord]) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let records: Vec<serde_json::Value> = edits
+            .iter()
             .map(|e| {
                 serde_json::json!({
                     "timestamp": e.timestamp,
@@ -471,12 +532,49 @@ impl TuiSessionManager {
             })
             .collect();
 
-        std::fs::write(&edits_path, serde_json::to_string_pretty(&json_records)?)?;
+        std::fs::write(path, serde_json::to_string_pretty(&records)?)?;
+        Ok(())
+    }
 
-        Ok(format!(
-            "Rewound {} on {}",
-            target_edit.tool_name, target_edit.file_path
-        ))
+    fn create_runtime_snapshot_record(
+        &self,
+        session_id: &str,
+        file_path: &str,
+        tool_name: &str,
+        content: &str,
+        sub_dir: &str,
+    ) -> anyhow::Result<EditRecord> {
+        let snapshot_dir = self.snapshots_session_dir(session_id).join(sub_dir);
+        std::fs::create_dir_all(&snapshot_dir)?;
+        let snapshot_file = format!("{}_{}.txt", chrono::Utc::now().timestamp_millis(), Uuid::new_v4().simple());
+        std::fs::write(snapshot_dir.join(&snapshot_file), content)?;
+
+        Ok(EditRecord {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            file_path: file_path.to_string(),
+            tool_name: tool_name.to_string(),
+            snapshot_dir: snapshot_dir.to_string_lossy().to_string(),
+            snapshot_file,
+        })
+    }
+
+    fn push_redo_record(
+        &self,
+        session_id: &str,
+        undone_edit: &EditRecord,
+        content_before_rewind: &str,
+    ) -> anyhow::Result<()> {
+        let redo_record = self.create_runtime_snapshot_record(
+            session_id,
+            &undone_edit.file_path,
+            &undone_edit.tool_name,
+            content_before_rewind,
+            "runtime_redo",
+        )?;
+        let redo_path = self.redo_edits_path(session_id);
+        let mut redo_edits = self.load_edit_records(&redo_path)?;
+        redo_edits.push(redo_record);
+        self.save_edit_records(&redo_path, &redo_edits)
     }
 }
 
@@ -705,5 +803,74 @@ mod tests {
         let _ = std::fs::remove_file(&file_b);
         let _ = std::fs::remove_dir_all(&snap_dir);
         let _ = std::fs::remove_file(&edits_path);
+    }
+
+    #[test]
+    fn test_redo_roundtrip_after_rewind() {
+        let mut manager = TuiSessionManager::in_memory().unwrap();
+        let session_id = manager.start_session("Redo Test", "gpt-4").unwrap();
+
+        let test_file = std::env::temp_dir().join("test_redo_file.txt");
+        std::fs::write(&test_file, "original content").unwrap();
+
+        let snap_dir = std::env::temp_dir().join("test_redo_snapshot");
+        std::fs::create_dir_all(&snap_dir).unwrap();
+        std::fs::write(snap_dir.join("test_redo_file.txt"), "original content").unwrap();
+
+        let edit_record = serde_json::json!([{
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "file_path": test_file.to_string_lossy().to_string(),
+            "tool_name": "file_edit",
+            "snapshot_dir": snap_dir.to_string_lossy().to_string(),
+            "snapshot_file": "test_redo_file.txt",
+        }]);
+
+        let edits_path = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".priority-agent")
+            .join("snapshots")
+            .join(&session_id)
+            .join("edits.json");
+        std::fs::create_dir_all(edits_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &edits_path,
+            serde_json::to_string_pretty(&edit_record).unwrap(),
+        )
+        .unwrap();
+
+        // Simulate file changed by edit tool.
+        std::fs::write(&test_file, "modified content").unwrap();
+
+        // Undo -> file returns to original.
+        let undo_result = manager.rewind_last_edit(&session_id).unwrap();
+        assert!(undo_result.contains("Rewound"));
+        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "original content");
+
+        // Redo -> file returns to modified.
+        let redo_result = manager.redo_last_edit(&session_id).unwrap();
+        assert!(redo_result.contains("Redid"));
+        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "modified content");
+
+        // Cleanup.
+        let _ = std::fs::remove_file(&test_file);
+        let _ = std::fs::remove_dir_all(&snap_dir);
+        let _ = std::fs::remove_dir_all(
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".priority-agent")
+                .join("snapshots")
+                .join(&session_id),
+        );
+    }
+
+    #[test]
+    fn test_redo_empty_stack_fails() {
+        let mut manager = TuiSessionManager::in_memory().unwrap();
+        let session_id = manager.start_session("Redo Empty", "gpt-4").unwrap();
+
+        let err = manager
+            .redo_last_edit(&session_id)
+            .expect_err("redo without undo should fail");
+        assert!(err.to_string().contains("No edits to redo"));
     }
 }

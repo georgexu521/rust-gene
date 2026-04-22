@@ -154,6 +154,10 @@ pub struct TuiApp {
     pub tasks: Vec<TaskItem>,
     /// 是否正在查询中
     pub is_querying: bool,
+    /// 是否处于暂停态（不接受新消息发送）
+    pub paused: bool,
+    /// 是否启用聚焦模式（仅显示 user/assistant）
+    pub focus_mode: bool,
     /// 命令注册表
     command_registry: CommandRegistry,
     /// 滚动位置
@@ -286,6 +290,8 @@ impl TuiApp {
             messages: vec![welcome_message],
             tasks: Vec::new(),
             is_querying: false,
+            paused: false,
+            focus_mode: false,
             command_registry: default_command_registry(),
             scroll_offset: 0,
             context,
@@ -350,6 +356,12 @@ impl TuiApp {
     /// 发送消息到 LLM（核心逻辑，可被 skill 调用复用）
     pub(crate) async fn send_message(&mut self, content: String) {
         if content.trim().is_empty() {
+            return;
+        }
+        if self.paused {
+            self.add_system_message(
+                "Agent is paused. Use `/pause resume` to continue sending messages.".to_string(),
+            );
             return;
         }
 
@@ -949,7 +961,7 @@ impl TuiApp {
             "/hooks" => slash::handle_hooks(self),
             "/profiling" => slash::handle_profiling(self),
             "/prompt" => slash::handle_prompt(self, args),
-            "/migrate" => slash::handle_migrate(self, args),
+            "/migrate" => slash::handle_migrate(self, args).await,
             "/focus" => slash::handle_focus(self, args),
             "/pause" => slash::handle_pause(self, args),
             "/install" => slash::handle_install(self, args).await,
@@ -957,10 +969,10 @@ impl TuiApp {
             "/branch" => slash::handle_branch(self, args).await,
             "/color" => slash::handle_color(self, args),
             // Phase 10 Batch 3: webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker
-            "/webhook" => slash::handle_webhook(self, args),
+            "/webhook" => slash::handle_webhook(self, args).await,
             "/wizard" => slash::handle_wizard(self),
             "/workspace" => slash::handle_workspace(self, args),
-            "/slack" => slash::handle_slack(self, args),
+            "/slack" => slash::handle_slack(self, args).await,
             "/stealth" => slash::handle_stealth(self, args),
             "/shadow" => slash::handle_shadow(self, args),
             "/reject" => slash::handle_reject(self, args),
@@ -1027,6 +1039,7 @@ impl TuiApp {
             "/snippet" => slash::handle_snippet(self, args),
             "/bookmark" => slash::handle_bookmark(self, args),
             "/tag" => slash::handle_tag(self, args),
+            "/search" => slash::handle_search(self, args),
             "/filter" => slash::handle_filter(self, args),
             // Phase 10 Final: Complete commands
             "/profile" => slash::handle_profile(self, args),
@@ -1272,6 +1285,20 @@ mod tests {
         let app = TuiApp::new();
         assert_eq!(app.messages.len(), 1); // 欢迎消息
         assert!(!app.is_querying);
+        assert!(!app.paused);
+        assert!(!app.focus_mode);
+    }
+
+    #[tokio::test]
+    async fn test_send_message_blocked_when_paused() {
+        let mut app = TuiApp::new();
+        app.paused = true;
+        let before = app.messages.len();
+        app.send_message("hello".to_string()).await;
+        assert_eq!(app.messages.len(), before + 1);
+        let last = app.messages.last().expect("system message expected");
+        assert_eq!(last.role, MessageRole::System);
+        assert!(last.content.contains("Agent is paused"));
     }
 
     #[tokio::test]

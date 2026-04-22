@@ -610,3 +610,4 @@
 2. 把 placeholder 命令清单接入 CI 提醒（非阻断）。
 3. 建立回归样本目录与首批 20 个高频任务样本。
 4. 输出 Phase 0 的验收报告模板。
+5. 按高频命令闭环清单逐项执行与验收：`docs/HIGH_FREQ_COMMAND_CLOSURE_CHECKLIST.md`。

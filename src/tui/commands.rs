@@ -585,7 +585,7 @@ pub const CMD_PROMPT: CommandDef = CommandDef::new(
     "/prompt",
     &[],
     "Config",
-    "/prompt [show|edit <text>]",
+    "/prompt [show|edit <text>|append <text>|apply|reset]",
     "Show or edit system prompt",
 );
 
@@ -601,7 +601,7 @@ pub const CMD_FOCUS: CommandDef = CommandDef::new(
     "/focus",
     &[],
     "General",
-    "/focus [on|off]",
+    "/focus [on|off|toggle|status]",
     "Toggle focus mode",
 );
 
@@ -609,7 +609,7 @@ pub const CMD_PAUSE: CommandDef = CommandDef::new(
     "/pause",
     &[],
     "General",
-    "/pause [pause|resume]",
+    "/pause [pause|resume|toggle|status]",
     "Pause or resume agent",
 );
 
@@ -641,8 +641,8 @@ pub const CMD_COLOR: CommandDef = CommandDef::new(
     "/color",
     &[],
     "Config",
-    "/color [dark|light|high-contrast]",
-    "Change theme color",
+    "/color [dark|light|high-contrast|hc]",
+    "Theme color alias (same as /theme)",
 );
 
 // Phase 10 Batch 3: webhook, wizard, workspace, slack, stealth, shadow, reject, subscribe, slots, ticker
@@ -650,7 +650,7 @@ pub const CMD_WEBHOOK: CommandDef = CommandDef::new(
     "/webhook",
     &[],
     "Info",
-    "/webhook [list|create|delete] <url>",
+    "/webhook [list|create <url> [name]|delete <name>|test <name|url> [payload]]",
     "Manage webhooks",
 );
 
@@ -659,7 +659,7 @@ pub const CMD_WIZARD: CommandDef = CommandDef::new(
     &[],
     "Config",
     "/wizard",
-    "Start setup wizard",
+    "Open guided setup in settings mode",
 );
 
 pub const CMD_WORKSPACE: CommandDef = CommandDef::new(
@@ -674,7 +674,7 @@ pub const CMD_SLACK: CommandDef = CommandDef::new(
     "/slack",
     &[],
     "Info",
-    "/slack [connect|disconnect|send]",
+    "/slack [status|connect <webhook_url> [channel]|disconnect|send [#channel] <message>]",
     "Slack integration",
 );
 
@@ -706,7 +706,7 @@ pub const CMD_SUBSCRIBE: CommandDef = CommandDef::new(
     "/subscribe",
     &[],
     "Info",
-    "/subscribe <event_type>",
+    "/subscribe [list|add <event>|remove <event>|clear]",
     "Subscribe to events",
 );
 
@@ -714,7 +714,7 @@ pub const CMD_SLOTS: CommandDef = CommandDef::new(
     "/slots",
     &[],
     "Config",
-    "/slots [list|set <name> <value>|clear]",
+    "/slots [list|get <name>|set <name> <value>|unset <name>|clear]",
     "View/edit slot variables",
 );
 
@@ -722,8 +722,8 @@ pub const CMD_TICKER: CommandDef = CommandDef::new(
     "/ticker",
     &[],
     "General",
-    "/ticker <message>",
-    "Display scrolling ticker",
+    "/ticker [show|clear|<message>]",
+    "Manage ticker message",
 );
 
 // Phase 10 Batch 4: config, copy, desktop, chrome, effort, preamble, untrap, verbose, write
@@ -755,7 +755,7 @@ pub const CMD_CHROME: CommandDef = CommandDef::new(
     "/chrome",
     &[],
     "Info",
-    "/chrome [open|tabs|bookmarks]",
+    "/chrome [open <url>|tabs|bookmarks]",
     "Chrome integration",
 );
 
@@ -763,7 +763,7 @@ pub const CMD_EFFORT: CommandDef = CommandDef::new(
     "/effort",
     &[],
     "Config",
-    "/effort [minimal|normal|maximum]",
+    "/effort [minimal|normal|maximum|status]",
     "Set effort level",
 );
 
@@ -787,7 +787,7 @@ pub const CMD_VERBOSE: CommandDef = CommandDef::new(
     "/verbose",
     &[],
     "Config",
-    "/verbose [on|off]",
+    "/verbose [on|off|toggle|status]",
     "Toggle verbose output",
 );
 
@@ -812,7 +812,7 @@ pub const CMD_PROJECT: CommandDef = CommandDef::new(
     "/project",
     &[],
     "Info",
-    "/project [info|list|init]",
+    "/project [info|list|tree [depth]|init <name>]",
     "Project management",
 );
 
@@ -820,7 +820,7 @@ pub const CMD_BACKEND: CommandDef = CommandDef::new(
     "/backend",
     &[],
     "Config",
-    "/backend [local|restricted|external]",
+    "/backend [local|restricted|external|status]",
     "Switch execution backend",
 );
 
@@ -828,7 +828,7 @@ pub const CMD_SANDBOX: CommandDef = CommandDef::new(
     "/sandbox",
     &[],
     "Config",
-    "/sandbox [on|off]",
+    "/sandbox [on|off|toggle|status]",
     "Toggle sandbox mode",
 );
 
@@ -836,7 +836,7 @@ pub const CMD_ENV: CommandDef = CommandDef::new(
     "/env",
     &[],
     "Info",
-    "/env [list|get <key>]",
+    "/env [list|get <key>|set <key> <value>|unset <key>]",
     "Show environment variables",
 );
 
@@ -852,7 +852,7 @@ pub const CMD_BENCHMARK: CommandDef = CommandDef::new(
     "/benchmark",
     &[],
     "Info",
-    "/benchmark [n]",
+    "/benchmark [n] (script or synthetic)",
     "Run performance benchmark",
 );
 
@@ -870,7 +870,7 @@ pub const CMD_TRACE: CommandDef = CommandDef::new(
     "/trace",
     &[],
     "Config",
-    "/trace [on|off|status]",
+    "/trace [on|off|toggle|status]",
     "Tracing controls",
 );
 
@@ -895,7 +895,7 @@ pub const CMD_LOGIN: CommandDef = CommandDef::new(
     "/login",
     &[],
     "General",
-    "/login [provider]",
+    "/login [provider|status]",
     "Authenticate with provider",
 );
 
@@ -1017,7 +1017,7 @@ pub const CMD_COMPACT: CommandDef = CommandDef::new(
     &[],
     "General",
     "/compact",
-    "Compact context",
+    "Compact conversation context",
 );
 
 pub const CMD_SNIPPET: CommandDef = CommandDef::new(
@@ -1056,7 +1056,7 @@ pub const CMD_FILTER: CommandDef = CommandDef::new(
     "/filter",
     &[],
     "Session",
-    "/filter [user|assistant|tool|all]",
+    "/filter <user|assistant|tool|system|all> [query]",
     "Filter messages",
 );
 
@@ -1065,7 +1065,7 @@ pub const CMD_PROFILE: CommandDef = CommandDef::new(
     "/profile",
     &[],
     "Config",
-    "/profile [show|set <key> <value>]",
+    "/profile [show [key]|set <key> <value>|unset <key>]",
     "Edit user profile",
 );
 
@@ -1231,53 +1231,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_QUICK);
     registry.register(&CMD_FEEDBACK);
 
-    // Mark placeholder commands (功能尚未完全实现)
-    // Phase 10 Batch 3 - Integration commands that are progressive implementations
-    registry.mark_placeholder("/webhook");
-    registry.mark_placeholder("/wizard");
-    registry.mark_placeholder("/workspace");
-    registry.mark_placeholder("/slack");
-    registry.mark_placeholder("/stealth");
-    registry.mark_placeholder("/shadow");
-    registry.mark_placeholder("/reject");
-    registry.mark_placeholder("/subscribe");
-    registry.mark_placeholder("/slots");
-    registry.mark_placeholder("/ticker");
-    // Phase 10 Batch 4 - Partial implementations
-    registry.mark_placeholder("/config");
-    registry.mark_placeholder("/chrome");
-    registry.mark_placeholder("/effort");
-    registry.mark_placeholder("/preamble");
-    registry.mark_placeholder("/untrap");
-    registry.mark_placeholder("/verbose");
-    // Phase 10 Extended - More experimental commands
-    registry.mark_placeholder("/rollback");
-    registry.mark_placeholder("/project");
-    registry.mark_placeholder("/backend");
-    registry.mark_placeholder("/sandbox");
-    registry.mark_placeholder("/env");
-    registry.mark_placeholder("/cache");
-    registry.mark_placeholder("/benchmark");
-    registry.mark_placeholder("/test");
-    registry.mark_placeholder("/trace");
-    // Phase 10 Extended 2 - Auth and misc commands
-    registry.mark_placeholder("/init");
-    registry.mark_placeholder("/login");
-    registry.mark_placeholder("/logout");
-    registry.mark_placeholder("/key");
-    // Phase 10 Extended 3 - Session and utility commands
-    registry.mark_placeholder("/merge");
-    registry.mark_placeholder("/cleanup");
-    registry.mark_placeholder("/compact");
-    registry.mark_placeholder("/snippet");
-    registry.mark_placeholder("/bookmark");
-    registry.mark_placeholder("/tag");
-    registry.mark_placeholder("/search");
-    registry.mark_placeholder("/filter");
-    registry.mark_placeholder("/profile");
-    registry.mark_placeholder("/theme");
-    registry.mark_placeholder("/shortcuts");
-    registry.mark_placeholder("/quick");
+    // Placeholder list intentionally empty: all registered slash commands currently have usable implementations.
 
     registry
 }

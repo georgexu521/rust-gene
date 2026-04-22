@@ -293,6 +293,22 @@ impl SessionStore {
         Ok(count)
     }
 
+    /// 删除会话中的全部消息（用于会话重写）
+    pub fn delete_messages(&self, session_id: &str) -> SqlResult<usize> {
+        let conn = self.conn();
+        let count = conn.execute(
+            "DELETE FROM messages WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        if count > 0 {
+            debug!(
+                "Deleted {} messages from session {} for rewrite",
+                count, session_id
+            );
+        }
+        Ok(count)
+    }
+
     // ==================== 搜索 ====================
 
     /// 全文搜索消息

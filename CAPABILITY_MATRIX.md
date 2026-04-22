@@ -1,6 +1,6 @@
 # Capability Matrix
 
-> Last updated: 2026-04-21
+> Last updated: 2026-04-22
 > Purpose: Track maturity of commands and tools
 
 ## Command Maturity Levels
@@ -39,6 +39,21 @@
 | Command | Handler | Description | Status |
 |---------|---------|-------------|--------|
 | `/session` | handle_session | Session management | 🟡 Usable |
+| `/merge` | handle_merge | Merge another session into current | 🟡 Usable |
+| `/cleanup` | handle_cleanup | Cleanup sessions/cache/logs with confirmation | 🟡 Usable |
+| `/snippet` | handle_snippet | Save/load/list local snippets | 🟡 Usable |
+| `/bookmark` | handle_bookmark | Save/list/go named bookmarks | 🟡 Usable |
+| `/tag` | handle_tag | Add/list/find item tags | 🟡 Usable |
+| `/search` | handle_search | Search sessions by query | 🟡 Usable |
+| `/filter` | handle_filter | Filter current session messages by role/query | 🟡 Usable |
+| `/profile` | handle_profile | Persisted profile show/set/unset | 🟡 Usable |
+| `/feedback` | handle_feedback | Persist feedback records | 🟡 Usable |
+| `/theme` | handle_theme | Show/set persisted theme preset | 🟡 Usable |
+| `/color` | handle_color | Theme color alias with persistence | 🟡 Usable |
+| `/focus` | handle_focus | Toggle focused chat rendering mode | 🟡 Usable |
+| `/pause` | handle_pause | Pause/resume message submission | 🟡 Usable |
+| `/shortcuts` | handle_shortcuts | Show active keybindings | 🟡 Usable |
+| `/quick` | handle_quick | Show contextual quick-action panel | 🟡 Usable |
 | `/resume` | handle_resume | Resume session | 🟡 Usable |
 | `/rewind` | handle_rewind | Rewind conversation | 🟡 Usable |
 | `/retry` | handle_retry | Retry last operation | 🟡 Usable |
@@ -57,6 +72,40 @@
 | `/explain` | handle_explain | Explain code | 🟡 Usable |
 | `/fix` | handle_fix | Fix code | 🟡 Usable |
 | `/settings` | handle_settings | Settings menu | 🟡 Usable |
+| `/config` | handle_config | Configuration | 🟡 Usable |
+| `/reload` | handle_reload | Reload config/plugins/skills | 🟡 Usable |
+| `/prompt` | handle_prompt | Persisted prompt show/edit/append/apply/reset | 🟡 Usable |
+| `/migrate` | handle_migrate | SQLx migration up/down/status helper | 🟡 Usable |
+| `/webhook` | handle_webhook | Persisted webhook create/list/delete/test | 🟡 Usable |
+| `/rollback` | handle_rollback | Rollback changes | 🟡 Usable |
+| `/test` | handle_test | Run tests with correct exit status | 🟡 Usable |
+| `/ping` | handle_ping | Local round-trip latency check | 🟡 Usable |
+| `/workspace` | handle_workspace | Workspace info + git worktree listing | 🟡 Usable |
+| `/stealth` | handle_stealth | Persisted stealth mode toggle/status | 🟡 Usable |
+| `/shadow` | handle_shadow | Persisted shadow mode toggle/status | 🟡 Usable |
+| `/reject` | handle_reject | Reject pending permission request | 🟡 Usable |
+| `/subscribe` | handle_subscribe | Persisted subscription list/add/remove/clear | 🟡 Usable |
+| `/slots` | handle_slots | Persisted slot list/get/set/unset/clear | 🟡 Usable |
+| `/preamble` | handle_preamble | Persisted preamble show/set/reset | 🟡 Usable |
+| `/verbose` | handle_verbose | Persisted verbose toggle + runtime log level | 🟡 Usable |
+| `/backend` | handle_backend | Persisted backend mode switch/status | 🟡 Usable |
+| `/sandbox` | handle_sandbox | Persisted sandbox toggle/status | 🟡 Usable |
+| `/env` | handle_env | List/get/set/unset PRIORITY_AGENT_* vars | 🟡 Usable |
+| `/cache` | handle_cache | Cache clear/stats | 🟡 Usable |
+| `/trace` | handle_trace | Persisted trace toggle/status + log level | 🟡 Usable |
+| `/import` | handle_import | Import messages from exported session JSON | 🟡 Usable |
+| `/wizard` | handle_wizard | Guided setup entry + settings mode | 🟡 Usable |
+| `/slack` | handle_slack | Webhook-based connect/status/send/disconnect | 🟡 Usable |
+| `/ticker` | handle_ticker | Persisted ticker show/set/clear | 🟡 Usable |
+| `/chrome` | handle_chrome | Open URL, list tabs, read bookmarks | 🟡 Usable |
+| `/effort` | handle_effort | Persisted effort level | 🟡 Usable |
+| `/untrap` | handle_untrap | Clear pending approvals/questions and recover UI mode | 🟡 Usable |
+| `/project` | handle_project | Info/list/tree/init project helpers | 🟡 Usable |
+| `/benchmark` | handle_benchmark | Script benchmark with synthetic fallback | 🟡 Usable |
+| `/init` | handle_init | Bootstrap project directory/files | 🟡 Usable |
+| `/login` | handle_login | Persisted local auth-session state | 🟡 Usable |
+| `/logout` | handle_logout | Clear local auth-session state | 🟡 Usable |
+| `/compact` | handle_compact | Perform context micro-compression and sync session | 🟡 Usable |
 | `/plan` | handle_plan | Enter plan mode | 🟡 Usable |
 | `/exit-plan` | handle_exit_plan | Exit plan mode | 🟡 Usable |
 | `/teammate` | handle_teammate | Teammate agent | 🟡 Usable |
@@ -69,42 +118,7 @@
 
 ### Scaffold (Needs work)
 
-| Command | Handler | Description | Status |
-|---------|---------|-------------|--------|
-| `/config` | handle_config | Configuration | 🔴 Scaffold |
-| `/copy` | handle_copy | Copy to clipboard | 🔴 Scaffold |
-| `/desktop` | handle_desktop | Desktop integration | 🔴 Scaffold |
-| `/branch` | handle_branch | Branch management | 🔴 Scaffold |
-| `/chrome` | handle_chrome | Chrome integration | 🔴 Scaffold |
-| `/color` | handle_color | Color theme | 🔴 Scaffold |
-| `/effort` | handle_effort | Effort estimation | 🔴 Scaffold |
-| `/focus` | handle_focus | Focus mode | 🔴 Scaffold |
-| `/hooks` | handle_hooks | Hook management | 🔴 Scaffold |
-| `/install` | handle_install | Install dependencies | 🔴 Scaffold |
-| `/lsp` | handle_lsp | LSP management | 🔴 Scaffold |
-| `/migrate` | handle_migrate | Migration tool | 🔴 Scaffold |
-| `/npm` | handle_npm | NPM helper | 🔴 Scaffold |
-| `/pause` | handle_pause | Pause agent | 🔴 Scaffold |
-| `/preamble` | handle_preamble | Preamble edit | 🔴 Scaffold |
-| `/profiling` | handle_profiling | Profiling tool | 🔴 Scaffold |
-| `/prompt` | handle_prompt | Prompt management | 🔴 Scaffold |
-| `/reload` | handle_reload | Reload config | 🔴 Scaffold |
-| `/reject` | handle_reject | Reject suggestion | 🔴 Scaffold |
-| `/rollback` | handle_rollback | Rollback changes | 🔴 Scaffold |
-| `/shadow` | handle_shadow | Shadow mode | 🔴 Scaffold |
-| `/skeleton` | handle_skeleton | Code skeleton | 🔴 Scaffold |
-| `/slack` | handle_slack | Slack integration | 🔴 Scaffold |
-| `/slots` | handle_slots | Slot management | 🔴 Scaffold |
-| `/stealth` | handle_stealth | Stealth mode | 🔴 Scaffold |
-| `/subscribe` | handle_subscribe | Subscribe updates | 🔴 Scaffold |
-| `/ticker` | handle_ticker | Ticker tool | 🔴 Scaffold |
-| `/token` | handle_token | Token info | 🔴 Scaffold |
-| `/untrap` | handle_untrap | Untrap mouse | 🔴 Scaffold |
-| `/verbose` | handle_verbose | Verbose output | 🔴 Scaffold |
-| `/webhook` | handle_webhook | Webhook management | 🔴 Scaffold |
-| `/wizard` | handle_wizard | Wizard mode | 🔴 Scaffold |
-| `/workspace` | handle_workspace | Workspace management | 🔴 Scaffold |
-| `/write` | handle_write | Write file | 🔴 Scaffold |
+No scaffold commands at the slash-command layer.
 
 ---
 
@@ -166,7 +180,7 @@
 
 | Category | Total | Production | Usable | Scaffold |
 |----------|-------|------------|--------|----------|
-| Commands | 114 | 16 (14%) | 28 (25%) | 70 (61%) |
+| Commands | 114 | 16 (14%) | 98 (86%) | 0 (0%) |
 | Tools | ~58 | ~40 (69%) | ~16 (28%) | ~2 (3%) |
 
 ---

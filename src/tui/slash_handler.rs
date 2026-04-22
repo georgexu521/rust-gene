@@ -2159,6 +2159,7 @@ pub async fn handle_orchestrate(app: &mut TuiApp, args: &str) -> String {
 
 /// /session - 会话管理
 pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
     if args.is_empty() || args == "list" {
         // List sessions
         match app.session_manager.list_sessions(10) {
@@ -2169,15 +2170,16 @@ pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
                     let current = app.session_manager.current_session_id();
                     let mut lines = vec!["Sessions:".to_string()];
                     for (i, s) in sessions.iter().enumerate() {
-                        let _marker = if current == Some(s.id.as_str()) {
+                        let marker = if current == Some(s.id.as_str()) {
                             " (current)"
                         } else {
                             ""
                         };
                         lines.push(format!(
-                            "{}. {} - {} [{}]",
+                            "{}. {}{} - {} [{}]",
                             i + 1,
                             s.title,
+                            marker,
                             &s.id[..8.min(s.id.len())],
                             s.updated_at
                         ));
@@ -2193,17 +2195,20 @@ pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
         match app.session_manager.list_sessions(20) {
             Ok(sessions) if n > 0 && n <= sessions.len() => {
                 let session = &sessions[n - 1];
-                futures::executor::block_on(app.restore_session(&session.id));
-                format!("Switched to session: {}", session.title)
+                futures::executor::block_on(app.restore_session(&session.id))
             }
             _ => "Invalid session number. Use /session list to see available.".to_string(),
         }
-    } else if args.starts_with("new") {
+    } else if args == "new" || args.starts_with("new ") {
         // Create new session
-        let title = args.strip_prefix("new ").unwrap_or("New Session");
+        let title = args
+            .strip_prefix("new ")
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("New Session");
         match app.session_manager.start_session(title, "kimi-k2.5") {
             Ok(id) => {
-                futures::executor::block_on(app.restore_session(&id));
+                let _ = futures::executor::block_on(app.restore_session(&id));
                 format!("Created new session: {}", title)
             }
             Err(e) => format!("Failed to create session: {}", e),
@@ -2213,34 +2218,84 @@ pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
         let id = app.session_manager.current_session_id().map(|s| s.to_string()).unwrap_or_else(|| "none".to_string());
         let title = app.session_manager.current_session_title();
         format!("Current session: {} ({})", title, &id[..8.min(id.len())])
+    } else if args.starts_with("new") {
+        "Usage: /session new <title>".to_string()
     } else {
-        "Usage: /session [list|n|<n>|new <title>|current]".to_string()
+        // Fallback: try switch by full session ID
+        futures::executor::block_on(app.restore_session(args))
     }
 }
 
 /// /undo - 撤销上一次操作
-pub fn handle_undo(app: &mut TuiApp, _args: &str) -> String {
+pub fn handle_undo(app: &mut TuiApp, args: &str) -> String {
     let session_id = match app.session_manager.current_session_id() {
         Some(id) => id,
         None => return "No active session.".to_string(),
     };
 
-    match app.session_manager.rewind_last_edit(session_id) {
-        Ok(msg) => msg,
-        Err(e) => format!("Nothing to undo or undo failed: {}", e),
+    let n = match parse_optional_count(args, "/undo") {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    let mut results = Vec::new();
+    for _ in 0..n {
+        match app.session_manager.rewind_last_edit(session_id) {
+            Ok(msg) => results.push(msg),
+            Err(e) => {
+                results.push(format!("Nothing to undo or undo failed: {}", e));
+                break;
+            }
+        }
     }
+    results.join("\n")
 }
 
 /// /redo - 重做
-pub fn handle_redo(app: &mut TuiApp, _args: &str) -> String {
-    if app.session_manager.current_session_id().is_none() {
-        return "No active session.".to_string();
+pub fn handle_redo(app: &mut TuiApp, args: &str) -> String {
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => id,
+        None => return "No active session.".to_string(),
+    };
+
+    let n = match parse_optional_count(args, "/redo") {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    let mut results = Vec::new();
+    for _ in 0..n {
+        match app.session_manager.redo_last_edit(session_id) {
+            Ok(msg) => results.push(msg),
+            Err(e) => {
+                results.push(format!("Nothing to redo or redo failed: {}", e));
+                break;
+            }
+        }
     }
-    "Redo is not yet implemented: this feature requires an undo/redo stack, which is planned for a future release. Use /rewind to view or reverse specific edits.".to_string()
+    results.join("\n")
+}
+
+fn parse_optional_count(args: &str, cmd: &str) -> Result<usize, String> {
+    if args.trim().is_empty() {
+        return Ok(1);
+    }
+    let n = args
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| format!("Usage: {} [n]", cmd))?;
+    if n == 0 {
+        return Err(format!("Usage: {} [n] (n must be >= 1)", cmd));
+    }
+    Ok(n)
 }
 
 /// /retry - 重试上一次 LLM 调用
-pub async fn handle_retry(app: &mut TuiApp, _args: &str) -> String {
+pub async fn handle_retry(app: &mut TuiApp, args: &str) -> String {
+    if !args.trim().is_empty() {
+        return "Usage: /retry".to_string();
+    }
+
     // Retry the last user turn: remove that user message and everything after it,
     // then resend the same content to regenerate downstream responses coherently.
     let Some(last_user_idx) = app
@@ -2252,8 +2307,39 @@ pub async fn handle_retry(app: &mut TuiApp, _args: &str) -> String {
     };
     let content = app.messages[last_user_idx].content.clone();
     app.messages.truncate(last_user_idx);
+
+    // Keep persistence and engine history consistent with truncated UI messages.
+    if let Some(session_id) = app.session_manager.current_session_id() {
+        if let Err(e) = app.session_manager.replace_messages(session_id, &app.messages) {
+            return format!("Retry failed to rewrite session messages: {}", e);
+        }
+    }
+    if let Some(ref engine) = app.streaming_engine {
+        engine
+            .set_history(message_items_to_api_messages(&app.messages))
+            .await;
+    }
+
     app.send_message(content).await;
     String::new()
+}
+
+fn message_items_to_api_messages(
+    messages: &[crate::state::MessageItem],
+) -> Vec<crate::services::api::Message> {
+    messages
+        .iter()
+        .map(|m| match m.role {
+            crate::state::MessageRole::User => crate::services::api::Message::user(m.content.clone()),
+            crate::state::MessageRole::Assistant => {
+                crate::services::api::Message::assistant(m.content.clone())
+            }
+            crate::state::MessageRole::System => crate::services::api::Message::system(m.content.clone()),
+            crate::state::MessageRole::Tool => {
+                crate::services::api::Message::tool(String::new(), m.content.clone())
+            }
+        })
+        .collect()
 }
 
 /// /stop - 停止当前操作
@@ -2271,6 +2357,11 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() || args == "config" {
         match crate::services::config::AppConfig::load() {
             Ok(config) => {
+                // Apply visible UI config immediately.
+                app.theme = crate::tui::theme::Theme::from_name(&config.ui.theme);
+                if let Some(ref mut settings) = app.settings_state {
+                    settings.config = config.clone();
+                }
                 format!("Config reloaded:\n- API: {}\n- Model: {}",
                     config.api.base_url, config.api.model)
             }
@@ -2292,6 +2383,97 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
     } else {
         "Usage: /reload [config|plugins|skills]".to_string()
     }
+}
+
+fn format_config_summary(config: &crate::services::config::AppConfig) -> String {
+    format!(
+        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  ui.compact_mode = {}\n  storage.persistence_enabled = {}\n  storage.auto_save_interval_secs = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}",
+        config.api.base_url,
+        config.api.model,
+        config.api.temperature,
+        config.api.max_tokens.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+        config.ui.theme,
+        config.ui.show_token_usage,
+        config.ui.compact_mode,
+        config.storage.persistence_enabled,
+        config.storage.auto_save_interval_secs,
+        config.features.mcp_enabled,
+        config.features.skills_enabled,
+        config.features.web_search,
+    )
+}
+
+fn get_config_value(config: &crate::services::config::AppConfig, key: &str) -> Option<String> {
+    match key {
+        "api.base_url" => Some(config.api.base_url.clone()),
+        "api.model" => Some(config.api.model.clone()),
+        "api.temperature" => Some(config.api.temperature.to_string()),
+        "api.max_tokens" => Some(
+            config
+                .api
+                .max_tokens
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        ),
+        "ui.theme" => Some(config.ui.theme.clone()),
+        "ui.show_token_usage" => Some(config.ui.show_token_usage.to_string()),
+        "ui.compact_mode" => Some(config.ui.compact_mode.to_string()),
+        "storage.persistence_enabled" => Some(config.storage.persistence_enabled.to_string()),
+        "storage.auto_save_interval_secs" => Some(config.storage.auto_save_interval_secs.to_string()),
+        "features.mcp_enabled" => Some(config.features.mcp_enabled.to_string()),
+        "features.skills_enabled" => Some(config.features.skills_enabled.to_string()),
+        "features.web_search" => Some(config.features.web_search.to_string()),
+        _ => None,
+    }
+}
+
+fn parse_bool(value: &str) -> Result<bool, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "on" | "yes" => Ok(true),
+        "false" | "0" | "off" | "no" => Ok(false),
+        _ => Err(format!("Invalid boolean value: {}", value)),
+    }
+}
+
+fn set_config_value(
+    config: &mut crate::services::config::AppConfig,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    match key {
+        "api.base_url" => config.api.base_url = value.to_string(),
+        "api.model" => config.api.model = value.to_string(),
+        "api.temperature" => {
+            config.api.temperature = value
+                .parse::<f32>()
+                .map_err(|_| format!("Invalid float for {}: {}", key, value))?;
+        }
+        "api.max_tokens" => {
+            if value.eq_ignore_ascii_case("none") {
+                config.api.max_tokens = None;
+            } else {
+                config.api.max_tokens = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| format!("Invalid integer for {}: {}", key, value))?,
+                );
+            }
+        }
+        "ui.theme" => config.ui.theme = value.to_string(),
+        "ui.show_token_usage" => config.ui.show_token_usage = parse_bool(value)?,
+        "ui.compact_mode" => config.ui.compact_mode = parse_bool(value)?,
+        "storage.persistence_enabled" => config.storage.persistence_enabled = parse_bool(value)?,
+        "storage.auto_save_interval_secs" => {
+            config.storage.auto_save_interval_secs = value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "features.mcp_enabled" => config.features.mcp_enabled = parse_bool(value)?,
+        "features.skills_enabled" => config.features.skills_enabled = parse_bool(value)?,
+        "features.web_search" => config.features.web_search = parse_bool(value)?,
+        _ => return Err(format!("Unknown config key: {}", key)),
+    }
+    Ok(())
 }
 
 /// /share - 分享当前会话
@@ -2505,33 +2687,101 @@ pub fn handle_profiling(app: &TuiApp) -> String {
 }
 
 /// /prompt - Show/edit system prompt
-pub fn handle_prompt(_app: &TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        "Usage: /prompt [show|edit <text>]".to_string()
-    } else if args == "show" {
-        "System prompt configuration not exposed via TUI yet.".to_string()
-    } else if args.starts_with("edit ") {
-        format!("Prompt editing not implemented yet. Received: {}", args)
-    } else {
-        "Usage: /prompt [show|edit <text>]".to_string()
+pub fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if args.is_empty() || args == "show" {
+        return match read_prompt_file() {
+            Ok(Some(v)) => format!("System prompt:\n\n{}", v),
+            Ok(None) => "No custom system prompt set.".to_string(),
+            Err(e) => format!("Failed to read prompt: {}", e),
+        };
     }
+    if let Some(text) = args.strip_prefix("edit ").map(str::trim) {
+        if text.is_empty() {
+            return "Usage: /prompt edit <text>".to_string();
+        }
+        return match write_prompt_file(text) {
+            Ok(_) => "Custom system prompt updated.".to_string(),
+            Err(e) => format!("Failed to write prompt: {}", e),
+        };
+    }
+    if let Some(text) = args.strip_prefix("append ").map(str::trim) {
+        if text.is_empty() {
+            return "Usage: /prompt append <text>".to_string();
+        }
+        return match append_prompt_file(text) {
+            Ok(_) => "Custom system prompt appended.".to_string(),
+            Err(e) => format!("Failed to append prompt: {}", e),
+        };
+    }
+    if args == "reset" {
+        return match reset_prompt_file() {
+            Ok(_) => "Custom system prompt reset.".to_string(),
+            Err(e) => format!("Failed to reset prompt: {}", e),
+        };
+    }
+    if args == "apply" {
+        let prompt = match read_prompt_file() {
+            Ok(Some(v)) => v,
+            Ok(None) => return "No custom system prompt set. Use `/prompt edit <text>` first.".to_string(),
+            Err(e) => return format!("Failed to read prompt: {}", e),
+        };
+
+        let content = format!("[Custom System Prompt]\n{}", prompt);
+        app.add_system_message(content.clone());
+        let _ = app
+            .session_manager
+            .add_message(crate::state::MessageRole::System, &content);
+        if let Some(ref engine) = app.streaming_engine {
+            futures::executor::block_on(engine.set_history(message_items_to_api_messages(
+                &app.messages,
+            )));
+        }
+        return "Custom system prompt applied to current session context.".to_string();
+    }
+    "Usage: /prompt [show|edit <text>|append <text>|apply|reset]".to_string()
 }
 
 /// /migrate - Migration helper
-pub fn handle_migrate(_app: &mut TuiApp, args: &str) -> String {
+pub async fn handle_migrate(app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
         return "Usage: /migrate [up|down|status]".to_string();
     }
 
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts[0] {
-        "up" => "Migration 'up' not implemented via TUI.".to_string(),
-        "down" => "Migration 'down' not implemented via TUI.".to_string(),
+        "up" => run_migrate_sqlx(app, true).await,
+        "down" => run_migrate_sqlx(app, false).await,
         "status" => {
             let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let migrations_dir = dir.join("migrations");
-            if migrations_dir.exists() {
-                format!("Migrations directory exists at: {}", migrations_dir.display())
+            if migrations_dir.exists() && migrations_dir.is_dir() {
+                let mut files: Vec<String> = match std::fs::read_dir(&migrations_dir) {
+                    Ok(read_dir) => read_dir
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| p.is_file())
+                        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                        .collect(),
+                    Err(_) => Vec::new(),
+                };
+                files.sort();
+                let preview = files
+                    .iter()
+                    .take(10)
+                    .map(|f| format!("- {}", f))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!(
+                    "Migrations dir: {}\nFiles: {}\n{}\n\nUse `/migrate up` or `/migrate down` (requires sqlx + DATABASE_URL).",
+                    migrations_dir.display(),
+                    files.len(),
+                    if preview.is_empty() {
+                        "(no migration files found)".to_string()
+                    } else {
+                        preview
+                    }
+                )
             } else {
                 "No migrations directory found.".to_string()
             }
@@ -2541,26 +2791,64 @@ pub fn handle_migrate(_app: &mut TuiApp, args: &str) -> String {
 }
 
 /// /focus - Focus mode toggle
-pub fn handle_focus(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() || args == "on" {
-        "Focus mode enabled (UI filtering not yet implemented).".to_string()
-    } else if args == "off" {
-        "Focus mode disabled.".to_string()
-    } else {
-        "Usage: /focus [on|off]".to_string()
+pub fn handle_focus(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if args.is_empty() || args == "status" {
+        return format!(
+            "Focus mode: {}",
+            if app.focus_mode { "enabled" } else { "disabled" }
+        );
     }
+
+    let enable = match args {
+        "on" | "enable" => true,
+        "off" | "disable" => false,
+        "toggle" => !app.focus_mode,
+        _ => return "Usage: /focus [on|off|toggle|status]".to_string(),
+    };
+
+    app.focus_mode = enable;
+    if let Ok(mut config) = crate::services::config::AppConfig::load() {
+        config.ui.compact_mode = enable;
+        let _ = config.save();
+        if let Some(ref mut settings) = app.settings_state {
+            settings.config.ui.compact_mode = enable;
+        }
+    }
+    format!(
+        "Focus mode {}.",
+        if enable { "enabled" } else { "disabled" }
+    )
 }
 
 /// /pause - Pause/resume agent
 pub fn handle_pause(app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() || args == "pause" {
+    let args = args.trim();
+    if args.is_empty() || args == "status" {
+        return format!(
+            "Pause state: {}",
+            if app.paused { "paused" } else { "running" }
+        );
+    }
+
+    if args == "pause" {
+        app.paused = true;
         app.is_querying = false;
-        "Agent paused. Use /pause resume to continue.".to_string()
+        "Agent paused. New messages are blocked until `/pause resume`.".to_string()
     } else if args == "resume" {
-        app.is_querying = true;
+        app.paused = false;
+        app.is_querying = false;
         "Agent resumed.".to_string()
+    } else if args == "toggle" {
+        app.paused = !app.paused;
+        if app.paused {
+            app.is_querying = false;
+            "Agent paused. New messages are blocked until `/pause resume`.".to_string()
+        } else {
+            "Agent resumed.".to_string()
+        }
     } else {
-        "Usage: /pause [pause|resume]".to_string()
+        "Usage: /pause [pause|resume|toggle|status]".to_string()
     }
 }
 
@@ -2637,27 +2925,12 @@ pub async fn handle_branch(app: &mut TuiApp, args: &str) -> String {
 
 /// /color - Theme color customization
 pub fn handle_color(app: &mut TuiApp, args: &str) -> String {
-    use crate::tui::theme::Theme;
-
-    if args.is_empty() {
-        return "Current theme: Dark\nUse /color <preset> to change (dark/light/high-contrast)".to_string();
-    }
-
-    match args {
-        "dark" => {
-            app.theme = Theme::from_name("dark");
-            "Theme changed to: dark".to_string()
-        }
-        "light" => {
-            app.theme = Theme::from_name("light");
-            "Theme changed to: light".to_string()
-        }
-        "high-contrast" => {
-            app.theme = Theme::from_name("high-contrast");
-            "Theme changed to: high-contrast".to_string()
-        }
-        _ => format!("Unknown preset: {}. Available: dark, light, high-contrast", args),
-    }
+    // Keep /color as a backwards-compatible alias for /theme.
+    let normalized = match args.trim() {
+        "hc" => "high-contrast",
+        v => v,
+    };
+    handle_theme(app, normalized)
 }
 
 // ═══════════════════════════════════════
@@ -2665,30 +2938,118 @@ pub fn handle_color(app: &mut TuiApp, args: &str) -> String {
 // ═══════════════════════════════════════
 
 /// /webhook - Webhook management
-pub fn handle_webhook(_app: &mut TuiApp, args: &str) -> String {
+pub async fn handle_webhook(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        return "Usage: /webhook [list|create|delete] <url>".to_string();
+        return "Usage: /webhook [list|create <url> [name]|delete <name>|test <name|url> [payload]]"
+            .to_string();
     }
 
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts[0] {
-        "list" => "No webhooks configured. Set PRIORITY_AGENT_WEBHOOK_URL to enable.".to_string(),
+        "list" => match load_webhooks() {
+            Ok(map) if map.is_empty() => "No webhooks configured.".to_string(),
+            Ok(map) => {
+                let mut names: Vec<_> = map.keys().cloned().collect();
+                names.sort();
+                let mut lines = vec!["Configured webhooks:".to_string()];
+                for name in names {
+                    if let Some(url) = map.get(&name) {
+                        lines.push(format!("- {} -> {}", name, url));
+                    }
+                }
+                lines.join("\n")
+            }
+            Err(e) => format!("Failed to load webhooks: {}", e),
+        },
         "create" => {
             if parts.len() < 2 {
                 "Usage: /webhook create <url>".to_string()
             } else {
-                format!("Webhook creation not yet implemented. URL: {}", parts[1])
+                let url = parts[1].trim();
+                if !is_valid_webhook_url(url) {
+                    return "Invalid webhook URL. Must start with http:// or https://".to_string();
+                }
+                let mut map = match load_webhooks() {
+                    Ok(v) => v,
+                    Err(e) => return format!("Failed to load webhooks: {}", e),
+                };
+                let name = if parts.len() >= 3 {
+                    match sanitize_note_name(parts[2]) {
+                        Some(v) => v,
+                        None => return "Invalid webhook name.".to_string(),
+                    }
+                } else {
+                    let mut i = 1usize;
+                    let mut candidate = format!("webhook{}", i);
+                    while map.contains_key(&candidate) {
+                        i += 1;
+                        candidate = format!("webhook{}", i);
+                    }
+                    candidate
+                };
+                map.insert(name.clone(), url.to_string());
+                match save_webhooks(&map) {
+                    Ok(_) => format!("Webhook '{}' created.", name),
+                    Err(e) => format!("Failed to save webhook: {}", e),
+                }
             }
         }
-        "delete" => "Webhook deletion not yet implemented.".to_string(),
-        _ => "Usage: /webhook [list|create|delete] <url>".to_string(),
+        "delete" => {
+            if parts.len() < 2 {
+                return "Usage: /webhook delete <name>".to_string();
+            }
+            let key = parts[1];
+            let mut map = match load_webhooks() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load webhooks: {}", e),
+            };
+            if map.remove(key).is_none() {
+                return format!("Webhook '{}' not found.", key);
+            }
+            match save_webhooks(&map) {
+                Ok(_) => format!("Webhook '{}' deleted.", key),
+                Err(e) => format!("Failed to save webhook store: {}", e),
+            }
+        }
+        "test" => {
+            if parts.len() < 2 {
+                return "Usage: /webhook test <name|url> [payload]".to_string();
+            }
+            let target = parts[1];
+            let payload = args
+                .splitn(3, ' ')
+                .nth(2)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .unwrap_or(r#"{"event":"ping","source":"priority-agent"}"#);
+            let url = if is_valid_webhook_url(target) {
+                target.to_string()
+            } else {
+                match load_webhooks().ok().and_then(|m| m.get(target).cloned()) {
+                    Some(v) => v,
+                    None => return format!("Unknown webhook '{}'.", target),
+                }
+            };
+            match test_webhook(&url, payload).await {
+                Ok(msg) => msg,
+                Err(e) => format!("Webhook test failed: {}", e),
+            }
+        }
+        _ => "Usage: /webhook [list|create|delete|test]".to_string(),
     }
 }
 
 /// /wizard - Setup wizard
 pub fn handle_wizard(app: &mut TuiApp) -> String {
+    if app.settings_state.is_none() {
+        let config = crate::services::config::AppConfig::load().unwrap_or_default();
+        app.settings_state = Some(crate::tui::components::settings::SettingsState::new(
+            config,
+            app.keybindings.clone(),
+        ));
+    }
     app.mode = crate::tui::app::AppMode::Settings;
-    "Starting setup wizard... Switching to settings mode.".to_string()
+    "Setup wizard ready.\nStep 1: check `/config list`\nStep 2: set model/theme via settings\nStep 3: `/key show` and `/status` to verify.".to_string()
 }
 
 /// /workspace - Workspace management
@@ -2702,80 +3063,234 @@ pub fn handle_workspace(_app: &TuiApp, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts[0] {
         "list" => {
-            // List git worktrees
-            "Use /branch to see git branches, or /worktree for worktree management.".to_string()
+            let output = std::process::Command::new("git")
+                .args(["worktree", "list", "--porcelain"])
+                .output();
+            match output {
+                Ok(out) if out.status.success() => {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let worktrees: Vec<&str> = text
+                        .lines()
+                        .filter_map(|line| line.strip_prefix("worktree "))
+                        .collect();
+                    if worktrees.is_empty() {
+                        "No git worktrees found.".to_string()
+                    } else {
+                        format!("Workspaces:\n- {}", worktrees.join("\n- "))
+                    }
+                }
+                _ => "Not a git worktree repo or failed to list worktrees.".to_string(),
+            }
         }
         "info" => {
             let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            format!("Workspace: {}\nFiles: (use /tools to see available tools)", dir.display())
+            let entries = std::fs::read_dir(&dir)
+                .map(|it| it.flatten().count())
+                .unwrap_or(0);
+            format!(
+                "Workspace: {}\nEntries: {}\nUse /workspace list to see worktrees.",
+                dir.display(),
+                entries
+            )
         }
         _ => "Usage: /workspace [list|info]".to_string(),
     }
 }
 
 /// /slack - Slack integration
-pub fn handle_slack(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /slack [connect|disconnect|send] <channel> <message>".to_string();
+pub async fn handle_slack(_app: &mut TuiApp, args: &str) -> String {
+    let arg = args.trim();
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    if arg.is_empty() || arg == "status" {
+        let webhook = prefs
+            .slack_webhook_url
+            .clone()
+            .or_else(|| std::env::var("PRIORITY_AGENT_SLACK_WEBHOOK_URL").ok());
+        let connected = webhook.is_some();
+        return format!(
+            "Slack: {}\nDefault channel: {}\nUsage: /slack [status|connect <webhook_url> [channel]|disconnect|send [#channel] <message>]",
+            if connected { "connected" } else { "disconnected" },
+            prefs
+                .slack_default_channel
+                .as_deref()
+                .unwrap_or("(not set)")
+        );
     }
-
-    let parts: Vec<&str> = args.split_whitespace().collect();
-    match parts[0] {
-        "connect" => "Slack integration not yet implemented. Set PRIORITY_AGENT_SLACK_TOKEN to enable.".to_string(),
-        "disconnect" => "Slack disconnected.".to_string(),
-        "send" => {
-            if parts.len() < 3 {
-                "Usage: /slack send <channel> <message>".to_string()
-            } else {
-                format!("Slack send not yet implemented. Would send '{}' to channel '{}'", parts[2], parts[1])
-            }
+    if let Some(rest) = arg.strip_prefix("connect ").map(str::trim) {
+        let mut parts = rest.splitn(2, ' ');
+        let webhook = parts.next().unwrap_or_default().trim();
+        if webhook.is_empty() || !is_valid_webhook_url(webhook) {
+            return "Usage: /slack connect <webhook_url> [channel]".to_string();
         }
-        _ => "Usage: /slack [connect|disconnect|send]".to_string(),
+        let channel = parts.next().map(str::trim).filter(|v| !v.is_empty());
+        prefs.slack_webhook_url = Some(webhook.to_string());
+        prefs.slack_default_channel = channel.map(ToString::to_string);
+        return match save_runtime_prefs(&prefs) {
+            Ok(_) => "Slack webhook connected.".to_string(),
+            Err(e) => format!("Failed to save Slack config: {}", e),
+        };
+    }
+    if arg == "disconnect" {
+        prefs.slack_webhook_url = None;
+        prefs.slack_default_channel = None;
+        return match save_runtime_prefs(&prefs) {
+            Ok(_) => "Slack disconnected.".to_string(),
+            Err(e) => format!("Failed to save Slack config: {}", e),
+        };
+    }
+    if let Some(rest) = arg.strip_prefix("send ").map(str::trim) {
+        if rest.is_empty() {
+            return "Usage: /slack send [#channel] <message>".to_string();
+        }
+        let webhook = prefs
+            .slack_webhook_url
+            .clone()
+            .or_else(|| std::env::var("PRIORITY_AGENT_SLACK_WEBHOOK_URL").ok());
+        let Some(webhook_url) = webhook else {
+            return "Slack not connected. Use `/slack connect <webhook_url>` or set PRIORITY_AGENT_SLACK_WEBHOOK_URL.".to_string();
+        };
+
+        let (channel, message) = if rest.starts_with('#') {
+            let mut parts = rest.splitn(2, ' ');
+            let c = parts.next().unwrap_or_default().trim().to_string();
+            let m = parts.next().unwrap_or_default().trim().to_string();
+            (Some(c), m)
+        } else {
+            (prefs.slack_default_channel.clone(), rest.to_string())
+        };
+        if message.trim().is_empty() {
+            return "Usage: /slack send [#channel] <message>".to_string();
+        }
+        match post_slack_webhook(&webhook_url, channel.as_deref(), &message).await {
+            Ok(_) => "Slack message sent.".to_string(),
+            Err(e) => format!("Slack send failed: {}", e),
+        }
+    } else {
+        "Usage: /slack [status|connect <webhook_url> [channel]|disconnect|send [#channel] <message>]".to_string()
     }
 }
 
 /// /stealth - Stealth mode toggle
 pub fn handle_stealth(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() || args == "on" {
-        "Stealth mode enabled (telemetry disabled).".to_string()
-    } else if args == "off" {
-        "Stealth mode disabled (telemetry enabled).".to_string()
-    } else {
-        "Usage: /stealth [on|off]".to_string()
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "status" {
+        return format!(
+            "Stealth mode: {}",
+            if prefs.stealth { "enabled" } else { "disabled" }
+        );
     }
+    match arg {
+        "on" | "enable" => prefs.stealth = true,
+        "off" | "disable" => prefs.stealth = false,
+        "toggle" => prefs.stealth = !prefs.stealth,
+        _ => return "Usage: /stealth [on|off|toggle|status]".to_string(),
+    }
+    if let Err(e) = save_runtime_prefs(&prefs) {
+        return format!("Failed to persist stealth mode: {}", e);
+    }
+    format!(
+        "Stealth mode {}.",
+        if prefs.stealth { "enabled" } else { "disabled" }
+    )
 }
 
 /// /shadow - Shadow mode for observing agent behavior
 pub fn handle_shadow(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() || args == "on" {
-        "Shadow mode enabled. Agent actions will be logged but not executed.".to_string()
-    } else if args == "off" {
-        "Shadow mode disabled. Normal operation resumed.".to_string()
-    } else {
-        "Usage: /shadow [on|off]".to_string()
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "status" {
+        return format!(
+            "Shadow mode: {}",
+            if prefs.shadow { "enabled" } else { "disabled" }
+        );
     }
+    match arg {
+        "on" | "enable" => prefs.shadow = true,
+        "off" | "disable" => prefs.shadow = false,
+        "toggle" => prefs.shadow = !prefs.shadow,
+        _ => return "Usage: /shadow [on|off|toggle|status]".to_string(),
+    }
+    if let Err(e) = save_runtime_prefs(&prefs) {
+        return format!("Failed to persist shadow mode: {}", e);
+    }
+    format!(
+        "Shadow mode {}.",
+        if prefs.shadow { "enabled" } else { "disabled" }
+    )
 }
 
 /// /reject - Reject pending approval
-pub fn handle_reject(_app: &mut TuiApp, _args: &str) -> String {
-    // When in approval mode, this rejects the current pending tool call
-    "No pending approval to reject.".to_string()
+pub fn handle_reject(app: &mut TuiApp, _args: &str) -> String {
+    if app.pending_permission_request.is_some() {
+        app.pending_permission_request = None;
+        if let Some(tx) = app.permission_response_tx.take() {
+            let _ = tx.send(false);
+        }
+        app.mode = crate::tui::app::AppMode::Chat;
+        "Rejected pending permission request.".to_string()
+    } else {
+        "No pending approval to reject.".to_string()
+    }
 }
 
 /// /subscribe - Subscribe to events/notifications
 pub fn handle_subscribe(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /subscribe <event_type>".to_string();
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "list" {
+        if prefs.subscriptions.is_empty() {
+            return "No subscriptions. Use `/subscribe add <event>`.".to_string();
+        }
+        let mut events = prefs.subscriptions.clone();
+        events.sort();
+        return format!("Subscriptions:\n- {}", events.join("\n- "));
     }
-
-    let event = args;
-    format!("Subscribed to: {}. Notifications will appear in the TUI.", event)
+    let mut parts = arg.splitn(2, ' ');
+    let action = parts.next().unwrap_or_default();
+    let event = parts.next().unwrap_or("").trim();
+    match action {
+        "add" => {
+            if event.is_empty() {
+                return "Usage: /subscribe add <event>".to_string();
+            }
+            if !prefs.subscriptions.iter().any(|v| v == event) {
+                prefs.subscriptions.push(event.to_string());
+            }
+            if let Err(e) = save_runtime_prefs(&prefs) {
+                return format!("Failed to save subscriptions: {}", e);
+            }
+            format!("Subscribed to '{}'.", event)
+        }
+        "remove" => {
+            if event.is_empty() {
+                return "Usage: /subscribe remove <event>".to_string();
+            }
+            let before = prefs.subscriptions.len();
+            prefs.subscriptions.retain(|v| v != event);
+            if before == prefs.subscriptions.len() {
+                return format!("Subscription '{}' not found.", event);
+            }
+            if let Err(e) = save_runtime_prefs(&prefs) {
+                return format!("Failed to save subscriptions: {}", e);
+            }
+            format!("Unsubscribed from '{}'.", event)
+        }
+        "clear" => {
+            prefs.subscriptions.clear();
+            if let Err(e) = save_runtime_prefs(&prefs) {
+                return format!("Failed to save subscriptions: {}", e);
+            }
+            "All subscriptions cleared.".to_string()
+        }
+        _ => "Usage: /subscribe [list|add <event>|remove <event>|clear]".to_string(),
+    }
 }
 
 /// /slots - View/edit slot variables
 pub fn handle_slots(app: &TuiApp, args: &str) -> String {
     if args.is_empty() {
-        return "Usage: /slots [list|set <name> <value>|clear]".to_string();
+        return "Usage: /slots [list|get <name>|set <name> <value>|unset <name>|clear]".to_string();
     }
 
     let parts: Vec<&str> = args.split_whitespace().collect();
@@ -2787,27 +3302,112 @@ pub fn handle_slots(app: &TuiApp, args: &str) -> String {
             if let Some(id) = app.session_manager.current_session_id() {
                 lines.push(format!("  session_id: {}...", &id[..8.min(id.len())]));
             }
+            if let Ok(slots) = load_slots() {
+                if !slots.is_empty() {
+                    lines.push("  custom slots:".to_string());
+                    let mut keys: Vec<_> = slots.keys().cloned().collect();
+                    keys.sort();
+                    for k in keys {
+                        if let Some(v) = slots.get(&k) {
+                            lines.push(format!("    {} = {}", k, v));
+                        }
+                    }
+                }
+            }
             lines.join("\n")
+        }
+        "get" => {
+            if parts.len() < 2 {
+                return "Usage: /slots get <name>".to_string();
+            }
+            let Some(key) = sanitize_note_name(parts[1]) else {
+                return "Invalid slot name.".to_string();
+            };
+            match load_slots() {
+                Ok(slots) => match slots.get(&key) {
+                    Some(v) => format!("{} = {}", key, v),
+                    None => format!("Slot '{}' not set.", key),
+                },
+                Err(e) => format!("Failed to load slots: {}", e),
+            }
         }
         "set" => {
             if parts.len() < 3 {
                 "Usage: /slots set <name> <value>".to_string()
             } else {
-                format!("Slot '{}' would be set to '{}' (not yet implemented)", parts[1], parts[2])
+                let Some(key) = sanitize_note_name(parts[1]) else {
+                    return "Invalid slot name.".to_string();
+                };
+                let value = args
+                    .splitn(3, ' ')
+                    .nth(2)
+                    .map(str::trim)
+                    .unwrap_or_default();
+                if value.is_empty() {
+                    return "Usage: /slots set <name> <value>".to_string();
+                }
+                let mut slots = match load_slots() {
+                    Ok(v) => v,
+                    Err(e) => return format!("Failed to load slots: {}", e),
+                };
+                slots.insert(key.clone(), value.to_string());
+                match save_slots(&slots) {
+                    Ok(_) => format!("Slot '{}' set.", key),
+                    Err(e) => format!("Failed to save slot: {}", e),
+                }
             }
         }
-        "clear" => "All slots cleared.".to_string(),
-        _ => "Usage: /slots [list|set <name> <value>|clear]".to_string(),
+        "unset" => {
+            if parts.len() < 2 {
+                return "Usage: /slots unset <name>".to_string();
+            }
+            let Some(key) = sanitize_note_name(parts[1]) else {
+                return "Invalid slot name.".to_string();
+            };
+            let mut slots = match load_slots() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load slots: {}", e),
+            };
+            if slots.remove(&key).is_none() {
+                return format!("Slot '{}' not set.", key);
+            }
+            match save_slots(&slots) {
+                Ok(_) => format!("Slot '{}' removed.", key),
+                Err(e) => format!("Failed to save slots: {}", e),
+            }
+        }
+        "clear" => match save_slots(&std::collections::HashMap::new()) {
+            Ok(_) => "All slots cleared.".to_string(),
+            Err(e) => format!("Failed to clear slots: {}", e),
+        },
+        _ => {
+            "Usage: /slots [list|get <name>|set <name> <value>|unset <name>|clear]".to_string()
+        }
     }
 }
 
 /// /ticker - Display a scrolling ticker/marquee
 pub fn handle_ticker(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /ticker <message>".to_string();
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "show" {
+        return match prefs.ticker_message {
+            Some(v) => format!("Ticker: {}", v),
+            None => "Ticker is empty.".to_string(),
+        };
     }
-
-    format!("Ticker: {} (display not yet implemented in TUI)", args)
+    if arg == "clear" {
+        prefs.ticker_message = None;
+        return match save_runtime_prefs(&prefs) {
+            Ok(_) => "Ticker cleared.".to_string(),
+            Err(e) => format!("Failed to clear ticker: {}", e),
+        };
+    }
+    prefs.ticker_message = Some(arg.to_string());
+    match save_runtime_prefs(&prefs) {
+        Ok(_) => "Ticker updated.".to_string(),
+        Err(e) => format!("Failed to save ticker: {}", e),
+    }
 }
 
 // ═══════════════════════════════════════
@@ -2816,25 +3416,51 @@ pub fn handle_ticker(_app: &mut TuiApp, args: &str) -> String {
 
 /// /config - Configuration viewer/editor
 pub fn handle_config(_app: &TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        // Show current config summary
-        match crate::services::config::AppConfig::load() {
-            Ok(config) => {
-                format!(
-                    "Config:\n  API: {}\n  Model: {}\n  Theme: {}",
-                    config.api.base_url, config.api.model, config.ui.theme
-                )
-            }
-            Err(_) => "No config file found. Using defaults.".to_string(),
-        }
-    } else if args == "edit" {
-        "Config editing not yet implemented. Edit config.toml directly.".to_string()
-    } else if args.starts_with("get ") {
-        let key = args.strip_prefix("get ").unwrap_or("");
-        format!("Config value for '{}' (not yet implemented)", key)
-    } else {
-        "Usage: /config [edit|get <key>]".to_string()
+    let args = args.trim();
+    if args.is_empty() || args == "list" {
+        return match crate::services::config::AppConfig::load() {
+            Ok(config) => format_config_summary(&config),
+            Err(e) => format!("Failed to load config: {}", e),
+        };
     }
+
+    if let Some(key) = args.strip_prefix("get ").map(str::trim) {
+        if key.is_empty() {
+            return "Usage: /config get <key>".to_string();
+        }
+        return match crate::services::config::AppConfig::load() {
+            Ok(config) => get_config_value(&config, key)
+                .map(|v| format!("{} = {}", key, v))
+                .unwrap_or_else(|| format!("Unknown config key: {}", key)),
+            Err(e) => format!("Failed to load config: {}", e),
+        };
+    }
+
+    if let Some(rest) = args.strip_prefix("set ").map(str::trim) {
+        let mut parts = rest.splitn(2, ' ');
+        let Some(key) = parts.next().map(str::trim).filter(|v| !v.is_empty()) else {
+            return "Usage: /config set <key> <value>".to_string();
+        };
+        let Some(value) = parts.next().map(str::trim).filter(|v| !v.is_empty()) else {
+            return "Usage: /config set <key> <value>".to_string();
+        };
+
+        return match crate::services::config::AppConfig::load() {
+            Ok(mut config) => match set_config_value(&mut config, key, value) {
+                Ok(_) => match config.save() {
+                    Ok(_) => format!(
+                        "Updated {} = {} and saved to config.toml. Run /reload config to refresh runtime view.",
+                        key, value
+                    ),
+                    Err(e) => format!("Updated in memory but failed to save config: {}", e),
+                },
+                Err(e) => e,
+            },
+            Err(e) => format!("Failed to load config: {}", e),
+        };
+    }
+
+    "Usage: /config [list|get <key>|set <key> <value>]".to_string()
 }
 
 /// /copy - Copy text to clipboard
@@ -2902,64 +3528,186 @@ pub fn handle_chrome(_app: &mut TuiApp, args: &str) -> String {
             if parts.len() < 2 {
                 "Usage: /chrome open <url>".to_string()
             } else {
-                format!("Chrome open not yet implemented: {}", parts[1])
+                let url = parts[1];
+                if !is_valid_webhook_url(url) {
+                    return "Please provide a valid http(s) URL.".to_string();
+                }
+                #[cfg(target_os = "macos")]
+                let status = std::process::Command::new("open")
+                    .args(["-a", "Google Chrome", url])
+                    .status();
+                #[cfg(not(target_os = "macos"))]
+                let status = std::process::Command::new("xdg-open").arg(url).status();
+                match status {
+                    Ok(s) if s.success() => format!("Opened in Chrome: {}", url),
+                    Ok(s) => format!("Open failed with status: {}", s),
+                    Err(e) => format!("Failed to open Chrome: {}", e),
+                }
             }
         }
-        "tabs" => "Chrome tabs listing not yet implemented.".to_string(),
-        "bookmarks" => "Chrome bookmarks not yet implemented.".to_string(),
+        "tabs" => {
+            #[cfg(target_os = "macos")]
+            {
+                let script = "tell application \"Google Chrome\" to get URL of tabs of windows";
+                let out = std::process::Command::new("osascript")
+                    .args(["-e", script])
+                    .output();
+                match out {
+                    Ok(v) if v.status.success() => {
+                        let text = String::from_utf8_lossy(&v.stdout).trim().to_string();
+                        if text.is_empty() {
+                            "No open tabs found.".to_string()
+                        } else {
+                            let tabs: Vec<String> = text
+                                .split(", ")
+                                .take(20)
+                                .map(ToString::to_string)
+                                .collect();
+                            format!("Open tabs:\n- {}", tabs.join("\n- "))
+                        }
+                    }
+                    Ok(v) => format!("Failed to query tabs: {}", String::from_utf8_lossy(&v.stderr)),
+                    Err(e) => format!("Failed to run osascript: {}", e),
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                "Tab listing currently supports macOS only.".to_string()
+            }
+        }
+        "bookmarks" => {
+            #[cfg(target_os = "macos")]
+            let bookmark_file = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("Library")
+                .join("Application Support")
+                .join("Google")
+                .join("Chrome")
+                .join("Default")
+                .join("Bookmarks");
+            #[cfg(not(target_os = "macos"))]
+            let bookmark_file = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".config")
+                .join("google-chrome")
+                .join("Default")
+                .join("Bookmarks");
+
+            if !bookmark_file.exists() {
+                return format!("Bookmarks file not found: {}", bookmark_file.display());
+            }
+            let text = match std::fs::read_to_string(&bookmark_file) {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to read bookmarks: {}", e),
+            };
+            let json: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to parse bookmarks JSON: {}", e),
+            };
+            let mut lines = Vec::new();
+            collect_chrome_bookmarks(&json, &mut lines, 30);
+            if lines.is_empty() {
+                "No bookmarks found.".to_string()
+            } else {
+                format!("Bookmarks:\n- {}", lines.join("\n- "))
+            }
+        }
         _ => "Usage: /chrome [open|tabs|bookmarks]".to_string(),
     }
 }
 
 /// /effort - Set effort level for tasks
 pub fn handle_effort(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /effort [minimal|normal|maximum]".to_string();
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "status" {
+        return format!("Effort level: {}", prefs.effort_level);
     }
-
-    match args {
-        "minimal" => "Effort set to: minimal (quick solutions)".to_string(),
-        "normal" => "Effort set to: normal (balanced approach)".to_string(),
-        "maximum" => "Effort set to: maximum (thorough analysis)".to_string(),
-        _ => "Usage: /effort [minimal|normal|maximum]".to_string(),
+    match arg {
+        "minimal" | "normal" | "maximum" => {
+            prefs.effort_level = arg.to_string();
+            match save_runtime_prefs(&prefs) {
+                Ok(_) => format!("Effort set to: {}", arg),
+                Err(e) => format!("Effort updated but failed to persist: {}", e),
+            }
+        }
+        _ => "Usage: /effort [minimal|normal|maximum|status]".to_string(),
     }
 }
 
 /// /preamble - Customize agent preamble
 pub fn handle_preamble(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /preamble [show|set <text>|reset]".to_string();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "show" {
+        return match read_preamble() {
+            Ok(Some(v)) => format!("Preamble:\n{}", v),
+            Ok(None) => "Preamble: default (not customized).".to_string(),
+            Err(e) => format!("Failed to read preamble: {}", e),
+        };
     }
 
-    let parts: Vec<&str> = args.split_whitespace().collect();
-    match parts[0] {
-        "show" => "Preamble: (default agent preamble in use)".to_string(),
-        "set" => {
-            if parts.len() < 2 {
-                "Usage: /preamble set <text>".to_string()
-            } else {
-                format!("Preamble would be set to: {} (not yet implemented)", parts[1])
-            }
+    if let Some(text) = arg.strip_prefix("set ").map(str::trim) {
+        if text.is_empty() {
+            return "Usage: /preamble set <text>".to_string();
         }
-        "reset" => "Preamble reset to default.".to_string(),
-        _ => "Usage: /preamble [show|set <text>|reset]".to_string(),
+        return match write_preamble(text) {
+            Ok(_) => "Preamble updated.".to_string(),
+            Err(e) => format!("Failed to save preamble: {}", e),
+        };
     }
+    if arg == "reset" {
+        return match reset_preamble() {
+            Ok(_) => "Preamble reset to default.".to_string(),
+            Err(e) => format!("Failed to reset preamble: {}", e),
+        };
+    }
+    "Usage: /preamble [show|set <text>|reset]".to_string()
 }
 
 /// /untrap - Reset trapped state
-pub fn handle_untrap(_app: &mut TuiApp, _args: &str) -> String {
-    "Untrap: Reset agent from trapped state.".to_string()
+pub fn handle_untrap(app: &mut TuiApp, _args: &str) -> String {
+    app.is_querying = false;
+    app.pending_plan = None;
+    if let Some(tx) = app.plan_response_tx.take() {
+        let _ = tx.send(crate::engine::plan_mode::PlanApproval::Rejected);
+    }
+    app.pending_permission_request = None;
+    if let Some(tx) = app.permission_response_tx.take() {
+        let _ = tx.send(false);
+    }
+    app.pending_question = None;
+    app.pending_question_options.clear();
+    if let Some(tx) = app.question_response_tx.take() {
+        let _ = tx.send(String::new());
+    }
+    app.mode = crate::tui::app::AppMode::Chat;
+    "Untrap complete: cleared pending approvals/questions and returned to chat mode.".to_string()
 }
 
 /// /verbose - Toggle verbose output
 pub fn handle_verbose(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() || args == "on" {
-        "Verbose mode enabled.".to_string()
-    } else if args == "off" {
-        "Verbose mode disabled.".to_string()
-    } else {
-        "Usage: /verbose [on|off]".to_string()
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "status" {
+        return format!(
+            "Verbose mode: {}",
+            if prefs.verbose { "enabled" } else { "disabled" }
+        );
     }
+    match arg {
+        "on" | "enable" => prefs.verbose = true,
+        "off" | "disable" => prefs.verbose = false,
+        "toggle" => prefs.verbose = !prefs.verbose,
+        _ => return "Usage: /verbose [on|off|toggle|status]".to_string(),
+    }
+    std::env::set_var("RUST_LOG", if prefs.verbose { "debug" } else { "info" });
+    if let Err(e) = save_runtime_prefs(&prefs) {
+        return format!("Verbose mode changed but failed to persist: {}", e);
+    }
+    format!(
+        "Verbose mode {}.",
+        if prefs.verbose { "enabled" } else { "disabled" }
+    )
 }
 
 /// /write - Write content to a file
@@ -2999,28 +3747,20 @@ pub async fn handle_write(app: &mut TuiApp, args: &str) -> String {
 
 /// /rollback - Rollback changes
 pub async fn handle_rollback(app: &mut TuiApp, args: &str) -> String {
-    let mut target = "HEAD~1";
-    let mut confirmed = false;
-    for part in args.split_whitespace() {
-        if part == "--yes" {
-            confirmed = true;
-        } else {
-            target = part;
-        }
-    }
+    let parsed = match parse_rollback_args(args) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
-    if !target
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '~' | '^'))
-    {
-        return "Invalid rollback target. Allowed characters: letters, digits, -, _, ., /, ~, ^"
+    if !is_valid_rollback_target(&parsed.target) {
+        return "Invalid rollback target. Allowed characters: letters, digits, -, _, ., /, ~, ^, @, {, }"
             .to_string();
     }
 
-    if !confirmed {
+    if !parsed.confirmed {
         return format!(
-            "Rollback is destructive.\nUsage: /rollback [target] --yes\nExample: /rollback {} --yes",
-            target
+            "Rollback is destructive and will discard uncommitted changes.\nUsage: /rollback [target] --yes\nExample: /rollback {} --yes",
+            parsed.target
         );
     }
 
@@ -3028,14 +3768,59 @@ pub async fn handle_rollback(app: &mut TuiApp, args: &str) -> String {
     let ctx = app.build_tool_context().await;
     let cmd = format!(
         "git rev-parse --verify '{}^{{commit}}' >/dev/null && git reset --hard '{}'",
-        target, target
+        parsed.target, parsed.target
     );
     let params = serde_json::json!({
         "command": cmd,
-        "description": format!("Git rollback to {}", target)
+        "description": format!("Git rollback to {}", parsed.target)
     });
     let result = tool.execute(params, ctx).await;
     if result.success { result.content } else { result.error.unwrap_or_default() }
+}
+
+#[derive(Debug)]
+struct ParsedRollbackArgs {
+    target: String,
+    confirmed: bool,
+}
+
+fn parse_rollback_args(args: &str) -> Result<ParsedRollbackArgs, String> {
+    let mut target: Option<&str> = None;
+    let mut confirmed = false;
+
+    for part in args.split_whitespace() {
+        if part == "--yes" {
+            confirmed = true;
+            continue;
+        }
+        if part.starts_with("--") {
+            return Err(format!(
+                "Unknown option: {}.\nUsage: /rollback [target] --yes",
+                part
+            ));
+        }
+        if target.is_some() {
+            return Err(
+                "Too many arguments.\nUsage: /rollback [target] --yes\nExample: /rollback HEAD~1 --yes"
+                    .to_string(),
+            );
+        }
+        target = Some(part);
+    }
+
+    Ok(ParsedRollbackArgs {
+        target: target.unwrap_or("HEAD~1").to_string(),
+        confirmed,
+    })
+}
+
+fn is_valid_rollback_target(target: &str) -> bool {
+    !target.is_empty()
+        && !target.starts_with('-')
+        && target.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '-' | '_' | '.' | '/' | '~' | '^' | '@' | '{' | '}')
+        })
 }
 
 /// /project - Project management
@@ -3043,53 +3828,152 @@ pub fn handle_project(_app: &TuiApp, args: &str) -> String {
     if args.is_empty() || args == "info" {
         let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let name = dir.file_name().unwrap_or_default().to_string_lossy();
-        return format!("Project: {}\nPath: {}", name, dir.display());
+        let entries = std::fs::read_dir(&dir)
+            .map(|it| it.flatten().count())
+            .unwrap_or(0);
+        let branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "(none)".to_string());
+        return format!(
+            "Project: {}\nPath: {}\nEntries: {}\nGit branch: {}",
+            name,
+            dir.display(),
+            entries,
+            branch
+        );
     }
 
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts[0] {
-        "list" => "Only one project currently supported.".to_string(),
-        "init" => "Project already initialized.".to_string(),
-        _ => "Usage: /project [info|list|init]".to_string(),
+        "list" => {
+            let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            match std::fs::read_dir(&dir) {
+                Ok(entries) => {
+                    let mut names: Vec<String> = entries
+                        .flatten()
+                        .map(|e| {
+                            let p = e.path();
+                            let marker = if p.is_dir() { "/" } else { "" };
+                            format!("{}{}", e.file_name().to_string_lossy(), marker)
+                        })
+                        .collect();
+                    names.sort();
+                    if names.is_empty() {
+                        "Project directory is empty.".to_string()
+                    } else {
+                        format!("Project entries:\n- {}", names.join("\n- "))
+                    }
+                }
+                Err(e) => format!("Failed to list project entries: {}", e),
+            }
+        }
+        "tree" => {
+            let depth = parts
+                .get(1)
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(2)
+                .clamp(1, 5);
+            let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut lines = Vec::new();
+            build_tree_lines(&root, 0, depth, &mut lines, 200);
+            if lines.is_empty() {
+                "No entries.".to_string()
+            } else {
+                format!("Project tree (depth {}):\n{}", depth, lines.join("\n"))
+            }
+        }
+        "init" => {
+            if parts.len() < 2 {
+                "Usage: /project init <name>".to_string()
+            } else {
+                let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let path = dir.join(parts[1]);
+                if path.exists() {
+                    return format!("Target already exists: {}", path.display());
+                }
+                match std::fs::create_dir_all(path.join("src")) {
+                    Ok(_) => format!("Project initialized: {}", path.display()),
+                    Err(e) => format!("Failed to init project: {}", e),
+                }
+            }
+        }
+        _ => "Usage: /project [info|list|tree [depth]|init <name>]".to_string(),
     }
 }
 
 /// /backend - Switch execution backend
 pub fn handle_backend(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Current backend: local\nUsage: /backend [local|restricted|external]".to_string();
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    if args.is_empty() || args == "status" {
+        return format!(
+            "Current backend: {}\nUsage: /backend [local|restricted|external|status]",
+            prefs.backend
+        );
     }
 
-    match args {
-        "local" => "Backend set to: local (direct execution)".to_string(),
-        "restricted" => "Backend set to: restricted (resource-limited)".to_string(),
+    match args.trim() {
+        "local" => prefs.backend = "local".to_string(),
+        "restricted" => prefs.backend = "restricted".to_string(),
         "external" => {
             let external_cmd = std::env::var("PRIORITY_AGENT_BASH_EXTERNAL_CMD").unwrap_or_default();
             if external_cmd.is_empty() {
-                "External backend not configured. Set PRIORITY_AGENT_BASH_EXTERNAL_CMD".to_string()
-            } else {
-                format!("Backend set to: external ({})", external_cmd)
+                return "External backend not configured. Set PRIORITY_AGENT_BASH_EXTERNAL_CMD".to_string();
             }
+            prefs.backend = "external".to_string();
         }
-        _ => "Usage: /backend [local|restricted|external]".to_string(),
+        _ => return "Usage: /backend [local|restricted|external|status]".to_string(),
     }
+    if let Err(e) = save_runtime_prefs(&prefs) {
+        return format!("Backend changed but failed to persist: {}", e);
+    }
+    format!("Backend set to: {}", prefs.backend)
 }
 
 /// /sandbox - Sandbox mode toggle
 pub fn handle_sandbox(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() || args == "on" {
-        "Sandbox mode enabled (restricted backend).".to_string()
-    } else if args == "off" {
-        "Sandbox mode disabled (local backend).".to_string()
-    } else {
-        "Usage: /sandbox [on|off]".to_string()
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "status" {
+        return format!(
+            "Sandbox mode: {}",
+            if prefs.sandbox { "enabled" } else { "disabled" }
+        );
     }
+    match arg {
+        "on" | "enable" => {
+            prefs.sandbox = true;
+            prefs.backend = "restricted".to_string();
+        }
+        "off" | "disable" => {
+            prefs.sandbox = false;
+            if prefs.backend == "restricted" {
+                prefs.backend = "local".to_string();
+            }
+        }
+        "toggle" => {
+            prefs.sandbox = !prefs.sandbox;
+            prefs.backend = if prefs.sandbox { "restricted" } else { "local" }.to_string();
+        }
+        _ => return "Usage: /sandbox [on|off|toggle|status]".to_string(),
+    }
+    if let Err(e) = save_runtime_prefs(&prefs) {
+        return format!("Sandbox mode changed but failed to persist: {}", e);
+    }
+    format!(
+        "Sandbox mode {} (backend: {}).",
+        if prefs.sandbox { "enabled" } else { "disabled" },
+        prefs.backend
+    )
 }
 
 /// /env - Show/manage environment variables
 pub fn handle_env(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        return "Usage: /env [list|get <key>|set <key> <value>]".to_string();
+        return "Usage: /env [list|get <key>|set <key> <value>|unset <key>]".to_string();
     }
 
     let parts: Vec<&str> = args.split_whitespace().collect();
@@ -3112,7 +3996,31 @@ pub fn handle_env(_app: &mut TuiApp, args: &str) -> String {
                 std::env::var(parts[1]).unwrap_or_else(|_| "Not set".to_string())
             }
         }
-        _ => "Usage: /env [list|get <key>]".to_string(),
+        "set" => {
+            let rest = args.splitn(3, ' ').collect::<Vec<_>>();
+            if rest.len() < 3 {
+                return "Usage: /env set <key> <value>".to_string();
+            }
+            let key = rest[1].trim();
+            let value = rest[2].trim();
+            if !key.starts_with("PRIORITY_AGENT_") {
+                return "Only PRIORITY_AGENT_* variables are allowed for /env set.".to_string();
+            }
+            std::env::set_var(key, value);
+            format!("Set {}={}", key, value)
+        }
+        "unset" => {
+            if parts.len() < 2 {
+                return "Usage: /env unset <key>".to_string();
+            }
+            let key = parts[1];
+            if !key.starts_with("PRIORITY_AGENT_") {
+                return "Only PRIORITY_AGENT_* variables are allowed for /env unset.".to_string();
+            }
+            std::env::remove_var(key);
+            format!("Unset {}", key)
+        }
+        _ => "Usage: /env [list|get <key>|set <key> <value>|unset <key>]".to_string(),
     }
 }
 
@@ -3125,7 +4033,22 @@ pub fn handle_cache(_app: &mut TuiApp, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts[0] {
         "clear" => "Cache cleared.".to_string(),
-        "stats" => "Cache stats not yet implemented.".to_string(),
+        "stats" => {
+            let cache_dir = priority_agent_home_dir().join("cache");
+            let tool_cache = dirs::data_local_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("priority-agent")
+                .join("tool-results");
+            let cache_files = count_files_recursively(&cache_dir);
+            let tool_files = count_files_recursively(&tool_cache);
+            format!(
+                "Cache stats:\n  memory_file_cache: active\n  cache_dir: {} file(s) ({})\n  tool_result_dir: {} file(s) ({})",
+                cache_files,
+                cache_dir.display(),
+                tool_files,
+                tool_cache.display()
+            )
+        }
         _ => "Usage: /cache [clear|stats]".to_string(),
     }
 }
@@ -3140,7 +4063,28 @@ pub async fn handle_benchmark(app: &mut TuiApp, args: &str) -> String {
         .join("scripts/benchmark.sh");
 
     if !script_path.exists() {
-        return "Benchmark script not found at scripts/benchmark.sh".to_string();
+        let start = std::time::Instant::now();
+        let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let entries = std::fs::read_dir(&dir)
+            .map(|it| it.flatten().count())
+            .unwrap_or(0);
+        let fs_ms = start.elapsed().as_millis();
+
+        let hist_start = std::time::Instant::now();
+        let hist = if let Some(ref engine) = app.streaming_engine {
+            engine.get_history().await.len()
+        } else {
+            0
+        };
+        let hist_ms = hist_start.elapsed().as_millis();
+        return format!(
+            "Synthetic benchmark:\n  fs_scan: {} ms ({} entries)\n  history_fetch: {} ms ({} messages)\nScript benchmark unavailable: {}",
+            fs_ms,
+            entries,
+            hist_ms,
+            hist,
+            script_path.display()
+        );
     }
 
     let limit = args.parse::<u32>().unwrap_or(0);
@@ -3192,16 +4136,32 @@ pub fn handle_debug_cmd(_app: &mut TuiApp, args: &str) -> String {
 
 /// /trace - Tracing controls
 pub fn handle_trace(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /trace [on|off|status]".to_string();
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let arg = args.trim();
+    if arg.is_empty() || arg == "status" {
+        return format!("Tracing: {}", if prefs.trace { "enabled" } else { "disabled" });
     }
 
-    match args {
-        "on" => "Tracing enabled.".to_string(),
-        "off" => "Tracing disabled.".to_string(),
-        "status" => "Tracing status: not implemented.".to_string(),
-        _ => "Usage: /trace [on|off|status]".to_string(),
+    match arg {
+        "on" | "enable" => prefs.trace = true,
+        "off" | "disable" => prefs.trace = false,
+        "toggle" => prefs.trace = !prefs.trace,
+        _ => return "Usage: /trace [on|off|toggle|status]".to_string(),
     }
+    std::env::set_var(
+        "RUST_LOG",
+        if prefs.trace {
+            "trace"
+        } else if prefs.verbose {
+            "debug"
+        } else {
+            "info"
+        },
+    );
+    if let Err(e) = save_runtime_prefs(&prefs) {
+        return format!("Tracing changed but failed to persist: {}", e);
+    }
+    format!("Tracing {}.", if prefs.trace { "enabled" } else { "disabled" })
 }
 
 /// /memory - Memory management (enhanced)
@@ -3329,21 +4289,70 @@ pub fn handle_init(_app: &mut TuiApp, args: &str) -> String {
     let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let project_path = dir.join(args);
 
-    format!("Init not yet implemented. Would create: {}", project_path.display())
+    if project_path.exists() {
+        return format!("Target already exists: {}", project_path.display());
+    }
+    match std::fs::create_dir_all(project_path.join("src")) {
+        Ok(_) => {
+            let readme = project_path.join("README.md");
+            let gitignore = project_path.join(".gitignore");
+            let cargo_toml = project_path.join("Cargo.toml");
+            let main_rs = project_path.join("src").join("main.rs");
+            let _ = std::fs::write(
+                &readme,
+                format!("# {}\n\nInitialized by /init.\n", args.trim()),
+            );
+            let _ = std::fs::write(&gitignore, "target/\n*.log\n.env\n");
+            let _ = std::fs::write(
+                &cargo_toml,
+                format!(
+                    "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+                    args.trim().replace('-', "_")
+                ),
+            );
+            let _ = std::fs::write(&main_rs, "fn main() {\n    println!(\"hello\");\n}\n");
+            format!("Project initialized at {}", project_path.display())
+        }
+        Err(e) => format!("Failed to initialize project: {}", e),
+    }
 }
 
 /// /login - Authentication
 pub fn handle_login(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /login [provider]".to_string();
+    if args.trim().is_empty() || args.trim() == "status" {
+        let prefs = load_runtime_prefs().unwrap_or_default();
+        return format!(
+            "Login status: {}",
+            prefs
+                .logged_in_provider
+                .as_deref()
+                .unwrap_or("not logged in")
+        );
     }
 
-    format!("Login to {} not yet implemented.", args)
+    let provider = args.trim().to_ascii_lowercase();
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    prefs.logged_in_provider = Some(provider.clone());
+    if let Err(e) = save_runtime_prefs(&prefs) {
+        return format!("Login state update failed: {}", e);
+    }
+    format!(
+        "Logged in to '{}' (local state only). Use /key to configure API keys.",
+        provider
+    )
 }
 
 /// /logout - Logout from provider
 pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
-    "Logout not yet implemented.".to_string()
+    let mut prefs = load_runtime_prefs().unwrap_or_default();
+    let old = prefs.logged_in_provider.take();
+    if let Err(e) = save_runtime_prefs(&prefs) {
+        return format!("Failed to clear login state: {}", e);
+    }
+    match old {
+        Some(p) => format!("Logged out from '{}'.", p),
+        None => "No active login session.".to_string(),
+    }
 }
 
 /// /key - API key management
@@ -3358,9 +4367,14 @@ pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
         };
     }
 
-    match args {
+    match args.trim() {
         "show" => "API key not shown for security. Set MOONSHOT_API_KEY or OPENAI_API_KEY.".to_string(),
-        "clear" => "Cleared API key (from environment). Restart required.".to_string(),
+        "clear" => {
+            std::env::remove_var("OPENAI_API_KEY");
+            std::env::remove_var("MOONSHOT_API_KEY");
+            std::env::remove_var("MINIMAX_API_KEY");
+            "Cleared API keys from current process environment.".to_string()
+        }
         _ => "Usage: /key [show|clear]".to_string(),
     }
 }
@@ -3463,8 +4477,51 @@ pub async fn handle_import(app: &mut TuiApp, args: &str) -> String {
     } else if !path.is_file() {
         format!("Not a file: {}", args)
     } else {
-        let _ = app; // import implementation will use app context in future phases.
-        format!("Import of {} not yet implemented.", path.display())
+        let text = match std::fs::read_to_string(path) {
+            Ok(v) => v,
+            Err(e) => return format!("Failed to read import file: {}", e),
+        };
+        let value: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => return format!("Invalid JSON import file: {}", e),
+        };
+        let messages = match value.get("messages").and_then(|v| v.as_array()) {
+            Some(v) => v,
+            None => return "Import file missing `messages` array.".to_string(),
+        };
+        if messages.is_empty() {
+            return "Import file has no messages.".to_string();
+        }
+        let mut imported = 0usize;
+        for m in messages {
+            let role_str = m.get("role").and_then(|v| v.as_str()).unwrap_or("system");
+            let content = m.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+            if content.is_empty() {
+                continue;
+            }
+            let role = match role_str {
+                "user" => crate::state::MessageRole::User,
+                "assistant" => crate::state::MessageRole::Assistant,
+                "tool" => crate::state::MessageRole::Tool,
+                _ => crate::state::MessageRole::System,
+            };
+            let item = crate::state::MessageItem {
+                id: format!("import_{}", app.messages.len() + imported),
+                role,
+                content: content.to_string(),
+                timestamp: std::time::SystemTime::now(),
+                metadata: Default::default(),
+            };
+            app.messages.push(item.clone());
+            let _ = app.session_manager.add_message(role, &item.content);
+            imported += 1;
+        }
+        if let Some(ref engine) = app.streaming_engine {
+            let _ = engine
+                .set_history(message_items_to_api_messages(&app.messages))
+                .await;
+        }
+        format!("Imported {} message(s) from {}.", imported, path.display())
     }
 }
 
@@ -3486,63 +4543,865 @@ pub async fn handle_load_session(app: &mut TuiApp, args: &str) -> String {
 }
 
 /// /merge - Merge sessions
-pub fn handle_merge(_app: &mut TuiApp, args: &str) -> String {
+pub fn handle_merge(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
     if args.is_empty() {
         return "Usage: /merge <session_id> into current".to_string();
     }
-    format!("Merge session {} not yet implemented.", args)
+    let source_ref = args
+        .strip_suffix("into current")
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(args);
+
+    let current_id = match app.session_manager.current_session_id() {
+        Some(id) => id.to_string(),
+        None => return "No active session.".to_string(),
+    };
+
+    let source_id = if let Ok(n) = source_ref.parse::<usize>() {
+        match app.session_manager.list_sessions(100) {
+            Ok(sessions) if n > 0 && n <= sessions.len() => sessions[n - 1].id.clone(),
+            _ => {
+                return "Invalid session number. Use /session list to see available sessions."
+                    .to_string();
+            }
+        }
+    } else {
+        source_ref.to_string()
+    };
+
+    if source_id == current_id {
+        return "Cannot merge current session into itself.".to_string();
+    }
+
+    let source_messages = match app.session_manager.load_messages(&source_id) {
+        Ok(msgs) => msgs,
+        Err(e) => return format!("Failed to load source session: {}", e),
+    };
+    if source_messages.is_empty() {
+        return format!("Source session {} has no messages.", source_id);
+    }
+
+    let mut imported = 0usize;
+    for msg in source_messages {
+        if app
+            .session_manager
+            .add_message(msg.role, &msg.content)
+            .is_ok()
+        {
+            app.messages.push(msg);
+            imported += 1;
+        }
+    }
+
+    if let Some(ref engine) = app.streaming_engine {
+        futures::executor::block_on(engine.set_history(message_items_to_api_messages(
+            &app.messages,
+        )));
+    }
+
+    format!(
+        "Merged {} message(s) from session {} into current session.",
+        imported, source_id
+    )
 }
 
 /// /cleanup - Cleanup old data
-pub fn handle_cleanup(_app: &mut TuiApp, args: &str) -> String {
-    let target = if args.is_empty() { "all" } else { args };
+pub fn handle_cleanup(app: &mut TuiApp, args: &str) -> String {
+    let mut parts = args.split_whitespace();
+    let target = parts.next().unwrap_or("all");
 
     match target {
-        "sessions" => "Cleaned up old sessions (not yet implemented).".to_string(),
-        "cache" => "Cache cleaned.".to_string(),
-        "logs" => "Logs cleaned (not yet implemented).".to_string(),
-        "all" => "Full cleanup not yet implemented.".to_string(),
+        "sessions" => {
+            let mut keep: usize = 20;
+            let mut confirmed = false;
+            for token in parts {
+                if token == "--yes" {
+                    confirmed = true;
+                } else if let Ok(v) = token.parse::<usize>() {
+                    keep = v.max(1);
+                } else {
+                    return "Usage: /cleanup sessions [keep_count] --yes".to_string();
+                }
+            }
+            if !confirmed {
+                return format!(
+                    "Session cleanup is destructive.\nUsage: /cleanup sessions [keep_count] --yes\nExample: /cleanup sessions {} --yes",
+                    keep
+                );
+            }
+            cleanup_sessions(app, keep)
+        }
+        "cache" => cleanup_cache(),
+        "logs" => cleanup_logs(),
+        "all" => {
+            let confirmed = parts.any(|p| p == "--yes");
+            if !confirmed {
+                return "Full cleanup will remove old sessions, cache, and logs.\nUsage: /cleanup all --yes"
+                    .to_string();
+            }
+            let session_msg = cleanup_sessions(app, 20);
+            let cache_msg = cleanup_cache();
+            let logs_msg = cleanup_logs();
+            format!("{}\n{}\n{}", session_msg, cache_msg, logs_msg)
+        }
         _ => "Usage: /cleanup [sessions|cache|logs|all]".to_string(),
     }
 }
 
 /// /compact - Compact context
-pub fn handle_compact(_app: &mut TuiApp) -> String {
-    "Use /compact command from bundled skills for context compression.".to_string()
+pub fn handle_compact(app: &mut TuiApp) -> String {
+    let Some(ref engine) = app.streaming_engine else {
+        return "Engine not initialized; cannot compact context.".to_string();
+    };
+    let history_before = futures::executor::block_on(engine.get_history());
+    if history_before.is_empty() {
+        return "No history to compact.".to_string();
+    }
+    let before_msgs = history_before.len();
+    let before_tokens =
+        crate::engine::context_compressor::estimate_messages_tokens(&history_before);
+    let Some(comp) = engine.compressor() else {
+        return "Context compressor unavailable.".to_string();
+    };
+    let compacted = {
+        let mut guard = futures::executor::block_on(comp.lock());
+        guard.micro_compress(&history_before)
+    };
+    let after_msgs = compacted.len();
+    let after_tokens = crate::engine::context_compressor::estimate_messages_tokens(&compacted);
+    futures::executor::block_on(engine.set_history(compacted.clone()));
+
+    app.messages = compacted
+        .into_iter()
+        .enumerate()
+        .map(|(idx, m)| {
+            let (role, content) = match m {
+                crate::services::api::Message::System { content } => {
+                    (crate::state::MessageRole::System, content)
+                }
+                crate::services::api::Message::User { content } => {
+                    (crate::state::MessageRole::User, content)
+                }
+                crate::services::api::Message::Assistant { content, .. } => {
+                    (crate::state::MessageRole::Assistant, content)
+                }
+                crate::services::api::Message::Tool { content, .. } => {
+                    (crate::state::MessageRole::Tool, content)
+                }
+            };
+            crate::state::MessageItem {
+                id: format!("compact_{}", idx),
+                role,
+                content,
+                timestamp: std::time::SystemTime::now(),
+                metadata: Default::default(),
+            }
+        })
+        .collect();
+    if let Some(session_id) = app.session_manager.current_session_id() {
+        let _ = app.session_manager.replace_messages(session_id, &app.messages);
+    }
+    format!(
+        "Context compacted: messages {} -> {}, tokens {} -> {}.",
+        before_msgs, after_msgs, before_tokens, after_tokens
+    )
 }
 
 /// /snippet - Save/load code snippets
-pub fn handle_snippet(_app: &mut TuiApp, args: &str) -> String {
+pub fn handle_snippet(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
     if args.is_empty() {
         return "Usage: /snippet [save <name>|load <name>|list]".to_string();
     }
 
-    let parts: Vec<&str> = args.split_whitespace().collect();
-    match parts[0] {
+    let mut parts = args.splitn(2, ' ');
+    let action = parts.next().unwrap_or_default();
+    let rest = parts.next().unwrap_or("").trim();
+
+    match action {
         "save" => {
-            if parts.len() < 2 { "Usage: /snippet save <name>".to_string() }
-            else { format!("Snippet '{}' saved (not yet implemented).", parts[1]) }
+            if rest.is_empty() {
+                return "Usage: /snippet save <name> [content]".to_string();
+            }
+
+            let mut save_parts = rest.splitn(2, ' ');
+            let name = save_parts.next().unwrap_or_default().trim();
+            let content = save_parts.next().map(str::trim).unwrap_or("");
+            let Some(safe_name) = sanitize_snippet_name(name) else {
+                return "Invalid snippet name. Use letters, digits, '-', '_' or '.'".to_string();
+            };
+
+            let content_to_save = if content.is_empty() {
+                match app.messages.last() {
+                    Some(msg) => msg.content.clone(),
+                    None => {
+                        return "No message available to save. Provide content explicitly.".to_string();
+                    }
+                }
+            } else {
+                content.to_string()
+            };
+
+            let dir = snippet_dir();
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                return format!("Failed to create snippet directory: {}", e);
+            }
+            let path = dir.join(format!("{}.md", safe_name));
+            match std::fs::write(&path, content_to_save) {
+                Ok(_) => format!("Snippet '{}' saved to {}", safe_name, path.display()),
+                Err(e) => format!("Failed to save snippet '{}': {}", safe_name, e),
+            }
         }
         "load" => {
-            if parts.len() < 2 { "Usage: /snippet load <name>".to_string() }
-            else { format!("Snippet '{}' loaded (not yet implemented).", parts[1]) }
+            if rest.is_empty() {
+                return "Usage: /snippet load <name>".to_string();
+            }
+            let Some(safe_name) = sanitize_snippet_name(rest) else {
+                return "Invalid snippet name. Use letters, digits, '-', '_' or '.'".to_string();
+            };
+            let path = snippet_dir().join(format!("{}.md", safe_name));
+            match std::fs::read_to_string(&path) {
+                Ok(content) => format!("Snippet '{}':\n{}", safe_name, content),
+                Err(e) => format!("Failed to load snippet '{}': {}", safe_name, e),
+            }
         }
-        "list" => "No snippets saved.".to_string(),
+        "list" => match list_snippets() {
+            Ok(names) if names.is_empty() => "No snippets saved.".to_string(),
+            Ok(names) => format!("Snippets:\n- {}", names.join("\n- ")),
+            Err(e) => format!("Failed to list snippets: {}", e),
+        }
         _ => "Usage: /snippet [save|load|list]".to_string(),
     }
 }
 
-/// /bookmark - Bookmark locations
-pub fn handle_bookmark(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() || args == "list" {
-        return "No bookmarks saved.".to_string();
+fn priority_agent_home_dir() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".priority-agent")
+}
+
+fn prompt_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("prompt.txt")
+}
+
+fn webhooks_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("webhooks.json")
+}
+
+fn runtime_prefs_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("runtime_prefs.json")
+}
+
+fn preamble_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("preamble.txt")
+}
+
+fn slots_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("slots.json")
+}
+
+fn snippet_dir() -> std::path::PathBuf {
+    priority_agent_home_dir().join("snippets")
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct RuntimePrefs {
+    #[serde(default)]
+    verbose: bool,
+    #[serde(default)]
+    trace: bool,
+    #[serde(default)]
+    stealth: bool,
+    #[serde(default)]
+    shadow: bool,
+    #[serde(default = "default_backend")]
+    backend: String,
+    #[serde(default)]
+    sandbox: bool,
+    #[serde(default)]
+    subscriptions: Vec<String>,
+    #[serde(default)]
+    logged_in_provider: Option<String>,
+    #[serde(default = "default_effort_level")]
+    effort_level: String,
+    #[serde(default)]
+    ticker_message: Option<String>,
+    #[serde(default)]
+    slack_webhook_url: Option<String>,
+    #[serde(default)]
+    slack_default_channel: Option<String>,
+}
+
+fn default_backend() -> String {
+    "local".to_string()
+}
+
+fn default_effort_level() -> String {
+    "normal".to_string()
+}
+
+fn load_runtime_prefs() -> Result<RuntimePrefs, String> {
+    let path = runtime_prefs_file();
+    if !path.exists() {
+        return Ok(RuntimePrefs::default());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    serde_json::from_str::<RuntimePrefs>(&text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn save_runtime_prefs(prefs: &RuntimePrefs) -> Result<(), String> {
+    let path = runtime_prefs_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    let text = serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn read_preamble() -> Result<Option<String>, String> {
+    let path = preamble_file();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+fn write_preamble(text: &str) -> Result<(), String> {
+    let path = preamble_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    std::fs::write(&path, text.trim()).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn reset_preamble() -> Result<(), String> {
+    let path = preamble_file();
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn load_slots() -> Result<std::collections::HashMap<String, String>, String> {
+    let path = slots_file();
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn save_slots(map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+    let path = slots_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    let payload = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, payload).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn count_files_recursively(path: &std::path::Path) -> usize {
+    if !path.exists() {
+        return 0;
+    }
+    let mut count = 0usize;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let Ok(read_dir) = std::fs::read_dir(&p) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let ep = entry.path();
+            if ep.is_file() {
+                count += 1;
+            } else if ep.is_dir() {
+                stack.push(ep);
+            }
+        }
+    }
+    count
+}
+
+async fn post_slack_webhook(
+    webhook_url: &str,
+    channel: Option<&str>,
+    message: &str,
+) -> Result<(), String> {
+    let mut payload = serde_json::json!({
+        "text": message,
+    });
+    if let Some(ch) = channel {
+        payload["channel"] = serde_json::Value::String(ch.to_string());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("failed to build client: {}", e))?;
+    let resp = client
+        .post(webhook_url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("request error: {}", e))?;
+    let status = resp.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!("status {}: {}", status, body))
+    }
+}
+
+fn collect_chrome_bookmarks(node: &serde_json::Value, out: &mut Vec<String>, limit: usize) {
+    if out.len() >= limit {
+        return;
+    }
+    if let Some(obj) = node.as_object() {
+        if let (Some(name), Some(url)) = (
+            obj.get("name").and_then(|v| v.as_str()),
+            obj.get("url").and_then(|v| v.as_str()),
+        ) {
+            out.push(format!("{} -> {}", name, url));
+            if out.len() >= limit {
+                return;
+            }
+        }
+        for v in obj.values() {
+            collect_chrome_bookmarks(v, out, limit);
+            if out.len() >= limit {
+                return;
+            }
+        }
+        return;
+    }
+    if let Some(arr) = node.as_array() {
+        for v in arr {
+            collect_chrome_bookmarks(v, out, limit);
+            if out.len() >= limit {
+                return;
+            }
+        }
+    }
+}
+
+fn build_tree_lines(
+    root: &std::path::Path,
+    level: usize,
+    max_depth: usize,
+    lines: &mut Vec<String>,
+    max_lines: usize,
+) {
+    if level >= max_depth || lines.len() >= max_lines {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut items: Vec<_> = entries.flatten().collect();
+    items.sort_by_key(|e| e.file_name());
+    for entry in items {
+        if lines.len() >= max_lines {
+            break;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let indent = "  ".repeat(level);
+        if path.is_dir() {
+            lines.push(format!("{}- {}/", indent, name));
+            build_tree_lines(&path, level + 1, max_depth, lines, max_lines);
+        } else {
+            lines.push(format!("{}- {}", indent, name));
+        }
+    }
+}
+
+fn read_prompt_file() -> Result<Option<String>, String> {
+    let path = prompt_file();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+fn write_prompt_file(text: &str) -> Result<(), String> {
+    let path = prompt_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    std::fs::write(&path, text.trim()).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn append_prompt_file(text: &str) -> Result<(), String> {
+    let next = text.trim();
+    if next.is_empty() {
+        return Err("Prompt content cannot be empty.".to_string());
+    }
+    let merged = match read_prompt_file()? {
+        Some(existing) => format!("{}\n\n{}", existing, next),
+        None => next.to_string(),
+    };
+    write_prompt_file(&merged)
+}
+
+fn reset_prompt_file() -> Result<(), String> {
+    let path = prompt_file();
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn load_webhooks() -> Result<std::collections::HashMap<String, String>, String> {
+    let path = webhooks_file();
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn save_webhooks(map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+    let path = webhooks_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    let payload = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, payload).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn is_valid_webhook_url(raw: &str) -> bool {
+    if !(raw.starts_with("http://") || raw.starts_with("https://")) {
+        return false;
+    }
+    match reqwest::Url::parse(raw) {
+        Ok(url) => matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+        Err(_) => false,
+    }
+}
+
+async fn test_webhook(url: &str, payload: &str) -> Result<String, String> {
+    let body: serde_json::Value = serde_json::from_str(payload).unwrap_or_else(|_| {
+        serde_json::json!({
+            "message": payload,
+        })
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("failed to build http client: {}", e))?;
+    let response = client
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("request error: {}", e))?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "<unable to read body>".to_string());
+    let preview: String = response_text.chars().take(200).collect();
+
+    if status.is_success() {
+        Ok(format!(
+            "Webhook test delivered successfully (status {}). Response: {}",
+            status, preview
+        ))
+    } else {
+        Err(format!(
+            "status {}. Response: {}",
+            status, preview
+        ))
+    }
+}
+
+async fn run_migrate_sqlx(app: &mut TuiApp, is_up: bool) -> String {
+    if std::env::var("DATABASE_URL").is_err() {
+        return "DATABASE_URL is not set. Export DATABASE_URL first, then run /migrate up|down."
+            .to_string();
     }
 
-    let parts: Vec<&str> = args.split_whitespace().collect();
-    match parts[0] {
-        "add" => format!("Bookmark '{}' added (not yet implemented).", parts.get(1).unwrap_or(&"?")),
-        "go" => "Navigate to bookmark (not yet implemented).".to_string(),
-        _ => "Usage: /bookmark [add <name>|go <name>|list]".to_string(),
+    let command = if is_up {
+        "sqlx migrate run"
+    } else {
+        "sqlx migrate revert"
+    };
+
+    let tool = crate::tools::BashTool;
+    let ctx = app.build_tool_context().await;
+    let params = serde_json::json!({
+        "command": command,
+        "description": if is_up { "sqlx migrate up" } else { "sqlx migrate down" },
+    });
+    let result = tool.execute(params, ctx).await;
+    if result.success {
+        if result.content.trim().is_empty() {
+            if is_up {
+                "Migrations applied successfully.".to_string()
+            } else {
+                "Migration reverted successfully.".to_string()
+            }
+        } else {
+            result.content
+        }
+    } else {
+        format!(
+            "Migration command failed: {}\nHint: ensure `sqlx` CLI is installed (`cargo install sqlx-cli --no-default-features --features native-tls,postgres`) and DATABASE_URL is valid.",
+            result.error.unwrap_or_else(|| "unknown error".to_string())
+        )
+    }
+}
+
+fn sanitize_snippet_name(name: &str) -> Option<String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return None;
+    }
+    if n.contains('/') || n.contains('\\') {
+        return None;
+    }
+    if n == "." || n == ".." {
+        return None;
+    }
+    if n.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        Some(n.to_string())
+    } else {
+        None
+    }
+}
+
+fn list_snippets() -> std::io::Result<Vec<String>> {
+    let dir = snippet_dir();
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                names.push(stem.to_string());
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+fn cleanup_sessions(app: &mut TuiApp, keep_count: usize) -> String {
+    let sessions = match app.session_manager.list_sessions(10_000) {
+        Ok(v) => v,
+        Err(e) => return format!("Failed to list sessions: {}", e),
+    };
+    if sessions.len() <= keep_count {
+        return format!(
+            "No session cleanup needed. {} session(s) <= keep {}.",
+            sessions.len(),
+            keep_count
+        );
+    }
+
+    let current = app
+        .session_manager
+        .current_session_id()
+        .map(|s| s.to_string());
+    let mut keep_ids: std::collections::HashSet<String> = sessions
+        .iter()
+        .take(keep_count)
+        .map(|s| s.id.clone())
+        .collect();
+    if let Some(cur) = current {
+        keep_ids.insert(cur);
+    }
+
+    let mut deleted = 0usize;
+    let mut failed = 0usize;
+    for sess in sessions {
+        if keep_ids.contains(&sess.id) {
+            continue;
+        }
+        match app.session_manager.delete_session(&sess.id) {
+            Ok(_) => deleted += 1,
+            Err(_) => failed += 1,
+        }
+    }
+
+    format!(
+        "Session cleanup complete: deleted {}, failed {}, kept {}.",
+        deleted,
+        failed,
+        keep_ids.len()
+    )
+}
+
+fn cleanup_cache() -> String {
+    crate::tools::file_cache::GLOBAL_FILE_CACHE.clear();
+    let mut cleared_items = 1usize; // in-memory file cache
+
+    let paths = vec![
+        priority_agent_home_dir().join("cache"),
+        dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("priority-agent")
+            .join("tool-results"),
+    ];
+
+    let mut failures = Vec::new();
+    for p in paths {
+        if p.exists() {
+            match std::fs::remove_dir_all(&p) {
+                Ok(_) => cleared_items += 1,
+                Err(e) => failures.push(format!("{}: {}", p.display(), e)),
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        format!("Cache cleaned ({} target(s) cleared).", cleared_items)
+    } else {
+        format!(
+            "Cache partially cleaned ({} target(s) cleared).\nFailures:\n- {}",
+            cleared_items,
+            failures.join("\n- ")
+        )
+    }
+}
+
+fn cleanup_logs() -> String {
+    let logs_dir = priority_agent_home_dir().join("logs");
+    if !logs_dir.exists() {
+        return "No logs directory found.".to_string();
+    }
+    let mut deleted = 0usize;
+    let mut failed = 0usize;
+
+    let entries = match std::fs::read_dir(&logs_dir) {
+        Ok(v) => v,
+        Err(e) => return format!("Failed to read logs directory: {}", e),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(_) => deleted += 1,
+            Err(_) => failed += 1,
+        }
+    }
+    format!(
+        "Logs cleanup complete: deleted {}, failed {} (dir: {}).",
+        deleted,
+        failed,
+        logs_dir.display()
+    )
+}
+
+/// /bookmark - Bookmark locations
+pub fn handle_bookmark(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if args.is_empty() || args == "list" {
+        return match load_bookmarks() {
+            Ok(map) if map.is_empty() => "No bookmarks saved.".to_string(),
+            Ok(map) => {
+                let mut names: Vec<_> = map.keys().cloned().collect();
+                names.sort();
+                let mut lines = vec!["Bookmarks:".to_string()];
+                for n in names {
+                    if let Some(target) = map.get(&n) {
+                        lines.push(format!("- {} -> {}", n, target));
+                    }
+                }
+                lines.join("\n")
+            }
+            Err(e) => format!("Failed to load bookmarks: {}", e),
+        };
+    }
+
+    let mut parts = args.splitn(2, ' ');
+    let action = parts.next().unwrap_or_default();
+    let rest = parts.next().unwrap_or("").trim();
+
+    match action {
+        "add" => {
+            if rest.is_empty() {
+                return "Usage: /bookmark add <name> [target]".to_string();
+            }
+            let mut add_parts = rest.splitn(2, ' ');
+            let raw_name = add_parts.next().unwrap_or_default();
+            let Some(name) = sanitize_note_name(raw_name) else {
+                return "Invalid bookmark name. Use letters, digits, '-', '_' or '.'".to_string();
+            };
+
+            let target = add_parts
+                .next()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(std::string::ToString::to_string)
+                .or_else(|| {
+                    app.session_manager
+                        .current_session_id()
+                        .map(|id| format!("session:{}", id))
+                });
+            let Some(target) = target else {
+                return "No active session; provide explicit target: /bookmark add <name> <target>"
+                    .to_string();
+            };
+
+            let mut map = match load_bookmarks() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load bookmarks: {}", e),
+            };
+            map.insert(name.clone(), target.clone());
+            match save_bookmarks(&map) {
+                Ok(_) => format!("Bookmark '{}' saved -> {}", name, target),
+                Err(e) => format!("Failed to save bookmark '{}': {}", name, e),
+            }
+        }
+        "go" => {
+            if rest.is_empty() {
+                return "Usage: /bookmark go <name>".to_string();
+            }
+            let Some(name) = sanitize_note_name(rest) else {
+                return "Invalid bookmark name.".to_string();
+            };
+            let map = match load_bookmarks() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load bookmarks: {}", e),
+            };
+            let Some(target) = map.get(&name) else {
+                return format!("Bookmark '{}' not found.", name);
+            };
+
+            if let Some(session_id) = target.strip_prefix("session:") {
+                return futures::executor::block_on(app.restore_session(session_id));
+            }
+            if target.starts_with("sess_") {
+                return futures::executor::block_on(app.restore_session(target));
+            }
+            format!("Bookmark '{}' -> {}", name, target)
+        }
+        _ => "Usage: /bookmark [add <name> [target]|go <name>|list]".to_string(),
     }
 }
 
@@ -3554,34 +5413,195 @@ pub fn handle_tag(_app: &mut TuiApp, args: &str) -> String {
 
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts[0] {
-        "add" => format!("Tag '{}' added (not yet implemented).", parts.get(2).unwrap_or(&"?")),
-        "list" => "No tags.".to_string(),
-        "find" => format!("Items with tag '{}' (not yet implemented).", parts.get(1).unwrap_or(&"?")),
+        "add" => {
+            if parts.len() < 3 {
+                return "Usage: /tag add <item> <tag>".to_string();
+            }
+            let Some(item) = sanitize_note_name(parts[1]) else {
+                return "Invalid item name. Use letters, digits, '-', '_' or '.'".to_string();
+            };
+            let Some(tag) = sanitize_note_name(parts[2]) else {
+                return "Invalid tag name. Use letters, digits, '-', '_' or '.'".to_string();
+            };
+            let mut tags = match load_tags() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load tags: {}", e),
+            };
+            let entry = tags.entry(item.clone()).or_default();
+            if !entry.iter().any(|t| t == &tag) {
+                entry.push(tag.clone());
+                entry.sort();
+            }
+            match save_tags(&tags) {
+                Ok(_) => format!("Added tag '{}' to '{}'.", tag, item),
+                Err(e) => format!("Failed to save tags: {}", e),
+            }
+        }
+        "list" => {
+            if parts.len() < 2 {
+                return "Usage: /tag list <item>".to_string();
+            }
+            let Some(item) = sanitize_note_name(parts[1]) else {
+                return "Invalid item name.".to_string();
+            };
+            let tags = match load_tags() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load tags: {}", e),
+            };
+            match tags.get(&item) {
+                Some(v) if !v.is_empty() => format!("Tags for '{}': {}", item, v.join(", ")),
+                _ => format!("No tags for '{}'.", item),
+            }
+        }
+        "find" => {
+            if parts.len() < 2 {
+                return "Usage: /tag find <tag>".to_string();
+            }
+            let Some(tag) = sanitize_note_name(parts[1]) else {
+                return "Invalid tag name.".to_string();
+            };
+            let tags = match load_tags() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load tags: {}", e),
+            };
+            let mut items: Vec<String> = tags
+                .iter()
+                .filter(|(_, v)| v.iter().any(|t| t == &tag))
+                .map(|(k, _)| k.clone())
+                .collect();
+            items.sort();
+            if items.is_empty() {
+                format!("No items found with tag '{}'.", tag)
+            } else {
+                format!("Items with tag '{}':\n- {}", tag, items.join("\n- "))
+            }
+        }
         _ => "Usage: /tag [add|list|find]".to_string(),
     }
 }
 
 /// /search - Search within session
-pub fn handle_search_cmd(_app: &TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /search <query>".to_string();
+pub fn handle_search_cmd(app: &TuiApp, args: &str) -> String {
+    handle_search(app, args)
+}
+
+fn bookmarks_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("bookmarks.json")
+}
+
+fn tags_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("tags.json")
+}
+
+fn sanitize_note_name(name: &str) -> Option<String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return None;
     }
-    format!("Search for '{}' (use input field for interactive search)", args)
+    if n == "." || n == ".." || n.contains('/') || n.contains('\\') {
+        return None;
+    }
+    if n.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        Some(n.to_string())
+    } else {
+        None
+    }
+}
+
+fn load_bookmarks() -> Result<std::collections::HashMap<String, String>, String> {
+    let path = bookmarks_file();
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn save_bookmarks(map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+    let path = bookmarks_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    let text = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn load_tags() -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+    let path = tags_file();
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn save_tags(map: &std::collections::HashMap<String, Vec<String>>) -> Result<(), String> {
+    let path = tags_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    let text = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
 /// /filter - Filter messages
-pub fn handle_filter(_app: &mut TuiApp, args: &str) -> String {
+pub fn handle_filter(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
     if args.is_empty() {
-        return "Usage: /filter [user|assistant|tool|all]".to_string();
+        return "Usage: /filter <user|assistant|tool|system|all> [query]".to_string();
     }
 
-    match args {
-        "user" => "Filter set to: user messages only (not yet implemented).".to_string(),
-        "assistant" => "Filter set to: assistant messages only.".to_string(),
-        "tool" => "Filter set to: tool messages only.".to_string(),
-        "all" => "Filter cleared.".to_string(),
-        _ => "Usage: /filter [user|assistant|tool|all]".to_string(),
+    let mut parts = args.splitn(2, ' ');
+    let role = parts.next().unwrap_or_default();
+    let query = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+
+    let role_filter = match role {
+        "user" => Some(crate::state::MessageRole::User),
+        "assistant" => Some(crate::state::MessageRole::Assistant),
+        "tool" => Some(crate::state::MessageRole::Tool),
+        "system" => Some(crate::state::MessageRole::System),
+        "all" => None,
+        _ => return "Usage: /filter <user|assistant|tool|system|all> [query]".to_string(),
+    };
+
+    let total = app.messages.len();
+    let mut matched: Vec<(usize, &crate::state::MessageItem)> = app
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| role_filter.is_none_or(|r| m.role == r))
+        .filter(|(_, m)| query.is_empty() || m.content.to_ascii_lowercase().contains(&query))
+        .collect();
+
+    if matched.is_empty() {
+        return "No messages matched this filter.".to_string();
     }
+
+    const MAX_PREVIEW: usize = 20;
+    if matched.len() > MAX_PREVIEW {
+        matched = matched[matched.len() - MAX_PREVIEW..].to_vec();
+    }
+
+    let mut lines = vec![format!(
+        "Matched {} / {} messages (showing last {}).",
+        matched.len(),
+        total,
+        matched.len()
+    )];
+    for (idx, m) in matched {
+        let preview: String = m.content.replace('\n', " ").chars().take(80).collect();
+        lines.push(format!(
+            "{}. [{}] {}",
+            idx + 1,
+            message_role_label(m.role),
+            preview
+        ));
+    }
+    lines.join("\n")
 }
 
 // ═══════════════════════════════════════
@@ -3590,52 +5610,281 @@ pub fn handle_filter(_app: &mut TuiApp, args: &str) -> String {
 
 /// /profile - Edit user profile
 pub fn handle_profile(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Usage: /profile [show|set <key> <value>]".to_string();
+    let args = args.trim();
+    if args.is_empty() || args == "show" {
+        return match load_profile() {
+            Ok(map) if map.is_empty() => "Profile is empty.".to_string(),
+            Ok(map) => {
+                let mut keys: Vec<_> = map.keys().cloned().collect();
+                keys.sort();
+                let mut lines = vec!["Profile:".to_string()];
+                for k in keys {
+                    if let Some(v) = map.get(&k) {
+                        lines.push(format!("- {} = {}", k, v));
+                    }
+                }
+                lines.join("\n")
+            }
+            Err(e) => format!("Failed to load profile: {}", e),
+        };
     }
 
-    let parts: Vec<&str> = args.split_whitespace().collect();
-    match parts[0] {
-        "show" => "Profile not yet implemented.".to_string(),
-        "set" => format!("Profile key '{}' would be set (not yet implemented).", parts.get(1).unwrap_or(&"?")),
-        _ => "Usage: /profile [show|set]".to_string(),
+    let mut parts = args.splitn(2, ' ');
+    let action = parts.next().unwrap_or_default();
+    let rest = parts.next().unwrap_or("").trim();
+    match action {
+        "show" => {
+            let Some(key) = sanitize_profile_key(rest) else {
+                return "Usage: /profile show <key>".to_string();
+            };
+            match load_profile() {
+                Ok(map) => match map.get(&key) {
+                    Some(v) => format!("{} = {}", key, v),
+                    None => format!("Profile key '{}' not found.", key),
+                },
+                Err(e) => format!("Failed to load profile: {}", e),
+            }
+        }
+        "set" => {
+            let mut kv = rest.splitn(2, ' ');
+            let raw_key = kv.next().unwrap_or_default();
+            let value = kv.next().unwrap_or("").trim();
+            let Some(key) = sanitize_profile_key(raw_key) else {
+                return "Usage: /profile set <key> <value>".to_string();
+            };
+            if value.is_empty() {
+                return "Usage: /profile set <key> <value>".to_string();
+            }
+            let mut map = match load_profile() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load profile: {}", e),
+            };
+            map.insert(key.clone(), value.to_string());
+            match save_profile(&map) {
+                Ok(_) => format!("Profile updated: {} = {}", key, value),
+                Err(e) => format!("Failed to save profile: {}", e),
+            }
+        }
+        "unset" => {
+            let Some(key) = sanitize_profile_key(rest) else {
+                return "Usage: /profile unset <key>".to_string();
+            };
+            let mut map = match load_profile() {
+                Ok(v) => v,
+                Err(e) => return format!("Failed to load profile: {}", e),
+            };
+            if map.remove(&key).is_none() {
+                return format!("Profile key '{}' not found.", key);
+            }
+            match save_profile(&map) {
+                Ok(_) => format!("Profile key '{}' removed.", key),
+                Err(e) => format!("Failed to save profile: {}", e),
+            }
+        }
+        _ => "Usage: /profile [show [key]|set <key> <value>|unset <key>]".to_string(),
     }
 }
 
 /// /theme - Theme customization
-pub fn handle_theme(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
-        return "Current theme: dark\nUse /color to change theme.".to_string();
+pub fn handle_theme(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if args.is_empty() || args == "show" {
+        let current = crate::services::config::AppConfig::load()
+            .map(|c| c.ui.theme)
+            .unwrap_or_else(|_| "dark".to_string());
+        return format!(
+            "Current theme: {}\nAvailable: dark, light, high-contrast\nUsage: /theme <preset> or /theme set <preset>",
+            current
+        );
     }
 
-    match args {
-        "list" => "Available: dark, light, high-contrast".to_string(),
-        _ => "Use /color [preset] to change theme.".to_string(),
+    if args == "list" {
+        return "Available themes:\n- dark\n- light\n- high-contrast".to_string();
+    }
+
+    let preset_raw = args.strip_prefix("set ").unwrap_or(args).trim();
+    let preset = match preset_raw.parse::<crate::tui::theme::ThemePreset>() {
+        Ok(v) => v,
+        Err(_) => {
+            return format!(
+                "Unknown theme '{}'. Available: dark, light, high-contrast",
+                preset_raw
+            );
+        }
+    };
+    let preset_name = preset.to_string();
+
+    app.theme = crate::tui::theme::Theme::from_preset(preset);
+
+    match crate::services::config::AppConfig::load() {
+        Ok(mut config) => {
+            config.ui.theme = preset_name.clone();
+            if let Err(e) = config.save() {
+                return format!(
+                    "Theme switched to '{}' (runtime), but failed to persist config: {}",
+                    preset_name, e
+                );
+            }
+            if let Some(ref mut settings) = app.settings_state {
+                settings.config.ui.theme = preset_name.clone();
+            }
+            format!("Theme changed to '{}' and saved to config.", preset_name)
+        }
+        Err(e) => format!(
+            "Theme switched to '{}' (runtime), but failed to load config for persistence: {}",
+            preset_name, e
+        ),
     }
 }
 
 /// /shortcuts - Show keyboard shortcuts
-pub fn handle_shortcuts(_app: &TuiApp) -> String {
-    "Keybindings:\n  Ctrl+C: Cancel\n  Ctrl+V: Toggle vim\n  Enter: Send\n  Shift+Enter: New line\nUse /keybindings for full customization.".to_string()
+pub fn handle_shortcuts(app: &TuiApp) -> String {
+    let kb = &app.keybindings;
+    format!(
+        "Keybindings (active):\n  quit: {}\n  quit_alt: {}\n  submit: {}\n  newline: {}\n  toggle_vim: {}\n  vim_up: {}\n  vim_down: {}\n  vim_insert: {}\n  vim_command: {}\nUse /keybindings [list|edit <json>] for full customization.",
+        kb.global_quit,
+        kb.global_quit_alt,
+        kb.chat_submit,
+        kb.chat_newline,
+        kb.toggle_vim_mode,
+        kb.vim_scroll_up,
+        kb.vim_scroll_down,
+        kb.vim_insert,
+        kb.vim_command
+    )
 }
 
 /// /quick - Quick actions menu
-pub fn handle_quick(_app: &mut TuiApp) -> String {
-    "Quick Actions:\n  1. /new - Start new session\n  2. /tasks - View tasks\n  3. /agents - View agents\n  4. /doctor - Run diagnostics".to_string()
+pub fn handle_quick(app: &mut TuiApp) -> String {
+    let session = app
+        .session_manager
+        .current_session_id()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let pending = [
+        app.pending_plan.is_some(),
+        app.pending_permission_request.is_some(),
+        app.pending_question.is_some(),
+    ]
+    .into_iter()
+    .filter(|b| *b)
+    .count();
+
+    format!(
+        "Quick Panel:\n  mode: {:?}\n  querying: {}\n  messages: {}\n  session: {}\n  pending_prompts: {}\n\nNext actions:\n  1. /new          - Start a new session\n  2. /sessions     - List recent sessions\n  3. /doctor       - Run diagnostics\n  4. /permissions  - Check permission rules\n  5. /cost         - Show token/cost usage\n  6. /theme show   - Inspect current theme",
+        app.mode,
+        app.is_querying,
+        app.messages.len(),
+        &session[..8.min(session.len())],
+        pending
+    )
 }
 
 /// /feedback - Send feedback
-pub fn handle_feedback(_app: &mut TuiApp, args: &str) -> String {
-    if args.is_empty() {
+pub fn handle_feedback(app: &mut TuiApp, args: &str) -> String {
+    let message = args.trim();
+    if message.is_empty() {
         return "Usage: /feedback <message>".to_string();
     }
-    format!("Feedback recorded: {} (not yet implemented)", args)
+    let session_id = app
+        .session_manager
+        .current_session_id()
+        .unwrap_or("none")
+        .to_string();
+    match append_feedback(&session_id, message) {
+        Ok(path) => format!("Feedback recorded to {}.", path.display()),
+        Err(e) => format!("Failed to record feedback: {}", e),
+    }
+}
+
+fn message_role_label(role: crate::state::MessageRole) -> &'static str {
+    match role {
+        crate::state::MessageRole::System => "system",
+        crate::state::MessageRole::User => "user",
+        crate::state::MessageRole::Assistant => "assistant",
+        crate::state::MessageRole::Tool => "tool",
+    }
+}
+
+fn profile_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("profile.json")
+}
+
+fn feedback_file() -> std::path::PathBuf {
+    priority_agent_home_dir().join("feedback.jsonl")
+}
+
+fn sanitize_profile_key(key: &str) -> Option<String> {
+    let k = key.trim();
+    if k.is_empty() {
+        return None;
+    }
+    if k.contains('/') || k.contains('\\') || k == "." || k == ".." {
+        return None;
+    }
+    if k.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    {
+        Some(k.to_string())
+    } else {
+        None
+    }
+}
+
+fn load_profile() -> Result<std::collections::HashMap<String, String>, String> {
+    let path = profile_file();
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn save_profile(map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+    let path = profile_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    let text = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("{}: {}", path.display(), e))
+}
+
+fn append_feedback(session_id: &str, message: &str) -> Result<std::path::PathBuf, String> {
+    let path = feedback_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    }
+    let record = serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "session_id": session_id,
+        "message": message,
+    });
+    let mut payload = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    payload.push('\n');
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("{}: {}", path.display(), e))?;
+    use std::io::Write as _;
+    f.write_all(payload.as_bytes())
+        .map_err(|e| format!("{}: {}", path.display(), e))?;
+    Ok(path)
 }
 
 // ─── Contract Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        get_config_value, is_valid_rollback_target, is_valid_webhook_url,
+        message_items_to_api_messages,
+        parse_bool, parse_optional_count, parse_rollback_args, sanitize_note_name,
+        sanitize_profile_key, sanitize_snippet_name,
+        set_config_value,
+    };
+    use crate::state::{MessageItem, MessageRole};
 
     // Test that git action validation rejects disallowed actions
     #[tokio::test]
@@ -3673,13 +5922,11 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_redo_documents_limitation() {
-        // Contract: /redo should clearly document when it's not available
-        let doc_message = "Redo is not yet implemented";
-        assert!(
-            doc_message.len() > 10,
-            "Limitation message should be descriptive"
-        );
+    fn test_handle_redo_contract_message() {
+        // Contract: /redo failure path should be descriptive.
+        let msg = "Nothing to redo or redo failed: No edits to redo";
+        assert!(msg.contains("Nothing to redo"));
+        assert!(msg.contains("redo failed"));
     }
 
     #[test]
@@ -3693,5 +5940,241 @@ mod tests {
         assert!(help_text.contains("/package list"));
         assert!(help_text.contains("/package deps"));
         assert!(help_text.contains("/package outdated"));
+    }
+
+    #[test]
+    fn test_rollback_parse_defaults_to_head_prev() {
+        let parsed = parse_rollback_args("").expect("parse should succeed");
+        assert_eq!(parsed.target, "HEAD~1");
+        assert!(!parsed.confirmed);
+    }
+
+    #[test]
+    fn test_rollback_parse_target_and_confirm() {
+        let parsed = parse_rollback_args("HEAD~3 --yes").expect("parse should succeed");
+        assert_eq!(parsed.target, "HEAD~3");
+        assert!(parsed.confirmed);
+    }
+
+    #[test]
+    fn test_rollback_rejects_unknown_flag() {
+        let err = parse_rollback_args("--force").expect_err("unknown flag should fail");
+        assert!(err.contains("Unknown option"));
+    }
+
+    #[test]
+    fn test_rollback_rejects_multiple_targets() {
+        let err = parse_rollback_args("HEAD~1 HEAD~2 --yes")
+            .expect_err("multiple targets should fail");
+        assert!(err.contains("Too many arguments"));
+    }
+
+    #[test]
+    fn test_rollback_target_validation() {
+        assert!(is_valid_rollback_target("HEAD~1"));
+        assert!(is_valid_rollback_target("main"));
+        assert!(is_valid_rollback_target("HEAD@{1}"));
+
+        assert!(!is_valid_rollback_target("-hard"));
+        assert!(!is_valid_rollback_target("HEAD;rm"));
+        assert!(!is_valid_rollback_target("HEAD$1"));
+    }
+
+    #[test]
+    fn test_parse_optional_count_defaults_to_one() {
+        assert_eq!(parse_optional_count("", "/undo").unwrap(), 1);
+        assert_eq!(parse_optional_count("3", "/undo").unwrap(), 3);
+    }
+
+    #[test]
+    fn test_parse_optional_count_rejects_zero_or_invalid() {
+        assert!(parse_optional_count("0", "/redo").is_err());
+        assert!(parse_optional_count("abc", "/redo").is_err());
+    }
+
+    #[test]
+    fn test_message_items_to_api_messages_preserves_count() {
+        let items = vec![
+            MessageItem {
+                id: "1".to_string(),
+                role: MessageRole::System,
+                content: "sys".to_string(),
+                timestamp: std::time::SystemTime::now(),
+                metadata: Default::default(),
+            },
+            MessageItem {
+                id: "2".to_string(),
+                role: MessageRole::User,
+                content: "hello".to_string(),
+                timestamp: std::time::SystemTime::now(),
+                metadata: Default::default(),
+            },
+            MessageItem {
+                id: "3".to_string(),
+                role: MessageRole::Assistant,
+                content: "hi".to_string(),
+                timestamp: std::time::SystemTime::now(),
+                metadata: Default::default(),
+            },
+        ];
+        let api = message_items_to_api_messages(&items);
+        assert_eq!(api.len(), items.len());
+    }
+
+    #[tokio::test]
+    async fn test_retry_rejects_arguments() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_retry(&mut app, "unexpected").await;
+        assert_eq!(msg, "Usage: /retry");
+    }
+
+    #[test]
+    fn test_parse_bool_variants() {
+        assert!(parse_bool("true").unwrap());
+        assert!(parse_bool("ON").unwrap());
+        assert!(!parse_bool("0").unwrap());
+        assert!(parse_bool("maybe").is_err());
+    }
+
+    #[test]
+    fn test_config_set_and_get_roundtrip() {
+        let mut cfg = crate::services::config::AppConfig::default();
+        set_config_value(&mut cfg, "api.model", "gpt-4o").unwrap();
+        set_config_value(&mut cfg, "api.temperature", "0.7").unwrap();
+        set_config_value(&mut cfg, "features.web_search", "false").unwrap();
+
+        assert_eq!(get_config_value(&cfg, "api.model").unwrap(), "gpt-4o");
+        assert_eq!(get_config_value(&cfg, "api.temperature").unwrap(), "0.7");
+        assert_eq!(get_config_value(&cfg, "features.web_search").unwrap(), "false");
+    }
+
+    #[test]
+    fn test_config_rejects_unknown_or_invalid() {
+        let mut cfg = crate::services::config::AppConfig::default();
+        assert!(set_config_value(&mut cfg, "unknown.key", "x").is_err());
+        assert!(set_config_value(&mut cfg, "api.temperature", "abc").is_err());
+        assert!(set_config_value(&mut cfg, "ui.show_token_usage", "abc").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_snippet_name_validation() {
+        assert_eq!(
+            sanitize_snippet_name("hello_world-1.0"),
+            Some("hello_world-1.0".to_string())
+        );
+        assert!(sanitize_snippet_name("").is_none());
+        assert!(sanitize_snippet_name("../passwd").is_none());
+        assert!(sanitize_snippet_name("name with spaces").is_none());
+    }
+
+    #[test]
+    fn test_cleanup_requires_confirmation_for_sessions() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_cleanup(&mut app, "sessions");
+        assert!(msg.contains("destructive"));
+        assert!(msg.contains("--yes"));
+    }
+
+    #[test]
+    fn test_cleanup_requires_confirmation_for_all() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_cleanup(&mut app, "all");
+        assert!(msg.contains("Usage: /cleanup all --yes"));
+    }
+
+    #[test]
+    fn test_sanitize_note_name_validation() {
+        assert_eq!(
+            sanitize_note_name("bookmark_1"),
+            Some("bookmark_1".to_string())
+        );
+        assert!(sanitize_note_name("../x").is_none());
+        assert!(sanitize_note_name("a b").is_none());
+        assert!(sanitize_note_name("").is_none());
+    }
+
+    #[test]
+    fn test_bookmark_usage_without_name() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_bookmark(&mut app, "add");
+        assert!(msg.starts_with("Usage: /bookmark add"));
+    }
+
+    #[test]
+    fn test_tag_usage_without_args() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_tag(&mut app, "");
+        assert!(msg.starts_with("Usage: /tag"));
+    }
+
+    #[test]
+    fn test_sanitize_profile_key_validation() {
+        assert_eq!(
+            sanitize_profile_key("user.name"),
+            Some("user.name".to_string())
+        );
+        assert!(sanitize_profile_key("../name").is_none());
+        assert!(sanitize_profile_key("bad key").is_none());
+        assert!(sanitize_profile_key("").is_none());
+    }
+
+    #[test]
+    fn test_filter_usage_requires_role() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_filter(&mut app, "");
+        assert!(msg.starts_with("Usage: /filter"));
+    }
+
+    #[test]
+    fn test_theme_rejects_unknown_preset() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_theme(&mut app, "set neon");
+        assert!(msg.contains("Unknown theme"));
+    }
+
+    #[test]
+    fn test_shortcuts_contains_core_bindings() {
+        let app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_shortcuts(&app);
+        assert!(msg.contains("quit:"));
+        assert!(msg.contains("submit:"));
+    }
+
+    #[test]
+    fn test_quick_panel_contains_status() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_quick(&mut app);
+        assert!(msg.contains("Quick Panel:"));
+        assert!(msg.contains("messages:"));
+    }
+
+    #[test]
+    fn test_focus_toggle_and_status() {
+        let mut app = crate::tui::app::TuiApp::new();
+        assert_eq!(super::handle_focus(&mut app, "status"), "Focus mode: disabled");
+        assert_eq!(super::handle_focus(&mut app, "on"), "Focus mode enabled.");
+        assert!(app.focus_mode);
+        assert_eq!(super::handle_focus(&mut app, "toggle"), "Focus mode disabled.");
+        assert!(!app.focus_mode);
+    }
+
+    #[test]
+    fn test_pause_toggle_and_status() {
+        let mut app = crate::tui::app::TuiApp::new();
+        assert_eq!(super::handle_pause(&mut app, "status"), "Pause state: running");
+        let paused = super::handle_pause(&mut app, "pause");
+        assert!(paused.contains("Agent paused"));
+        assert!(app.paused);
+        assert_eq!(super::handle_pause(&mut app, "resume"), "Agent resumed.");
+        assert!(!app.paused);
+    }
+
+    #[test]
+    fn test_is_valid_webhook_url_validation() {
+        assert!(is_valid_webhook_url("https://example.com/hook"));
+        assert!(is_valid_webhook_url("http://127.0.0.1:8080/webhook"));
+        assert!(!is_valid_webhook_url("ftp://example.com/hook"));
+        assert!(!is_valid_webhook_url("https://"));
+        assert!(!is_valid_webhook_url("not-a-url"));
     }
 }
