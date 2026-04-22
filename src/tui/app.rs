@@ -979,6 +979,7 @@ impl TuiApp {
             "/audit" => slash::handle_audit(self, args).await,
             "/permissions" | "/perm" => slash::handle_permissions(self, args),
             "/commit" => slash::handle_commit(self).await,
+            "/commit-push-pr" => slash::handle_commit_push_pr(self, args).await,
             "/review-pr" => slash::handle_review_pr(self, args).await,
             "/review" => slash::handle_review(self).await,
             "/security-review" => slash::handle_security_review(self).await,

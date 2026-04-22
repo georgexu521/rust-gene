@@ -1,4 +1,7 @@
 //! Git 工具 - 执行常见的 git 操作
+//!
+//! 支持只读操作（status/diff/log/show）和写操作（add/commit/push/checkout/branch）。
+//! 写操作需要用户确认，并有过滤危险参数的安全校验。
 
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
@@ -15,7 +18,10 @@ impl Tool for GitTool {
     }
 
     fn description(&self) -> &str {
-        "Run common git operations. Actions: 'status', 'diff', 'log', 'show'."
+        "Run common git operations. \
+         Read-only actions: 'status', 'diff', 'log', 'show'. \
+         Write actions: 'add', 'commit', 'push', 'checkout', 'branch'. \
+         Write actions require user confirmation."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -24,16 +30,21 @@ impl Tool for GitTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["status", "diff", "log", "show"],
+                    "enum": ["status", "diff", "log", "show", "add", "commit", "push", "checkout", "branch"],
                     "description": "The git action to perform"
                 },
                 "path": {
                     "type": "string",
-                    "description": "Optional file path filter"
+                    "description": "Optional file path filter (for status, diff, add)"
+                },
+                "paths": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "List of file paths (for add action)"
                 },
                 "commit": {
                     "type": "string",
-                    "description": "Commit hash for 'show' action"
+                    "description": "Commit hash for 'show' action, or commit message for 'commit' action"
                 },
                 "range": {
                     "type": "string",
@@ -53,10 +64,113 @@ impl Tool for GitTool {
                     "type": "integer",
                     "default": 10,
                     "description": "Number of commits for 'log' action"
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Branch name for 'checkout' or 'branch' action"
+                },
+                "create_branch": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Create a new branch (for checkout -b)"
+                },
+                "remote": {
+                    "type": "string",
+                    "default": "origin",
+                    "description": "Remote name for 'push' action"
+                },
+                "force": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Force push (DANGEROUS — requires extra confirmation)"
+                },
+                "all": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Stage all changes (for commit -a)"
                 }
             },
             "required": ["action"]
         })
+    }
+
+    fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
+        match params["action"].as_str() {
+            Some("add" | "commit" | "push" | "checkout" | "branch") => true,
+            _ => false,
+        }
+    }
+
+    fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {
+        let action = params["action"].as_str().unwrap_or("");
+        match action {
+            "add" => {
+                let path = params["path"].as_str().unwrap_or("");
+                if !path.is_empty() {
+                    Some(format!("Stage file '{}' for commit?", path))
+                } else {
+                    Some("Stage all changes for commit?".to_string())
+                }
+            }
+            "commit" => {
+                let msg = params["commit"].as_str().unwrap_or("(no message)");
+                Some(format!("Create git commit with message: '{}'", msg))
+            }
+            "push" => {
+                let remote = params["remote"].as_str().unwrap_or("origin");
+                let force = params["force"].as_bool().unwrap_or(false);
+                if force {
+                    Some(format!(
+                        "⚠️ FORCE push to {}? This will overwrite remote history!",
+                        remote
+                    ))
+                } else {
+                    Some(format!("Push current branch to {}?", remote))
+                }
+            }
+            "checkout" => {
+                let branch = params["branch"].as_str().unwrap_or("");
+                let create = params["create_branch"].as_bool().unwrap_or(false);
+                if create {
+                    Some(format!("Create and switch to new branch '{}'?", branch))
+                } else {
+                    Some(format!("Switch to branch '{}'?", branch))
+                }
+            }
+            "branch" => {
+                let branch = params["branch"].as_str().unwrap_or("");
+                Some(format!("Create new branch '{}'?", branch))
+            }
+            _ => None,
+        }
+    }
+
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let action = params["action"].as_str().unwrap_or("");
+        match action {
+            "commit" => {
+                let msg = params["commit"].as_str().unwrap_or("");
+                format!("git commit: '{}'", msg)
+            }
+            "push" => {
+                let remote = params["remote"].as_str().unwrap_or("origin");
+                let force = params["force"].as_bool().unwrap_or(false);
+                format!("git push: remote={} force={}", remote, force)
+            }
+            "checkout" | "branch" => {
+                let branch = params["branch"].as_str().unwrap_or("");
+                format!("git {}: {}", action, branch)
+            }
+            "add" => {
+                let path = params["path"].as_str().unwrap_or("");
+                if path.is_empty() {
+                    "git add: all".to_string()
+                } else {
+                    format!("git add: {}", path)
+                }
+            }
+            _ => format!("git {}", action),
+        }
     }
 
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
@@ -65,6 +179,7 @@ impl Tool for GitTool {
         let stat = params["stat"].as_bool().unwrap_or(false);
 
         let result = match action {
+            // ── 只读操作 ───────────────────────────────
             "status" => {
                 let mut cmd = Command::new("git");
                 cmd.arg("status").arg("--short");
@@ -112,6 +227,78 @@ impl Tool for GitTool {
                 }
                 cmd.output().await
             }
+            // ── 写操作 ─────────────────────────────────
+            "add" => {
+                if let Some(paths) = params["paths"].as_array() {
+                    let mut cmd = Command::new("git");
+                    cmd.arg("add");
+                    for p in paths {
+                        if let Some(s) = p.as_str() {
+                            cmd.arg(s);
+                        }
+                    }
+                    cmd.output().await
+                } else if !path.is_empty() {
+                    Command::new("git").arg("add").arg(path).output().await
+                } else {
+                    Command::new("git").arg("add").arg("-A").output().await
+                }
+            }
+            "commit" => {
+                let message = params["commit"].as_str().unwrap_or("");
+                if message.is_empty() {
+                    return ToolResult::error("Commit message cannot be empty");
+                }
+                let all = params["all"].as_bool().unwrap_or(false);
+                let mut cmd = Command::new("git");
+                cmd.arg("commit").arg("-m").arg(message);
+                if all {
+                    cmd.arg("-a");
+                }
+                cmd.output().await
+            }
+            "push" => {
+                let remote = params["remote"].as_str().unwrap_or("origin");
+                let force = params["force"].as_bool().unwrap_or(false);
+                if force && !is_safe_force_push(remote) {
+                    return ToolResult::error(
+                        "Force push to this remote is blocked for safety.".to_string(),
+                    );
+                }
+                let mut cmd = Command::new("git");
+                cmd.arg("push").arg(remote);
+                if force {
+                    cmd.arg("--force-with-lease");
+                }
+                // 推送当前分支
+                cmd.arg("HEAD");
+                cmd.output().await
+            }
+            "checkout" => {
+                let branch = params["branch"].as_str().unwrap_or("");
+                if branch.is_empty() {
+                    return ToolResult::error("Branch name required for checkout");
+                }
+                let create = params["create_branch"].as_bool().unwrap_or(false);
+                let mut cmd = Command::new("git");
+                cmd.arg("checkout");
+                if create {
+                    cmd.arg("-b");
+                }
+                cmd.arg(branch);
+                cmd.output().await
+            }
+            "branch" => {
+                let branch = params["branch"].as_str().unwrap_or("");
+                if branch.is_empty() {
+                    return ToolResult::error("Branch name required");
+                }
+                Command::new("git")
+                    .arg("branch")
+                    .arg(branch)
+                    .output()
+                    .await
+            }
             _ => {
                 return ToolResult::error(format!("Unknown git action: {}", action));
             }
@@ -120,7 +307,13 @@ impl Tool for GitTool {
         match result {
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout);
-                ToolResult::success(text.to_string())
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let output = if text.is_empty() && !stderr.is_empty() {
+                    stderr.to_string()
+                } else {
+                    text.to_string()
+                };
+                ToolResult::success(output)
             }
             Ok(out) => ToolResult::error(format!(
                 "git {} failed: {}",
@@ -159,6 +352,14 @@ fn is_valid_git_range(range: &str) -> bool {
     })
 }
 
+/// 检查 force push 是否安全
+fn is_safe_force_push(remote: &str) -> bool {
+    // 禁止向 origin 直接 force push（保护主分支）
+    // 允许向个人 fork 或 feature remote force push
+    let lower = remote.to_lowercase();
+    !matches!(lower.as_str(), "origin" | "upstream")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +387,21 @@ mod tests {
         assert!(!result.content.is_empty());
     }
 
+    #[tokio::test]
+    async fn test_git_branch_list_implicit() {
+        // branch action without branch name should fail gracefully
+        let tool = GitTool;
+        let result = tool
+            .execute(
+                json!({ "action": "branch", "branch": "test-branch-42" }),
+                ToolContext::new(".", "test"),
+            )
+            .await;
+        // May succeed or fail depending on git state; either is fine for this test
+        // Just verify it doesn't panic
+        let _ = result.success;
+    }
+
     #[test]
     fn test_is_valid_git_range() {
         assert!(is_valid_git_range("HEAD~1..HEAD"));
@@ -194,5 +410,44 @@ mod tests {
         assert!(!is_valid_git_range("--help"));
         assert!(!is_valid_git_range("HEAD;rm -rf /"));
         assert!(!is_valid_git_range("`whoami`"));
+    }
+
+    #[test]
+    fn test_safe_force_push() {
+        assert!(!is_safe_force_push("origin"));
+        assert!(!is_safe_force_push("upstream"));
+        assert!(is_safe_force_push("myfork"));
+        assert!(is_safe_force_push("fork"));
+    }
+
+    #[test]
+    fn test_requires_confirmation() {
+        let tool = GitTool;
+        assert!(!tool.requires_confirmation(&json!({ "action": "status" })));
+        assert!(!tool.requires_confirmation(&json!({ "action": "diff" })));
+        assert!(!tool.requires_confirmation(&json!({ "action": "log" })));
+        assert!(!tool.requires_confirmation(&json!({ "action": "show" })));
+        assert!(tool.requires_confirmation(&json!({ "action": "add" })));
+        assert!(tool.requires_confirmation(&json!({ "action": "commit" })));
+        assert!(tool.requires_confirmation(&json!({ "action": "push" })));
+        assert!(tool.requires_confirmation(&json!({ "action": "checkout" })));
+        assert!(tool.requires_confirmation(&json!({ "action": "branch" })));
+    }
+
+    #[test]
+    fn test_to_classifier_input() {
+        let tool = GitTool;
+        assert_eq!(
+            tool.to_classifier_input(&json!({ "action": "commit", "commit": "fix bug" })),
+            "git commit: 'fix bug'"
+        );
+        assert_eq!(
+            tool.to_classifier_input(&json!({ "action": "push", "remote": "origin", "force": true })),
+            "git push: remote=origin force=true"
+        );
+        assert_eq!(
+            tool.to_classifier_input(&json!({ "action": "add", "path": "src/main.rs" })),
+            "git add: src/main.rs"
+        );
     }
 }

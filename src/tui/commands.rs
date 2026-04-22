@@ -345,6 +345,14 @@ pub const CMD_COMMIT: CommandDef = CommandDef::new(
     "Generate a commit message for staged changes",
 );
 
+pub const CMD_COMMIT_PUSH_PR: CommandDef = CommandDef::new(
+    "/commit-push-pr",
+    &[],
+    "Skills",
+    "/commit-push-pr [description]",
+    "Stage, commit, push, and create a PR in one workflow",
+);
+
 pub const CMD_REVIEW_PR: CommandDef = CommandDef::new(
     "/review-pr",
     &[],
@@ -1149,6 +1157,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_RESUME);
     registry.register(&CMD_REWIND);
     registry.register(&CMD_COMMIT);
+    registry.register(&CMD_COMMIT_PUSH_PR);
     registry.register(&CMD_REVIEW_PR);
     registry.register(&CMD_REVIEW);
     registry.register(&CMD_SECURITY_REVIEW);

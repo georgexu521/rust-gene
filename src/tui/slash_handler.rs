@@ -8,6 +8,7 @@ use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
 use crate::tools::Tool;
 use crate::tui::app::{AppMode, TuiApp};
+use tokio::process::Command;
 
 // ─── Session Management ───────────────────────────────────────────────
 
@@ -944,6 +945,94 @@ pub async fn handle_commit(app: &mut TuiApp) -> String {
         }
         None => "Skill 'commit' not found.".to_string(),
     }
+}
+
+pub async fn handle_commit_push_pr(app: &mut TuiApp, args: &str) -> String {
+    let tool = crate::tools::GitTool;
+    let ctx = app.build_tool_context().await;
+
+    // 收集 git 上下文
+    let status_result = tool
+        .execute(serde_json::json!({ "action": "status" }), ctx.clone())
+        .await;
+    let status = if status_result.success {
+        status_result.content
+    } else {
+        "Unable to get git status.".to_string()
+    };
+
+    let diff_result = tool
+        .execute(serde_json::json!({ "action": "diff" }), ctx.clone())
+        .await;
+    let diff = if diff_result.success {
+        diff_result.content
+    } else {
+        "Unable to get git diff.".to_string()
+    };
+
+    // 获取当前分支
+    let branch = match Command::new("git")
+        .args(["branch", "--show-current"])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => "unknown".to_string(),
+    };
+
+    let log_result = tool
+        .execute(serde_json::json!({ "action": "log", "n": 5 }), ctx.clone())
+        .await;
+    let log = if log_result.success {
+        log_result.content
+    } else {
+        "Unable to get git log.".to_string()
+    };
+
+    let user_desc = if args.trim().is_empty() {
+        "No specific description provided. Infer the purpose from the changes.".to_string()
+    } else {
+        args.trim().to_string()
+    };
+
+    let prompt = format!(
+        "You are a git workflow assistant. Complete the following steps to commit changes and create a PR.\n\
+         \n\
+         ## Steps\n\
+         1. Use the `git` tool with action='add' to stage all changes (path='' or paths=[]).\n\
+         2. Use the `git` tool with action='commit' to create a commit.\n\
+            - Generate a concise conventional commit message from the changes.\n\
+            - Format: `<type>(<scope>): <description>` (e.g., `feat(auth): add login flow`)\n\
+            - Keep subject under 72 characters, use imperative mood.\n\
+         3. Check current branch. If on main/master, create a new feature branch first using git action='checkout' with create_branch=true.\n\
+         4. Use the `git` tool with action='push' to push the branch to origin.\n\
+         5. Use the `github` tool with action='pr_create' to create a Pull Request.\n\
+            - Use the commit message as PR title.\n\
+            - Provide a brief PR body summarizing the changes.\n\
+         \n\
+         ## Safety Rules\n\
+         - NEVER use force push.\n\
+         - NEVER use `git commit --amend`.\n\
+         - Do not commit secret files (.env, credentials.json, id_rsa, etc.).\n\
+         - If there are no changes to commit, report that and stop.\n\
+         \n\
+         ## Context\n\
+         Current branch: {}\n\
+         User description: {}\n\
+         \n\
+         Git status:\n\
+         ```\n{}\n```\n\
+         \n\
+         Git diff:\n\
+         ```diff\n{}\n```\n\
+         \n\
+         Recent commits:\n\
+         ```\n{}\n```",
+        branch, user_desc, status, diff, log
+    );
+
+    app.send_message(prompt).await;
+    String::new()
 }
 
 pub async fn handle_review_pr(app: &mut TuiApp, args: &str) -> String {
