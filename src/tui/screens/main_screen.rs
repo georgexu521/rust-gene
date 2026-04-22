@@ -61,7 +61,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             break;
         }
 
-        let msg_height = estimate_message_height(msg, inner_area.width as usize);
+        let msg_height = estimate_message_height(msg, inner_area.width as usize, &app.theme);
         let msg_area = Rect {
             x: inner_area.x,
             y: current_y,
@@ -268,11 +268,100 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(stats, chunks[1]);
 }
 
+/// 渲染消息搜索弹窗
+pub fn render_message_search(f: &mut Frame, app: &TuiApp, area: Rect) {
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    let search_height = (area.height / 2).max(10).min(20);
+    let popup_area = centered_rect(80, search_height, area);
+
+    f.render_widget(Clear, popup_area);
+
+    let search = &app.message_search_state;
+    let title = search.status_text();
+
+    let block = Block::default()
+        .title(format!(" {} ", title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.border_active))
+        .style(Style::default().bg(app.theme.bg_popup));
+
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    if search.results.is_empty() {
+        let hint = if search.query.is_empty() {
+            "Type to search messages..."
+        } else {
+            "No matches found"
+        };
+        let text = Paragraph::new(hint)
+            .style(Style::default().fg(app.theme.text_dim))
+            .alignment(Alignment::Center);
+        f.render_widget(text, inner);
+    } else {
+        let results_list = search.render_results();
+        let mut state = search.list_state.clone();
+        f.render_stateful_widget(results_list, inner, &mut state);
+    }
+
+    // 底部提示
+    let hint_area = Rect {
+        x: popup_area.x,
+        y: popup_area.y + popup_area.height - 1,
+        width: popup_area.width,
+        height: 1,
+    };
+    let hint = Paragraph::new("Esc: close | Enter: jump | ↑/↓: navigate | n: toggle case")
+        .style(Style::default().fg(app.theme.text_dim))
+        .alignment(Alignment::Center);
+    f.render_widget(hint, hint_area);
+}
+
 /// 估算消息高度
-fn estimate_message_height(msg: &crate::state::MessageItem, width: usize) -> usize {
-    let base_height = 3; // 头部 + 空行 + 底部空行
-    let content_lines = (msg.content.len() / width.max(1)) + 1;
-    base_height + content_lines
+fn estimate_message_height(
+    msg: &crate::state::MessageItem,
+    width: usize,
+    _theme: &crate::tui::theme::Theme,
+) -> usize {
+    let base_height = 3; // header + blank line + trailing blank
+    let effective_width = width.saturating_sub(4).max(1);
+
+    let content_height = if msg.role == crate::state::MessageRole::Assistant {
+        // Assistant messages: markdown rendering with code blocks, lists, etc.
+        let mut lines = 0;
+        let mut in_code_block = false;
+        for line in msg.content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                in_code_block = !in_code_block;
+                lines += 1; // fence line
+            } else if in_code_block {
+                lines += 1;
+            } else if trimmed.starts_with('#') {
+                // Heading: rarely wraps
+                lines += 1;
+            } else if trimmed.is_empty() {
+                lines += 1;
+            } else {
+                let dw = unicode_width::UnicodeWidthStr::width(line);
+                lines += (dw + effective_width - 1) / effective_width;
+            }
+        }
+        lines.max(1)
+    } else {
+        // User/System/Tool: simple text wrapping
+        msg.content
+            .lines()
+            .map(|line| {
+                let dw = unicode_width::UnicodeWidthStr::width(line);
+                (dw + effective_width - 1) / effective_width
+            })
+            .sum::<usize>()
+            .max(1)
+    };
+
+    base_height + content_height
 }
 
 /// 渲染帮助弹窗

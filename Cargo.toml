@@ -87,6 +87,11 @@ tree-sitter-rust = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-python = "0.23"
 
+# TUI 升级依赖
+unicode-width = "0.2"
+syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
+arboard = "3.4"
+
 [package]
 name = "priority-agent"
 version = "0.1.0"
@@ -161,6 +166,9 @@ tree-sitter-typescript = { workspace = true }
 tree-sitter-python = { workspace = true }
 md5 = "0.7"
 diffy = "0.4"
+unicode-width = { workspace = true }
+syntect = { workspace = true }
+arboard = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

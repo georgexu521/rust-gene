@@ -251,6 +251,23 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 &app.theme,
             );
         }
+        app::AppMode::MessageSearch => {
+            // 消息搜索模式：先渲染底层聊天界面，再叠加搜索弹窗
+            let main_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(3),
+                    Constraint::Length(5),
+                    Constraint::Length(1),
+                ])
+                .split(f.area());
+
+            screens::main_screen::render_chat_area(f, app, main_chunks[0]);
+            screens::main_screen::render_input_area(f, app, main_chunks[1]);
+            screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+
+            screens::main_screen::render_message_search(f, app, f.area());
+        }
     }
 }
 
@@ -355,6 +372,61 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             app.scroll_up_half_page();
             return Ok(false);
         }
+        if key.code == KeyCode::Char('/') {
+            app.message_search_state.activate();
+            app.mode = app::AppMode::MessageSearch;
+            return Ok(false);
+        }
+    }
+
+    // 消息搜索模式特殊处理
+    if app.mode == app::AppMode::MessageSearch {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc => {
+                app.message_search_state.deactivate();
+                app.mode = app::AppMode::VimNormal;
+                return Ok(false);
+            }
+            KeyCode::Enter => {
+                // Jump to selected result
+                if let Some(result) = app.message_search_state.selected_result() {
+                    app.scroll_offset = result.message_index;
+                }
+                app.message_search_state.deactivate();
+                app.mode = app::AppMode::VimNormal;
+                return Ok(false);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.message_search_state.prev_result();
+                return Ok(false);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.message_search_state.next_result();
+                return Ok(false);
+            }
+            KeyCode::Char('n') => {
+                app.message_search_state.toggle_case_sensitive();
+                // Re-run search
+                let contents: Vec<String> = app.messages.iter().map(|m| m.content.clone()).collect();
+                app.message_search_state.search(&contents);
+                return Ok(false);
+            }
+            KeyCode::Backspace => {
+                app.message_search_state.pop_char();
+                let contents: Vec<String> = app.messages.iter().map(|m| m.content.clone()).collect();
+                app.message_search_state.search(&contents);
+                return Ok(false);
+            }
+            KeyCode::Char(c) => {
+                app.message_search_state.push_char(c);
+                let contents: Vec<String> = app.messages.iter().map(|m| m.content.clone()).collect();
+                app.message_search_state.search(&contents);
+                return Ok(false);
+            }
+            _ => {}
+        }
+        return Ok(false);
     }
 
     // 其他模式统一通过 action_for 分发

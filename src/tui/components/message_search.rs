@@ -1,8 +1,6 @@
 //! 消息搜索组件
 //!
 //! 在对话历史中搜索特定内容
-#![allow(dead_code)]
-
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},

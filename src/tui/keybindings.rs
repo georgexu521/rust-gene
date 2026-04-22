@@ -434,6 +434,9 @@ impl Keybindings {
             crate::tui::app::AppMode::AskUser | crate::tui::app::AppMode::Onboarding => {
                 // AskUser 和 Onboarding 模式的键盘事件在 handle_key_event 中单独处理
             }
+            crate::tui::app::AppMode::MessageSearch => {
+                // MessageSearch 模式的键盘事件在 handle_key_event 中单独处理
+            }
         }
         AppAction::None
     }

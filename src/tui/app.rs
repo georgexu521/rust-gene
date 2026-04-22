@@ -140,6 +140,7 @@ pub enum AppMode {
     DiffViewer,
     VimNormal,
     Onboarding,
+    MessageSearch,
 }
 
 /// TUI 应用状态
@@ -207,6 +208,8 @@ pub struct TuiApp {
     pub diff_title: String,
     /// Diff 查看器滚动偏移
     pub diff_scroll_offset: u16,
+    /// 消息搜索状态
+    pub message_search_state: crate::tui::components::message_search::MessageSearchState,
     /// LSP 管理器
     pub lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     /// Worktree 管理器
@@ -321,6 +324,7 @@ impl TuiApp {
             diff_content: String::new(),
             diff_title: String::new(),
             diff_scroll_offset: 0,
+            message_search_state: crate::tui::components::message_search::MessageSearchState::new(),
             lsp_manager,
             worktree_manager,
             bundled_skills: {
@@ -552,6 +556,8 @@ impl TuiApp {
 
             // 使用 AtomicBool 检测流是否完成（由后台任务设置）
             if self.stream_done.load(Ordering::SeqCst) {
+                // 流式响应完成，发送终端通知
+                crate::tui::notify::send_notification("Priority Agent", "Response ready");
                 self.is_querying = false;
             }
         }
