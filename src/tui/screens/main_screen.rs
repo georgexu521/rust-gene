@@ -27,12 +27,74 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     // 如果有消息，渲染它们
     if app.messages.is_empty() {
-        let empty_text = Paragraph::new("No messages yet. Start typing below!").style(
-            Style::default()
-                .fg(app.theme.text_dim)
-                .add_modifier(Modifier::ITALIC),
-        );
-        f.render_widget(empty_text, inner_area);
+        let welcome_lines = vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "  ██████╗ ██████╗ ██╗ ██████╗ ██████╗ ██╗████████╗██╗   ██╗",
+                Style::default().fg(app.theme.assistant_message),
+            )]),
+            Line::from(vec![Span::styled(
+                "  ██╔══██╗██╔══██╗██║██╔════╝██╔═══██╗██║╚══██╔══╝╚██╗ ██╔╝",
+                Style::default().fg(app.theme.assistant_message),
+            )]),
+            Line::from(vec![Span::styled(
+                "  ██████╔╝██████╔╝██║██║     ██║   ██║██║   ██║    ╚████╔╝ ",
+                Style::default().fg(app.theme.assistant_message),
+            )]),
+            Line::from(vec![Span::styled(
+                "  ██╔═══╝ ██╔══██╗██║██║     ██║   ██║██║   ██║     ╚██╔╝  ",
+                Style::default().fg(app.theme.assistant_message),
+            )]),
+            Line::from(vec![Span::styled(
+                "  ██║     ██║  ██║██║╚██████╗╚██████╔╝██║   ██║      ██║   ",
+                Style::default().fg(app.theme.assistant_message),
+            )]),
+            Line::from(vec![Span::styled(
+                "  ╚═╝     ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═════╝ ╚═╝   ╚═╝      ╚═╝   ",
+                Style::default().fg(app.theme.assistant_message),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "         Welcome to Priority Agent",
+                Style::default()
+                    .fg(app.theme.text_highlight)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "  Type a message below to start chatting with your AI assistant.",
+                Style::default().fg(app.theme.text_dim),
+            )]),
+            Line::from(vec![Span::styled(
+                "  Press ",
+                Style::default().fg(app.theme.text_dim),
+            ), Span::styled(
+                "?",
+                Style::default().fg(app.theme.info).add_modifier(Modifier::BOLD),
+            ), Span::styled(
+                " for keyboard shortcuts, ",
+                Style::default().fg(app.theme.text_dim),
+            ), Span::styled(
+                "/help",
+                Style::default().fg(app.theme.info).add_modifier(Modifier::BOLD),
+            ), Span::styled(
+                " for commands.",
+                Style::default().fg(app.theme.text_dim),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "  Current model: ",
+                Style::default().fg(app.theme.text_dim),
+            ), Span::styled(
+                app.current_model_label(),
+                Style::default().fg(app.theme.info),
+            )]),
+        ];
+        let welcome = Paragraph::new(Text::from(welcome_lines))
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+        f.render_widget(welcome, inner_area);
         return;
     }
 
@@ -167,13 +229,17 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
 
 /// 渲染状态栏
 pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
-    // 分割状态栏为左右两部分
+    // 三分栏状态栏：左(状态) | 中(徽章) | 右(信息)
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Min(15),
+            Constraint::Min(25),
+            Constraint::Min(30),
+        ])
         .split(area);
 
-    // 左侧：状态信息
+    // ── 左侧：状态图标 + 文字 ──
     let spinner_frames = ['⠻', '⠹', '⠹', '⠸', '⠼', '⠴', '⠶', '⠷', '⠷', '⠿'];
     let spinner_idx = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -182,7 +248,7 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         / 100) as usize
         % spinner_frames.len();
 
-    let status_text = if app.is_querying {
+    let left_text = if app.is_querying {
         vec![
             Span::styled(
                 format!("{} ", spinner_frames[spinner_idx]),
@@ -196,87 +262,90 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             Span::styled(error.clone(), Style::default().fg(app.theme.error)),
         ]
     } else {
-        let mut spans = vec![
+        vec![
             Span::styled("✓ ", Style::default().fg(app.theme.success)),
             Span::styled("Ready", Style::default().fg(app.theme.text)),
-        ];
-        if let Some(ref wt) = app.worktree_manager {
-            if let Some(name) = wt.try_active_worktree_name() {
-                spans.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
-                spans.push(Span::styled(
-                    format!("[worktree: {}]", name),
-                    Style::default().fg(app.theme.status_worktree),
-                ));
-            }
-        }
-        spans
+        ]
     };
+    f.render_widget(Paragraph::new(Line::from(left_text)), chunks[0]);
 
-    let status = Paragraph::new(Line::from(status_text));
-    f.render_widget(status, chunks[0]);
-
-    // 右侧：统计和提示
-    let mut right_text = Vec::new();
+    // ── 中间：模式徽章 + 工作树 ──
+    let mut center_text = Vec::new();
     if app.vim_mode {
-        right_text.push(Span::styled(
+        center_text.push(Span::styled(
             "[VIM]",
             Style::default()
                 .fg(app.theme.status_vim)
                 .add_modifier(Modifier::BOLD),
         ));
-        right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
     }
-    if app.is_querying {
-        right_text.push(Span::styled(
-            "Esc: cancel",
-            Style::default().fg(app.theme.text_dim),
+    if app.paused {
+        if !center_text.is_empty() {
+            center_text.push(Span::styled(" ", Style::default()));
+        }
+        center_text.push(Span::styled(
+            "[PAUSED]",
+            Style::default().fg(app.theme.warning).add_modifier(Modifier::BOLD),
         ));
+    }
+    if app.focus_mode {
+        if !center_text.is_empty() {
+            center_text.push(Span::styled(" ", Style::default()));
+        }
+        center_text.push(Span::styled(
+            "[FOCUS]",
+            Style::default().fg(app.theme.info).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(plan_state_label) = app.plan_mode_status_label() {
+        if !center_text.is_empty() {
+            center_text.push(Span::styled(" ", Style::default()));
+        }
+        center_text.push(Span::styled(
+            plan_state_label,
+            Style::default().fg(app.theme.warning).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(ref wt) = app.worktree_manager {
+        if let Some(name) = wt.try_active_worktree_name() {
+            if !center_text.is_empty() {
+                center_text.push(Span::styled(" ", Style::default()));
+            }
+            center_text.push(Span::styled(
+                format!("[wt:{}]", name),
+                Style::default().fg(app.theme.status_worktree),
+            ));
+        }
+    }
+    if center_text.is_empty() {
+        center_text.push(Span::styled("—", Style::default().fg(app.theme.text_dim)));
+    }
+    f.render_widget(
+        Paragraph::new(Line::from(center_text)).alignment(Alignment::Center),
+        chunks[1],
+    );
+
+    // ── 右侧：模型 + 消息数 + 帮助 ──
+    let mut right_text = Vec::new();
+    if app.is_querying {
+        right_text.push(Span::styled("Esc: cancel", Style::default().fg(app.theme.text_dim)));
     } else {
-        if app.paused {
-            right_text.push(Span::styled(
-                "[PAUSED]",
-                Style::default().fg(app.theme.warning).add_modifier(Modifier::BOLD),
-            ));
-            right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
-        }
-        if app.focus_mode {
-            right_text.push(Span::styled(
-                "[FOCUS]",
-                Style::default().fg(app.theme.info).add_modifier(Modifier::BOLD),
-            ));
-            right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
-        }
-        // 显示 Plan Mode 状态
-        if let Some(plan_state_label) = app.plan_mode_status_label() {
-            right_text.push(Span::styled(
-                plan_state_label,
-                Style::default().fg(app.theme.warning).add_modifier(Modifier::BOLD),
-            ));
-            right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
-        }
         right_text.push(Span::styled(
-            format!(
-                "{} / {}",
-                app.current_provider_label(),
-                app.current_model_label()
-            ),
+            format!("{} / {}", app.current_provider_label(), app.current_model_label()),
             Style::default().fg(app.theme.info),
         ));
-        right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
+        right_text.push(Span::styled(" │ ", Style::default().fg(app.theme.border)));
         right_text.push(Span::styled(
             format!("{} msgs", app.message_count()),
             Style::default().fg(app.theme.text_dim),
         ));
-        right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
+        right_text.push(Span::styled(" │ ", Style::default().fg(app.theme.border)));
         right_text.push(Span::styled("/help", Style::default().fg(app.theme.info)));
-        right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
-        right_text.push(Span::styled(
-            "Ctrl+C: quit",
-            Style::default().fg(app.theme.text_dim),
-        ));
     }
-    let stats = Paragraph::new(Line::from(right_text)).alignment(Alignment::Right);
-    f.render_widget(stats, chunks[1]);
+    f.render_widget(
+        Paragraph::new(Line::from(right_text)).alignment(Alignment::Right),
+        chunks[2],
+    );
 }
 
 /// 渲染消息搜索弹窗
