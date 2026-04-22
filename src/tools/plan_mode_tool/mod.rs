@@ -24,7 +24,13 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn description(&self) -> &str {
-        "Enter plan mode to design an implementation approach before coding. In plan mode, focus on exploration and planning."
+        concat!(
+            "Enter plan mode to design an implementation approach before coding. In plan mode, focus on exploration and planning.\n\n",
+            "While in plan mode, if you encounter ambiguous requirements or need to make a design decision ",
+            "where multiple valid options exist, use the `ask_user` tool to ask a clarifying question ",
+            "BEFORE submitting the final plan. Examples of when to ask: uncertain auth method (OAuth vs JWT), ",
+            "UI framework choice, API design approach, naming conventions, or scope boundaries."
+        )
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -37,7 +43,11 @@ impl Tool for EnterPlanModeTool {
     async fn execute(&self, _params: serde_json::Value, _context: ToolContext) -> ToolResult {
         self.manager.enter_plan_mode().await;
         ToolResult::success_with_data(
-            "Entered plan mode. Focus on exploring the codebase and designing an implementation approach. DO NOT write or edit files yet.",
+            concat!(
+                "Entered plan mode. Focus on exploring the codebase and designing an implementation approach. ",
+                "DO NOT write or edit files yet.\n\n",
+                "If you encounter ambiguous requirements, use the `ask_user` tool to ask clarifying questions before submitting the plan."
+            ),
             json!({ "mode": "plan" }),
         )
     }

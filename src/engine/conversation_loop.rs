@@ -900,6 +900,8 @@ pub struct ConversationLoop {
     tool_registry: Arc<ToolRegistry>,
     cost_tracker: Arc<Mutex<crate::cost_tracker::CostTracker>>,
     model: String,
+    /// 会话 ID（固定，用于追踪 checkpoint、记忆等）
+    session_id: String,
     max_iterations: usize,
     agent_manager: Option<Arc<crate::agent::AgentManager>>,
     mcp_manager: Option<Arc<crate::engine::mcp::McpManager>>,
@@ -920,6 +922,8 @@ pub struct ConversationLoop {
     allowed_tools: Option<HashSet<String>>,
     /// 本轮是否已触发过 Workflow（每轮最多一次）
     workflow_triggered_this_turn: std::sync::atomic::AtomicBool,
+    /// Workflow 策略（默认从环境变量读取，可覆盖）
+    workflow_policy: WorkflowPolicy,
 }
 
 /// 对话循环结果
@@ -957,6 +961,8 @@ impl ConversationLoop {
             approval_channel: None,
             allowed_tools: None,
             workflow_triggered_this_turn: std::sync::atomic::AtomicBool::new(false),
+            workflow_policy: WorkflowPolicy::from_env(),
+            session_id: format!("session-{}", uuid::Uuid::new_v4()),
         }
     }
 
@@ -1031,9 +1037,14 @@ impl ConversationLoop {
         self
     }
 
+    pub fn with_workflow_policy(mut self, policy: WorkflowPolicy) -> Self {
+        self.workflow_policy = policy;
+        self
+    }
+
     /// 创建工具执行上下文
     fn create_tool_context(&self) -> ToolContext {
-        let mut ctx = ToolContext::new(".", format!("session-{}", uuid::Uuid::new_v4()));
+        let mut ctx = ToolContext::new(".", self.session_id.clone());
         if let Some(ref manager) = self.agent_manager {
             ctx = ctx.with_agent_manager(manager.clone());
         }
@@ -1090,7 +1101,7 @@ impl ConversationLoop {
                     _ => None,
                 })
             {
-                let workflow_policy = WorkflowPolicy::from_env();
+                let workflow_policy = self.workflow_policy.clone();
                 let gate = Gate::new().with_policy(workflow_policy.gate.clone());
                 if is_drift_interruption_signal(last_user_msg) {
                     crate::engine::workflow::metrics::record_drift_interruption();
@@ -2427,7 +2438,14 @@ mod tests {
             "mock-model".to_string(),
         )
         .with_permission_mode(crate::permissions::PermissionMode::AutoAll)
-        .with_max_iterations(4);
+        .with_max_iterations(4)
+        .with_workflow_policy(WorkflowPolicy {
+            gate: crate::engine::workflow::GatePolicy {
+                workflow_enabled: false,
+                llm_classifier_enabled: false,
+            },
+            ..WorkflowPolicy::default()
+        });
 
         let run1 = loop_engine
             .run(vec![
@@ -2512,7 +2530,14 @@ mod tests {
             "mock-model".to_string(),
         )
         .with_permission_mode(crate::permissions::PermissionMode::AutoAll)
-        .with_max_iterations(3);
+        .with_max_iterations(3)
+        .with_workflow_policy(WorkflowPolicy {
+            gate: crate::engine::workflow::GatePolicy {
+                workflow_enabled: false,
+                llm_classifier_enabled: false,
+            },
+            ..WorkflowPolicy::default()
+        });
 
         let run = loop_engine
             .run(vec![

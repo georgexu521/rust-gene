@@ -31,6 +31,7 @@ const BUNDLED_SKILLS: &[(&str, &str)] = &[
     ("dream", include_str!("bundled/dream.md")),
     ("custom", include_str!("bundled/custom.md")),
     ("orchestrate", include_str!("bundled/orchestrate.md")),
+    ("batch", include_str!("bundled/batch.md")),
 ];
 
 /// 加载所有 bundled skills

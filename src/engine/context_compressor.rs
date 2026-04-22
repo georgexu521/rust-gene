@@ -12,6 +12,110 @@ use crate::services::api::Message;
 #[cfg(test)]
 use crate::services::api::ToolCall;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
+
+// ── Compact Boundary 元数据 ───────────────────────────────
+
+/// 压缩边界元数据（对标 Claude Code 的 compact_boundary）
+/// 嵌入在压缩后的摘要消息内容中，用于：
+/// 1. 标识压缩发生的位置
+/// 2. 记录被保留的尾部消息 UUID（用于恢复）
+/// 3. 追踪压缩历史
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompactMetadata {
+    /// 压缩序列号（单调递增）
+    pub sequence: u32,
+    /// 压缩边界唯一 ID
+    pub boundary_id: String,
+    /// 被保留的尾部消息数量
+    pub preserved_tail_count: usize,
+    /// 压缩前的消息总数
+    pub messages_before: usize,
+    /// 压缩后的消息总数
+    pub messages_after: usize,
+    /// 压缩前的 token 数
+    pub tokens_before: u64,
+    /// 压缩后的 token 数
+    pub tokens_after: u64,
+    /// 压缩时间戳
+    pub timestamp: String,
+}
+
+impl CompactMetadata {
+    /// 生成 compact boundary 标记文本（嵌入到消息内容中）
+    pub fn to_boundary_marker(&self) -> String {
+        format!(
+            "\n[COMPACT_BOUNDARY seq={} id={} preserved={} before_msgs={} after_msgs={} before_tokens={} after_tokens={} timestamp={}]",
+            self.sequence,
+            self.boundary_id,
+            self.preserved_tail_count,
+            self.messages_before,
+            self.messages_after,
+            self.tokens_before,
+            self.tokens_after,
+            self.timestamp
+        )
+    }
+
+    /// 从消息内容中解析 compact boundary 标记
+    pub fn parse_from_text(text: &str) -> Option<(Self, String)> {
+        let marker_start = text.find("[COMPACT_BOUNDARY")?;
+        let marker_end = text[marker_start..].find(']')? + marker_start + 1;
+        let marker = &text[marker_start..marker_end];
+        let clean_text = format!("{}{}", &text[..marker_start], &text[marker_end..]);
+
+        // 简单解析关键字段
+        let mut seq = 0u32;
+        let mut id = String::new();
+        let mut preserved = 0usize;
+        let mut before_msgs = 0usize;
+        let mut after_msgs = 0usize;
+        let mut before_tok = 0u64;
+        let mut after_tok = 0u64;
+        let mut timestamp = String::new();
+
+        for part in marker.split_whitespace() {
+            if let Some((k, v)) = part.split_once('=') {
+                match k {
+                    "seq" => seq = v.parse().unwrap_or(0),
+                    "id" => id = v.to_string(),
+                    "preserved" => preserved = v.parse().unwrap_or(0),
+                    "before_msgs" => before_msgs = v.parse().unwrap_or(0),
+                    "after_msgs" => after_msgs = v.parse().unwrap_or(0),
+                    "before_tokens" => before_tok = v.parse().unwrap_or(0),
+                    "after_tokens" => after_tok = v.parse().unwrap_or(0),
+                    "timestamp" => timestamp = v.to_string(),
+                    _ => {}
+                }
+            }
+        }
+
+        Some((Self {
+            sequence: seq,
+            boundary_id: id,
+            preserved_tail_count: preserved,
+            messages_before: before_msgs,
+            messages_after: after_msgs,
+            tokens_before: before_tok,
+            tokens_after: after_tok,
+            timestamp,
+        }, clean_text))
+    }
+}
+
+/// 从消息列表中提取所有 compact boundary 元数据
+pub fn extract_compact_boundaries(messages: &[Message]) -> Vec<CompactMetadata> {
+    let mut result = Vec::new();
+    for msg in messages {
+        let text = msg.content();
+        if text.contains("[COMPACT_BOUNDARY") {
+            if let Some((meta, _)) = CompactMetadata::parse_from_text(&text) {
+                result.push(meta);
+            }
+        }
+    }
+    result
+}
 
 // ── 摘要模板 ──────────────────────────────────────────────
 
@@ -51,6 +155,103 @@ already completed, and the current session state may still reflect \
 that work (for example, files may already be changed). Use the summary \
 and the current state to continue from where things left off, and \
 avoid repeating work:";
+
+/// 会话记忆压缩策略（对标 Claude Code 的 sessionMemoryCompact）
+///
+/// 基于会话历史的智能压缩：
+/// 1. 识别高频出现的文件/工具/模式，保留到 Critical Context
+/// 2. 自动提取用户偏好（从记忆系统）
+/// 3. 识别并保留未完成的任务链
+#[derive(Debug, Clone, Default)]
+pub struct SessionMemoryCompact {
+    /// 从会话中提取的关键文件（出现频率高的）
+    pub hot_files: Vec<String>,
+    /// 用户偏好记忆（从 MemoryManager 注入）
+    pub user_preferences: Vec<String>,
+    /// 未完成的任务链
+    pub pending_tasks: Vec<String>,
+    /// 高频使用的工具模式
+    pub tool_patterns: Vec<String>,
+}
+
+impl SessionMemoryCompact {
+    /// 从消息历史中分析并提取会话记忆
+    pub fn analyze(messages: &[Message]) -> Self {
+        use std::collections::HashMap;
+
+        let mut file_counts: HashMap<String, usize> = HashMap::new();
+        let mut tool_counts: HashMap<String, usize> = HashMap::new();
+        let mut pending: Vec<String> = Vec::new();
+
+        for msg in messages {
+            let text = msg.content();
+
+            // 提取文件路径（简单启发式）
+            for word in text.split_whitespace() {
+                if word.contains('.') && (word.contains('/') || word.contains("\\")) {
+                    *file_counts.entry(word.to_string()).or_insert(0) += 1;
+                }
+            }
+
+            // 提取工具使用模式
+            if text.contains("Tool: ") || text.contains("tool_call") {
+                for line in text.lines() {
+                    if let Some(tool) = line.strip_prefix("Tool: ") {
+                        *tool_counts.entry(tool.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+
+            // 提取未完成任务（TODO/FIXME/ pending）
+            let lower = text.to_lowercase();
+            if lower.contains("todo") || lower.contains("fixme") || lower.contains("pending") {
+                for line in text.lines() {
+                    let ll = line.to_lowercase();
+                    if ll.contains("todo") || ll.contains("fixme") || ll.contains("pending") {
+                        pending.push(line.trim().to_string());
+                    }
+                }
+            }
+        }
+
+        // 取出现频率最高的文件（top 5）
+        let mut hot_files: Vec<(String, usize)> = file_counts.into_iter().collect();
+        hot_files.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // 取出现频率最高的工具模式（top 3）
+        let mut tool_patterns: Vec<(String, usize)> = tool_counts.into_iter().collect();
+        tool_patterns.sort_by(|a, b| b.1.cmp(&a.1));
+
+        Self {
+            hot_files: hot_files.into_iter().take(5).map(|(f, _)| f).collect(),
+            user_preferences: Vec::new(), // 由外部注入
+            pending_tasks: pending.into_iter().take(10).collect(),
+            tool_patterns: tool_patterns.into_iter().take(3).map(|(t, _)| t).collect(),
+        }
+    }
+
+    /// 将会话记忆注入到摘要文本中
+    pub fn inject_into_summary(&self, summary: &mut String) {
+        if !self.hot_files.is_empty() {
+            summary.push_str("\n\n## Frequently Accessed Files\n");
+            for f in &self.hot_files {
+                summary.push_str(&format!("- {}\n", f));
+            }
+        }
+        if !self.pending_tasks.is_empty() {
+            summary.push_str("\n## Pending Tasks\n");
+            for t in &self.pending_tasks {
+                summary.push_str(&format!("- {}\n", t));
+            }
+        }
+        if !self.tool_patterns.is_empty() {
+            summary.push_str("\n## Common Tool Patterns\n");
+            for p in &self.tool_patterns {
+                summary.push_str(&format!("- {}\n", p));
+            }
+        }
+    }
+}
 
 /// 给 LLM 的压缩 prompt 模板
 pub const COMPRESSION_PROMPT_TEMPLATE: &str = "\
@@ -599,6 +800,10 @@ pub struct ContextCompressor {
     consecutive_llm_failures: u32,
     /// 连续失败熔断阈值
     max_consecutive_llm_failures: u32,
+    /// Compact Boundary 序列号（单调递增）
+    compact_sequence: u32,
+    /// Compact Boundary 历史（用于追踪和恢复）
+    compact_metadata_history: Vec<CompactMetadata>,
 }
 
 impl ContextCompressor {
@@ -619,6 +824,8 @@ impl ContextCompressor {
             llm_compression_failures: 0,
             consecutive_llm_failures: 0,
             max_consecutive_llm_failures: 3,
+            compact_sequence: 0,
+            compact_metadata_history: Vec::new(),
         }
     }
 
@@ -839,8 +1046,25 @@ impl ContextCompressor {
         // Phase 4: 组装结果
         let mut result = head.to_vec();
 
+        // 生成 Compact Boundary 元数据（在 summary 组装前准备）
+        let compact_meta = if !summary_text.is_empty() {
+            self.compact_sequence += 1;
+            Some(CompactMetadata {
+                sequence: self.compact_sequence,
+                boundary_id: format!("cb-{}", Uuid::new_v4().simple()),
+                preserved_tail_count: tail.len(),
+                messages_before: messages.len(),
+                messages_after: head.len() + tail.len() + 1, // +1 for summary
+                tokens_before: estimate_messages_tokens(&messages),
+                tokens_after: 0, // 将在后面更新
+                timestamp: chrono::Local::now().to_rfc3339(),
+            })
+        } else {
+            None
+        };
+
         if !summary_text.is_empty() {
-            let formatted_summary = if self.compression_count > 0 {
+            let mut formatted_summary = if self.compression_count > 0 {
                 format!(
                     "{}\n（上下文已压缩 {} 次，保留累积知识）\n\n{}",
                     SUMMARY_PREFIX,
@@ -850,6 +1074,11 @@ impl ContextCompressor {
             } else {
                 format!("{}\n\n{}", SUMMARY_PREFIX, summary_text)
             };
+
+            // 嵌入 Compact Boundary 标记
+            if let Some(ref meta) = compact_meta {
+                formatted_summary.push_str(&meta.to_boundary_marker());
+            }
 
             // ── 消息角色交替（Hermes 风格）──
             // OpenAI API 要求消息角色交替，不能连续两个相同角色
@@ -931,9 +1160,15 @@ impl ContextCompressor {
         // Phase 5: 校验工具调用对完整性（移除孤立 tool result + 插入 stub）
         let result = Self::sanitize_tool_pairs(result);
 
+        // 更新 compact metadata 的 tokens_after 并保存到历史
+        if let Some(mut meta) = compact_meta {
+            meta.tokens_after = estimate_messages_tokens(&result);
+            self.compact_metadata_history.push(meta);
+        }
+
         self.compression_count += 1;
 
-        info!("Compressed to {} messages", result.len());
+        info!("Compressed to {} messages (compact_boundary #{})", result.len(), self.compact_sequence);
         result
     }
 
@@ -2183,5 +2418,126 @@ mod tests {
         // With small window, even few messages might approach limit
         let warning = compressor.warning_level(&low_messages);
         assert!(matches!(warning, CompressionWarning::None | CompressionWarning::Approaching));
+    }
+
+    #[test]
+    fn test_compact_boundary_marker() {
+        let meta = CompactMetadata {
+            sequence: 1,
+            boundary_id: "cb-test-123".to_string(),
+            preserved_tail_count: 3,
+            messages_before: 20,
+            messages_after: 5,
+            tokens_before: 8000,
+            tokens_after: 3000,
+            timestamp: "2026-04-23T10:00:00+08:00".to_string(),
+        };
+
+        let marker = meta.to_boundary_marker();
+        assert!(marker.contains("COMPACT_BOUNDARY"));
+        assert!(marker.contains("seq=1"));
+        assert!(marker.contains("id=cb-test-123"));
+
+        // Parse it back
+        let (parsed, clean) = CompactMetadata::parse_from_text(&format!("Summary text{}", marker)).unwrap();
+        assert_eq!(parsed.sequence, 1);
+        assert_eq!(parsed.boundary_id, "cb-test-123");
+        assert_eq!(parsed.preserved_tail_count, 3);
+        assert_eq!(parsed.messages_before, 20);
+        assert_eq!(parsed.tokens_before, 8000);
+        assert!(clean.starts_with("Summary text"));
+    }
+
+    #[test]
+    fn test_compact_boundary_embedded_in_compression() {
+        let mut compressor = ContextCompressor::new(2000);
+
+        let messages = vec![
+            Message::system("You are a helpful assistant."),
+            Message::user("Task 1: do something"),
+            Message::assistant("Done with task 1.".to_string()),
+            Message::user("Task 2: do more"),
+            Message::assistant("Done with task 2.".to_string()),
+            Message::user("Task 3: do even more"),
+            Message::assistant("Done with task 3.".to_string()),
+            Message::user("Task 4: final task"),
+        ];
+
+        let compressed = compressor.compress(&messages);
+
+        // 应该有 compact boundary 被嵌入
+        let boundaries = extract_compact_boundaries(&compressed);
+        assert_eq!(boundaries.len(), 1, "Should have one compact boundary");
+        assert_eq!(boundaries[0].sequence, 1);
+        assert!(boundaries[0].messages_before > 0);
+        assert!(boundaries[0].tokens_before > 0);
+
+        // compressor 应该记录了历史
+        assert_eq!(compressor.compact_metadata_history.len(), 1);
+    }
+
+    #[test]
+    fn test_session_memory_compact_analyze() {
+        let messages = vec![
+            Message::system("System prompt"),
+            Message::user("Read src/main.rs and src/lib.rs"),
+            Message::assistant("I read src/main.rs and src/lib.rs"),
+            Message::tool("call_1", "Content of src/main.rs"),
+            Message::user("Now read src/config.rs"),
+            Message::assistant("I read src/config.rs and src/main.rs again"),
+            Message::user("TODO: fix the bug in src/main.rs"),
+        ];
+
+        let smc = SessionMemoryCompact::analyze(&messages);
+
+        // hot_files 应该包含出现频率高的文件
+        assert!(!smc.hot_files.is_empty(), "Should detect hot files");
+        assert!(smc.hot_files.iter().any(|f| f.contains("src/main.rs")), "Should detect main.rs");
+
+        // pending_tasks 应该包含 TODO
+        assert!(!smc.pending_tasks.is_empty(), "Should detect pending tasks");
+        assert!(smc.pending_tasks.iter().any(|t| t.contains("TODO")), "Should detect TODO");
+    }
+
+    #[test]
+    fn test_session_memory_compact_inject() {
+        let smc = SessionMemoryCompact {
+            hot_files: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
+            user_preferences: vec![],
+            pending_tasks: vec!["TODO: fix bug".to_string()],
+            tool_patterns: vec!["file_read".to_string()],
+        };
+
+        let mut summary = "Summary text".to_string();
+        smc.inject_into_summary(&mut summary);
+
+        assert!(summary.contains("Frequently Accessed Files"));
+        assert!(summary.contains("src/main.rs"));
+        assert!(summary.contains("Pending Tasks"));
+        assert!(summary.contains("TODO: fix bug"));
+        assert!(summary.contains("Common Tool Patterns"));
+        assert!(summary.contains("file_read"));
+    }
+
+    #[test]
+    fn test_extract_compact_boundaries_from_messages() {
+        let msg1 = Message::system("Normal system message");
+        let msg2 = Message::user(format!("User message with boundary{}\nmore text",
+            CompactMetadata {
+                sequence: 2,
+                boundary_id: "cb-abc".to_string(),
+                preserved_tail_count: 2,
+                messages_before: 10,
+                messages_after: 3,
+                tokens_before: 5000,
+                tokens_after: 2000,
+                timestamp: "2026-04-23T10:00:00+08:00".to_string(),
+            }.to_boundary_marker()
+        ));
+
+        let boundaries = extract_compact_boundaries(&[msg1, msg2]);
+        assert_eq!(boundaries.len(), 1);
+        assert_eq!(boundaries[0].sequence, 2);
+        assert_eq!(boundaries[0].boundary_id, "cb-abc");
     }
 }

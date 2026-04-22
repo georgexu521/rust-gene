@@ -24,6 +24,8 @@ pub enum PlanModeState {
     Off,
     /// 正在生成计划
     Generating,
+    /// 正在向用户澄清需求（交互式提问中）
+    Clarifying { question: String },
     /// 等待用户审批
     WaitingApproval,
     /// 正在执行计划
@@ -385,6 +387,22 @@ impl PlanModeManager {
         *plan = None;
         info!("Exited plan mode (rejected={})", rejected);
     }
+
+    /// 开始澄清提问
+    pub async fn start_clarifying(&self, question: &str) {
+        let mut state = self.state.lock().await;
+        *state = PlanModeState::Clarifying {
+            question: question.to_string(),
+        };
+        info!("Started clarifying question: {}", question);
+    }
+
+    /// 完成澄清提问，回到生成计划状态
+    pub async fn finish_clarifying(&self) {
+        let mut state = self.state.lock().await;
+        *state = PlanModeState::Generating;
+        info!("Finished clarifying, back to generating");
+    }
 }
 
 impl Default for PlanModeManager {
@@ -414,7 +432,13 @@ impl Tool for PlanTool {
     }
 
     fn description(&self) -> &str {
-        "Create an execution plan for the current task. Use this when the task is complex and needs step-by-step planning before execution. The plan will be shown to the user for approval."
+        concat!(
+            "Create an execution plan for the current task. Use this when the task is complex and needs step-by-step planning before execution. The plan will be shown to the user for approval.\n\n",
+            "IMPORTANT: Before submitting a plan, ensure you have clarified all ambiguous requirements. ",
+            "If you are unsure about any aspect (e.g., auth method, UI framework, API choice, file naming convention), ",
+            "use the `ask_user` tool FIRST to ask the user a clarifying question. ",
+            "Only submit the plan after the user's response resolves the ambiguity."
+        )
     }
 
     fn parameters(&self) -> serde_json::Value {

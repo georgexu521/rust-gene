@@ -219,6 +219,8 @@ pub struct TuiApp {
     pub theme: crate::tui::theme::Theme,
     /// 引导状态
     pub onboarding_state: Option<crate::onboarding::OnboardingState>,
+    /// Plan Mode 状态标签缓存（用于状态栏显示，避免渲染时异步查询）
+    pub plan_mode_label: Option<String>,
 }
 
 impl TuiApp {
@@ -308,6 +310,7 @@ impl TuiApp {
             pending_plan: None,
             plan_response_tx: None,
             plan_modification_input: String::new(),
+            plan_mode_label: None,
             pending_permission_request: None,
             permission_response_tx: None,
             pending_question: None,
@@ -564,6 +567,33 @@ impl TuiApp {
         if self.mode == AppMode::Chat && self.pending_question.is_none() {
             self.check_pending_question().await;
         }
+
+        // 更新 Plan Mode 状态标签缓存
+        self.update_plan_mode_label().await;
+    }
+
+    /// 异步更新 Plan Mode 状态标签缓存
+    async fn update_plan_mode_label(&mut self) {
+        let plan_manager = &crate::engine::plan_mode::GLOBAL_PLAN_MANAGER;
+        let state = plan_manager.get_state().await;
+        self.plan_mode_label = match state {
+            crate::engine::plan_mode::PlanModeState::Off => None,
+            crate::engine::plan_mode::PlanModeState::Generating => Some("[PLAN: generating]".to_string()),
+            crate::engine::plan_mode::PlanModeState::Clarifying { ref question } => {
+                let q = if question.len() > 20 {
+                    format!("{}...", &question[..20])
+                } else {
+                    question.clone()
+                };
+                Some(format!("[PLAN: clarifying \"{}\"]", q))
+            }
+            crate::engine::plan_mode::PlanModeState::WaitingApproval => Some("[PLAN: awaiting approval]".to_string()),
+            crate::engine::plan_mode::PlanModeState::Executing { current_step } => {
+                Some(format!("[PLAN: step {}]", current_step + 1))
+            }
+            crate::engine::plan_mode::PlanModeState::Completed => Some("[PLAN: done]".to_string()),
+            crate::engine::plan_mode::PlanModeState::Rejected => None,
+        };
     }
 
     /// 检查是否有待审批的计划
@@ -590,6 +620,11 @@ impl TuiApp {
         self.pending_plan = None;
         self.plan_modification_input.clear();
         self.mode = AppMode::Chat;
+    }
+
+    /// 获取 Plan Mode 状态标签（用于状态栏显示，返回缓存值）
+    pub fn plan_mode_status_label(&self) -> Option<String> {
+        self.plan_mode_label.clone()
     }
 
     /// 检查是否有待审批的工具权限请求
@@ -920,6 +955,9 @@ impl TuiApp {
             "/sessions" => slash::handle_sessions(self),
             "/new" => slash::handle_new(self).await,
             "/stats" => slash::handle_stats(self),
+            "/checkpoints" => slash::handle_checkpoints(self).await,
+            "/restore" | "/r" => slash::handle_restore(self, args).await,
+            "/batch" => slash::handle_batch(self, args).await,
             "/settings" => {
                 let config = crate::services::config::AppConfig::load().unwrap_or_default();
                 self.settings_state = Some(crate::tui::components::settings::SettingsState::new(

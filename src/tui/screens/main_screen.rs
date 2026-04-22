@@ -235,6 +235,14 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             ));
             right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
         }
+        // 显示 Plan Mode 状态
+        if let Some(plan_state_label) = app.plan_mode_status_label() {
+            right_text.push(Span::styled(
+                plan_state_label,
+                Style::default().fg(app.theme.warning).add_modifier(Modifier::BOLD),
+            ));
+            right_text.push(Span::styled(" | ", Style::default().fg(app.theme.border)));
+        }
         right_text.push(Span::styled(
             format!(
                 "{} / {}",
