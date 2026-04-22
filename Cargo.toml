@@ -159,6 +159,8 @@ tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-python = { workspace = true }
+md5 = "0.7"
+diffy = "0.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }

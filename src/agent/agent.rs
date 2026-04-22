@@ -76,7 +76,19 @@ impl AgentConfig {
 
     pub fn with_role(mut self, role: AgentRole) -> Self {
         self.role = role;
+        // 自动从角色设置系统提示词前缀（如果当前是默认提示词）
+        if self.system_prompt == "You are a helpful assistant." {
+            self.system_prompt = role.system_prompt_prefix().to_string();
+        } else {
+            // 否则将角色前缀追加到现有提示词
+            self.system_prompt = format!("{}\n\n{}", role.system_prompt_prefix(), self.system_prompt);
+        }
         self
+    }
+
+    /// 从角色名构建配置
+    pub fn from_role(role: AgentRole) -> Self {
+        Self::new(role.display_name()).with_role(role)
     }
 
     pub fn with_max_turns(mut self, max_turns: usize) -> Self {

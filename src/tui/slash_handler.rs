@@ -260,6 +260,155 @@ pub fn handle_stats(app: &TuiApp) -> String {
     }
 }
 
+pub async fn handle_batch(_app: &mut TuiApp, args: &str) -> String {
+    if args.trim().is_empty() {
+        return "Usage: /batch <task description> [--files <patterns>...]\n\
+                Example: /batch Rename all User references to Account --files src/**/*.rs\n\
+                Set PRIORITY_AGENT_BATCH_REFACTOR=1 to enable.".to_string();
+    }
+
+    // 解析参数
+    let parts: Vec<&str> = args.split(" --files ").collect();
+    let description = parts[0].trim();
+    let files = if parts.len() > 1 {
+        parts[1].split_whitespace().map(|s| s.to_string()).collect()
+    } else {
+        Vec::new()
+    };
+
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let batch = crate::engine::batch_refactor::BatchRefactor::new(working_dir);
+
+    if !batch.is_enabled() {
+        return "Batch refactor is not enabled.\n\
+                Set environment variable: PRIORITY_AGENT_BATCH_REFACTOR=1\n\
+                Optional: PRIORITY_AGENT_BATCH_MAX_PARALLEL=10".to_string();
+    }
+
+    // 如果没有指定文件，尝试自动发现
+    let files = if files.is_empty() {
+        let mut scanner = crate::tools::project_tool::ProjectScanner::new();
+        scanner.scan(std::path::Path::new("."));
+        let files: Vec<String> = scanner.files().iter().take(50).cloned().collect();
+        if files.is_empty() {
+            return "No files specified and auto-discovery found none.".to_string();
+        }
+        files
+    } else {
+        files
+    };
+
+    match batch.execute(description, files).await {
+        Ok(result) => {
+            let mut lines = vec![
+                format!("## Batch Refactor Result: {:?}", result.status),
+                format!("Units: {} | Duration: {}ms", result.units.len(), result.total_duration_ms),
+                String::new(),
+            ];
+
+            let success_count = result.units.iter().filter(|u| u.success).count();
+            let fail_count = result.units.len() - success_count;
+            lines.push(format!("✅ Success: {} | ❌ Failed: {}", success_count, fail_count));
+
+            for unit in &result.units {
+                let icon = if unit.success { "✅" } else { "❌" };
+                lines.push(format!("{} {} ({}ms)", icon, unit.unit_id, unit.duration_ms));
+                if !unit.output.is_empty() {
+                    for line in unit.output.lines().take(5) {
+                        lines.push(format!("   {}", line));
+                    }
+                }
+            }
+
+            lines.join("\n")
+        }
+        Err(e) => format!("Batch refactor failed: {}", e),
+    }
+}
+
+pub async fn handle_checkpoints(app: &TuiApp) -> String {
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => format!("session-{}", id),
+        None => return "No active session. Start a conversation first.".to_string(),
+    };
+
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+    let cp = mgr.lock().await;
+    let checkpoints = cp.list_checkpoints();
+    let stats = cp.stats();
+
+    if checkpoints.is_empty() {
+        return "No checkpoints for this session yet.\nCheckpoints are created automatically before file edits.".to_string();
+    }
+
+    let mut lines = vec![
+        format!("Checkpoints for session (total: {}, files tracked: {})",
+            stats.total_checkpoints, stats.total_files_tracked),
+        String::new(),
+    ];
+
+    for c in checkpoints.iter().rev().take(20) {
+        let files: Vec<String> = c.file_backups.iter()
+            .map(|f| format!("{} {}", if f.existed_before { "📝" } else { "🆕" }, f.original_path))
+            .collect();
+        lines.push(format!(
+            "[{}] {} ({} files)\n  tool: {} | {}",
+            c.sequence,
+            c.id.split('_').last().unwrap_or(&c.id),
+            c.file_backups.len(),
+            c.tool_name,
+            files.join(", ")
+        ));
+    }
+
+    if checkpoints.len() > 20 {
+        lines.push(format!("\n... and {} more checkpoints", checkpoints.len() - 20));
+    }
+
+    lines.join("\n")
+}
+
+pub async fn handle_restore(app: &mut TuiApp, args: &str) -> String {
+    if args.trim().is_empty() {
+        return "Usage: /restore <checkpoint_id>\nUse /checkpoints to list available checkpoints.".to_string();
+    }
+
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => format!("session-{}", id),
+        None => return "No active session.".to_string(),
+    };
+
+    let checkpoint_id = args.trim();
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+    let cp = mgr.lock().await;
+
+    match cp.restore_checkpoint(checkpoint_id).await {
+        Ok(result) => {
+            let mut lines = vec![format!("Restored checkpoint: {}", result.checkpoint_id)];
+            if !result.restored_files.is_empty() {
+                lines.push(format!("\nRestored {} file(s):", result.restored_files.len()));
+                for f in &result.restored_files {
+                    lines.push(format!("  ✅ {}", f));
+                }
+            }
+            if !result.removed_files.is_empty() {
+                lines.push(format!("\nRemoved {} file(s) (did not exist before checkpoint):", result.removed_files.len()));
+                for f in &result.removed_files {
+                    lines.push(format!("  🗑️  {}", f));
+                }
+            }
+            if !result.failed_files.is_empty() {
+                lines.push(format!("\nFailed to restore {} file(s):", result.failed_files.len()));
+                for (f, e) in &result.failed_files {
+                    lines.push(format!("  ❌ {} — {}", f, e));
+                }
+            }
+            lines.join("\n")
+        }
+        Err(e) => format!("Failed to restore checkpoint: {}", e),
+    }
+}
+
 // ─── System & Tools ───────────────────────────────────────────────────
 
 pub fn handle_status(app: &TuiApp) -> String {

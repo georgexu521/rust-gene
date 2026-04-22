@@ -270,6 +270,30 @@ pub const CMD_AGENTS: CommandDef = CommandDef::new(
     "List active/known agents and status",
 );
 
+pub const CMD_CHECKPOINTS: CommandDef = CommandDef::new(
+    "/checkpoints",
+    &[],
+    "Info",
+    "/checkpoints",
+    "List file checkpoints (snapshots) for this session",
+);
+
+pub const CMD_RESTORE: CommandDef = CommandDef::new(
+    "/restore",
+    &["/r"],
+    "Action",
+    "/restore <checkpoint_id>",
+    "Restore files to a checkpoint state",
+);
+
+pub const CMD_BATCH: CommandDef = CommandDef::new(
+    "/batch",
+    &[],
+    "Action",
+    "/batch <description> --files <patterns...>",
+    "Run batch refactoring across multiple files in parallel",
+);
+
 pub const CMD_DOCTOR: CommandDef = CommandDef::new(
     "/doctor",
     &[],
@@ -1115,6 +1139,9 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_TOOLS);
     registry.register(&CMD_TASKS);
     registry.register(&CMD_AGENTS);
+    registry.register(&CMD_CHECKPOINTS);
+    registry.register(&CMD_RESTORE);
+    registry.register(&CMD_BATCH);
     registry.register(&CMD_DOCTOR);
     registry.register(&CMD_AUDIT);
     registry.register(&CMD_PERMISSIONS);
@@ -1249,6 +1276,9 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_TOOLS,
     &CMD_TASKS,
     &CMD_AGENTS,
+    &CMD_CHECKPOINTS,
+    &CMD_RESTORE,
+    &CMD_BATCH,
     &CMD_DOCTOR,
     &CMD_AUDIT,
     &CMD_PERMISSIONS,

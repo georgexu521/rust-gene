@@ -423,6 +423,8 @@ pub struct ToolContext {
     pub file_cache: Option<std::sync::Arc<crate::tools::file_cache::FileStateCache>>,
     /// 诊断跟踪器（用于 diagnostic tracking 功能）
     pub diagnostic_tracker: Option<std::sync::Arc<crate::engine::DiagnosticTracker>>,
+    /// Checkpoint 管理器（文件修改快照）
+    pub checkpoint_manager: Option<std::sync::Arc<tokio::sync::Mutex<crate::engine::checkpoint::CheckpointManager>>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -484,6 +486,7 @@ impl ToolContext {
             cost_tracker: None,
             file_cache: None,
             diagnostic_tracker: None,
+            checkpoint_manager: None,
         }
     }
 
@@ -577,6 +580,15 @@ impl ToolContext {
         tracker: std::sync::Arc<crate::engine::DiagnosticTracker>,
     ) -> Self {
         self.diagnostic_tracker = Some(tracker);
+        self
+    }
+
+    /// 设置 Checkpoint 管理器
+    pub fn with_checkpoint_manager(
+        mut self,
+        manager: std::sync::Arc<tokio::sync::Mutex<crate::engine::checkpoint::CheckpointManager>>,
+    ) -> Self {
+        self.checkpoint_manager = Some(manager);
         self
     }
 }

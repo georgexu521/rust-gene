@@ -42,6 +42,19 @@ pub struct AgentMemory {
     snapshots: Arc<RwLock<Vec<MemorySnapshot>>>,
 }
 
+/// 角色记忆存储路径
+pub fn role_memory_dir() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".priority-agent")
+        .join("agent_memories")
+}
+
+/// 角色记忆文件路径
+pub fn role_memory_path(role_name: &str) -> std::path::PathBuf {
+    role_memory_dir().join(format!("{}.json", role_name))
+}
+
 impl AgentMemory {
     /// 创建新的 Agent 记忆
     pub fn new(agent_id: String) -> Self {
@@ -50,6 +63,25 @@ impl AgentMemory {
             entries: Arc::new(RwLock::new(HashMap::new())),
             snapshots: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    /// 按角色保存记忆到标准路径
+    pub async fn save_to_role_file(&self, role_name: &str) -> Result<(), String> {
+        let dir = role_memory_dir();
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            return Err(format!("Failed to create role memory dir: {}", e));
+        }
+        let path = role_memory_path(role_name);
+        self.save_to_file(&path).await
+    }
+
+    /// 从角色文件加载记忆
+    pub async fn load_from_role_file(&self, role_name: &str) -> Result<(), String> {
+        let path = role_memory_path(role_name);
+        if !path.exists() {
+            return Ok(()); // 文件不存在视为空记忆
+        }
+        self.load_from_file(&path).await
     }
 
     /// 保存记忆
@@ -314,6 +346,101 @@ pub fn global_memory_manager() -> &'static MemoryManager {
     &MEMORY_MANAGER
 }
 
+/// 角色记忆存储
+///
+/// 为每种 Agent 角色提供独立的持久化记忆存储。
+/// 对标 Claude Code 的 agentMemory.ts：每个内置角色有自己的记忆文件。
+#[derive(Debug, Clone)]
+pub struct RoleMemoryStore {
+    /// 角色名 -> AgentMemory
+    memories: Arc<RwLock<HashMap<String, AgentMemory>>>,
+}
+
+impl RoleMemoryStore {
+    pub fn new() -> Self {
+        Self {
+            memories: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// 获取或创建角色的记忆（自动从磁盘加载）
+    pub async fn get_or_create(&self, role_name: &str) -> AgentMemory {
+        {
+            let memories = self.memories.read().await;
+            if let Some(mem) = memories.get(role_name) {
+                return mem.clone();
+            }
+        }
+
+        let mem = AgentMemory::new(format!("role:{}", role_name));
+        // 尝试从磁盘加载
+        if let Err(e) = mem.load_from_role_file(role_name).await {
+            tracing::warn!("Failed to load role memory for {}: {}", role_name, e);
+        }
+
+        let mut memories = self.memories.write().await;
+        memories.insert(role_name.to_string(), mem.clone());
+        mem
+    }
+
+    /// 保存指定角色的记忆到磁盘
+    pub async fn persist(&self, role_name: &str) -> Result<(), String> {
+        let memories = self.memories.read().await;
+        let mem = memories
+            .get(role_name)
+            .ok_or_else(|| format!("No memory found for role: {}", role_name))?;
+        mem.save_to_role_file(role_name).await
+    }
+
+    /// 保存所有角色记忆到磁盘
+    pub async fn persist_all(&self) -> Vec<(String, Result<(), String>)> {
+        let memories = self.memories.read().await;
+        let mut results = Vec::new();
+        for (role_name, mem) in memories.iter() {
+            results.push((role_name.clone(), mem.save_to_role_file(role_name).await));
+        }
+        results
+    }
+
+    /// 列出所有已加载的角色
+    pub async fn list_roles(&self) -> Vec<String> {
+        let memories = self.memories.read().await;
+        memories.keys().cloned().collect()
+    }
+
+    /// 清除角色记忆（内存+可选磁盘）
+    pub async fn clear(&self, role_name: &str, remove_file: bool) -> Result<(), String> {
+        {
+            let mut memories = self.memories.write().await;
+            memories.remove(role_name);
+        }
+        if remove_file {
+            let path = role_memory_path(role_name);
+            if path.exists() {
+                tokio::fs::remove_file(&path)
+                    .await
+                    .map_err(|e| format!("Failed to remove role memory file: {}", e))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for RoleMemoryStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 全局角色记忆存储
+static ROLE_MEMORY_STORE: once_cell::sync::Lazy<RoleMemoryStore> =
+    once_cell::sync::Lazy::new(RoleMemoryStore::new);
+
+/// 获取全局角色记忆存储
+pub fn global_role_memory_store() -> &'static RoleMemoryStore {
+    &ROLE_MEMORY_STORE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +507,31 @@ mod tests {
         // 模糊搜索
         let debug_entries = memory.search("debug").await;
         assert_eq!(debug_entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_role_memory_store() {
+        use crate::agent::roles::AgentRole;
+
+        let store = RoleMemoryStore::new();
+        let role_name = AgentRole::Plan.display_name();
+
+        // 获取角色记忆
+        let mem = store.get_or_create(role_name).await;
+        mem.save("plan_format", "markdown with steps").await;
+        mem.save("risk_checklist", "5 items").await;
+
+        // 持久化
+        store.persist(role_name).await.unwrap();
+
+        // 创建新的 store 实例，验证可以从磁盘加载
+        let store2 = RoleMemoryStore::new();
+        let mem2 = store2.get_or_create(role_name).await;
+        assert_eq!(mem2.load("plan_format").await, Some("markdown with steps".to_string()));
+        assert_eq!(mem2.load("risk_checklist").await, Some("5 items".to_string()));
+
+        // 清理
+        store2.clear(role_name, true).await.unwrap();
     }
 
     #[tokio::test]

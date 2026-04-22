@@ -383,10 +383,12 @@ impl Tool for FileWriteTool {
             }
         }
 
-        // 如果文件已存在，先保存快照
-        if path.exists() {
-            if let Ok(old_content) = tokio::fs::read_to_string(&path).await {
-                let _ = save_snapshot(&path, &context.session_id, &old_content, "file_write").await;
+        // 创建 checkpoint（文件修改前自动快照）
+        let cp_mgr = crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await;
+        {
+            let mut cp = cp_mgr.lock().await;
+            if let Err(e) = cp.create_checkpoint("file_write", None, None, &[path.clone()]).await {
+                warn!("Failed to create checkpoint for file_write: {}", e);
             }
         }
 
@@ -788,15 +790,14 @@ impl Tool for FileEditTool {
             (old_string.to_string(), new_string.to_string())
         };
 
-        // 保存快照
-        let snapshot_path =
-            match save_snapshot(&path, &context.session_id, &content, "file_edit").await {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    warn!("Failed to save snapshot: {}", e);
-                    None
-                }
-            };
+        // 创建 checkpoint（文件修改前自动快照）
+        let cp_mgr = crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await;
+        {
+            let mut cp = cp_mgr.lock().await;
+            if let Err(e) = cp.create_checkpoint("file_edit", None, None, &[path.clone()]).await {
+                warn!("Failed to create checkpoint for file_edit: {}", e);
+            }
+        }
 
         // 确定操作模式
         let result = if let (Some(start), Some(end)) = (line_start, line_end) {
@@ -831,13 +832,10 @@ impl Tool for FileEditTool {
                             cache.invalidate_metadata(&path);
                         }
                         info!("Successfully edited file: {:?}", path);
-                        let mut data = json!({
+                        let data = json!({
                             "path": path_str,
                             "replacements": replacements,
                         });
-                        if let Some(sp) = snapshot_path {
-                            data["snapshot_path"] = json!(sp.to_string_lossy().to_string());
-                        }
                         ToolResult::success_with_data(
                             format!(
                                 "File edited successfully: {} ({} replacement(s))",
@@ -1406,9 +1404,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_edit_snapshot_saved() {
+    async fn test_file_edit_checkpoint_created() {
         let tool = FileEditTool;
-        let path = "/tmp/test_priority_agent_edit_snapshot.txt";
+        let path = "/tmp/test_priority_agent_edit_checkpoint.txt";
         let original = "original content\n";
         tokio::fs::write(path, original).await.unwrap();
 
@@ -1417,23 +1415,34 @@ mod tests {
             "old_string": "original",
             "new_string": "modified"
         });
-        let session_id = "test-session-snapshot";
+        let session_id = "test-session-checkpoint";
         let context = ToolContext::new(".", session_id);
         let result = tool.execute(params, context).await;
 
         assert!(result.success, "edit failed: {:?}", result.error);
-        let data = result.data.unwrap_or_default();
-        let snap_path = data["snapshot_path"]
-            .as_str()
-            .expect("snapshot_path should exist");
-        assert!(std::path::Path::new(snap_path).exists());
-        let snap_content = tokio::fs::read_to_string(snap_path).await.unwrap();
-        assert_eq!(snap_content, original);
+
+        // 验证 checkpoint 被创建
+        let mgr = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+        let cp = mgr.lock().await;
+        let checkpoints = cp.list_checkpoints();
+        assert!(!checkpoints.is_empty(), "checkpoint should be created");
+
+        let latest = checkpoints.last().unwrap();
+        assert_eq!(latest.tool_name, "file_edit");
+        assert_eq!(latest.file_backups.len(), 1);
+        assert_eq!(latest.file_backups[0].original_path, path);
+        assert!(latest.file_backups[0].existed_before);
+
+        // 验证可以恢复
+        let restore_result = cp.restore_checkpoint(&latest.id).await.unwrap();
+        assert_eq!(restore_result.restored_files.len(), 1);
+        let restored_content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(restored_content, original);
 
         let _ = tokio::fs::remove_file(path).await;
-        let _ =
-            tokio::fs::remove_dir_all(std::path::Path::new(snap_path).ancestors().nth(2).unwrap())
-                .await;
+        let _ = tokio::fs::remove_dir_all(
+            dirs::home_dir().unwrap().join(".priority-agent").join("checkpoints").join(format!("session-{}", session_id))
+        ).await;
     }
 
     #[tokio::test]
