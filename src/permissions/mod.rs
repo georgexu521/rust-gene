@@ -3,6 +3,8 @@
 //! 细粒度的工具权限控制
 //! 支持通配符匹配、规则源分类
 
+pub mod llm_classifier;
+
 use serde::{Deserialize, Serialize};
 
 /// 检查字符串是否匹配通配符模式

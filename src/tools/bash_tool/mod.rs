@@ -237,6 +237,11 @@ impl Tool for BashTool {
         })
     }
 
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let cmd = params["command"].as_str().unwrap_or("");
+        format!("bash: {}", cmd)
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let command = params["command"].as_str().unwrap_or("");
         if command.is_empty() {

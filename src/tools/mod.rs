@@ -286,6 +286,19 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// 为安全分类器提供精简输入
+    ///
+    /// 返回工具的精简参数摘要，用于 LLM 分类器 transcript。
+    /// 返回空字符串表示该工具不需要分类器审查。
+    fn to_classifier_input(&self, params: &Value) -> String {
+        // 默认实现：返回工具名 + 参数键列表
+        let keys: Vec<String> = params
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        format!("{}({})", self.name(), keys.join(", "))
+    }
+
     /// 验证参数是否符合 schema（返回 None 表示验证通过，Some(msg) 表示错误）
     fn validate_params(&self, params: &Value) -> Option<String> {
         let schema = self.parameters();

@@ -33,6 +33,11 @@ impl Tool for WebFetchTool {
         })
     }
 
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let url = params["url"].as_str().unwrap_or("");
+        format!("web_fetch: {}", url)
+    }
+
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
         let url = params["url"].as_str().unwrap_or("");
         if url.is_empty() {
@@ -131,6 +136,11 @@ impl Tool for WebSearchTool {
             },
             "required": ["query"]
         })
+    }
+
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let query = params["query"].as_str().unwrap_or("");
+        format!("web_search: {}", query)
     }
 
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {

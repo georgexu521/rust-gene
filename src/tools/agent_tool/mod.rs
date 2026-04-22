@@ -777,6 +777,22 @@ impl Tool for AgentTool {
         })
     }
 
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let desc = params["description"].as_str().unwrap_or("");
+        let role = params["role"].as_str().unwrap_or("default");
+        let template = params["template"].as_str().unwrap_or("");
+        let prompt = params["prompt"].as_str().unwrap_or("");
+        let prompt_summary = if prompt.len() > 60 {
+            format!("{}...", &prompt[..60])
+        } else {
+            prompt.to_string()
+        };
+        format!(
+            "agent: role={} template={} desc='{}' prompt='{}'",
+            role, template, desc, prompt_summary
+        )
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let agent_manager = match &context.agent_manager {
             Some(manager) => manager.clone(),

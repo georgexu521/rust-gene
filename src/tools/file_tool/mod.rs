@@ -181,6 +181,11 @@ impl Tool for FileReadTool {
         })
     }
 
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let path = params["path"].as_str().unwrap_or("");
+        format!("file_read: {}", path)
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let path_str = params["path"].as_str().unwrap_or("");
         if path_str.is_empty() {
@@ -339,6 +344,12 @@ impl Tool for FileWriteTool {
             },
             "required": ["path", "content"]
         })
+    }
+
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let path = params["path"].as_str().unwrap_or("");
+        let content_len = params["content"].as_str().map(|s| s.len()).unwrap_or(0);
+        format!("file_write: {} ({} bytes)", path, content_len)
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
@@ -705,6 +716,20 @@ impl Tool for FileEditTool {
             },
             "required": ["path", "new_string"]
         })
+    }
+
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let path = params["path"].as_str().unwrap_or("");
+        let has_old = params["old_string"].as_str().is_some();
+        let has_lines = params["line_start"].as_u64().is_some();
+        let mode = if has_old {
+            "exact"
+        } else if has_lines {
+            "line_range"
+        } else {
+            "insert"
+        };
+        format!("file_edit: {} ({})", path, mode)
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {

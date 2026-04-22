@@ -924,6 +924,10 @@ pub struct ConversationLoop {
     workflow_triggered_this_turn: std::sync::atomic::AtomicBool,
     /// Workflow 策略（默认从环境变量读取，可覆盖）
     workflow_policy: WorkflowPolicy,
+    /// 拒绝追踪器
+    denial_tracker: Option<Arc<crate::security::DenialTracker>>,
+    /// 安全审计日志
+    audit_log: Option<Arc<crate::security::SecurityAuditLog>>,
 }
 
 /// 对话循环结果
@@ -963,6 +967,8 @@ impl ConversationLoop {
             workflow_triggered_this_turn: std::sync::atomic::AtomicBool::new(false),
             workflow_policy: WorkflowPolicy::from_env(),
             session_id: format!("session-{}", uuid::Uuid::new_v4()),
+            denial_tracker: None,
+            audit_log: None,
         }
     }
 
@@ -2156,6 +2162,44 @@ impl ConversationLoop {
                 if result.duration_ms.is_none() {
                     result.duration_ms = Some(duration_ms);
                 }
+
+                // ── Security Audit & Denial Tracking ──────────────────────
+                let params_summary = if let Some(tool) = self.tool_registry.get(&tool_name) {
+                    tool.to_classifier_input(&tc.arguments)
+                } else {
+                    tool_name.clone()
+                };
+
+                if let Some(ref log) = self.audit_log {
+                    let decision = if result.success {
+                        "EXECUTED"
+                    } else if result.error.as_deref().unwrap_or("").contains("Permission denied")
+                    {
+                        "DENIED"
+                    } else {
+                        "FAILED"
+                    };
+                    log.log_execution(&tool_name, &params_summary, result.success, decision)
+                        .await;
+                }
+
+                if let Some(ref tracker) = self.denial_tracker {
+                    if result.success {
+                        tracker.record_success().await;
+                    } else if result.error.as_deref().unwrap_or("").contains("Permission denied")
+                        || result.error.as_deref().unwrap_or("").contains("Dangerous command")
+                    {
+                        tracker
+                            .record_denial(
+                                &tool_name,
+                                &params_summary,
+                                result.error.as_deref().unwrap_or("security block"),
+                            )
+                            .await;
+                    }
+                }
+                // ─────────────────────────────────────────────────────────
+
                 {
                     let mut tracker = self.cost_tracker.lock().await;
                     tracker.record_tool_execution(
