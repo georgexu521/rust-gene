@@ -1,12 +1,65 @@
 //! Markdown 渲染组件
 //!
 //! 使用 pulldown-cmark 将 Markdown 转换为 ratatui::Text
+//! 支持代码块语法高亮（syntect）
 
 use pulldown_cmark::{Event, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
+use std::sync::LazyLock;
+
+// ── syntect 全局缓存 ──
+static SYNTAX_SET: LazyLock<syntect::parsing::SyntaxSet> =
+    LazyLock::new(syntect::parsing::SyntaxSet::load_defaults_newlines);
+static THEME_SET: LazyLock<syntect::highlighting::ThemeSet> =
+    LazyLock::new(syntect::highlighting::ThemeSet::load_defaults);
+
+/// 将 syntect 样式转换为 ratatui 样式
+fn syntect_to_ratatui(style: syntect::highlighting::Style) -> Style {
+    use syntect::highlighting::FontStyle;
+    let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+    let mut ratatui_style = Style::default().fg(fg);
+    if style.font_style.contains(FontStyle::BOLD) {
+        ratatui_style = ratatui_style.add_modifier(Modifier::BOLD);
+    }
+    if style.font_style.contains(FontStyle::ITALIC) {
+        ratatui_style = ratatui_style.add_modifier(Modifier::ITALIC);
+    }
+    if style.font_style.contains(FontStyle::UNDERLINE) {
+        ratatui_style = ratatui_style.add_modifier(Modifier::UNDERLINED);
+    }
+    ratatui_style
+}
+
+/// 高亮代码块内容
+fn highlight_code_block(code: &str, language: &str) -> Vec<Line<'static>> {
+    let ss = &*SYNTAX_SET;
+    let ts = &*THEME_SET;
+
+    let syntax = ss
+        .find_syntax_by_token(language)
+        .or_else(|| ss.find_syntax_by_extension(language))
+        .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+    let theme = &ts.themes["base16-ocean.dark"];
+    let mut highlighter = syntect::easy::HighlightLines::new(syntax, theme);
+
+    let mut lines = Vec::new();
+    for line in syntect::util::LinesWithEndings::from(code) {
+        let highlighted = highlighter.highlight_line(line, ss).unwrap_or_default();
+        let spans: Vec<Span<'static>> = highlighted
+            .into_iter()
+            .map(|(style, text)| Span::styled(text.to_string(), syntect_to_ratatui(style)))
+            .collect();
+
+        let mut full_spans = vec![Span::styled("  ", Style::default())];
+        full_spans.extend(spans);
+        lines.push(Line::from(full_spans));
+    }
+    lines
+}
 
 /// 将 Markdown 文本转换为 ratatui::Text
 pub fn parse_markdown(text: &str) -> Text<'_> {
@@ -16,6 +69,7 @@ pub fn parse_markdown(text: &str) -> Text<'_> {
     let mut current_style = Style::default().fg(Color::White);
     let mut in_code_block = false;
     let mut code_language = String::new();
+    let mut code_block_buffer = String::new();
     let mut list_stack: Vec<u64> = Vec::new();
     let mut pending_text = String::new();
 
@@ -57,9 +111,12 @@ pub fn parse_markdown(text: &str) -> Text<'_> {
                     Tag::CodeBlock(lang) => {
                         in_code_block = true;
                         code_language = match lang {
-                            pulldown_cmark::CodeBlockKind::Fenced(lang_str) => lang_str.to_string(),
+                            pulldown_cmark::CodeBlockKind::Fenced(lang_str) => {
+                                lang_str.to_string()
+                            }
                             pulldown_cmark::CodeBlockKind::Indented => String::new(),
                         };
+                        code_block_buffer.clear();
                         if !current_line.is_empty() || !pending_text.is_empty() {
                             flush_pending(&mut current_line, &mut pending_text, current_style);
                             lines.push(Line::from(current_line));
@@ -118,30 +175,23 @@ pub fn parse_markdown(text: &str) -> Text<'_> {
                     }
                     TagEnd::CodeBlock => {
                         in_code_block = false;
+                        // 使用 syntect 高亮代码块
+                        let highlighted = highlight_code_block(&code_block_buffer, &code_language);
+                        lines.extend(highlighted);
                         lines.push(Line::from(Span::styled(
                             "```",
                             Style::default().fg(Color::DarkGray),
                         )));
                         lines.push(Line::from(""));
                         code_language.clear();
+                        code_block_buffer.clear();
                     }
                     _ => {}
                 }
             }
             Event::Text(text) => {
                 if in_code_block {
-                    flush_pending(&mut current_line, &mut pending_text, current_style);
-                    for line in text.split('\n') {
-                        lines.push(Line::from(vec![
-                            Span::styled("  ", Style::default()),
-                            Span::styled(
-                                line.to_string(),
-                                Style::default()
-                                    .fg(Color::Green)
-                                    .add_modifier(Modifier::DIM),
-                            ),
-                        ]));
-                    }
+                    code_block_buffer.push_str(&text);
                 } else {
                     pending_text.push_str(&text);
                 }
@@ -210,5 +260,23 @@ mod tests {
         let text = "- item 1\n- item 2";
         let result = parse_markdown(text);
         assert!(!result.lines.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_code_block_rust() {
+        let code = "fn main() {\n    println!(\"hello\");\n}\n";
+        let lines = highlight_code_block(code, "rust");
+        assert!(!lines.is_empty());
+        // Should have 3 lines of code (plus maybe extra)
+        assert!(lines.len() >= 3);
+    }
+
+    #[test]
+    fn test_highlight_code_block_unknown_lang() {
+        let code = "some code here\n";
+        let lines = highlight_code_block(code, "unknown_lang_xyz");
+        assert!(!lines.is_empty());
+        // Should fallback to plain text
+        assert!(lines[0].to_string().contains("some code here"));
     }
 }
