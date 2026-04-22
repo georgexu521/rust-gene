@@ -9,7 +9,6 @@
 //!   经 sigmoid 映射到 [0, 100]
 
 use super::feedback::{FeedbackEngine, HistoricalFailureRule};
-use std::collections::HashSet;
 
 /// 计算权重所需的环境变量系数
 fn env_mul(name: &str, default: f64) -> f64 {
@@ -696,7 +695,6 @@ mod tests {
 
         assert_eq!(result.step_index, 0);
         assert!(result.normalized_score <= 100);
-        assert!(result.normalized_score >= 0);
         assert_eq!(result.dimension_scores.len(), 7);
         assert!(!result.explanation.is_empty());
     }

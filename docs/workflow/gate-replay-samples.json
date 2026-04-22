@@ -1,0 +1,12 @@
+[
+  {"task_description":"修复一个 typo", "complexity":"simple"},
+  {"task_description":"查看当前配置", "complexity":"simple"},
+  {"task_description":"git status", "complexity":"simple"},
+  {"task_description":"重构整个用户认证系统", "complexity":"complex"},
+  {"task_description":"新增一个完整的支付模块并接入现有架构", "complexity":"complex"},
+  {"task_description":"迁移数据库 schema 到新版本", "complexity":"complex"},
+  {"task_description":"实现 /status 命令并补测试", "complexity":"medium"},
+  {"task_description":"跨模块优化 workflow gate 和 metrics", "complexity":"medium"},
+  {"task_description":"更新版本号展示", "complexity":"simple"},
+  {"task_description":"分析项目并给出改造计划", "complexity":"medium"}
+]

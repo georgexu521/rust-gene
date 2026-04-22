@@ -2493,6 +2493,7 @@ fn message_items_to_api_messages(
 pub fn handle_stop(app: &mut TuiApp, _args: &str) -> String {
     if app.is_querying {
         app.is_querying = false;
+        crate::engine::workflow::metrics::record_drift_interruption();
         "Stopping current operation...".to_string()
     } else {
         "No operation in progress.".to_string()

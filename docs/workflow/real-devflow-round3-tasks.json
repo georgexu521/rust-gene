@@ -1,0 +1,62 @@
+[
+  {
+    "commit": "cd20a1a",
+    "date": "2026-04-22",
+    "subject": "feat(workflow): close gaps #4 #5 #6 — memory, env gate, trigger limit",
+    "task_description": "基于本周提交，验证 workflow memory/env gate/trigger limit 缺口闭环是否稳定。"
+  },
+  {
+    "commit": "c8a34d9",
+    "date": "2026-04-22",
+    "subject": "feat(socratic): add auto_think() active-triggering mode",
+    "task_description": "验证 Socratic 主动触发模式在复杂任务下是否先抓主线再展开。"
+  },
+  {
+    "commit": "cb1d5c5",
+    "date": "2026-04-22",
+    "subject": "feat(workflow): implement WorkflowEngine state machine",
+    "task_description": "对 WorkflowEngine 状态机做真实开发流验收，确认 gate/thinking/planning/executing/report 链路。"
+  },
+  {
+    "commit": "a58f8b8",
+    "date": "2026-04-22",
+    "subject": "feat(workflow): implement recursive plan splitting with L3 atomic flattening",
+    "task_description": "验证递归拆分和 L3 原子化策略在复杂任务中的可执行性和稳定性。"
+  },
+  {
+    "commit": "568cbde",
+    "date": "2026-04-22",
+    "subject": "feat(workflow): M2 enhanced planner with LLM-assisted dependency inference",
+    "task_description": "验证 LLM 辅助依赖推断是否提升计划覆盖率并降低跑偏。"
+  },
+  {
+    "commit": "30f9661",
+    "date": "2026-04-22",
+    "subject": "feat(workflow): integrate M2 feedback loop into weight engine and execution pipeline",
+    "task_description": "验证反馈环对权重重算是否生效，检查 rework 和 drift 的变化。"
+  },
+  {
+    "commit": "850d220",
+    "date": "2026-04-22",
+    "subject": "feat(workflow): add metrics.rs for execution log aggregation + integrate into report",
+    "task_description": "验证 workflow 指标聚合输出是否完整，能否用于周报追踪。"
+  },
+  {
+    "commit": "ddd2450",
+    "date": "2026-04-22",
+    "subject": "feat(workflow): M1 MVP — Gate + Questioning + Weights + Planner + Executor + Loop integration",
+    "task_description": "以 M1 MVP 提交为基准，验收 gate/questioning/weights/planner/executor/loop 的闭环质量。"
+  },
+  {
+    "commit": "15414eb",
+    "date": "2026-04-21",
+    "subject": "fix(tui): harden /test /import /ping and version formatting",
+    "task_description": "验证 tui 关键命令修复在真实流程中不会误报成功、不会注入、不会伪延迟。"
+  },
+  {
+    "commit": "3082e47",
+    "date": "2026-04-21",
+    "subject": "chore(clippy): eliminate warnings and normalize parsing/default patterns",
+    "task_description": "验证本周质量门禁清理后，workflow 开发流仍保持可编译、可测试、可回归。"
+  }
+]

@@ -1,0 +1,455 @@
+[
+  {
+    "id": "S-01",
+    "task_description": "Fix clippy warning: useless format! in src/tui/slash_handler.rs and 4 other locations",
+    "complexity": "simple",
+    "estimated_files": 1,
+    "mainline_goal": "消除编译器警告，保持代码整洁",
+    "true_blocker": "定位所有受影响的 format! 调用位置",
+    "drift_risks": [
+      "顺手重构附近代码风格",
+      "把 warning 改成其他写法而非直接删除 format!",
+      "检查整个文件的所有 format! 调用（过度扫描）"
+    ],
+    "expected_steps": [
+      "运行 cargo clippy 确认 warning 列表",
+      "逐个替换 useless format! 为字符串字面量",
+      "重新运行 clippy 确认清零",
+      "运行 cargo test 确认无回归"
+    ],
+    "source_commit": "3082e47",
+    "annotation_notes": "实际就是一个字符串替换，但 AI 容易过度扫描整个文件"
+  },
+  {
+    "id": "S-02",
+    "task_description": "Add missing rustdoc to the DiagnosticTracker::before_edit method",
+    "complexity": "simple",
+    "estimated_files": 1,
+    "mainline_goal": "补全公共 API 的文档注释",
+    "true_blocker": "理解 before_edit 的语义和参数含义",
+    "drift_risks": [
+      "重写整个模块的文档",
+      "纠结措辞超过必要",
+      "顺手修改函数签名"
+    ],
+    "expected_steps": [
+      "打开目标文件定位函数",
+      "阅读函数实现理解语义",
+      "添加简明文档注释",
+      "运行 cargo doc 确认无 warning"
+    ],
+    "source_commit": null,
+    "annotation_notes": "纯文档工作，AI 容易把简单注释写成论文"
+  },
+  {
+    "id": "S-03",
+    "task_description": "Change PRIORITY_AGENT_SOCRATIC_MAX_ROUNDS default from 5 to 3",
+    "complexity": "simple",
+    "estimated_files": 1,
+    "mainline_goal": "降低默认提问轮数以节省 token",
+    "true_blocker": "找到默认值在源码中的定义位置",
+    "drift_risks": [
+      "同时修改多个不相关的默认值",
+      "讨论为什么改这个值（过度分析）",
+      "修改测试中的硬编码期望值"
+    ],
+    "expected_steps": [
+      "grep 查找默认值定义",
+      "修改常量为 3",
+      "检查是否有测试依赖此默认值",
+      "运行相关测试"
+    ],
+    "source_commit": null,
+    "annotation_notes": "单点修改，但 AI 可能想顺便优化整个配置系统"
+  },
+  {
+    "id": "S-04",
+    "task_description": "Update the version string displayed in /doctor output from 'v0.8.0' to 'v0.9.0'",
+    "complexity": "simple",
+    "estimated_files": 1,
+    "mainline_goal": "发布前更新版本号显示",
+    "true_blocker": "找到版本号在源码中的定义位置",
+    "drift_risks": [
+      "同时更新 Cargo.toml 版本（本次只需要改显示）",
+      "检查所有地方的版本号（过度扫描）",
+      "讨论版本号策略"
+    ],
+    "expected_steps": [
+      "grep 'v0.8.0' 定位引用",
+      "替换为 'v0.9.0'",
+      "运行 cargo test 确认无硬编码版本测试失败"
+    ],
+    "source_commit": null,
+    "annotation_notes": "纯字符串替换"
+  },
+  {
+    "id": "S-05",
+    "task_description": "Fix test failure in test_performance_panel_json caused by hardcoded timestamp in assertion",
+    "complexity": "simple",
+    "estimated_files": 1,
+    "mainline_goal": "修复因硬编码时间戳导致的 flaky 测试",
+    "true_blocker": "复现测试失败并理解原因",
+    "drift_risks": [
+      "重写整个测试模块",
+      "引入复杂的时间 mocking 框架",
+      "同时修改其他看似相关的测试"
+    ],
+    "expected_steps": [
+      "运行失败测试确认错误",
+      "定位硬编码时间戳",
+      "改用动态时间或 mock",
+      "运行测试 3 次确认稳定"
+    ],
+    "source_commit": null,
+    "annotation_notes": "常见 flaky 测试修复"
+  },
+  {
+    "id": "M-01",
+    "task_description": "Add a new /status command that shows current API provider, model, and connection health",
+    "complexity": "medium",
+    "estimated_files": 3,
+    "mainline_goal": "让用户一键查看系统状态",
+    "true_blocker": "理解 slash 命令注册流程（commands.rs + slash_handler.rs）",
+    "drift_risks": [
+      "先优化整个命令系统的抽象（非主线）",
+      "纠结命令名（/status vs /info vs /health）",
+      "先做漂亮的 TUI 渲染再实现功能"
+    ],
+    "expected_steps": [
+      "在 commands.rs 定义 CMD_STATUS 常量",
+      "在 slash_handler.rs 添加处理函数",
+      "从 QueryEngine 获取 provider/model 信息",
+      "格式化输出状态信息",
+      "注册到 help 列表",
+      "运行测试"
+    ],
+    "source_commit": "a860ddb",
+    "annotation_notes": "典型的新增命令任务，AI 经常先做渲染再做逻辑"
+  },
+  {
+    "id": "M-02",
+    "task_description": "Add validate_params() to the file_edit tool to reject invalid old_string/new_string combinations",
+    "complexity": "medium",
+    "estimated_files": 2,
+    "mainline_goal": "在编辑前验证参数合法性，避免无效操作",
+    "true_blocker": "确定 old_string/new_string 的合法性规则（空字符串、相同内容等）",
+    "drift_risks": [
+      "重写整个 file_edit 工具",
+      "过度验证（检查文件是否存在等，应由执行层处理）",
+      "纠结错误消息措辞"
+    ],
+    "expected_steps": [
+      "阅读现有 file_edit 实现",
+      "确定 validate 规则列表",
+      "实现 validate_params() 方法",
+      "添加测试覆盖各种无效输入",
+      "运行测试"
+    ],
+    "source_commit": null,
+    "annotation_notes": "AI 容易把 validate 做成 full validation，超出参数级别"
+  },
+  {
+    "id": "M-03",
+    "task_description": "Add GET /api/audit/summary endpoint to the API server",
+    "complexity": "medium",
+    "estimated_files": 3,
+    "mainline_goal": "暴露审计概览数据给 HTTP API 消费者",
+    "true_blocker": "确定路由结构和响应 schema",
+    "drift_risks": [
+      "先重构整个 API 路由结构",
+      "过度设计响应格式（分页、过滤等）",
+      "先写前端再写后端"
+    ],
+    "expected_steps": [
+      "查看现有 /api 路由模式",
+      "在 api/mod.rs 新增路由",
+      "实现 handler 函数（调用 cost_tracker）",
+      "定义响应结构体",
+      "添加测试或手动验证",
+      "更新 API 文档"
+    ],
+    "source_commit": "744d073",
+    "annotation_notes": "AI 经常从 axum handler 开始写，但应该先定 schema"
+  },
+  {
+    "id": "M-04",
+    "task_description": "Change /doctor output format: show tool metrics in a table instead of bullet list",
+    "complexity": "medium",
+    "estimated_files": 1,
+    "mainline_goal": "提升 /doctor 命令的可读性",
+    "true_blocker": "定位当前渲染代码并理解现有格式",
+    "drift_risks": [
+      "重写整个 /doctor 命令",
+      "引入表格渲染库（过度工程）",
+      "纠结列宽和对齐"
+    ],
+    "expected_steps": [
+      "找到 slash_handler.rs 中 /doctor 的渲染代码",
+      "将 bullet list 改为手动表格（字符串拼接）",
+      "保持原有数据内容不变",
+      "运行测试确认输出正确"
+    ],
+    "source_commit": "744d073",
+    "annotation_notes": "AI 容易想引入 ratatui Table widget，但手动拼接更简单"
+  },
+  {
+    "id": "M-05",
+    "task_description": "Add a new PermissionMode::Once that grants one-time authorization per pattern",
+    "complexity": "medium",
+    "estimated_files": 3,
+    "mainline_goal": "支持一次性授权，减少重复提示",
+    "true_blocker": "理解现有 PermissionMode 枚举和匹配逻辑",
+    "drift_risks": [
+      "同时重构整个权限系统",
+      "纠结 Once 的过期策略（本次只需要单次）",
+      "先做 UI 再做逻辑"
+    ],
+    "expected_steps": [
+      "阅读 permissions/mod.rs 现有模式",
+      "新增 Once 变体到 PermissionMode",
+      "在匹配逻辑中处理 Once（使用后移除）",
+      "添加存储 Once 授权的数据结构",
+      "更新 /permissions 命令显示",
+      "运行测试"
+    ],
+    "source_commit": "939e9d8",
+    "annotation_notes": "需要理解现有模式体系，AI 容易漏改某个 match 分支"
+  },
+  {
+    "id": "M-06",
+    "task_description": "Add a bundled skill for /simplify command that reviews code for reuse, quality, and efficiency",
+    "complexity": "medium",
+    "estimated_files": 2,
+    "mainline_goal": "为 /simplify 命令提供可复用的 skill 模板",
+    "true_blocker": "复用现有 skill markdown 模板格式",
+    "drift_risks": [
+      "设计全新的 skill 格式",
+      "写太多示例代码（skill 应该是元指令）",
+      "纠结 frontmatter 字段名"
+    ],
+    "expected_steps": [
+      "查看现有 bundled skill 模板（如 /commit）",
+      "复制模板结构",
+      "替换内容为 simplify 的审查逻辑",
+      "在 skill registry 中注册",
+      "在 slash_handler.rs 接入",
+      "测试命令入口"
+    ],
+    "source_commit": "3160b19",
+    "annotation_notes": "本质是模板填充，AI 容易过度设计 skill 语言"
+  },
+  {
+    "id": "M-07",
+    "task_description": "Fix all occurrences of `&format!("static")` clippy warnings across the codebase",
+    "complexity": "medium",
+    "estimated_files": 5,
+    "mainline_goal": "批量修复同类 clippy 警告",
+    "true_blocker": "找到所有出现位置（grep + clippy 输出）",
+    "drift_risks": [
+      "逐个文件阅读并修改（低效）",
+      "用 sed 全局替换但误伤合法用法",
+      "修改后不做测试验证"
+    ],
+    "expected_steps": [
+      "运行 cargo clippy 获取完整 warning 列表",
+      "用 grep 确认所有文件",
+      "批量替换为 .to_string()",
+      "运行 clippy 确认清零",
+      "运行 cargo test 确认无回归"
+    ],
+    "source_commit": "3082e47",
+    "annotation_notes": "批量修复，AI 容易逐个文件打开修改"
+  },
+  {
+    "id": "M-08",
+    "task_description": "Add PRIORITY_AGENT_BASH_EXTERNAL_FALLBACK env var to control external backend fallback behavior",
+    "complexity": "medium",
+    "estimated_files": 2,
+    "mainline_goal": "让用户可配置 bash external 失败后的回退策略",
+    "true_blocker": "确定配置注入点和默认值",
+    "drift_risks": [
+      "同时添加多个不相关的配置项",
+      "重构整个配置系统",
+      "纠结命名（fallback vs retry vs degrade）"
+    ],
+    "expected_steps": [
+      "找到现有 bash backend 配置读取代码",
+      "新增 env var 读取逻辑",
+      "在 fallback 逻辑中读取此变量",
+      "更新 /doctor 显示新配置",
+      "运行测试"
+    ],
+    "source_commit": "bd7d1a9",
+    "annotation_notes": "单配置项添加，但涉及读取逻辑和显示逻辑两个文件"
+  },
+  {
+    "id": "C-01",
+    "task_description": "Implement a new `diff` tool that returns structured hunks for file edits",
+    "complexity": "complex",
+    "estimated_files": 4,
+    "mainline_goal": "让文件编辑产生可读的结构化 diff 输出",
+    "true_blocker": "设计 diff 输出的数据结构（hunk/line/operation）",
+    "drift_risks": [
+      "引入 diff crate 做全功能 diff（过度）",
+      "先做 CLI 输出再做数据结构",
+      "纠结 unified diff vs side-by-side 格式"
+    ],
+    "expected_steps": [
+      "调研现有 diff crate（或手写简单实现）",
+      "定义 Hunk/LineDiff 数据结构",
+      "实现 simple_diff() 核心算法",
+      "实现 get_patch_for_display() 渲染",
+      "在 file_edit 工具中接入 diff 输出",
+      "添加单元测试",
+      "注册到工具 registry"
+    ],
+    "source_commit": "3160b19",
+    "annotation_notes": "需要设计数据结构，AI 容易直接从渲染开始"
+  },
+  {
+    "id": "C-02",
+    "task_description": "Integrate Pre/Post tool hooks into ConversationLoop tool execution path",
+    "complexity": "complex",
+    "estimated_files": 4,
+    "mainline_goal": "在工具执行前后插入可配置的钩子回调",
+    "true_blocker": "识别 ConversationLoop 中所有工具执行入口（并行 vs 串行路径）",
+    "drift_risks": [
+      "同时重构整个 ConversationLoop（非主线）",
+      "只做串行路径忽略并行路径",
+      "过度设计 Hook 参数结构"
+    ],
+    "expected_steps": [
+      "阅读 conversation_loop.rs 找到所有 execute_tool 调用",
+      "区分并行（只读）和串行（读写）路径",
+      "在串行路径前后插入 pre/post hook 调用",
+      "在并行路径前插入 pre hook（后插可选）",
+      "实现 HookManager 的调用逻辑",
+      "添加超时和 fail-open/fail-closed 策略",
+      "运行测试"
+    ],
+    "source_commit": "bd7d1a9",
+    "annotation_notes": "关键在找到所有执行入口，AI 经常漏掉某个分支"
+  },
+  {
+    "id": "C-03",
+    "task_description": "Implement BatchRefactor: decompose large changes into 5-30 parallel worktree agents",
+    "complexity": "complex",
+    "estimated_files": 5,
+    "mainline_goal": "让大规模重构可以并行化执行",
+    "true_blocker": "设计任务分解策略（如何拆成独立子任务）",
+    "drift_risks": [
+      "先做并行调度再做分解策略",
+      "过度设计 agent 通信协议",
+      "纠结拆分为 5 个还是 30 个（应先验证可行性）"
+    ],
+    "expected_steps": [
+      "设计 BatchRefactor 结构体和 API",
+      "实现 decompose() 任务分解逻辑",
+      "集成 WorktreeManager 创建隔离环境",
+      "实现并行 agent 调度（buffer_unordered）",
+      "实现结果收集和 PR URL 解析",
+      "注册为 /batch 命令",
+      "添加测试"
+    ],
+    "source_commit": "3160b19",
+    "annotation_notes": "任务分解是核心难点，AI 容易直接跳到并行执行"
+  },
+  {
+    "id": "C-04",
+    "task_description": "Add WebSocket transport support to MCP client",
+    "complexity": "complex",
+    "estimated_files": 4,
+    "mainline_goal": "支持通过 WebSocket 连接远程 MCP 服务器",
+    "true_blocker": "理解现有 MCP transport 抽象并扩展",
+    "drift_risks": [
+      "重写整个 MCP 客户端",
+      "过度设计重连策略（先做基础连接）",
+      "先做消息协议再做传输层"
+    ],
+    "expected_steps": [
+      "查看现有 McpTransport 枚举和 trait",
+      "新增 WebSocket 变体",
+      "引入 tokio-tungstenite 或手动实现",
+      "实现 connect/send/receive 方法",
+      "处理 ws:// 和 wss:// URL",
+      "在 /doctor 中显示 WebSocket 状态",
+      "运行测试"
+    ],
+    "source_commit": "a134e5b",
+    "annotation_notes": "需要理解现有抽象再扩展，AI 容易直接写 WebSocket 代码"
+  },
+  {
+    "id": "C-05",
+    "task_description": "Implement DiagnosticTracker: capture baseline diagnostics before edit and compare after",
+    "complexity": "complex",
+    "estimated_files": 4,
+    "mainline_goal": "让代码编辑自动检测新增错误",
+    "true_blocker": "设计 baseline 捕获和对比机制",
+    "drift_risks": [
+      "先集成 LSP 再做数据结构",
+      "过度设计诊断分类体系",
+      "纠结增量对比 vs 全量对比"
+    ],
+    "expected_steps": [
+      "设计 DiagnosticTracker 结构体",
+      "实现 before_edit() 捕获 baseline",
+      "实现 get_new_diagnostics() 对比",
+      "集成 LspManager 获取 diagnostics",
+      "在 file_edit 工具中接入 tracker",
+      "在 TUI 中显示新增错误",
+      "添加测试"
+    ],
+    "source_commit": "3160b19",
+    "annotation_notes": "baseline 对比是核心，AI 容易先做显示再做捕获"
+  },
+  {
+    "id": "C-06",
+    "task_description": "Split monolithic src/ into workspace: priority-core (lib) + priority-cli (bin)",
+    "complexity": "complex",
+    "estimated_files": 10,
+    "mainline_goal": "分离核心库和前端，支持多前端架构",
+    "true_blocker": "识别并解决循环依赖（permissions ↔ tools）",
+    "drift_risks": [
+      "一次性迁移所有模块（应渐进）",
+      "先做 Cargo.toml 配置再做模块移动",
+      "纠结 crate 命名和目录结构"
+    ],
+    "expected_steps": [
+      "分析模块依赖关系（找出循环依赖）",
+      "提取 security 模块打破循环依赖",
+      "创建 priority-core/ 目录和 Cargo.toml",
+      "迁移无依赖模块（errors, priority, weight_engine）",
+      "逐步迁移其他模块",
+      "创建 priority-cli/ 迁移 TUI",
+      "更新根 Cargo.toml workspace 声明",
+      "验证 cargo build --workspace 通过"
+    ],
+    "source_commit": "c4a4c92",
+    "annotation_notes": "循环依赖是关键 blocker，AI 容易直接移动文件导致编译失败"
+  },
+  {
+    "id": "C-07",
+    "task_description": "Implement WorkflowEngine: gate + weights + active socratic + executor",
+    "complexity": "complex",
+    "estimated_files": 8,
+    "mainline_goal": "实现权重驱动 + 主动提问式深思的核心引擎",
+    "true_blocker": "设计状态机和模块边界",
+    "drift_risks": [
+      "先做权重系统再做闸门（应从入口开始）",
+      "过度设计状态机（先做核心路径）",
+      "同时改造 Socratic 和 ConversationLoop（范围过大）"
+    ],
+    "expected_steps": [
+      "设计 WorkflowState 枚举和转换规则",
+      "实现 Gate（Direct vs Workflow 判定）",
+      "实现 WeightEngine（六维评分）",
+      "改造 SocraticSession 支持主动模式",
+      "实现 Planner（计划生成 + 递归拆分）",
+      "实现 Executor（按权重执行）",
+      "在 ConversationLoop 中插入入口",
+      "添加测试"
+    ],
+    "source_commit": null,
+    "annotation_notes": "这是本专项的核心任务，范围大但边界已在 design doc 中冻结"
+  }
+]

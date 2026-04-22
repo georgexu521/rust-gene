@@ -7,7 +7,7 @@
 //! - 前置压缩（Preflight）：循环前检查总 token，超阈值提前压缩
 //! - IterationBudget：迭代预算退还机制（只读工具可退还）
 
-use crate::engine::workflow::{Gate, NoOpStepExecutor, WorkflowEngine};
+use crate::engine::workflow::{Gate, StepExecutor, WorkflowEngine};
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
@@ -75,6 +75,667 @@ fn safe_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
         start += 1;
     }
     &s[start..]
+}
+
+#[derive(Clone)]
+struct WorkflowRealStepExecutor {
+    tool_registry: Arc<ToolRegistry>,
+    llm_provider: Arc<dyn LlmProvider>,
+    model: String,
+    base_context: ToolContext,
+}
+
+#[async_trait::async_trait]
+impl StepExecutor for WorkflowRealStepExecutor {
+    async fn execute_step(&self, step: &crate::engine::plan_mode::PlanStep) -> Result<String, String> {
+        let Some(tool_name) = step.tool.as_deref() else {
+            return Ok(format!(
+                "[workflow] non-executable planning step: {}",
+                step.description
+            ));
+        };
+        let Some(tool) = self.tool_registry.get(tool_name) else {
+            return Ok(format!(
+                "[workflow] tool '{}' unavailable, kept as planning note: {}",
+                tool_name, step.description
+            ));
+        };
+
+        let params = self
+            .build_params(step, tool.parameters())
+            .await
+            .map_err(|e| format!("build params failed for tool '{}': {}", tool_name, e))?;
+
+        if let Some(err) = tool.validate_params(&params) {
+            return Err(format!("invalid params for '{}': {}", tool_name, err));
+        }
+
+        let result = tool.execute(params, self.base_context.clone()).await;
+        if result.success {
+            Ok(format!("[{}] {}", tool_name, result.content))
+        } else {
+            Err(format!(
+                "[{}] {}",
+                tool_name,
+                result.error.clone().unwrap_or(result.content)
+            ))
+        }
+    }
+}
+
+impl WorkflowRealStepExecutor {
+    async fn build_params(
+        &self,
+        step: &crate::engine::plan_mode::PlanStep,
+        schema: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        if let Ok(params) = self.tool_specific_params(step) {
+            return Self::normalize_params(params, &schema, step);
+        }
+        // 先用 LLM 根据 tool schema 生成参数（真实执行路径）
+        if let Ok(params) = self.llm_build_params(step, &schema).await {
+            return Self::normalize_params(params, &schema, step);
+        }
+        // LLM 失败时回退到 schema 驱动的最小参数
+        self.fallback_params(step, &schema)
+    }
+
+    fn tool_specific_params(
+        &self,
+        step: &crate::engine::plan_mode::PlanStep,
+    ) -> Result<serde_json::Value, String> {
+        let tool = step
+            .tool
+            .as_deref()
+            .ok_or_else(|| "missing tool".to_string())?;
+        match tool {
+            "file_read" => {
+                let path = guess_path(&step.description).unwrap_or_else(|| "README.md".to_string());
+                Ok(serde_json::json!({ "path": path }))
+            }
+            "file_write" => {
+                let path = guess_path(&step.description).unwrap_or_else(|| "notes.md".to_string());
+                let content = infer_file_write_content(&step.description, &path);
+                Ok(serde_json::json!({ "path": path, "content": content }))
+            }
+            "grep" => {
+                let pattern = extract_quoted(&step.description)
+                    .unwrap_or_else(|| first_keyword(&step.description).unwrap_or("TODO").to_string());
+                let path = guess_path(&step.description).unwrap_or_else(|| ".".to_string());
+                Ok(serde_json::json!({ "pattern": pattern, "path": path }))
+            }
+            "glob" => {
+                let pattern = guess_glob_pattern(&step.description);
+                let path = guess_path(&step.description).unwrap_or_else(|| ".".to_string());
+                Ok(serde_json::json!({ "pattern": pattern, "path": path }))
+            }
+            "bash" => {
+                let command = extract_command(&step.description)
+                    .unwrap_or_else(|| format!("echo {}", shell_safe_echo(&step.description)));
+                Ok(serde_json::json!({ "command": command, "timeout": 60 }))
+            }
+            "project_list" => {
+                let (action, query) = infer_project_list_action(&step.description);
+                match query {
+                    Some(q) => Ok(serde_json::json!({ "action": action, "query": q, "limit": 30 })),
+                    None => Ok(serde_json::json!({ "action": action, "limit": 30 })),
+                }
+            }
+            "memory_save" => {
+                let category = infer_memory_category(&step.description);
+                let content = extract_backtick(&step.description)
+                    .or_else(|| extract_quoted(&step.description))
+                    .unwrap_or_else(|| step.description.clone());
+                Ok(serde_json::json!({ "content": content, "category": category }))
+            }
+            "todo_write" => {
+                let todos = infer_todo_items(&step.description);
+                Ok(serde_json::json!({ "todos": todos }))
+            }
+            "json_query" => Ok(infer_json_query_params(&step.description)),
+            "file_edit" => {
+                let path = guess_path(&step.description)
+                    .ok_or_else(|| "file_edit requires explicit path in step description".to_string())?;
+                if let Some((old_s, new_s)) = extract_replace_triplet(&step.description) {
+                    Ok(serde_json::json!({
+                        "path": path,
+                        "old_string": old_s,
+                        "new_string": new_s
+                    }))
+                } else {
+                    Err("file_edit requires quoted old/new strings in step description".to_string())
+                }
+            }
+            _ => Err("no dedicated planner for tool".to_string()),
+        }
+    }
+
+    async fn llm_build_params(
+        &self,
+        step: &crate::engine::plan_mode::PlanStep,
+        schema: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let prompt = format!(
+            "你是工具参数生成器。根据 step 描述和 JSON schema 生成工具参数。\n\
+             只输出 JSON object，不要 markdown，不要解释。\n\
+             step: {}\n\
+             tool: {}\n\
+             schema: {}\n\
+             输出:",
+            step.description,
+            step.tool.as_deref().unwrap_or("unknown"),
+            schema
+        );
+        let mut req = ChatRequest::new(&self.model)
+            .with_messages(vec![
+                Message::system("只输出严格 JSON 对象，禁止多余文本。"),
+                Message::user(&prompt),
+            ])
+            .with_temperature(0.0);
+        req.max_tokens = Some(300);
+        let resp = self
+            .llm_provider
+            .chat(req)
+            .await
+            .map_err(|e| format!("llm error: {}", e))?;
+        serde_json::from_str::<serde_json::Value>(resp.content.trim())
+            .map_err(|e| format!("invalid json from llm: {}", e))
+    }
+
+    fn fallback_params(
+        &self,
+        step: &crate::engine::plan_mode::PlanStep,
+        schema: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let mut map = serde_json::Map::new();
+        let required = schema
+            .get("required")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let props = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        for field in required {
+            let Some(key) = field.as_str() else {
+                continue;
+            };
+            let ty = props
+                .get(key)
+                .and_then(|p| p.get("type"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("string");
+            let value = match ty {
+                "string" => {
+                    if key.contains("path") {
+                        guess_path(&step.description)
+                            .map(serde_json::Value::String)
+                            .unwrap_or_else(|| serde_json::Value::String(".".to_string()))
+                    } else if key == "command" {
+                        serde_json::Value::String(step.description.clone())
+                    } else if key == "pattern" {
+                        serde_json::Value::String(
+                            step.description
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or("TODO")
+                                .to_string(),
+                        )
+                    } else {
+                        serde_json::Value::String(step.description.clone())
+                    }
+                }
+                "integer" | "number" => serde_json::Value::Number(1.into()),
+                "boolean" => serde_json::Value::Bool(true),
+                "array" => serde_json::Value::Array(vec![]),
+                "object" => serde_json::Value::Object(serde_json::Map::new()),
+                _ => serde_json::Value::String(step.description.clone()),
+            };
+            map.insert(key.to_string(), value);
+        }
+
+        if map.is_empty() {
+            return Err("no required params and llm synthesis failed".to_string());
+        }
+        Ok(serde_json::Value::Object(map))
+    }
+
+    fn normalize_params(
+        params: serde_json::Value,
+        schema: &serde_json::Value,
+        step: &crate::engine::plan_mode::PlanStep,
+    ) -> Result<serde_json::Value, String> {
+        let props = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let required = schema
+            .get("required")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut map = match params {
+            serde_json::Value::Object(m) => m,
+            _ => {
+                return Err("tool params must be a JSON object".to_string());
+            }
+        };
+
+        for field in &required {
+            let Some(key) = field.as_str() else {
+                continue;
+            };
+            if !map.contains_key(key) || map.get(key).is_some_and(serde_json::Value::is_null) {
+                map.insert(
+                    key.to_string(),
+                    Self::default_value_for_type(key, props.get(key), step),
+                );
+                continue;
+            }
+
+            if let Some(current) = map.get(key).cloned() {
+                let coerced = Self::coerce_param_type(current, props.get(key), step, key);
+                map.insert(key.to_string(), coerced);
+            }
+        }
+
+        Ok(serde_json::Value::Object(map))
+    }
+
+    fn coerce_param_type(
+        value: serde_json::Value,
+        prop_schema: Option<&serde_json::Value>,
+        step: &crate::engine::plan_mode::PlanStep,
+        key: &str,
+    ) -> serde_json::Value {
+        let ty = prop_schema
+            .and_then(|p| p.get("type"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("string");
+
+        match ty {
+            "string" => match value {
+                serde_json::Value::String(_) => value,
+                serde_json::Value::Number(n) => serde_json::Value::String(n.to_string()),
+                serde_json::Value::Bool(b) => serde_json::Value::String(b.to_string()),
+                _ => Self::default_value_for_type(key, prop_schema, step),
+            },
+            "integer" | "number" => match value {
+                serde_json::Value::Number(_) => value,
+                serde_json::Value::String(s) => s
+                    .trim()
+                    .parse::<i64>()
+                    .ok()
+                    .map(|i| serde_json::Value::Number(i.into()))
+                    .unwrap_or_else(|| Self::default_value_for_type(key, prop_schema, step)),
+                _ => Self::default_value_for_type(key, prop_schema, step),
+            },
+            "boolean" => match value {
+                serde_json::Value::Bool(_) => value,
+                serde_json::Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" | "yes" | "on" => serde_json::Value::Bool(true),
+                    "false" | "0" | "no" | "off" => serde_json::Value::Bool(false),
+                    _ => Self::default_value_for_type(key, prop_schema, step),
+                },
+                _ => Self::default_value_for_type(key, prop_schema, step),
+            },
+            "array" => match value {
+                serde_json::Value::Array(_) => value,
+                _ => serde_json::Value::Array(vec![]),
+            },
+            "object" => match value {
+                serde_json::Value::Object(_) => value,
+                _ => serde_json::Value::Object(serde_json::Map::new()),
+            },
+            _ => value,
+        }
+    }
+
+    fn default_value_for_type(
+        key: &str,
+        prop_schema: Option<&serde_json::Value>,
+        step: &crate::engine::plan_mode::PlanStep,
+    ) -> serde_json::Value {
+        let ty = prop_schema
+            .and_then(|p| p.get("type"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("string");
+        match ty {
+            "string" => {
+                if key.contains("path") {
+                    guess_path(&step.description)
+                        .map(serde_json::Value::String)
+                        .unwrap_or_else(|| serde_json::Value::String(".".to_string()))
+                } else if key == "command" {
+                    extract_command(&step.description)
+                        .map(serde_json::Value::String)
+                        .unwrap_or_else(|| serde_json::Value::String(step.description.clone()))
+                } else if key == "pattern" {
+                    serde_json::Value::String(
+                        first_keyword(&step.description)
+                            .unwrap_or("TODO")
+                            .to_string(),
+                    )
+                } else {
+                    serde_json::Value::String(step.description.clone())
+                }
+            }
+            "integer" | "number" => serde_json::Value::Number(1.into()),
+            "boolean" => serde_json::Value::Bool(true),
+            "array" => serde_json::Value::Array(vec![]),
+            "object" => serde_json::Value::Object(serde_json::Map::new()),
+            _ => serde_json::Value::String(step.description.clone()),
+        }
+    }
+}
+
+fn guess_path(desc: &str) -> Option<String> {
+    for token in desc.split_whitespace() {
+        let t = token.trim_matches(|c: char| ",.;:()[]{}\"'`".contains(c));
+        if t.contains('/') || t.contains(".rs") || t.contains(".md") || t.contains(".toml") {
+            return Some(t.to_string());
+        }
+    }
+    for token in desc.split_whitespace() {
+        let t = token.trim_matches(|c: char| ",.;:()[]{}\"'`".contains(c));
+        if matches!(
+            t,
+            "src" | "docs" | "tests" | "test" | "examples" | "scripts" | "crates"
+        ) {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
+fn extract_quoted(s: &str) -> Option<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut start = None;
+    for (i, ch) in chars.iter().enumerate() {
+        if *ch == '"' || *ch == '\'' {
+            if let Some((idx, quote)) = start {
+                if *ch == quote {
+                    let content: String = chars[idx + 1..i].iter().collect();
+                    if !content.trim().is_empty() {
+                        return Some(content);
+                    }
+                    start = None;
+                }
+            } else {
+                start = Some((i, *ch));
+            }
+        }
+    }
+    None
+}
+
+fn first_keyword(s: &str) -> Option<&str> {
+    s.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| ",.;:()[]{}\"'`".contains(c)))
+        .find(|w| !w.is_empty() && w.len() > 2)
+}
+
+fn guess_glob_pattern(step: &str) -> String {
+    if let Some(q) = extract_quoted(step) {
+        if q.contains('*') || q.contains('?') || q.contains('[') {
+            return q;
+        }
+    }
+    for token in step.split_whitespace() {
+        let t = token.trim_matches(|c: char| ",.;:()[]{}\"'`".contains(c));
+        if t.contains('*') || t.contains('?') || t.contains('[') {
+            return t.to_string();
+        }
+    }
+    let lower = step.to_lowercase();
+    if lower.contains("rust") || lower.contains(".rs") {
+        return "**/*.rs".to_string();
+    }
+    if lower.contains("markdown") || lower.contains(".md") {
+        return "**/*.md".to_string();
+    }
+    if lower.contains("test") {
+        return "**/*test*".to_string();
+    }
+    "**/*".to_string()
+}
+
+fn infer_file_write_content(step: &str, path: &str) -> String {
+    if let Some(block) = extract_backtick(step) {
+        return block;
+    }
+    if let Some(q) = extract_quoted(step) {
+        return q;
+    }
+    format!(
+        "# Auto-generated content\n\nSource step: {}\nTarget path: {}\n",
+        step, path
+    )
+}
+
+fn infer_project_list_action(step: &str) -> (&'static str, Option<String>) {
+    let lower = step.to_lowercase();
+    if lower.contains("refresh") || lower.contains("刷新") || lower.contains("重建索引") {
+        return ("refresh", None);
+    }
+    if lower.contains("summary")
+        || lower.contains("概览")
+        || lower.contains("项目结构")
+        || lower.contains("目录结构")
+    {
+        return ("summary", None);
+    }
+    if lower.contains("dir ") || lower.contains("目录") || lower.contains("文件夹") {
+        let query = extract_quoted(step).or_else(|| guess_path(step));
+        return ("dir", query);
+    }
+    if lower.contains("search") || lower.contains("查找") || lower.contains("搜索") || lower.contains("fuzzy") {
+        let query = extract_quoted(step).or_else(|| first_keyword(step).map(str::to_string));
+        return ("search", query);
+    }
+    if lower.contains("list") || lower.contains("列出") {
+        return ("list", None);
+    }
+    ("summary", None)
+}
+
+fn infer_memory_category(step: &str) -> &'static str {
+    let lower = step.to_lowercase();
+    if lower.contains("偏好") || lower.contains("preference") {
+        "preference"
+    } else if lower.contains("规范") || lower.contains("约定") || lower.contains("convention") {
+        "convention"
+    } else if lower.contains("决策") || lower.contains("decision") {
+        "decision"
+    } else {
+        "note"
+    }
+}
+
+fn infer_todo_items(step: &str) -> Vec<serde_json::Value> {
+    let mut todos = Vec::new();
+    let raw = extract_backtick(step)
+        .or_else(|| extract_quoted(step))
+        .unwrap_or_else(|| step.to_string());
+    for part in raw
+        .split(['\n', ';', '；', ',', '，'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .take(5)
+    {
+        let lower = part.to_lowercase();
+        let status = if lower.contains("完成") || lower.contains("done") || lower.contains("completed")
+        {
+            "completed"
+        } else if lower.contains("进行中") || lower.contains("in progress") {
+            "in_progress"
+        } else {
+            "pending"
+        };
+        let priority = if lower.contains("高优") || lower.contains("high") {
+            "high"
+        } else if lower.contains("低优") || lower.contains("low") {
+            "low"
+        } else {
+            "medium"
+        };
+        todos.push(serde_json::json!({
+            "content": part,
+            "status": status,
+            "priority": priority
+        }));
+    }
+    if todos.is_empty() {
+        todos.push(serde_json::json!({
+            "content": step,
+            "status": "pending",
+            "priority": "medium"
+        }));
+    }
+    todos
+}
+
+fn infer_json_query_params(step: &str) -> serde_json::Value {
+    let lower = step.to_lowercase();
+    let action = if lower.contains("validate") || lower.contains("校验") {
+        "validate"
+    } else if lower.contains("format") || lower.contains("格式化") {
+        "format"
+    } else if lower.contains("set ") || lower.contains("设置") || lower.contains("修改字段") {
+        "set"
+    } else {
+        "get"
+    };
+
+    let json_str = extract_backtick(step)
+        .or_else(|| extract_quoted(step))
+        .filter(|s| s.trim_start().starts_with('{') || s.trim_start().starts_with('['))
+        .unwrap_or_else(|| "{}".to_string());
+
+    let path = if action == "get" || action == "set" {
+        extract_path_hint(step).unwrap_or_else(|| "data".to_string())
+    } else {
+        String::new()
+    };
+
+    if action == "set" {
+        serde_json::json!({
+            "action": action,
+            "json": json_str,
+            "path": path,
+            "value": "null"
+        })
+    } else if path.is_empty() {
+        serde_json::json!({
+            "action": action,
+            "json": json_str
+        })
+    } else {
+        serde_json::json!({
+            "action": action,
+            "json": json_str,
+            "path": path
+        })
+    }
+}
+
+fn extract_path_hint(step: &str) -> Option<String> {
+    for token in step.split_whitespace() {
+        let t = token.trim_matches(|c: char| ",.;:()[]{}\"'`".contains(c));
+        if t.contains('.') && !t.contains('/') && !t.starts_with("http") {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
+fn extract_command(step: &str) -> Option<String> {
+    let lower = step.to_lowercase();
+    for marker in ["`", "cmd:", "command:"] {
+        if marker == "`" {
+            if let Some(cmd) = extract_backtick(step) {
+                return Some(cmd);
+            }
+        } else if let Some(idx) = lower.find(marker) {
+            let cmd = step[idx + marker.len()..].trim();
+            if !cmd.is_empty() {
+                return Some(cmd.to_string());
+            }
+        }
+    }
+
+    if lower.contains("cargo test") {
+        return Some("cargo test".to_string());
+    }
+    if lower.contains("cargo check") {
+        return Some("cargo check".to_string());
+    }
+    if lower.contains("cargo clippy") {
+        return Some("cargo clippy".to_string());
+    }
+    if lower.contains("git status") {
+        return Some("git status".to_string());
+    }
+    None
+}
+
+fn extract_backtick(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut start = None;
+    for (i, b) in bytes.iter().enumerate() {
+        if *b == b'`' {
+            if let Some(st) = start {
+                if i > st + 1 {
+                    let cmd = &s[st + 1..i];
+                    if !cmd.trim().is_empty() {
+                        return Some(cmd.trim().to_string());
+                    }
+                }
+                start = None;
+            } else {
+                start = Some(i);
+            }
+        }
+    }
+    None
+}
+
+fn extract_replace_triplet(s: &str) -> Option<(String, String)> {
+    // 约定：... replace 'old' with 'new' ...
+    let lower = s.to_lowercase();
+    let replace_pos = lower.find("replace")?;
+    let with_pos = lower[replace_pos..].find(" with ")? + replace_pos;
+    let before = s[replace_pos + "replace".len()..with_pos].trim();
+    let after = s[with_pos + " with ".len()..].trim();
+    let old_s = extract_quoted(before)?;
+    let new_s = extract_quoted(after)?;
+    Some((old_s, new_s))
+}
+
+fn shell_safe_echo(s: &str) -> String {
+    let cleaned = s.replace('\n', " ").replace('"', "\\\"");
+    format!("\"{}\"", cleaned)
+}
+
+fn is_drift_interruption_signal(user_input: &str) -> bool {
+    let lower = user_input.to_lowercase();
+    let markers = [
+        "跑偏",
+        "不是重点",
+        "先别",
+        "先不要",
+        "停一下",
+        "stop that",
+        "off track",
+        "wrong focus",
+        "not the point",
+    ];
+    markers.iter().any(|m| lower.contains(m))
 }
 
 /// 截断工具结果，如果超过阈值则写入磁盘
@@ -364,9 +1025,31 @@ impl ConversationLoop {
                     _ => None,
                 })
             {
-                let gate = Gate::new();
-                let decision = gate.decide(last_user_msg);
+                let gate_llm_enabled = std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
+                    .ok()
+                    .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+                    .unwrap_or(false);
+                let gate = Gate::new().with_llm_classifier(gate_llm_enabled);
+                if is_drift_interruption_signal(last_user_msg) {
+                    crate::engine::workflow::metrics::record_drift_interruption();
+                }
+                let decision = if gate_llm_enabled {
+                    gate.decide_with_llm(last_user_msg, self.provider.as_ref(), &self.model)
+                        .await
+                } else {
+                    gate.decide(last_user_msg)
+                };
                 if decision.is_workflow() {
+                    crate::engine::workflow::metrics::record_workflow_run();
+                    if let Some(ref mem_mgr) = self.memory_manager {
+                        let mut mem = mem_mgr.lock().await;
+                        mem.save_workflow_decision(
+                            "gate",
+                            last_user_msg,
+                            "Workflow",
+                            decision.reason(),
+                        );
+                    }
                     if let Some(tx) = tx {
                         let _ = tx
                             .send(StreamEvent::TextChunk(format!(
@@ -375,12 +1058,30 @@ impl ConversationLoop {
                             )))
                             .await;
                     }
+                    let workflow_executor = WorkflowRealStepExecutor {
+                        tool_registry: self.tool_registry.clone(),
+                        llm_provider: self.provider.clone(),
+                        model: self.model.clone(),
+                        base_context: self.create_tool_context(),
+                    };
                     let workflow_engine = WorkflowEngine::new(self.provider.clone());
                     match workflow_engine
-                        .run(last_user_msg, last_user_msg, &NoOpStepExecutor)
+                        .run(last_user_msg, last_user_msg, &workflow_executor)
                         .await
                     {
                         Ok(result) => {
+                            if let Some(ref mem_mgr) = self.memory_manager {
+                                let mut mem = mem_mgr.lock().await;
+                                mem.save_workflow_decision(
+                                    "execution",
+                                    last_user_msg,
+                                    "Success",
+                                    &format!(
+                                        "workflow completed with {} steps",
+                                        result.plan.steps.len()
+                                    ),
+                                );
+                            }
                             if let Some(tx) = tx {
                                 let _ = tx.send(StreamEvent::Complete).await;
                             }
@@ -392,6 +1093,15 @@ impl ConversationLoop {
                             });
                         }
                         Err(e) => {
+                            if let Some(ref mem_mgr) = self.memory_manager {
+                                let mut mem = mem_mgr.lock().await;
+                                mem.save_workflow_decision(
+                                    "fallback",
+                                    last_user_msg,
+                                    "DirectMode",
+                                    &e,
+                                );
+                            }
                             warn!(
                                 "Workflow execution failed: {}, falling back to direct mode",
                                 e
@@ -1419,8 +2129,9 @@ mod tests {
     use super::*;
     use crate::services::api::{ChatResponse, ToolCall, Usage};
     use crate::test_utils::env_guard::EnvVarGuard;
-    use crate::tools::FileWriteTool;
+    use crate::tools::{FileReadTool, FileWriteTool};
     use async_openai::types::ChatCompletionResponseStream;
+    use serde::Deserialize;
     use std::collections::VecDeque;
     use std::sync::Mutex as StdMutex;
     use tempfile::tempdir;
@@ -1454,8 +2165,95 @@ mod tests {
         assert!(result.content.contains("Output truncated"));
     }
 
+    #[test]
+    fn test_normalize_params_fills_missing_required_fields() {
+        let step = crate::engine::plan_mode::PlanStep::new(
+            "运行 cargo test 验证修复",
+            Some("bash".to_string()),
+        );
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string" },
+                "timeout": { "type": "integer" }
+            },
+            "required": ["command", "timeout"]
+        });
+
+        let out = WorkflowRealStepExecutor::normalize_params(serde_json::json!({}), &schema, &step)
+            .expect("normalize should succeed");
+        assert_eq!(out["command"], "cargo test");
+        assert!(out["timeout"].is_number());
+    }
+
+    #[test]
+    fn test_normalize_params_coerces_required_field_types() {
+        let step = crate::engine::plan_mode::PlanStep::new(
+            "在 src/main.rs 中搜索 TODO",
+            Some("grep".to_string()),
+        );
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": { "type": "string" },
+                "path": { "type": "string" },
+                "limit": { "type": "integer" },
+                "recursive": { "type": "boolean" }
+            },
+            "required": ["pattern", "path", "limit", "recursive"]
+        });
+
+        let out = WorkflowRealStepExecutor::normalize_params(
+            serde_json::json!({
+                "pattern": 123,
+                "path": true,
+                "limit": "20",
+                "recursive": "yes"
+            }),
+            &schema,
+            &step,
+        )
+        .expect("normalize should succeed");
+
+        assert_eq!(out["pattern"], "123");
+        assert_eq!(out["path"], "true");
+        assert_eq!(out["limit"], 20);
+        assert_eq!(out["recursive"], true);
+    }
+
+    #[test]
+    fn test_normalize_params_rejects_non_object_payload() {
+        let step = crate::engine::plan_mode::PlanStep::new(
+            "读取 README.md",
+            Some("file_read".to_string()),
+        );
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "path": { "type": "string" } },
+            "required": ["path"]
+        });
+        let err = WorkflowRealStepExecutor::normalize_params(
+            serde_json::json!(["not", "object"]),
+            &schema,
+            &step,
+        )
+        .expect_err("non-object params should be rejected");
+        assert!(err.contains("JSON object"));
+    }
+
     struct MockLlmProvider {
         responses: StdMutex<VecDeque<ChatResponse>>,
+    }
+
+    fn workflow_test_executor() -> WorkflowRealStepExecutor {
+        WorkflowRealStepExecutor {
+            tool_registry: Arc::new(ToolRegistry::new()),
+            llm_provider: Arc::new(MockLlmProvider {
+                responses: StdMutex::new(VecDeque::new()),
+            }),
+            model: "mock-model".to_string(),
+            base_context: ToolContext::new(".", "workflow-test"),
+        }
     }
 
     #[async_trait::async_trait]
@@ -1830,6 +2628,376 @@ mod tests {
             result2.content.contains("Direct mode response"),
             "Expected direct response, got: {}",
             result2.content
+        );
+    }
+
+    struct ReplayLlmProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ReplayLlmProvider {
+        async fn chat(&self, request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            let last_user = request
+                .messages
+                .iter()
+                .rev()
+                .find_map(|m| match m {
+                    Message::User { content } => Some(content.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("");
+
+            let content = if last_user.contains("工具参数生成器") {
+                if last_user.contains("file_read") {
+                    r#"{"path":"README.md"}"#.to_string()
+                } else {
+                    "{}".to_string()
+                }
+            } else if last_user.contains("最终执行方案") || last_user.contains("列出具体步骤") {
+                "1. 读取 README.md 理解当前行为\n2. 读取 workflow-spec.md 对齐目标\n3. 读取 PLAN.md 核对当前阶段"
+                    .to_string()
+            } else if last_user.contains("最核心目标") {
+                "核心目标是先定位主线 blocker，再给出可执行改进路径。".to_string()
+            } else if last_user.contains("前提条件") {
+                "需要先确认现有实现状态、关键文件边界、可回退路径。".to_string()
+            } else if last_user.contains("最大风险") {
+                "最大风险是跑偏到细枝末节，或者执行顺序错误导致返工。".to_string()
+            } else {
+                "这是一个可执行的分析结论。".to_string()
+            };
+
+            Ok(ChatResponse {
+                content,
+                tool_calls: None,
+                usage: None,
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("stream unsupported in replay provider"))
+        }
+
+        fn base_url(&self) -> &str {
+            "mock://replay"
+        }
+
+        fn default_model(&self) -> &str {
+            "replay-model"
+        }
+    }
+
+    fn parse_metric_percent(report: &str, key: &str) -> Option<f64> {
+        let needle = format!("{}: ", key);
+        let idx = report.find(&needle)?;
+        let tail = &report[idx + needle.len()..];
+        let line = tail.lines().next()?.trim();
+        let value = line.trim_end_matches('%').trim();
+        value.parse::<f64>().ok()
+    }
+
+    #[tokio::test]
+    async fn test_workflow_real_devflow_round2_acceptance() {
+        let tasks = vec![
+            "重构 slash_handler 中 session/redo/retry 命令稳定性并避免跑偏",
+            "改进 workflow gate 让复杂任务优先走结构化流程",
+            "完善 workflow metrics 并输出北极星指标",
+            "清理 workflow 执行链里的参数生成失败路径",
+            "增强 Socratic 主动提问，避免细节纠结",
+            "优化 planner 的依赖推断与重算权重逻辑",
+            "把关键 workflow 决策写入记忆系统供后续复用",
+            "做一轮真实开发流验收并输出结果",
+        ];
+
+        let mut workflow_reports = 0usize;
+        let mut mainline_hits = 0usize;
+        let mut avg_coverage_acc = 0.0f64;
+        let mut avg_rework_acc = 0.0f64;
+
+        for task in &tasks {
+            let provider = Arc::new(ReplayLlmProvider);
+            let mut registry = ToolRegistry::new();
+            registry.register(FileReadTool);
+            let registry = Arc::new(registry);
+            let tracker = Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new()));
+
+            let loop_engine = ConversationLoop::new(
+                provider,
+                registry,
+                tracker,
+                "replay-model".to_string(),
+            )
+            .with_permission_mode(crate::permissions::PermissionMode::AutoAll)
+            .with_max_iterations(4);
+
+            let result = loop_engine
+                .run(vec![Message::user(*task)])
+                .await
+                .expect("conversation loop should run");
+
+            if result.content.contains("Workflow 执行报告") {
+                workflow_reports += 1;
+            }
+            if result.content.contains("Mainline Hit: yes") {
+                mainline_hits += 1;
+            }
+            avg_coverage_acc +=
+                parse_metric_percent(&result.content, "First Plan Coverage").unwrap_or(0.0);
+            avg_rework_acc += parse_metric_percent(&result.content, "Rework Rate").unwrap_or(0.0);
+        }
+
+        let n = tasks.len() as f64;
+        let workflow_rate = workflow_reports as f64 / n * 100.0;
+        let mainline_hit_rate = mainline_hits as f64 / n * 100.0;
+        let avg_coverage = avg_coverage_acc / n;
+        let avg_rework = avg_rework_acc / n;
+
+        let report = format!(
+            "# Workflow 真实开发流验收（Round 2）\n\n- 任务数: {}\n- Workflow 触发率: {:.1}%\n- Mainline Hit Rate: {:.1}%\n- Avg First Plan Coverage: {:.1}%\n- Avg Rework Rate: {:.1}%\n\n## 结论\n- Gate + Workflow + 真实工具执行链路可运行\n- 指标可回收，可用于下一轮优化\n",
+            tasks.len(),
+            workflow_rate,
+            mainline_hit_rate,
+            avg_coverage,
+            avg_rework
+        );
+
+        let _ = std::fs::create_dir_all("docs/workflow");
+        std::fs::write("docs/workflow/real-devflow-round2-report.md", report)
+            .expect("write round2 report");
+
+        assert!(
+            workflow_rate >= 80.0,
+            "workflow trigger rate too low: {:.1}%",
+            workflow_rate
+        );
+        assert!(
+            mainline_hit_rate >= 60.0,
+            "mainline hit rate too low: {:.1}%",
+            mainline_hit_rate
+        );
+    }
+
+    #[test]
+    fn test_tool_specific_params_file_write_glob_project_list() {
+        let executor = workflow_test_executor();
+
+        let write_step = crate::engine::plan_mode::PlanStep::new(
+            "写入 docs/workflow/notes.md 内容 `hello world`",
+            Some("file_write".to_string()),
+        );
+        let write = executor
+            .tool_specific_params(&write_step)
+            .expect("file_write params");
+        assert_eq!(write["path"], "docs/workflow/notes.md");
+        assert_eq!(write["content"], "hello world");
+
+        let glob_step = crate::engine::plan_mode::PlanStep::new(
+            "搜索 `src/**/*.rs` 文件",
+            Some("glob".to_string()),
+        );
+        let glob = executor.tool_specific_params(&glob_step).expect("glob params");
+        assert_eq!(glob["pattern"], "src/**/*.rs");
+
+        let project_step = crate::engine::plan_mode::PlanStep::new(
+            "在项目里搜索 \"workflow\" 相关文件",
+            Some("project_list".to_string()),
+        );
+        let project = executor
+            .tool_specific_params(&project_step)
+            .expect("project_list params");
+        assert_eq!(project["action"], "search");
+        assert_eq!(project["query"], "workflow");
+    }
+
+    #[test]
+    fn test_tool_specific_params_memory_todo_json_query() {
+        let executor = workflow_test_executor();
+
+        let memory_step = crate::engine::plan_mode::PlanStep::new(
+            "保存团队约定：`代码提交前必须跑 workflow-production-gates.sh`",
+            Some("memory_save".to_string()),
+        );
+        let memory = executor
+            .tool_specific_params(&memory_step)
+            .expect("memory_save params");
+        assert_eq!(memory["category"], "convention");
+        assert!(memory["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("workflow-production-gates.sh"));
+
+        let todo_step = crate::engine::plan_mode::PlanStep::new(
+            "todo: `修复 gate 样本; 完成 param replay`",
+            Some("todo_write".to_string()),
+        );
+        let todo = executor
+            .tool_specific_params(&todo_step)
+            .expect("todo_write params");
+        assert!(todo["todos"].is_array());
+        assert!(!todo["todos"].as_array().unwrap_or(&Vec::new()).is_empty());
+
+        let json_step = crate::engine::plan_mode::PlanStep::new(
+            "校验 JSON: `{\"name\":\"alice\"}`",
+            Some("json_query".to_string()),
+        );
+        let jq = executor
+            .tool_specific_params(&json_step)
+            .expect("json_query params");
+        assert_eq!(jq["action"], "validate");
+        assert!(jq["json"].as_str().unwrap_or_default().contains("alice"));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ParamReplaySample {
+        tool: String,
+        description: String,
+        required_fields: Vec<String>,
+        expected_action: Option<String>,
+        expected_pattern_contains: Option<String>,
+        expected_path_contains: Option<String>,
+    }
+
+    #[test]
+    fn test_param_planner_replay_samples() {
+        let raw = include_str!("../../docs/workflow/param-replay-samples.json");
+        let samples: Vec<ParamReplaySample> =
+            serde_json::from_str(raw).expect("valid param-replay-samples.json");
+        assert!(!samples.is_empty(), "param replay samples should not be empty");
+
+        let executor = workflow_test_executor();
+        for sample in &samples {
+            let step = crate::engine::plan_mode::PlanStep::new(
+                sample.description.clone(),
+                Some(sample.tool.clone()),
+            );
+            let params = executor
+                .tool_specific_params(&step)
+                .unwrap_or_else(|e| panic!("planner failed for tool '{}': {}", sample.tool, e));
+
+            for field in &sample.required_fields {
+                assert!(
+                    params.get(field).is_some(),
+                    "missing required field '{}' for tool '{}'",
+                    field,
+                    sample.tool
+                );
+            }
+            if let Some(action) = &sample.expected_action {
+                assert_eq!(
+                    params["action"].as_str(),
+                    Some(action.as_str()),
+                    "unexpected action for {:?}",
+                    sample
+                );
+            }
+            if let Some(pattern) = &sample.expected_pattern_contains {
+                let got = params["pattern"].as_str().unwrap_or_default();
+                assert!(
+                    got.contains(pattern),
+                    "pattern '{}' does not contain expected '{}'",
+                    got,
+                    pattern
+                );
+            }
+            if let Some(path) = &sample.expected_path_contains {
+                let got = params["path"].as_str().unwrap_or_default();
+                assert!(
+                    got.contains(path),
+                    "path '{}' does not contain expected '{}'",
+                    got,
+                    path
+                );
+            }
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Round3Task {
+        #[allow(dead_code)]
+        commit: String,
+        #[allow(dead_code)]
+        date: String,
+        #[allow(dead_code)]
+        subject: String,
+        task_description: String,
+    }
+
+    #[tokio::test]
+    async fn test_workflow_real_devflow_round3_acceptance() {
+        let tasks_raw = include_str!("../../docs/workflow/real-devflow-round3-tasks.json");
+        let tasks: Vec<Round3Task> =
+            serde_json::from_str(tasks_raw).expect("valid round3 tasks json");
+        assert!(
+            tasks.len() >= 8,
+            "round3 tasks should contain at least 8 items"
+        );
+
+        let mut workflow_reports = 0usize;
+        let mut mainline_hits = 0usize;
+        let mut avg_coverage_acc = 0.0f64;
+        let mut avg_rework_acc = 0.0f64;
+
+        for task in &tasks {
+            let provider = Arc::new(ReplayLlmProvider);
+            let mut registry = ToolRegistry::new();
+            registry.register(FileReadTool);
+            let registry = Arc::new(registry);
+            let tracker = Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new()));
+
+            let loop_engine = ConversationLoop::new(
+                provider,
+                registry,
+                tracker,
+                "replay-model".to_string(),
+            )
+            .with_permission_mode(crate::permissions::PermissionMode::AutoAll)
+            .with_max_iterations(4);
+
+            let result = loop_engine
+                .run(vec![Message::user(task.task_description.clone())])
+                .await
+                .expect("conversation loop should run");
+
+            if result.content.contains("Workflow 执行报告") {
+                workflow_reports += 1;
+            }
+            if result.content.contains("Mainline Hit: yes") {
+                mainline_hits += 1;
+            }
+            avg_coverage_acc +=
+                parse_metric_percent(&result.content, "First Plan Coverage").unwrap_or(0.0);
+            avg_rework_acc += parse_metric_percent(&result.content, "Rework Rate").unwrap_or(0.0);
+        }
+
+        let n = tasks.len() as f64;
+        let workflow_rate = workflow_reports as f64 / n * 100.0;
+        let mainline_hit_rate = mainline_hits as f64 / n * 100.0;
+        let avg_coverage = avg_coverage_acc / n;
+        let avg_rework = avg_rework_acc / n;
+
+        let report = format!(
+            "# Workflow 真实开发流验收（Round 3 - 本周提交回放）\n\n- 样本任务数: {}\n- Workflow 触发率: {:.1}%\n- Mainline Hit Rate: {:.1}%\n- Avg First Plan Coverage: {:.1}%\n- Avg Rework Rate: {:.1}%\n\n## 结论\n- 使用本周真实提交提炼任务进行回放验收\n- Gate + Workflow + 真实工具执行链路可运行\n- 结果可用于下一轮优化决策\n",
+            tasks.len(),
+            workflow_rate,
+            mainline_hit_rate,
+            avg_coverage,
+            avg_rework
+        );
+
+        let _ = std::fs::create_dir_all("docs/workflow");
+        std::fs::write("docs/workflow/real-devflow-round3-report.md", report)
+            .expect("write round3 report");
+
+        assert!(
+            workflow_rate >= 80.0,
+            "workflow trigger rate too low: {:.1}%",
+            workflow_rate
+        );
+        assert!(
+            mainline_hit_rate >= 60.0,
+            "mainline hit rate too low: {:.1}%",
+            mainline_hit_rate
         );
     }
 }

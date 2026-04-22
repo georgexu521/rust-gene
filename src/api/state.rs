@@ -454,6 +454,29 @@ impl ApiState {
             version: env!("CARGO_PKG_VERSION").to_string(),
         })
     }
+
+    /// 获取 workflow 每周汇总指标
+    pub async fn get_workflow_weekly_metrics(
+        &self,
+        limit_weeks: usize,
+    ) -> anyhow::Result<WorkflowWeeklyMetricsResponse> {
+        let rows = crate::engine::workflow::metrics::load_weekly_metric_summary(limit_weeks)
+            .map_err(anyhow::Error::msg)?;
+        let weeks = rows
+            .into_iter()
+            .map(|r| WorkflowWeeklyMetricItem {
+                week_key: r.week_key,
+                runs: r.runs,
+                mainline_hit_rate: r.mainline_hit_rate,
+                avg_first_plan_coverage: r.avg_first_plan_coverage,
+                avg_rework_rate: r.avg_rework_rate,
+            })
+            .collect();
+        Ok(WorkflowWeeklyMetricsResponse {
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            weeks,
+        })
+    }
 }
 
 /// 消息信息

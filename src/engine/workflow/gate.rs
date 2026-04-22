@@ -6,6 +6,7 @@
 //! 3. LLM Classifier（可选，M1 中暂不提供默认实现）
 
 use std::sync::LazyLock;
+use crate::services::api::{ChatRequest, LlmProvider, Message};
 
 /// 闸门判定结果
 #[derive(Debug, Clone, PartialEq)]
@@ -149,17 +150,66 @@ impl Gate {
 
         // 3. 默认行为：复杂可能性高，偏向 Workflow
         // M1 中 LLM Classifier 可选，未启用时默认 Workflow
-        if self.enable_llm_classifier {
-            // TODO: M2 中接入 LLM 轻量分类
-            GateDecision::Workflow {
-                reason: "LLM classifier not yet implemented in M1, defaulting to Workflow".into(),
-                confidence: 0.5,
-            }
-        } else {
-            GateDecision::Workflow {
+        let _ = self.enable_llm_classifier;
+        GateDecision::Workflow {
+            reason: "No fast lane or heuristic match, defaulting to Workflow (M1)".into(),
+            confidence: 0.5,
+        }
+    }
+
+    /// 异步判定（可选 LLM 轻量分类）
+    ///
+    /// 顺序：环境变量开关 → Fast Lane → Heuristic → LLM（可选）→ 默认 Workflow
+    pub async fn decide_with_llm(
+        &self,
+        input: &str,
+        provider: &dyn LlmProvider,
+        model: &str,
+    ) -> GateDecision {
+        if !Self::is_workflow_enabled() {
+            return GateDecision::Direct {
+                reason: "Workflow disabled by PRIORITY_AGENT_WORKFLOW_ENABLED".into(),
+            };
+        }
+
+        if let Some(decision) = fast_lane_check(input) {
+            return decision;
+        }
+
+        if let Some(decision) = heuristic_scan(input) {
+            return decision;
+        }
+
+        if !self.enable_llm_classifier {
+            return GateDecision::Workflow {
                 reason: "No fast lane or heuristic match, defaulting to Workflow (M1)".into(),
                 confidence: 0.5,
-            }
+            };
+        }
+
+        let prompt = format!(
+            "你是工作流路由分类器。请判断用户请求应走 direct 还是 workflow。\n\
+             规则：\n\
+             - 简单查询/闲聊/单点小修复 => direct\n\
+             - 多步骤改造/跨模块/高风险操作/架构决策 => workflow\n\
+             输出必须是一行 JSON：{{\"decision\":\"direct|workflow\",\"confidence\":0.0-1.0,\"reason\":\"...\"}}\n\
+             用户请求：{}",
+            input
+        );
+        let mut request = ChatRequest::new(model)
+            .with_messages(vec![Message::system("只输出 JSON，不要解释。"), Message::user(&prompt)])
+            .with_temperature(0.0);
+        request.max_tokens = Some(120);
+
+        match provider.chat(request).await {
+            Ok(resp) => Self::parse_llm_decision(&resp.content).unwrap_or_else(|| GateDecision::Workflow {
+                reason: "LLM classifier parse failed, defaulting to Workflow".into(),
+                confidence: 0.5,
+            }),
+            Err(_) => GateDecision::Workflow {
+                reason: "LLM classifier failed, defaulting to Workflow".into(),
+                confidence: 0.5,
+            },
         }
     }
 
@@ -177,6 +227,28 @@ impl Gate {
     }
 }
 
+impl Gate {
+    fn parse_llm_decision(raw: &str) -> Option<GateDecision> {
+        let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+        let decision = v.get("decision")?.as_str()?.to_ascii_lowercase();
+        let confidence = v
+            .get("confidence")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.5)
+            .clamp(0.0, 1.0);
+        let reason = v
+            .get("reason")
+            .and_then(|x| x.as_str())
+            .unwrap_or("LLM classifier decision")
+            .to_string();
+        match decision.as_str() {
+            "direct" => Some(GateDecision::Direct { reason }),
+            "workflow" => Some(GateDecision::Workflow { reason, confidence }),
+            _ => None,
+        }
+    }
+}
+
 impl Default for Gate {
     fn default() -> Self {
         Self::new()
@@ -190,6 +262,7 @@ impl Default for Gate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[test]
     fn test_fast_lane_help() {
@@ -324,5 +397,59 @@ mod tests {
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
 
         assert!(Gate::is_workflow_enabled(), "Workflow should be enabled by default");
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReplaySample {
+        task_description: String,
+        complexity: String,
+    }
+
+    fn load_replay_samples() -> (Vec<ReplaySample>, String) {
+        let v2 = std::path::Path::new("docs/workflow/gate-replay-samples-v2.json");
+        let v1 = std::path::Path::new("docs/workflow/gate-replay-samples.json");
+        if v2.exists() {
+            let raw = std::fs::read_to_string(v2).expect("read v2 replay samples");
+            let samples: Vec<ReplaySample> =
+                serde_json::from_str(&raw).expect("valid gate-replay-samples-v2.json");
+            return (samples, v2.display().to_string());
+        }
+        let raw = std::fs::read_to_string(v1).expect("read v1 replay samples");
+        let samples: Vec<ReplaySample> =
+            serde_json::from_str(&raw).expect("valid gate-replay-samples.json");
+        (samples, v1.display().to_string())
+    }
+
+    #[test]
+    fn test_gate_offline_replay_accuracy() {
+        let (samples, source) = load_replay_samples();
+        assert!(!samples.is_empty(), "samples should not be empty");
+
+        let gate = Gate::new();
+        let mut hits = 0usize;
+        for s in &samples {
+            let predicted = gate.decide(&s.task_description);
+            let expected_workflow = !s.complexity.eq_ignore_ascii_case("simple");
+            if expected_workflow == predicted.is_workflow() {
+                hits += 1;
+            }
+        }
+
+        let acc = hits as f64 / samples.len() as f64;
+        let threshold = if samples.len() >= 200 { 0.85 } else { 0.60 };
+        eprintln!(
+            "[gate replay] source={} accuracy={:.2}% ({}/{}) threshold={:.0}%",
+            source,
+            acc * 100.0,
+            hits,
+            samples.len(),
+            threshold * 100.0
+        );
+        assert!(
+            acc >= threshold,
+            "gate replay accuracy too low: {:.2}% (< {:.0}%)",
+            acc * 100.0,
+            threshold * 100.0
+        );
     }
 }

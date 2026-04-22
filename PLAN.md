@@ -680,3 +680,101 @@
 2. 建立 20 条真实任务样本并完成 blocker 标注。
 3. 输出 `gate-spec.md` 与 `weights-spec.md` 初稿。
 4. 同步建立专项周报模板与指标看板字段定义。
+
+### 11.10 当前完成度快照（2026-04-22）
+1. W1-W9 交付物：已落盘（含 `workflow-v1-design.md`、`baseline-report.md`、`gate-spec.md`、`weights-spec.md`、`questioning-spec.md`、`planner-executor-spec.md`、`metrics-pipeline-spec.md`、`m1-integration-plan.md`、`m1-acceptance-checklist.md`）。
+2. W10-W12 交付物：已补齐（`m1-gap-list.md`、`m2-optimization-plan.md`、`rollout-plan.md`、`operator-guide.md`）。
+3. 执行支持文件：已补齐（`scripts/workflow-m1-acceptance.sh`、`docs/workflow/weekly-report-template.md`、`docs/workflow/samples/samples-v1-annotated.json`）。
+4. 代码一致性：`WorkflowEngine::run_gate` 已接入真实 Gate 判定，避免直接调用绕过闸门。
+
+---
+
+## 12. 稳定生产级开发计划（Post-MVP）
+
+> 目标：把当前“可用 Beta”提升为“稳定生产级”。  
+> 时间窗：6 周（可压缩到 4 周，但风险更高）。
+
+### 12.1 生产级验收标准（Definition of Done）
+1. 连续 14 天无 P0 故障。
+2. P1 故障每周不超过 2 个，且均有 RCA。
+3. `cargo check` / `cargo clippy` / `cargo test` / `workflow-m1-acceptance` / `workflow-gate-replay` 全绿。
+4. 四项北极星指标可追溯、可周报、可对比趋势。
+5. 灰度与回滚演练完成，15 分钟内可降级到 Direct。
+
+### 12.2 主要缺口（当前）
+1. 真实工具执行参数生成稳定性不足（复杂步骤偶发失败）。
+2. `Drift Interruption Rate` 仍是轻量埋点，缺持久化与维度拆解。
+3. Gate 的 LLM 分类不是默认强策略，误判治理机制仍需加强。
+4. 运维侧报警、SLO、发布门禁尚未完整自动化。
+
+### 12.3 分阶段计划
+
+#### Phase S0（第 1-2 周）：执行稳定性
+1. 扩展“工具专用参数 planner”到 Top 10 高频工具（`file_read/file_edit/bash/grep` 之外继续补齐）。
+2. 参数失败二级回退：专用模板回退 + 安全默认值回退 + 明确错误码。
+3. 建立参数生成回放样本（>= 80 条）并纳入 CI。
+4. 交付物：`docs/workflow/param-planner-spec.md`、`docs/workflow/param-replay-report.md`。
+5. 验收：回放执行成功率 >= 95%，危险默认参数 0 次。
+
+#### Phase S1（第 3-4 周）：指标与 Gate 产品化
+1. 北极星指标持久化到 SQLite（会话维度 + 任务维度 + 周维度）。
+2. 增加指标查询接口与周报导出脚本（自动生成趋势报告）。
+3. Gate 双通道默认启用：启发式 + LLM 分类，带超时降级与原因记录。
+4. Gate 误判样本扩充到 >= 200 条，持续回放评估。
+5. 交付物：`docs/workflow/metrics-storage-spec.md`、`docs/workflow/gate-misclass-report.md`。
+6. 验收：Gate 离线准确率 >= 85%，线上误判可解释率 100%。
+
+#### Phase S2（第 5 周）：发布门禁与可观测
+1. CI 强制质量门禁：`check + clippy + tests + m1 acceptance + gate replay + round3 replay`。
+2. 结构化日志与告警规则：drift 激增、rework 激增、fallback 激增。
+3. 故障分级与自动降级：连续失败触发 `FallbackDirect`，并打告警。
+4. 交付物：`docs/workflow/release-gates.md`、`docs/workflow/alerts-playbook.md`。
+5. 验收：门禁失败禁止合并；告警误报率 < 10%。
+
+#### Phase S3（第 6 周）：灰度与生产演练
+1. 灰度放量：10% -> 50% -> 100%，每阶段至少观察 48 小时。
+2. 回滚演练：配置回滚、开关回滚、版本回滚三层演练。
+3. 事故演练：模拟 drift 激增并在 15 分钟内降级恢复。
+4. 交付物：`docs/workflow/production-readiness-report.md`。
+5. 验收：全量后连续 7 天核心指标稳定，无 P0。
+
+### 12.4 6 周甘特版任务清单
+
+| 周次 | 重点目标 | 关键任务 | 验收标准 |
+|------|---------|---------|---------|
+| W1 | 参数稳定化 | Top 10 工具参数 planner v1 + 回放样本集 | 参数回放成功率 >= 90% |
+| W2 | 参数稳定化闭环 | 二级回退 + 错误码统一 + 安全默认值收敛 | 参数回放成功率 >= 95% |
+| W3 | 指标持久化 | 四指标写入 SQLite + 查询脚本 | 周报可自动生成 |
+| W4 | Gate 产品化 | 双通道 Gate 默认启用 + 200 样本回放 | Gate 准确率 >= 85% |
+| W5 | 发布门禁 | CI 门禁 + 告警规则 + 自动降级策略 | 失败可自动阻断发布 |
+| W6 | 灰度上线 | 10%->50%->100% 灰度 + 回滚演练 | 连续稳定通过生产验收 |
+
+### 12.5 发布门禁（生产前必须满足）
+1. `scripts/workflow-m1-acceptance.sh` 通过。
+2. `scripts/workflow-gate-replay.sh` 通过，准确率 >= 85%。
+3. `scripts/workflow-real-devflow-round2.sh` 与 `scripts/workflow-real-devflow-round3.sh` 通过。
+4. 无 blocker 级缺陷未关闭。
+5. 回滚脚本实测通过。
+
+### 12.6 风险与缓解
+1. 指标好看但不真实：保留人工抽样核验（每周至少 20 条）。
+2. 参数 planner 覆盖不全：先覆盖高频工具，再扩面。
+3. Gate 过拟合样本：训练/回放样本分离并保留盲测集。
+4. 灰度放量太快：严格执行阶段观测窗口，不提前晋级。
+
+### 12.7 立即行动（本周）
+1. 新建 `docs/workflow/param-planner-spec.md` 并冻结 Top 10 工具策略。
+2. 建立 `docs/workflow/gate-replay-samples-v2.json`（目标 200 条）。
+3. 增加 `workflow-production-gates.sh` 汇总脚本（串行执行全部门禁）。
+4. 启动 W1 任务并在周报模板中新增“生产级达成率”字段。
+
+#### 12.7.1 执行进展（2026-04-22）
+- ✅ 已完成：`param-planner-spec.md`（Top-10 工具策略冻结 v1）
+- ✅ 已完成：`workflow-production-gates.sh`（已纳入 `workflow-param-replay`）
+- ✅ 已完成：`param-replay-samples.json` + `workflow-param-replay.sh` + `param-replay-report.md`
+- ✅ 已完成：`gate-replay-samples-v2.json` 扩容到 200 条（门槛提升到 85% 并通过）
+- ✅ 已完成：`gate-misclass-report.md` 自动生成（由 `workflow-gate-replay.sh` 产出）
+- ✅ 已完成：Top-10 参数 planner（`file_read/file_edit/bash/grep/file_write/glob/project_list/memory_save/todo_write/json_query`）
+- ✅ 已完成：S1 首步落地，`metrics-storage-spec.md` + SQLite 持久化接线（`workflow_metrics_runs`）
+- ✅ 已完成：`/api/workflow/metrics/weekly` 查询接口（支持 `limit`）
+- ✅ 已完成：`workflow-weekly-report.sh` 周报脚本升级（含 WoW 环比列）

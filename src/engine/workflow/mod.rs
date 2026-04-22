@@ -77,6 +77,8 @@ pub enum WorkflowState {
     Done,
     /// 报告生成
     Report,
+    /// 降级到 Direct 模式（预算/错误触发）
+    FallbackDirect,
 }
 
 /// 状态快照（用于审计和调试）
@@ -162,7 +164,7 @@ impl WorkflowEngine {
     /// 运行完整 Workflow（状态机驱动）
     ///
     /// # 状态机行为
-    /// 1. GATE — 快速检查（当前直接通过，未来可接入 Gate 判断）
+    /// 1. GATE — 快速检查（支持可选 LLM 分类）
     /// 2. THINKING — 主动提问式深思
     /// 3. PLANNING — 递归计划生成
     /// 4. WEIGHTING — 权重计算（在 planning 中完成）
@@ -181,11 +183,20 @@ impl WorkflowEngine {
 
         // 1. GATE
         sm.transition(WorkflowState::Gate);
-        self.run_gate(task, mainline_goal)?;
+        if let Err(e) = self.run_gate(task, mainline_goal).await {
+            sm.transition(WorkflowState::FallbackDirect);
+            return Err(e);
+        }
 
         // 2. THINKING
         sm.transition(WorkflowState::Thinking);
-        let thinking_result = self.run_thinking(task, mainline_goal).await?;
+        let thinking_result = match self.run_thinking(task, mainline_goal).await {
+            Ok(v) => v,
+            Err(e) => {
+                sm.transition(WorkflowState::FallbackDirect);
+                return Err(e);
+            }
+        };
 
         // 3. PLANNING
         sm.transition(WorkflowState::Planning);
@@ -199,7 +210,13 @@ impl WorkflowEngine {
             current_step: 0,
             total: plan.steps.len(),
         });
-        let mut execution_log = self.run_executing(&mut plan, step_executor, &mut sm).await?;
+        let mut execution_log = match self.run_executing(&mut plan, step_executor, &mut sm).await {
+            Ok(v) => v,
+            Err(e) => {
+                sm.transition(WorkflowState::FallbackDirect);
+                return Err(e);
+            }
+        };
 
         // 6. VERIFYING
         sm.transition(WorkflowState::Verifying);
@@ -254,10 +271,35 @@ impl WorkflowEngine {
     // 状态步骤方法
     // ============================================================================
 
-    fn run_gate(&self, _task: &str, _mainline_goal: &str) -> Result<(), String> {
-        // GATE 状态：快速准入检查
-        // 当前直接通过；未来可接入 Gate::decide() 做 Direct vs Workflow 路由
-        Ok(())
+    async fn run_gate(&self, task: &str, _mainline_goal: &str) -> Result<(), String> {
+        // GATE 状态：与 ConversationLoop 保持一致的闸门判定。
+        // 即使外部直接调用 WorkflowEngine，也会进行一次准入检查。
+        let gate = Gate::new().with_llm_classifier(
+            std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
+                .ok()
+                .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+                .unwrap_or(false),
+        );
+        let decision = if std::env::var("PRIORITY_AGENT_WORKFLOW_GATE_LLM")
+            .ok()
+            .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+            .unwrap_or(false)
+        {
+            gate.decide_with_llm(
+                task,
+                self.llm_provider.as_ref(),
+                self.llm_provider.default_model(),
+            )
+            .await
+        } else {
+            gate.decide(task)
+        };
+        match decision {
+            GateDecision::Workflow { .. } => Ok(()),
+            GateDecision::Direct { reason } => {
+                Err(format!("Gate decided Direct mode, skip workflow: {}", reason))
+            }
+        }
     }
 
     async fn run_thinking(
@@ -360,8 +402,16 @@ impl WorkflowEngine {
         output.push_str(&WorkflowExecutor::format_report(execution_log));
         output.push('\n');
         // M1: 追加执行指标聚合
-        let metrics = WorkflowMetrics::from_records(execution_log);
+        let metrics = WorkflowMetrics::from_workflow(plan, execution_log, &plan.goal);
         output.push_str(&metrics.summary());
+        match crate::engine::workflow::metrics::persist_workflow_metrics(
+            &thinking.problem_statement,
+            &plan.goal,
+            &metrics,
+        ) {
+            Ok(_) => output.push_str("\n- Metrics persisted: yes\n"),
+            Err(e) => output.push_str(&format!("\n- Metrics persisted: no ({})\n", e)),
+        }
         output.push('\n');
         // 状态机历史
         output.push_str(&sm.format_history());
@@ -376,7 +426,7 @@ impl WorkflowEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::plan_mode::{PlanStep, StepStatus};
+    use crate::engine::plan_mode::PlanStep;
     use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message};
     use async_trait::async_trait;
 

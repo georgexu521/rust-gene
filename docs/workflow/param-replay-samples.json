@@ -1,0 +1,58 @@
+[
+  {
+    "tool": "file_read",
+    "description": "读取 src/main.rs 查看启动逻辑",
+    "required_fields": ["path"],
+    "expected_path_contains": "src/main.rs"
+  },
+  {
+    "tool": "file_write",
+    "description": "写入 docs/workflow/notes.md 内容 `hello workflow`",
+    "required_fields": ["path", "content"],
+    "expected_path_contains": "docs/workflow/notes.md"
+  },
+  {
+    "tool": "grep",
+    "description": "在 src 中搜索 TODO",
+    "required_fields": ["pattern", "path"],
+    "expected_path_contains": "src"
+  },
+  {
+    "tool": "glob",
+    "description": "搜索 `src/**/*.rs` 文件",
+    "required_fields": ["pattern", "path"],
+    "expected_pattern_contains": "*.rs"
+  },
+  {
+    "tool": "bash",
+    "description": "执行 `cargo test` 验证回归",
+    "required_fields": ["command", "timeout"]
+  },
+  {
+    "tool": "project_list",
+    "description": "在项目里搜索 \"workflow\" 相关文件",
+    "required_fields": ["action", "query", "limit"],
+    "expected_action": "search"
+  },
+  {
+    "tool": "project_list",
+    "description": "输出项目结构概览",
+    "required_fields": ["action", "limit"],
+    "expected_action": "summary"
+  },
+  {
+    "tool": "memory_save",
+    "description": "保存约定：`提交前跑 workflow-production-gates.sh`",
+    "required_fields": ["content", "category"]
+  },
+  {
+    "tool": "todo_write",
+    "description": "todo: `修复 gate; 完成 param replay`",
+    "required_fields": ["todos"]
+  },
+  {
+    "tool": "json_query",
+    "description": "校验 JSON: `{\"ok\":true}`",
+    "required_fields": ["action", "json"]
+  }
+]

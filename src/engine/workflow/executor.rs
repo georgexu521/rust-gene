@@ -131,7 +131,6 @@ impl WorkflowExecutor {
 
         let (outcome, final_status) = match first_result {
             Ok(output) => {
-                let duration = start.elapsed().as_millis() as u64;
                 plan.steps[step_index].status = StepStatus::Completed;
                 (
                     ExecutionOutcome::Success(output),
@@ -147,7 +146,6 @@ impl WorkflowExecutor {
 
                 match retry_result {
                     Ok(output) => {
-                        let duration = start.elapsed().as_millis() as u64;
                         plan.steps[step_index].status = StepStatus::Completed;
                         (
                             ExecutionOutcome::Success(output),
@@ -156,7 +154,6 @@ impl WorkflowExecutor {
                     }
                     Err(err2) => {
                         // 第 2 次失败 → 标记 [重构]（E-05）
-                        let duration = start.elapsed().as_millis() as u64;
                         let step = &mut plan.steps[step_index];
                         if !step.description.starts_with("[重构]") {
                             step.description = format!("[重构] {}", step.description);
@@ -216,7 +213,7 @@ impl WorkflowExecutor {
             total_duration
         ));
 
-        for (i, record) in records.iter().enumerate() {
+        for record in records {
             let icon = match &record.outcome {
                 ExecutionOutcome::Success(_) => "✅",
                 ExecutionOutcome::Failed(_) => "❌",
@@ -294,7 +291,7 @@ mod tests {
         let plan_steps = steps
             .into_iter()
             .enumerate()
-            .map(|(i, (desc, weight, deps))| PlanStep {
+            .map(|(_, (desc, weight, deps))| PlanStep {
                 description: desc,
                 tool: None,
                 status: StepStatus::Pending,

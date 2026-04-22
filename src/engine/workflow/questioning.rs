@@ -3,7 +3,7 @@
 //! 改造现有 SocraticSession，新增主动触发、动态生成、自问自答能力。
 //! M1 范围：固定模板 fallback + 简化版 LLM 动态生成 + Budget 控制。
 
-use crate::engine::socratic::{QuestionType, SocraticSession};
+use crate::engine::socratic::QuestionType;
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use serde::{Deserialize, Serialize};
 
@@ -166,6 +166,14 @@ pub struct ActiveQuestioningEngine {
     node_counter: usize,
 }
 
+#[derive(Debug, Clone)]
+struct PendingQuestion {
+    question: String,
+    qtype: QuestionType,
+    depth: usize,
+    parent_id: Option<String>,
+}
+
 impl ActiveQuestioningEngine {
     pub fn new(task: String, mainline_goal: String) -> Self {
         Self {
@@ -183,24 +191,32 @@ impl ActiveQuestioningEngine {
         model: &str,
     ) -> Result<ThinkingResult, String> {
         let mut budget = BudgetTracker::from_env();
+        let max_depth = std::env::var("PRIORITY_AGENT_SOCRATIC_MAX_DEPTH")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(3);
+        let mut queue = self.generate_seed_questions();
 
-        // M1：先使用固定模板生成初始问题（确保稳定性）
-        let initial_questions = self.generate_initial_questions();
-
-        for (question, qtype) in initial_questions {
+        while let Some(pending) = queue.pop_front() {
             if !budget.can_proceed() {
                 break;
             }
 
             // LLM 自答
             let answer = self
-                .self_answer(llm_provider, model, &question, &budget)
+                .self_answer(llm_provider, model, &pending.question, &budget)
                 .await?;
 
-            let cost = estimate_token_cost(&question, &answer);
+            let cost = estimate_token_cost(&pending.question, &answer);
             budget.consume(cost);
 
-            let node = self.record_qa(question, answer, qtype);
+            let node = self.record_qa(
+                pending.question,
+                answer,
+                pending.qtype,
+                pending.depth,
+                pending.parent_id,
+            );
 
             // 检查收敛
             if let Some(reason) = self.check_convergence() {
@@ -211,41 +227,62 @@ impl ActiveQuestioningEngine {
             if self.has_executable_plan(&node) {
                 return Ok(self.build_result("executable_plan_formed".into(), &budget));
             }
+
+            // 动态追问（递进式）
+            if pending.depth < max_depth {
+                if let Some(next) = self.generate_followup_question(&node, pending.depth + 1) {
+                    queue.push_back(next);
+                }
+            }
         }
 
         // Budget 耗尽或问题列表遍历完
-        Ok(self.build_result("budget_exhausted".into(), &budget))
+        let reason = if budget.is_exhausted() {
+            "budget_exhausted".to_string()
+        } else {
+            "question_queue_exhausted".to_string()
+        };
+        Ok(self.build_result(reason, &budget))
     }
 
-    /// M1：固定模板生成初始问题
-    fn generate_initial_questions(&self) -> Vec<(String, QuestionType)> {
-        vec![
-            (
-                format!(
-                    "任务「{}」的最核心目标是什么？去掉所有表面需求后，本质上要解决什么问题？",
-                    truncate(&self.task, 80)
-                ),
-                QuestionType::GoalClarification,
+    fn generate_seed_questions(&self) -> std::collections::VecDeque<PendingQuestion> {
+        let mut q = std::collections::VecDeque::new();
+        q.push_back(PendingQuestion {
+            question: format!(
+                "任务「{}」的最核心目标是什么？去掉表面需求后，本质问题是什么？",
+                truncate(&self.task, 80)
             ),
-            (
-                format!(
-                    "要完成这个目标，有哪些前提条件必须先满足？",
-                ),
-                QuestionType::PrerequisiteCheck,
-            ),
-            (
-                format!(
-                    "做这件事最大的风险是什么？最可能在哪里出错？",
-                ),
-                QuestionType::RiskAssessment,
-            ),
-            (
-                format!(
-                    "基于以上分析，最终的执行方案是什么？请列出具体步骤。",
-                ),
-                QuestionType::Reflection,
-            ),
-        ]
+            qtype: QuestionType::GoalClarification,
+            depth: 0,
+            parent_id: None,
+        });
+        q.push_back(PendingQuestion {
+            question: "要完成这个目标，哪些前提和约束必须先满足？".to_string(),
+            qtype: QuestionType::PrerequisiteCheck,
+            depth: 0,
+            parent_id: None,
+        });
+        q.push_back(PendingQuestion {
+            question: "最大的风险是什么？最可能出错的环节在哪里？".to_string(),
+            qtype: QuestionType::RiskAssessment,
+            depth: 0,
+            parent_id: None,
+        });
+        if is_complex_task(&self.task) {
+            q.push_back(PendingQuestion {
+                question: "如果要避免跑偏，应该如何定义主线与非主线边界？".to_string(),
+                qtype: QuestionType::GoalClarification,
+                depth: 0,
+                parent_id: None,
+            });
+        }
+        q.push_back(PendingQuestion {
+            question: "基于以上分析，最终执行方案是什么？请列出步骤。".to_string(),
+            qtype: QuestionType::Reflection,
+            depth: 0,
+            parent_id: None,
+        });
+        q
     }
 
     /// LLM 自答
@@ -280,7 +317,14 @@ impl ActiveQuestioningEngine {
     }
 
     /// 记录 Q&A
-    fn record_qa(&mut self, question: String, answer: String, qtype: QuestionType) -> QuestionNode {
+    fn record_qa(
+        &mut self,
+        question: String,
+        answer: String,
+        qtype: QuestionType,
+        depth: usize,
+        parent_id: Option<String>,
+    ) -> QuestionNode {
         self.node_counter += 1;
         let id = format!("Q-{}", self.node_counter);
 
@@ -292,8 +336,8 @@ impl ActiveQuestioningEngine {
             question,
             answer,
             question_type: qtype,
-            depth: 0, // M1 简化，不使用深度递归
-            parent_id: None,
+            depth,
+            parent_id,
             child_ids: Vec::new(),
             mainline_relevance: relevance,
             token_cost: cost,
@@ -301,6 +345,43 @@ impl ActiveQuestioningEngine {
 
         self.nodes.push(node.clone());
         node
+    }
+
+    fn generate_followup_question(
+        &self,
+        node: &QuestionNode,
+        depth: usize,
+    ) -> Option<PendingQuestion> {
+        let answer = node.answer.to_lowercase();
+        let followup = if answer.contains("不确定")
+            || answer.contains("可能")
+            || answer.contains("风险")
+            || answer.contains("依赖")
+        {
+            Some((
+                "针对你刚提到的不确定点，最小验证步骤是什么？".to_string(),
+                QuestionType::RiskAssessment,
+            ))
+        } else if node.question_type == QuestionType::PrerequisiteCheck {
+            Some((
+                "这些前提里，哪个是当前真正的 blocker？为什么？".to_string(),
+                QuestionType::GoalClarification,
+            ))
+        } else if node.question_type == QuestionType::GoalClarification && depth <= 2 {
+            Some((
+                "若只允许先做一件事，哪一步最能推动主线？".to_string(),
+                QuestionType::Reflection,
+            ))
+        } else {
+            None
+        }?;
+
+        Some(PendingQuestion {
+            question: followup.0,
+            qtype: followup.1,
+            depth,
+            parent_id: Some(node.id.clone()),
+        })
     }
 
     /// 检查收敛条件
@@ -434,6 +515,23 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}...", s.chars().take(max).collect::<String>())
     }
+}
+
+fn is_complex_task(task: &str) -> bool {
+    let t = task.to_lowercase();
+    let markers = [
+        "重构",
+        "架构",
+        "迁移",
+        "跨模块",
+        "系统",
+        "workflow",
+        "refactor",
+        "architecture",
+        "migrate",
+        "multi",
+    ];
+    markers.iter().any(|m| t.contains(m))
 }
 
 // ============================================================================

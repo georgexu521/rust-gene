@@ -69,6 +69,10 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
         )
         // Stats API
         .route("/api/stats", get(get_stats_handler))
+        .route(
+            "/api/workflow/metrics/weekly",
+            get(get_workflow_weekly_metrics_handler),
+        )
         // Audit API
         .route("/api/audit/summary", get(get_audit_summary_handler))
         .route("/api/audit/recent", get(get_audit_recent_handler))
@@ -378,6 +382,33 @@ async fn get_stats_handler(
     let stats = state.get_stats().await?;
 
     Ok((StatusCode::OK, Json(stats)))
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkflowWeeklyMetricItem {
+    pub week_key: String,
+    pub runs: usize,
+    pub mainline_hit_rate: f64,
+    pub avg_first_plan_coverage: f64,
+    pub avg_rework_rate: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkflowWeeklyMetricsResponse {
+    pub generated_at: String,
+    pub weeks: Vec<WorkflowWeeklyMetricItem>,
+}
+
+async fn get_workflow_weekly_metrics_handler(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<Arc<ApiState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(8);
+    let result = state.get_workflow_weekly_metrics(limit).await?;
+    Ok((StatusCode::OK, Json(result)))
 }
 
 // ── Audit Handlers ─────────────────────────────────────
@@ -871,5 +902,51 @@ mod tests {
             (0.0..=100.0).contains(&rate),
             "first_pass_rate_pct should be in [0,100], got {rate}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_workflow_weekly_metrics_endpoint() {
+        let provider = Arc::new(MockProvider);
+        let state = Arc::new(crate::api::state::ApiState {
+            provider,
+            model: "mock-model".to_string(),
+            tool_registry: Arc::new(crate::tools::ToolRegistry::new()),
+            session_store: Arc::new(tokio::sync::RwLock::new(
+                crate::session_store::SessionStore::in_memory().expect("in-memory session store"),
+            )),
+            config: Arc::new(tokio::sync::RwLock::new(
+                crate::services::config::AppConfig::default(),
+            )),
+            start_time: Instant::now(),
+            request_count: Arc::new(tokio::sync::RwLock::new(0)),
+            audit_tracker: Arc::new(tokio::sync::RwLock::new(
+                crate::cost_tracker::CostTracker::new(),
+            )),
+            lsp_manager: None,
+            worktree_manager: None,
+        });
+        let app = create_routes(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/workflow/metrics/weekly?limit=4")
+                    .method("GET")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("valid json response");
+        assert!(
+            value["generated_at"].as_str().is_some(),
+            "generated_at should be present"
+        );
+        assert!(value["weeks"].is_array(), "weeks should be array");
     }
 }
