@@ -611,3 +611,72 @@
 3. 建立回归样本目录与首批 20 个高频任务样本。
 4. 输出 Phase 0 的验收报告模板。
 5. 按高频命令闭环清单逐项执行与验收：`docs/HIGH_FREQ_COMMAND_CLOSURE_CHECKLIST.md`。
+
+---
+
+## 11. WorkflowEngine 专项开发计划（基于 `brainstorm.md` 与 `workflow-spec.md`）
+
+> 目标：解决“AI 抓不住重点、容易陷入细枝末节”的核心问题。  
+> 方法：源码级权重规则 + 主动提问式深思（Socratic 内核，对外术语用“主动提问式深思”）。
+
+### 11.1 北极星目标
+1. 先找主线（Mainline），再做细节。
+2. 通过主动多提关键问题，把任务想透再执行。
+3. 执行顺序由源码规则约束，而非提示词“建议”。
+
+### 11.2 四个硬指标（专项验收口径）
+1. Mainline Hit Rate > 70%。
+2. Drift Interruption Rate < 15%。
+3. First Plan Coverage > 80%。
+4. Rework Rate 按阶段持续下降（每阶段目标下降 10%-20%）。
+
+### 11.3 12 周分阶段任务表
+
+| 周次 | 阶段主题 | 核心任务 | 交付物 | 验收标准 |
+|------|---------|---------|-------|---------|
+| W1 | 规范冻结 | 冻结术语、状态机、指标字典、复杂任务判定标准 | `workflow-v1-design.md` | 评审通过，术语不再反复变更 |
+| W2 | 基线采样 | 采集真实任务样本并人工标注 blocker/跑偏 | `baseline-report.md`、样本集 v1 | 四指标有可复现实测基线 |
+| W3 | Gate 方案 | 设计 Direct vs Workflow 闸门，定义误判回退策略 | `gate-spec.md` | 离线判定准确率达标（建议 >= 75%） |
+| W4 | 权重规则 | 固化六维权重（Risk/Impact/Complexity/Blocker/Dependency/Drift） | `weights-spec.md` | 同输入稳定排序、可解释 |
+| W5 | 提问策略 | 设计问题链生成、停止条件、预算上限 | `questioning-spec.md` | 能稳定产出“可执行问题链” |
+| W6 | 执行策略 | 设计 Planner/Executor/递归拆分/失败升级策略 | `planner-executor-spec.md` | 异常路径闭环完整 |
+| W7 | 观测体系 | 指标埋点、日志结构、回放格式、周报模板 | `metrics-pipeline-spec.md` | 每周可自动产出趋势报告 |
+| W8 | MVP 联调计划 | 明确 M1 最小可运行链路与阻断清单 | `m1-integration-plan.md` | 依赖关系与接口全部清晰 |
+| W9 | MVP 验收脚本 | 制定专项验收清单与样本任务通过标准 | `m1-acceptance-checklist.md` | 清单可直接执行 |
+| W10 | 缺口收敛 | 按验收演练输出缺口与优先级 | `m1-gap-list.md` | 缺口可量化且有排期 |
+| W11 | 优化计划 | 针对 drift 与返工率做专项优化方案 | `m2-optimization-plan.md` | 预期提升幅度明确 |
+| W12 | 上线与回滚 | 试运行/灰度/回滚/运维手册 | `rollout-plan.md`、`operator-guide.md` | 可控上线、可快速回退 |
+
+### 11.4 每周固定节奏（执行纪律）
+1. 周一：确认本周唯一主目标（最多 1 主 + 2 次目标）。
+2. 周三：中期评审，检查是否偏离四项指标。
+3. 周五：跑验收脚本、更新周报、确认下周阻断项。
+
+### 11.5 范围控制规则（防止再次跑偏）
+1. 任何任务都必须回答：“它如何改善四项硬指标？”
+2. 无法提升指标的工作自动降级为 backlog。
+3. 先观测和约束，后算法“变聪明”。
+4. 任何新增复杂机制必须有降级路径（回到 direct mode）。
+
+### 11.6 技术约束（与 `workflow-spec.md` 对齐）
+1. 权重逻辑必须在源码实现，环境变量仅允许调系数。
+2. 提问式深思必须有预算上限（轮数、每问 token、总预算）。
+3. 递归深度默认 3 层，触底后强制平铺为原子步骤。
+4. 所有排序和决策必须输出“可解释原因”文本。
+
+### 11.7 第一批实施入口（不含编码，只定边界）
+1. `src/engine/conversation_loop.rs`：Workflow 闸门插入点。
+2. `src/engine/socratic.rs`：被动到主动模式改造边界。
+3. `src/engine/socratic_executor.rs`：执行层复用范围。
+4. `src/engine/workflow/`：新增模块边界（`gate/weights/questioning/planner/executor/metrics`）。
+
+### 11.8 与 24 周主计划的映射
+1. 本专项 W1-W6 对应主计划 Phase 1-3 的“正确性 + Context + 规划能力”强化。
+2. 本专项 W7-W9 对应主计划 Phase 4-5 的“可观测 + 可验收”落地。
+3. 本专项 W10-W12 对应主计划 Phase 6-7 的“产品化 + 灰度发布”路径。
+
+### 11.9 立即执行清单（专项）
+1. 先产出 `workflow-v1-design.md`（冻结状态机和术语）。
+2. 建立 20 条真实任务样本并完成 blocker 标注。
+3. 输出 `gate-spec.md` 与 `weights-spec.md` 初稿。
+4. 同步建立专项周报模板与指标看板字段定义。

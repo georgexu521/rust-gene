@@ -32,6 +32,7 @@ pub mod symbol_index;
 pub mod tool_orchestration;
 pub mod turn_state;
 pub mod worktree;
+pub mod workflow;
 
 pub use query_engine::QueryEngine;
 
