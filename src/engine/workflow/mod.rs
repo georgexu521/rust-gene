@@ -9,6 +9,7 @@
 //! - `metrics.rs` — 评估指标与日志
 
 pub mod executor;
+pub mod feedback;
 pub mod gate;
 pub mod metrics;
 pub mod planner;
@@ -16,6 +17,7 @@ pub mod questioning;
 pub mod weights;
 
 pub use executor::{ExecutionOutcome, ExecutionRecord, NoOpStepExecutor, StepExecutor, WorkflowExecutor};
+pub use feedback::{FeedbackEngine, HistoricalFailureRule};
 pub use metrics::WorkflowMetrics;
 pub use gate::{Gate, GateDecision};
 pub use planner::WorkflowPlanner;
@@ -85,6 +87,10 @@ impl WorkflowEngine {
         // 3. EXECUTION
         let executor = WorkflowExecutor::new();
         let execution_log = executor.execute(&mut plan, step_executor).await?;
+
+        // M2: 记录执行反馈（用于后续权重调整）
+        let mut feedback = FeedbackEngine::load();
+        feedback.record_execution(&execution_log);
 
         // 4. REPORT
         let final_report = Self::build_report(&thinking_result, &plan, &execution_log);

@@ -8,6 +8,7 @@
 //!   每项范围 [-20, +20]，RawScore 范围 [-120, +120]
 //!   经 sigmoid 映射到 [0, 100]
 
+use super::feedback::{FeedbackEngine, HistoricalFailureRule};
 use std::collections::HashSet;
 
 /// 计算权重所需的环境变量系数
@@ -380,14 +381,17 @@ impl WeightRule for DependencyPenaltyRule {
 /// 漂移惩罚规则
 ///
 /// 步骤描述与主线目标的偏离程度。
+/// M2: 叠加历史漂移惩罚系数（来自 FeedbackEngine）。
 pub struct DriftPenaltyRule {
     multiplier: f64,
+    feedback: FeedbackEngine,
 }
 
 impl DriftPenaltyRule {
     pub fn new() -> Self {
         Self {
             multiplier: env_mul("PRIORITY_AGENT_WEIGHT_DRIFT_MUL", 1.0),
+            feedback: FeedbackEngine::load(),
         }
     }
 
@@ -453,13 +457,19 @@ impl WeightRule for DriftPenaltyRule {
     fn compute(&self, ctx: &StepContext) -> DimensionScore {
         let (is_drift, detail) = Self::detect_drift(&ctx.description, &ctx.mainline_goal);
         let raw = if is_drift { -4 } else { 0 };
-        let weighted = raw as f64 * self.multiplier;
+        let drift_multiplier = self.feedback.get_drift_multiplier();
+        let weighted = raw as f64 * self.multiplier * drift_multiplier;
+
+        let mut explanation = format!("Drift{}{}", raw, if is_drift { format!("({})", detail) } else { String::new() });
+        if drift_multiplier > 1.01 {
+            explanation.push_str(&format!(" [hist_mul={:.2}x]", drift_multiplier));
+        }
 
         DimensionScore {
             dimension: WeightDimension::DriftPenalty,
             raw_score: raw,
             weighted_score: weighted,
-            explanation: format!("Drift{}{}", raw, if is_drift { format!("({})", detail) } else { String::new() }),
+            explanation,
         }
     }
 }
@@ -490,7 +500,7 @@ pub struct WeightEngine {
 }
 
 impl WeightEngine {
-    /// 创建默认引擎（包含所有六维规则）
+    /// 创建默认引擎（包含所有六维规则 + M2 反馈规则）
     pub fn default_engine() -> Self {
         let rules: Vec<Box<dyn WeightRule>> = vec![
             Box::new(RiskRule::new()),
@@ -499,6 +509,7 @@ impl WeightEngine {
             Box::new(BlockerValueRule::new()),
             Box::new(DependencyPenaltyRule::new()),
             Box::new(DriftPenaltyRule::new()),
+            Box::new(HistoricalFailureRule::new()),
         ];
         Self { rules }
     }
@@ -686,7 +697,7 @@ mod tests {
         assert_eq!(result.step_index, 0);
         assert!(result.normalized_score <= 100);
         assert!(result.normalized_score >= 0);
-        assert_eq!(result.dimension_scores.len(), 6);
+        assert_eq!(result.dimension_scores.len(), 7);
         assert!(!result.explanation.is_empty());
     }
 
