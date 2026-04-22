@@ -10,11 +10,13 @@
 
 pub mod executor;
 pub mod gate;
+pub mod metrics;
 pub mod planner;
 pub mod questioning;
 pub mod weights;
 
 pub use executor::{ExecutionOutcome, ExecutionRecord, NoOpStepExecutor, StepExecutor, WorkflowExecutor};
+pub use metrics::WorkflowMetrics;
 pub use gate::{Gate, GateDecision};
 pub use planner::WorkflowPlanner;
 pub use questioning::{ActiveQuestioningEngine, QuestionNode, ThinkingResult};
@@ -119,6 +121,10 @@ impl WorkflowEngine {
         }
         output.push('\n');
         output.push_str(&WorkflowExecutor::format_report(execution_log));
+        output.push('\n');
+        // M1: 追加执行指标聚合
+        let metrics = WorkflowMetrics::from_records(execution_log);
+        output.push_str(&metrics.summary());
         output
     }
 }
