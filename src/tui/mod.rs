@@ -377,6 +377,18 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             app.mode = app::AppMode::MessageSearch;
             return Ok(false);
         }
+        if key.code == KeyCode::Tab {
+            // Toggle collapse for the message at scroll_offset
+            let idx = app.scroll_offset;
+            if idx < app.messages.len() {
+                if app.collapsed_indices.contains(&idx) {
+                    app.collapsed_indices.remove(&idx);
+                } else {
+                    app.collapsed_indices.insert(idx);
+                }
+            }
+            return Ok(false);
+        }
     }
 
     // 消息搜索模式特殊处理

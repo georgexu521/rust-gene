@@ -210,6 +210,8 @@ pub struct TuiApp {
     pub diff_scroll_offset: u16,
     /// 消息搜索状态
     pub message_search_state: crate::tui::components::message_search::MessageSearchState,
+    /// 折叠的消息索引（Vim Normal 模式下 Tab 折叠/展开）
+    pub collapsed_indices: std::collections::HashSet<usize>,
     /// LSP 管理器
     pub lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     /// Worktree 管理器
@@ -325,6 +327,7 @@ impl TuiApp {
             diff_title: String::new(),
             diff_scroll_offset: 0,
             message_search_state: crate::tui::components::message_search::MessageSearchState::new(),
+            collapsed_indices: std::collections::HashSet::new(),
             lsp_manager,
             worktree_manager,
             bundled_skills: {

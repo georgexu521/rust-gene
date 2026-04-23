@@ -117,13 +117,37 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut current_y = inner_area.y;
     let max_y = inner_area.y + inner_area.height;
 
-    for (_idx, msg) in messages.iter().enumerate().skip(app.scroll_offset) {
+    let mut last_date: Option<chrono::NaiveDate> = None;
+    for (idx, msg) in messages.iter().enumerate().skip(app.scroll_offset) {
         // 检查是否还有空间
         if current_y >= max_y {
             break;
         }
 
-        let msg_height = estimate_message_height(msg, inner_area.width as usize, &app.theme);
+        // ── 日期分隔线 ──
+        let msg_date = chrono::DateTime::<chrono::Local>::from(msg.timestamp).date_naive();
+        if let Some(prev_date) = last_date {
+            if msg_date != prev_date {
+                let date_str = msg_date.format("%Y-%m-%d").to_string();
+                let sep_text = format!("─── {} ───", date_str);
+                let sep = Paragraph::new(sep_text)
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(app.theme.text_dim));
+                let sep_area = Rect {
+                    x: inner_area.x,
+                    y: current_y,
+                    width: inner_area.width,
+                    height: 1,
+                };
+                f.render_widget(sep, sep_area);
+                current_y += 1;
+            }
+        }
+        last_date = Some(msg_date);
+
+        // ── 消息渲染 ──
+        let collapsed = app.collapsed_indices.contains(&idx);
+        let msg_height = estimate_message_height(msg, inner_area.width as usize, &app.theme, collapsed);
         let msg_area = Rect {
             x: inner_area.x,
             y: current_y,
@@ -131,7 +155,6 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             height: (msg_height as u16).min(max_y - current_y),
         };
 
-        // 渲染消息（带左侧颜色竖条区分角色）
         let border_color = match msg.role {
             crate::state::MessageRole::User => app.theme.user_message,
             crate::state::MessageRole::Assistant => app.theme.assistant_message,
@@ -141,8 +164,12 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         let block = Block::default()
             .borders(Borders::LEFT)
             .border_style(Style::default().fg(border_color));
-        let paragraph = message::render_message(msg, inner_area.width as usize, &app.theme)
-            .block(block);
+
+        let paragraph = if collapsed {
+            message::render_message_compact(msg, &app.theme).block(block)
+        } else {
+            message::render_message(msg, inner_area.width as usize, &app.theme).block(block)
+        };
         f.render_widget(paragraph, msg_area);
 
         current_y += msg_height as u16;
@@ -403,7 +430,11 @@ fn estimate_message_height(
     msg: &crate::state::MessageItem,
     width: usize,
     _theme: &crate::tui::theme::Theme,
+    collapsed: bool,
 ) -> usize {
+    if collapsed {
+        return 2; // header + "..." indicator
+    }
     let base_height = 3; // header + blank line + trailing blank
     let effective_width = width.saturating_sub(4).max(1);
 
