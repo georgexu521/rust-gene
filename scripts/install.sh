@@ -8,6 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 BUILD_TYPE="debug"
+FEATURES=""
 INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local}"
 BIN_DIR="$INSTALL_PREFIX/bin"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/priority-agent"
@@ -18,15 +19,21 @@ Usage: scripts/install.sh [options]
 
 Options:
   --release          Build in release mode (default: debug)
+  --features F       Comma-separated cargo features (e.g. legacy-cli)
   --prefix PATH      Install prefix directory (default: ~/.local)
   --system           Install to /usr/local (requires sudo)
   -h, --help         Show this help
+
+Examples:
+  scripts/install.sh --release --features legacy-cli
+  scripts/install.sh --release --system
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --release) BUILD_TYPE="release"; shift ;;
+    --features) FEATURES="${2:-}"; shift 2 ;;
     --prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
     --system) INSTALL_PREFIX="/usr/local"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -37,6 +44,7 @@ done
 echo "=== Priority Agent Installer ==="
 echo ""
 echo "Build type:   $BUILD_TYPE"
+echo "Features:     ${FEATURES:-(none)}"
 echo "Install prefix: $INSTALL_PREFIX"
 echo ""
 
@@ -48,13 +56,19 @@ if ! command -v cargo &>/dev/null; then
 fi
 
 echo "[1/4] Building priority-agent..."
+CARGO_ARGS=()
 if [[ "$BUILD_TYPE" == "release" ]]; then
-  cargo build --release --quiet
+  CARGO_ARGS+=("--release")
   SRC_BIN="target/release/priority-agent"
 else
-  cargo build --quiet
   SRC_BIN="target/debug/priority-agent"
 fi
+if [[ -n "$FEATURES" ]]; then
+  CARGO_ARGS+=("--features" "$FEATURES")
+  echo "       Features: $FEATURES"
+fi
+
+cargo build --quiet "${CARGO_ARGS[@]}"
 
 if [[ ! -x "$SRC_BIN" ]]; then
   echo "Error: Build failed - binary not found at $SRC_BIN"
