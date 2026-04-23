@@ -10,32 +10,29 @@ pub use commands::{Cli, Commands};
 pub use display::{format_progress, format_task_tree, print_banner};
 pub use interactive::{prompt_project, prompt_task, select_task};
 
-/// 运行 CLI 交互模式（legacy-cli 模式入口）
+/// 运行 CLI 模式（legacy-cli 模式入口）
 #[cfg(feature = "legacy-cli")]
 pub async fn run_cli() {
     use crate::cli::commands::Commands;
 
-    loop {
-        println!("\n=== Priority Agent CLI ===");
-        crate::cli::commands::print_help();
-        println!();
-
-        let cli = Cli::parse();
-        match cli.command {
-            Commands::Help => crate::cli::commands::print_help(),
-            Commands::Init => println!("Initializing project..."),
-            Commands::AddTask { name } => println!("Adding task: {}", name),
-            Commands::List => println!("Listing tasks..."),
-            Commands::Next => println!("Next recommended task..."),
-            Commands::CompleteTask { id } => println!("Completing task: {}", id),
-            Commands::Progress => println!("Showing progress..."),
-            Commands::Analyze => println!("Analyzing project..."),
-            Commands::Snapshot { name } => println!("Creating snapshot: {:?}", name),
-            Commands::Restore { id } => println!("Restoring: {}", id),
-            Commands::Interactive => {
-                if let Err(e) = run_interactive().await {
-                    eprintln!("Interactive error: {}", e);
-                }
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Help => crate::cli::commands::print_help(),
+        Commands::Init => println!("Initializing project..."),
+        Commands::AddTask { name } => println!("Adding task: {}", name),
+        Commands::List => println!("Listing tasks..."),
+        Commands::Next => println!("Next recommended task..."),
+        Commands::CompleteTask { id } => println!("Completing task: {}", id),
+        Commands::Progress => println!("Showing progress..."),
+        Commands::Analyze => println!("Analyzing project..."),
+        Commands::Snapshot { name } => println!("Creating snapshot: {:?}", name),
+        Commands::Restore { id } => println!("Restoring: {}", id),
+        Commands::Interactive => {
+            println!("\n=== Priority Agent CLI ===");
+            crate::cli::commands::print_help();
+            println!();
+            if let Err(e) = run_interactive().await {
+                eprintln!("Interactive error: {}", e);
             }
         }
     }
