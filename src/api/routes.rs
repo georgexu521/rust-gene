@@ -37,7 +37,8 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
         .route("/v1/triggers/:id/run", post(v1_run_trigger_handler))
         .layer(middleware::from_fn(bridge_auth_middleware));
 
-    Router::new()
+    // 受保护的 API 路由（需要认证）
+    let api_routes = Router::new()
         // Chat API
         .route("/api/chat", post(chat_handler))
         .route("/api/chat/stream", post(chat_stream_handler))
@@ -81,9 +82,16 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
         .route("/api/audit/summary", get(get_audit_summary_handler))
         .route("/api/audit/recent", get(get_audit_recent_handler))
         .route("/api/audit/export", post(export_audit_handler))
-        // Health API
+        .layer(middleware::from_fn(bridge_auth_middleware));
+
+    // 公开路由（无需认证）
+    let public_routes = Router::new()
         .route("/api/health", get(health_handler))
-        .route("/api/version", get(version_handler))
+        .route("/api/version", get(version_handler));
+
+    Router::new()
+        .merge(api_routes)
+        .merge(public_routes)
         .merge(bridge_v1)
         .with_state(state)
 }
@@ -297,6 +305,15 @@ async fn call_tool_handler(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<ToolCallRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // 危险工具禁止通过 API 远程调用
+    const DANGEROUS_TOOLS: &[&str] = &["bash", "file_write", "file_edit"];
+    if DANGEROUS_TOOLS.contains(&req.tool.as_str()) {
+        return Err(ApiError::Forbidden(format!(
+            "tool '{}' is not allowed via API for security reasons",
+            req.tool
+        )));
+    }
+
     let session_id = req
         .session_id
         .unwrap_or_else(|| format!("api-{}", uuid::Uuid::new_v4()));
@@ -481,7 +498,26 @@ async fn export_audit_handler(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<ExportAuditRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path_buf = req.path.as_deref().map(std::path::PathBuf::from);
+    // 路径安全校验
+    let path_buf = if let Some(path_str) = req.path.as_deref() {
+        let path = std::path::PathBuf::from(path_str);
+        // 拒绝包含 .. 的路径
+        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return Err(ApiError::BadRequest(
+                "path contains '..' which is not allowed".into(),
+            ));
+        }
+        // 拒绝绝对路径（防止写入系统任意位置）
+        if path.is_absolute() {
+            return Err(ApiError::BadRequest(
+                "absolute paths are not allowed".into(),
+            ));
+        }
+        Some(path)
+    } else {
+        None
+    };
+
     let snapshot = state
         .export_audit_snapshot(
             req.session_id.as_deref(),

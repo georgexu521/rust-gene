@@ -249,11 +249,33 @@ impl Tool for BashTool {
         }
 
         let description = params["description"].as_str().unwrap_or(command);
-        let timeout = params["timeout"].as_u64().unwrap_or(60);
-        let working_dir = params["working_dir"]
-            .as_str()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| context.working_dir.clone());
+        let timeout = params["timeout"].as_u64().unwrap_or(60).min(3600);
+
+        // working_dir 安全校验
+        let working_dir = if let Some(wd_str) = params["working_dir"].as_str() {
+            let wd = std::path::PathBuf::from(wd_str);
+            // 拒绝包含 .. 的路径
+            if wd.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+                return ToolResult::error("working_dir cannot contain '..'");
+            }
+            // 如果是绝对路径，必须位于项目目录或临时目录下
+            if wd.is_absolute() {
+                let project_root = &context.working_dir;
+                let in_project = wd.starts_with(project_root);
+                let in_tmp = wd.starts_with("/tmp") || wd.starts_with("/var/tmp");
+                if !in_project && !in_tmp {
+                    return ToolResult::error(
+                        "absolute working_dir must be within project directory or /tmp"
+                    );
+                }
+                wd
+            } else {
+                // 相对路径：相对于 context.working_dir 解析
+                context.working_dir.join(wd)
+            }
+        } else {
+            context.working_dir.clone()
+        };
 
         let sandbox = params["sandbox"].as_bool().unwrap_or(false);
         let requested_backend_raw = params["backend"].as_str().map(ToString::to_string);

@@ -518,6 +518,7 @@ pub struct MessageInfo {
 pub enum ApiError {
     NotFound(String),
     BadRequest(String),
+    Forbidden(String),
     Internal(String),
     NotImplemented(String),
 }
@@ -527,6 +528,7 @@ impl std::fmt::Display for ApiError {
         match self {
             ApiError::NotFound(msg) => write!(f, "Not found: {}", msg),
             ApiError::BadRequest(msg) => write!(f, "Bad request: {}", msg),
+            ApiError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
             ApiError::Internal(msg) => write!(f, "Internal error: {}", msg),
             ApiError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
         }
@@ -543,6 +545,7 @@ impl axum::response::IntoResponse for ApiError {
         let (status, message) = match &self {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
             ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg.clone()),
         };
