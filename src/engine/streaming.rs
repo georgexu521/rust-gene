@@ -290,18 +290,24 @@ impl StreamingQueryEngine {
 
     /// 运行时更新权限模式（供 TUI 命令调用）
     pub fn set_permission_mode(&self, mode: crate::permissions::PermissionMode) {
-        *self
-            .permission_mode
-            .write()
-            .expect("permission_mode RwLock poisoned while setting mode") = mode;
+        match self.permission_mode.write() {
+            Ok(mut guard) => *guard = mode,
+            Err(poisoned) => {
+                warn!("permission_mode RwLock poisoned during write, recovering");
+                *poisoned.into_inner() = mode;
+            }
+        }
     }
 
     /// 获取当前权限模式
     pub fn permission_mode(&self) -> crate::permissions::PermissionMode {
-        *self
-            .permission_mode
-            .read()
-            .expect("permission_mode RwLock poisoned while reading mode")
+        match self.permission_mode.read() {
+            Ok(guard) => *guard,
+            Err(poisoned) => {
+                warn!("permission_mode RwLock poisoned during read, recovering");
+                *poisoned.into_inner()
+            }
+        }
     }
 
     /// 获取记忆管理器
@@ -393,7 +399,9 @@ impl StreamingQueryEngine {
 
                 // 持久化用户消息
                 if let (Some(ref store), Some(ref sid)) = (&session_store, &session_id) {
-                    let _ = store.add_message(sid, "user", &user_msg, None, None);
+                    if let Err(e) = store.add_message(sid, "user", &user_msg, None, None) {
+                        warn!("Failed to persist user message: {}", e);
+                    }
                 }
             }
 
@@ -529,13 +537,15 @@ impl StreamingQueryEngine {
                         let tool_calls_json = assistant_msg
                             .tool_calls()
                             .map(|tc| serde_json::to_value(tc).unwrap_or(serde_json::Value::Null));
-                        let _ = store.add_message(
+                        if let Err(e) = store.add_message(
                             sid,
                             "assistant",
                             &assistant_content,
                             tool_calls_json.as_ref(),
                             None,
-                        );
+                        ) {
+                            warn!("Failed to persist assistant message: {}", e);
+                        }
                     }
                 }
             }

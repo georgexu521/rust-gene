@@ -1,7 +1,6 @@
 //! 配置管理
 //!
 //! 管理应用配置，支持配置文件和环境变量
-#![allow(dead_code)]
 
 use anyhow::Result;
 use config::{Config, ConfigError, Environment, File};

@@ -180,7 +180,13 @@ fn save_persisted_oauth_token(server_name: &str, token: &McpOAuthToken) -> anyho
         HashMap::new()
     };
     map.insert(server_name.to_string(), token.clone());
-    std::fs::write(path, serde_json::to_string_pretty(&map)?)?;
+    std::fs::write(&path, serde_json::to_string_pretty(&map)?)?;
+    // Restrict file permissions to owner-only on Unix (chmod 600)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 
@@ -522,6 +528,16 @@ impl McpClient {
                         continue;
                     }
                 };
+
+                // Cap Content-Length to prevent OOM from malicious servers
+                const MAX_MCP_MESSAGE_LEN: usize = 10 * 1024 * 1024; // 10 MiB
+                if len > MAX_MCP_MESSAGE_LEN {
+                    warn!(
+                        "MCP message too large from {}: {} bytes (max {})",
+                        server_name, len, MAX_MCP_MESSAGE_LEN
+                    );
+                    continue;
+                }
 
                 let mut body = vec![0u8; len];
                 if let Err(e) = reader.read_exact(&mut body).await {

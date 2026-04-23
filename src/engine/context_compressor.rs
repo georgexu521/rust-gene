@@ -1201,7 +1201,8 @@ impl ContextCompressor {
                         };
                         // 裁剪：关键失败链路保留更多上下文，普通结果保留短摘要
                         let truncated = if content.len() > keep_len {
-                            format!("{}...(truncated)", &content[..keep_len])
+                            let safe: String = content.chars().take(keep_len).collect();
+                            format!("{}...(truncated)", safe)
                         } else {
                             content.clone()
                         };
@@ -1407,7 +1408,11 @@ impl ContextCompressor {
                     }
                 }
                 Message::Tool { content, .. } => {
-                    if content.contains("error") || content.contains("Error") {
+                    // 只有当工具结果同时包含错误和成功标志时，才认为"错误已解决"
+                    let lower = content.to_lowercase();
+                    let has_error = lower.contains("error") || lower.contains("failed");
+                    let has_success = lower.contains("ok") || lower.contains("success") || lower.contains("passed");
+                    if has_error && has_success {
                         new_summary
                             .progress_done
                             .push("遇到错误并已解决".to_string());
@@ -1418,13 +1423,9 @@ impl ContextCompressor {
                         && trimmed.len() > 20
                         && trimmed.len() < 300
                         && (trimmed.contains("API key")
-                            || trimmed.contains("token")
                             || trimmed.contains("secret")
                             || trimmed.contains("password")
-                            || trimmed.contains("error")
-                            || trimmed.contains("failed")
-                            || trimmed.contains("diagnostic")
-                            || trimmed.contains("path"))
+                            || trimmed.contains("diagnostic"))
                     {
                         let snippet = trimmed.chars().take(200).collect::<String>();
                         if !new_summary.critical_context.contains(&snippet) {
@@ -1513,7 +1514,7 @@ impl ContextCompressor {
 
         let prompt = format!(
             "Summarize this conversation into 8 sections: Goal, Constraints & Preferences, Progress (Done/InProgress/Blocked), Key Decisions, Relevant Files, Next Steps, Critical Context, Tools & Patterns.\n\n{}",
-            &conversation[..conversation.len().min(8000)]
+            &conversation.chars().take(8000).collect::<String>()
         );
 
         let request = crate::services::api::ChatRequest::new(&self.llm_model)

@@ -153,6 +153,7 @@ impl QueryEngine {
     }
 
     /// 创建统一对话循环
+    #[allow(dead_code)]
     fn create_loop(&self) -> super::conversation_loop::ConversationLoop {
         self.create_loop_with_allowed_tools(None)
     }

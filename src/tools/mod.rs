@@ -342,9 +342,10 @@ pub trait Tool: Send + Sync {
             // 成功结果：截断长输出，保留关键部分
             let content = &result.content;
             if content.len() > 2000 {
+                let safe: String = content.chars().take(2000).collect();
                 format!(
                     "{}\n\n[Output truncated - {} bytes total]",
-                    &content[..2000],
+                    safe,
                     content.len()
                 )
             } else {

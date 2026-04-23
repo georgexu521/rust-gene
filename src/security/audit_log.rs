@@ -275,7 +275,8 @@ fn format_timestamp(ts: std::time::SystemTime) -> String {
 
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() > max_len {
-        format!("{}...", &s[..max_len])
+        let safe: String = s.chars().take(max_len).collect();
+        format!("{}...", safe)
     } else {
         s.to_string()
     }

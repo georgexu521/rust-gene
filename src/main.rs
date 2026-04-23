@@ -3,8 +3,6 @@
 //! 解决 AI Agent 抓不住重点的问题，通过显式的权重系统让 AI 始终专注于最重要的事项。
 //! 高密度思考 = 高密度 Q&A — Agent 应不断提问/解答来深化推理。
 
-#![allow(dead_code)]
-
 // ─── Core Modules ────────────────────────────────────────────────────
 pub mod agent;
 pub mod ai_analyzer;

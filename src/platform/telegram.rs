@@ -148,6 +148,7 @@ impl TelegramAdapter {
     }
 
     /// 处理更新
+    #[allow(dead_code)]
     async fn process_updates(&self, updates: Vec<TelegramUpdate>, handler: &dyn MessageHandler) {
         for update in updates {
             // 更新 offset

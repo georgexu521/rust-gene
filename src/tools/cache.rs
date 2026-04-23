@@ -1,7 +1,6 @@
 //! 工具结果缓存
 //!
 //! 缓存工具执行结果，避免重复执行相同的工具调用
-#![allow(dead_code)]
 
 use serde_json::Value;
 use std::collections::HashMap;

@@ -1,7 +1,6 @@
 //! 工具系统使用示例
 //!
 //! 展示如何使用工具系统
-#![allow(dead_code)]
 
 use crate::tools::*;
 

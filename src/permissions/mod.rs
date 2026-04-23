@@ -7,6 +7,9 @@ pub mod llm_classifier;
 
 use serde::{Deserialize, Serialize};
 
+/// Once 模式授权有效期（秒）
+const ONCE_AUTHORIZATION_TTL_SECS: u64 = 30;
+
 /// 检查字符串是否匹配通配符模式
 /// 支持 * (任意字符) 和 ? (单个字符)
 pub fn match_wildcard(pattern: &str, text: &str) -> bool {
@@ -389,9 +392,9 @@ impl PermissionContext {
             }
             PermissionMode::Once => {
                 // Once 模式：先检查是否已有有效的一次性授权
+                // NOTE: 按 tool_name 粒度授权，不区分参数。
                 if let Some(expired) = self.once_authorizations.get(tool_name) {
-                    if expired.elapsed().as_secs() < 300 {
-                        // 5分钟内有效，直接拒绝
+                    if expired.elapsed().as_secs() < ONCE_AUTHORIZATION_TTL_SECS {
                         return false;
                     }
                 }
@@ -434,14 +437,14 @@ impl PermissionContext {
     pub fn has_once_authorization(&self, tool_name: &str) -> bool {
         self.once_authorizations
             .get(tool_name)
-            .map(|exp| exp.elapsed().as_secs() < 300)
+            .map(|exp| exp.elapsed().as_secs() < ONCE_AUTHORIZATION_TTL_SECS)
             .unwrap_or(false)
     }
 
     /// 清理过期的一次性授权
     pub fn cleanup_expired_once(&mut self) {
         self.once_authorizations
-            .retain(|_, exp| exp.elapsed().as_secs() < 300);
+            .retain(|_, exp| exp.elapsed().as_secs() < ONCE_AUTHORIZATION_TTL_SECS);
     }
 
     fn risk_level(tool_name: &str, params: &serde_json::Value) -> RiskLevel {

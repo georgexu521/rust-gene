@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 /// Skill 注册表 - 文件驱动
+#[allow(dead_code)]
 pub struct SkillRegistry {
     /// 已加载的 skills（name -> Skill）
     skills: HashMap<String, Skill>,
@@ -18,6 +19,7 @@ pub struct SkillRegistry {
     remote_urls: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl SkillRegistry {
     /// 创建新的 Skill 注册表
     pub fn new() -> Self {

@@ -44,6 +44,7 @@ pub enum McpServerTransport {
 /// MCP 服务器请求
 #[derive(Debug, Deserialize)]
 struct McpRequest {
+    #[allow(dead_code)]
     jsonrpc: String,
     id: Value,
     method: String,
@@ -83,6 +84,7 @@ impl McpError {
         Self::new(-32601, msg)
     }
 
+    #[allow(dead_code)]
     fn internal_error(msg: impl Into<String>) -> Self {
         Self::new(-32603, msg)
     }

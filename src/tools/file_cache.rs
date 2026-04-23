@@ -1,7 +1,6 @@
 //! 文件状态缓存
 //!
 //! 缓存文件元数据（mtime, size），监控文件变更
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

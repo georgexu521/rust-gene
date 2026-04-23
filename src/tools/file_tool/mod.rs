@@ -64,7 +64,7 @@ static READ_FILES: Lazy<Mutex<HashMap<String, HashSet<String>>>> =
 
 /// 标记文件已被读取（用于 must-read-before-edit 检查）
 pub fn mark_file_read(session_id: &str, file_path: &str) {
-    let mut tracker = READ_FILES.lock().unwrap();
+    let mut tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
     let session_files = tracker
         .entry(session_id.to_string())
         .or_default();
@@ -73,7 +73,7 @@ pub fn mark_file_read(session_id: &str, file_path: &str) {
 
 /// 检查文件是否已被读取
 pub fn is_file_read(session_id: &str, file_path: &str) -> bool {
-    let tracker = READ_FILES.lock().unwrap();
+    let tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
     tracker
         .get(session_id)
         .map(|s: &HashSet<String>| s.contains(file_path))
@@ -82,7 +82,7 @@ pub fn is_file_read(session_id: &str, file_path: &str) -> bool {
 
 /// 清除会话的读取状态
 pub fn clear_read_files(session_id: &str) {
-    let mut tracker = READ_FILES.lock().unwrap();
+    let mut tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
     tracker.remove(session_id);
 }
 
@@ -110,7 +110,7 @@ pub fn mark_file_read_with_state(
     mtime: std::time::SystemTime,
 ) {
     mark_file_read(session_id, file_path);
-    let mut states = FILE_STATES.lock().unwrap();
+    let mut states = FILE_STATES.lock().unwrap_or_else(|e| e.into_inner());
     let key = format!("{}:{}", session_id, file_path);
     states.insert(
         key,
@@ -128,7 +128,7 @@ pub fn is_file_modified_since_read(
     current_content: &str,
     current_mtime: std::time::SystemTime,
 ) -> bool {
-    let states = FILE_STATES.lock().unwrap();
+    let states = FILE_STATES.lock().unwrap_or_else(|e| e.into_inner());
     let key = format!("{}:{}", session_id, file_path);
     if let Some(state) = states.get(&key) {
         // 检查 mtime 是否变化
@@ -563,6 +563,7 @@ fn build_match_context(
 }
 
 /// 保存文件快照
+#[allow(dead_code)]
 async fn save_snapshot(
     path: &Path,
     session_id: &str,
@@ -620,7 +621,7 @@ async fn save_snapshot(
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".priority-agent")
         .join("snapshots")
-        .join(session_id)
+        .join(&safe_session_id)
         .join("edits.json");
 
     let edit_record = serde_json::json!({

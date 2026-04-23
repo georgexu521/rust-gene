@@ -1,7 +1,6 @@
 //! 文件浏览器组件
 //!
 //! 树形文件浏览，支持导航和选择
-#![allow(dead_code)]
 
 use ratatui::{
     layout::Rect,

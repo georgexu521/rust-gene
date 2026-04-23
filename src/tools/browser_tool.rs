@@ -183,6 +183,7 @@ find specific elements, or run JavaScript in a browser context."
 
 /// 一次性浏览器会话，启动 Chrome headless 并通过 CDP 控制
 struct BrowserSession {
+    #[allow(dead_code)]
     port: u16,
     chrome_process: Child,
     client: CdpClient,

@@ -1,7 +1,6 @@
 //! 进度条组件
 //!
 //! 显示工具执行进度和状态
-#![allow(dead_code)]
 #![allow(mismatched_lifetime_syntaxes)]
 
 use ratatui::{
