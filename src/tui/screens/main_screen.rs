@@ -11,89 +11,30 @@ use ratatui::{
     Frame,
 };
 
-/// 渲染聊天区域
+/// 渲染聊天区域（Claude Code 风格：无边框，留白分隔）
 pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
-    // 创建块
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.border))
-        .title(format!(
-            " Chat {} ",
-            if app.is_querying { "(Thinking...)" } else { "" }
-        ));
-
-    let inner_area = block.inner(area);
-    f.render_widget(block, area);
+    // 直接使用 area，不添加外边框
+    let inner_area = area;
 
     // 如果有消息，渲染它们
     if app.messages.is_empty() {
-        let welcome_lines = vec![
-            Line::from(""),
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                "  ██████╗ ██████╗ ██╗ ██████╗ ██████╗ ██╗████████╗██╗   ██╗",
-                Style::default().fg(app.theme.assistant_message),
-            )]),
-            Line::from(vec![Span::styled(
-                "  ██╔══██╗██╔══██╗██║██╔════╝██╔═══██╗██║╚══██╔══╝╚██╗ ██╔╝",
-                Style::default().fg(app.theme.assistant_message),
-            )]),
-            Line::from(vec![Span::styled(
-                "  ██████╔╝██████╔╝██║██║     ██║   ██║██║   ██║    ╚████╔╝ ",
-                Style::default().fg(app.theme.assistant_message),
-            )]),
-            Line::from(vec![Span::styled(
-                "  ██╔═══╝ ██╔══██╗██║██║     ██║   ██║██║   ██║     ╚██╔╝  ",
-                Style::default().fg(app.theme.assistant_message),
-            )]),
-            Line::from(vec![Span::styled(
-                "  ██║     ██║  ██║██║╚██████╗╚██████╔╝██║   ██║      ██║   ",
-                Style::default().fg(app.theme.assistant_message),
-            )]),
-            Line::from(vec![Span::styled(
-                "  ╚═╝     ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═════╝ ╚═╝   ╚═╝      ╚═╝   ",
-                Style::default().fg(app.theme.assistant_message),
-            )]),
+        let welcome = Paragraph::new(Text::from(vec![
             Line::from(""),
             Line::from(vec![Span::styled(
-                "         Welcome to Priority Agent",
-                Style::default()
-                    .fg(app.theme.text_highlight)
-                    .add_modifier(Modifier::BOLD),
+                "Welcome to Priority Agent",
+                Style::default().fg(app.theme.text_highlight).add_modifier(Modifier::BOLD),
             )]),
-            Line::from(""),
             Line::from(vec![Span::styled(
-                "  Type a message below to start chatting with your AI assistant.",
+                "Type a message and press Enter to chat.",
                 Style::default().fg(app.theme.text_dim),
             )]),
             Line::from(vec![Span::styled(
-                "  Press ",
-                Style::default().fg(app.theme.text_dim),
-            ), Span::styled(
-                "?",
-                Style::default().fg(app.theme.info).add_modifier(Modifier::BOLD),
-            ), Span::styled(
-                " for keyboard shortcuts, ",
-                Style::default().fg(app.theme.text_dim),
-            ), Span::styled(
-                "/help",
-                Style::default().fg(app.theme.info).add_modifier(Modifier::BOLD),
-            ), Span::styled(
-                " for commands.",
+                format!("Model: {}", app.current_model_label()),
                 Style::default().fg(app.theme.text_dim),
             )]),
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                "  Current model: ",
-                Style::default().fg(app.theme.text_dim),
-            ), Span::styled(
-                app.current_model_label(),
-                Style::default().fg(app.theme.info),
-            )]),
-        ];
-        let welcome = Paragraph::new(Text::from(welcome_lines))
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true });
+        ]))
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
         f.render_widget(welcome, inner_area);
         return;
     }
@@ -117,256 +58,186 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut current_y = inner_area.y;
     let max_y = inner_area.y + inner_area.height;
 
-    let mut last_date: Option<chrono::NaiveDate> = None;
     for (idx, msg) in messages.iter().enumerate().skip(app.scroll_offset) {
-        // 检查是否还有空间
         if current_y >= max_y {
             break;
         }
 
-        // ── 日期分隔线 ──
-        let msg_date = chrono::DateTime::<chrono::Local>::from(msg.timestamp).date_naive();
-        if let Some(prev_date) = last_date {
-            if msg_date != prev_date {
-                let date_str = msg_date.format("%Y-%m-%d").to_string();
-                let sep_text = format!("─── {} ───", date_str);
-                let sep = Paragraph::new(sep_text)
-                    .alignment(Alignment::Center)
-                    .style(Style::default().fg(app.theme.text_dim));
-                let sep_area = Rect {
-                    x: inner_area.x,
-                    y: current_y,
-                    width: inner_area.width,
-                    height: 1,
-                };
-                f.render_widget(sep, sep_area);
-                current_y += 1;
-            }
-        }
-        last_date = Some(msg_date);
-
-        // ── 消息渲染 ──
         let collapsed = app.collapsed_indices.contains(&idx);
         let msg_height = estimate_message_height(msg, inner_area.width as usize, &app.theme, collapsed);
+        let msg_height = (msg_height as u16).min(max_y - current_y);
         let msg_area = Rect {
             x: inner_area.x,
             y: current_y,
             width: inner_area.width,
-            height: (msg_height as u16).min(max_y - current_y),
+            height: msg_height,
         };
-
-        let border_color = match msg.role {
-            crate::state::MessageRole::User => app.theme.user_message,
-            crate::state::MessageRole::Assistant => app.theme.assistant_message,
-            crate::state::MessageRole::System => app.theme.system_message,
-            crate::state::MessageRole::Tool => app.theme.tool_message,
-        };
-        let block = Block::default()
-            .borders(Borders::LEFT)
-            .border_style(Style::default().fg(border_color));
 
         let paragraph = if collapsed {
-            message::render_message_compact(msg, &app.theme).block(block)
+            message::render_message_compact(msg, &app.theme)
         } else {
-            message::render_message(msg, inner_area.width as usize, &app.theme).block(block)
+            message::render_message(msg, inner_area.width as usize, &app.theme)
         };
         f.render_widget(paragraph, msg_area);
 
-        current_y += msg_height as u16;
+        current_y += msg_height;
     }
 
-    // 渲染滚动指示器
+    // 滚动指示器
     if app.scroll_offset > 0 {
-        let scroll_indicator = Paragraph::new("↑ more above").style(
-            Style::default()
-                .fg(app.theme.text_dim)
-                .add_modifier(Modifier::ITALIC),
-        );
-        f.render_widget(
-            scroll_indicator,
-            Rect {
-                x: inner_area.x,
-                y: inner_area.y,
-                width: inner_area.width,
-                height: 1,
-            },
-        );
+        let indicator = Paragraph::new("↑ more above")
+            .style(Style::default().fg(app.theme.text_dim).add_modifier(Modifier::ITALIC));
+        f.render_widget(indicator, Rect {
+            x: inner_area.x, y: inner_area.y, width: inner_area.width, height: 1,
+        });
     }
 }
 
-/// 渲染输入区域
+/// 渲染输入区域（Claude Code 风格：底线分隔 + > 前缀）
 pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let title = match app.mode {
-        crate::tui::app::AppMode::VimNormal => " -- NORMAL -- ",
-        _ => {
-            if app.vim_mode {
-                " -- INSERT -- "
-            } else {
-                " Input "
-            }
-        }
+    // 顶部分隔线
+    let sep = Paragraph::new("").block(
+        Block::default().borders(Borders::TOP).border_style(Style::default().fg(app.theme.border))
+    );
+    let sep_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+    f.render_widget(sep, sep_area);
+
+    let inner_area = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(1),
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.border_active))
-        .style(Style::default().bg(app.theme.bg))
-        .title(title);
 
-    let inner_area = block.inner(area);
-    f.render_widget(block, area);
-
-    // 渲染输入内容
     let input_text = app.input.value();
 
-    // 如果正在查询，显示提示
     let (display_text, style) = if app.is_querying {
-        (
-            Text::from("Waiting for response..."),
-            Style::default().fg(app.theme.text),
-        )
+        let mut lines = vec![Line::from(vec![
+            Span::styled("> ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Waiting for response...", Style::default().fg(app.theme.text_dim)),
+        ])];
+        if let Some(ref err) = app.error_message {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(err.clone(), Style::default().fg(app.theme.error)),
+            ]));
+        }
+        (Text::from(lines), Style::default())
     } else if app.mode == crate::tui::app::AppMode::VimNormal {
-        let text =
-            Text::from("Vim Normal Mode: j/k scroll, i insert, : command, Ctrl+V toggle off");
-        (text, Style::default().fg(app.theme.text_dim))
+        let text = Text::from(vec![Line::from(vec![
+            Span::styled("> ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Vim Normal: j/k scroll, i insert, : command, Ctrl+V toggle", Style::default().fg(app.theme.text_dim)),
+        ])]);
+        (text, Style::default())
     } else if input_text.is_empty() {
-        let text = Text::from("Type your message here... (Shift+Enter for newline, Enter to send)");
-        (text, Style::default().fg(app.theme.text_dim))
+        let text = Text::from(vec![Line::from(vec![
+            Span::styled("> ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Type your message... (Shift+Enter newline, Enter send)", Style::default().fg(app.theme.text_dim)),
+        ])]);
+        (text, Style::default())
     } else {
-        let lines: Vec<Line> = input_text
+        let mut lines: Vec<Line> = input_text
             .lines()
-            .map(|line| Line::from(line.to_string()))
+            .enumerate()
+            .map(|(i, line)| {
+                if i == 0 {
+                    Line::from(vec![
+                        Span::styled("> ", Style::default().fg(app.theme.text)),
+                        Span::styled(line.to_string(), Style::default().fg(app.theme.text)),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(line.to_string(), Style::default().fg(app.theme.text)),
+                    ])
+                }
+            })
             .collect();
-        (Text::from(lines), Style::default().fg(app.theme.text))
+        if lines.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("> ", Style::default().fg(app.theme.text)),
+            ]));
+        }
+        (Text::from(lines), Style::default())
     };
 
     let paragraph = Paragraph::new(display_text).style(style);
     f.render_widget(paragraph, inner_area);
 
-    // 设置光标位置（如果不是正在查询）
+    // 设置光标位置
     if !app.is_querying {
         let (cursor_line, cursor_col) = app.input.cursor_line_column();
-        let cursor_x = inner_area.x + cursor_col as u16;
+        let cursor_x = inner_area.x + cursor_col as u16 + 2; // +2 for "> " prefix on first line
         let cursor_y = inner_area.y + cursor_line as u16;
+        // Only add prefix offset on first line
+        let actual_cursor_x = if cursor_line == 0 {
+            cursor_x
+        } else {
+            inner_area.x + cursor_col as u16
+        };
         f.set_cursor_position((
-            cursor_x.min(inner_area.x + inner_area.width - 1),
+            actual_cursor_x.min(inner_area.x + inner_area.width - 1),
             cursor_y.min(inner_area.y + inner_area.height - 1),
         ));
     }
 }
 
-/// 渲染状态栏
+/// 渲染状态栏（Claude Code 风格：单行，简洁，· 分隔）
 pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
-    // 三分栏状态栏：左(状态) | 中(徽章) | 右(信息)
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(15),
-            Constraint::Min(25),
-            Constraint::Min(30),
-        ])
-        .split(area);
+    let mut parts = Vec::new();
 
-    // ── 左侧：状态图标 + 文字 ──
-    let spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let spinner_idx = app.tick_count % spinner_frames.len();
-
-    let left_text = if app.is_querying {
-        vec![
-            Span::styled(
-                format!("{} ", spinner_frames[spinner_idx]),
-                Style::default().fg(app.theme.status_thinking),
-            ),
-            Span::styled("Thinking...", Style::default().fg(app.theme.text)),
-        ]
+    // 左侧：状态
+    if app.is_querying {
+        let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let ch = frames[app.tick_count % frames.len()];
+        parts.push(Span::styled(format!("{} Thinking...", ch), Style::default().fg(app.theme.status_thinking)));
     } else if let Some(ref error) = app.error_message {
-        vec![
-            Span::styled("✗ ", Style::default().fg(app.theme.error)),
-            Span::styled(error.clone(), Style::default().fg(app.theme.error)),
-        ]
+        parts.push(Span::styled(format!("✗ {}", error), Style::default().fg(app.theme.error)));
     } else {
-        vec![
-            Span::styled("✓ ", Style::default().fg(app.theme.success)),
-            Span::styled("Ready", Style::default().fg(app.theme.text)),
-        ]
-    };
-    f.render_widget(Paragraph::new(Line::from(left_text)), chunks[0]);
+        parts.push(Span::styled("Ready", Style::default().fg(app.theme.text_dim)));
+    }
 
-    // ── 中间：模式徽章 + 工作树 ──
-    let mut center_text = Vec::new();
+    // 中间：模式徽章
     if app.vim_mode {
-        center_text.push(Span::styled(
-            "[VIM]",
-            Style::default()
-                .fg(app.theme.status_vim)
-                .add_modifier(Modifier::BOLD),
-        ));
+        parts.push(Span::styled("vim", Style::default().fg(app.theme.status_vim)));
     }
     if app.paused {
-        if !center_text.is_empty() {
-            center_text.push(Span::styled(" ", Style::default()));
-        }
-        center_text.push(Span::styled(
-            "[PAUSED]",
-            Style::default().fg(app.theme.warning).add_modifier(Modifier::BOLD),
-        ));
+        parts.push(Span::styled("paused", Style::default().fg(app.theme.warning)));
     }
     if app.focus_mode {
-        if !center_text.is_empty() {
-            center_text.push(Span::styled(" ", Style::default()));
-        }
-        center_text.push(Span::styled(
-            "[FOCUS]",
-            Style::default().fg(app.theme.info).add_modifier(Modifier::BOLD),
-        ));
+        parts.push(Span::styled("focus", Style::default().fg(app.theme.info)));
     }
-    if let Some(plan_state_label) = app.plan_mode_status_label() {
-        if !center_text.is_empty() {
-            center_text.push(Span::styled(" ", Style::default()));
-        }
-        center_text.push(Span::styled(
-            plan_state_label,
-            Style::default().fg(app.theme.warning).add_modifier(Modifier::BOLD),
-        ));
+    if let Some(label) = app.plan_mode_status_label() {
+        parts.push(Span::styled(label, Style::default().fg(app.theme.warning)));
     }
-    if let Some(ref wt) = app.worktree_manager {
-        if let Some(name) = wt.try_active_worktree_name() {
-            if !center_text.is_empty() {
-                center_text.push(Span::styled(" ", Style::default()));
-            }
-            center_text.push(Span::styled(
-                format!("[wt:{}]", name),
-                Style::default().fg(app.theme.status_worktree),
-            ));
-        }
-    }
-    if center_text.is_empty() {
-        center_text.push(Span::styled("—", Style::default().fg(app.theme.text_dim)));
-    }
-    f.render_widget(
-        Paragraph::new(Line::from(center_text)).alignment(Alignment::Center),
-        chunks[1],
-    );
 
-    // ── 右侧：模型 + 消息数 + 帮助 ──
-    let mut right_text = Vec::new();
+    // 右侧：模型 + 消息数 + hint
     if app.is_querying {
-        right_text.push(Span::styled("Esc: cancel", Style::default().fg(app.theme.text_dim)));
+        parts.push(Span::styled("esc to cancel", Style::default().fg(app.theme.text_dim)));
     } else {
-        right_text.push(Span::styled(
+        parts.push(Span::styled(
             format!("{} / {}", app.current_provider_label(), app.current_model_label()),
-            Style::default().fg(app.theme.info),
+            Style::default().fg(app.theme.text_dim),
         ));
-        right_text.push(Span::styled(" │ ", Style::default().fg(app.theme.border)));
-        right_text.push(Span::styled(
+        parts.push(Span::styled(
             format!("{} msgs", app.message_count()),
             Style::default().fg(app.theme.text_dim),
         ));
-        right_text.push(Span::styled(" │ ", Style::default().fg(app.theme.border)));
-        right_text.push(Span::styled("/help", Style::default().fg(app.theme.info)));
+        parts.push(Span::styled("? for shortcuts", Style::default().fg(app.theme.text_dim)));
     }
+
+    // 用 " · " 连接所有部分
+    let mut spans = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(app.theme.border)));
+        }
+        spans.push(part.clone());
+    }
+
     f.render_widget(
-        Paragraph::new(Line::from(right_text)).alignment(Alignment::Right),
-        chunks[2],
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
+        area,
     );
 }
 

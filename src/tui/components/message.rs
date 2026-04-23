@@ -1,6 +1,6 @@
 //! 消息渲染组件
 //!
-//! 渲染不同类型的消息（用户、助手、系统、工具）
+//! Claude Code 风格：简洁、无边框、用留白和颜色区分角色
 
 use crate::state::{MessageItem, MessageRole};
 use crate::tui::components::markdown::parse_markdown;
@@ -10,53 +10,74 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
-/// 渲染消息为 Paragraph
+/// 渲染消息为 Paragraph（Claude Code 风格）
 pub fn render_message<'a>(
     message: &'a MessageItem,
     _width: usize,
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
-    let (prefix, color) = match message.role {
-        MessageRole::User => ("You", theme.user_message),
-        MessageRole::Assistant => ("Assistant", theme.assistant_message),
-        MessageRole::System => ("System", theme.system_message),
-        MessageRole::Tool => ("Tool", theme.tool_message),
-    };
+    match message.role {
+        MessageRole::User => render_user_message(message, theme),
+        MessageRole::Assistant => render_assistant_message(message, theme),
+        MessageRole::System => render_system_message(message, theme),
+        MessageRole::Tool => render_tool_message(message, theme),
+    }
+}
 
-    let mut lines = Vec::new();
-
-    // 消息头部
-    let header = Line::from(vec![
-        Span::styled(
-            format!("{} ", prefix),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format_time(&message.timestamp),
-            Style::default().fg(theme.text_dim),
-        ),
-    ]);
-    lines.push(header);
-    lines.push(Line::from(""));
-
-    // 消息内容（所有消息统一使用 Markdown 渲染）
+fn render_user_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
     let markdown_text = parse_markdown(&message.content, theme);
+    let mut lines = Vec::new();
+    // 用户消息：无额外前缀，内容直接展示
     for line in markdown_text.lines {
         lines.push(line);
     }
+    Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: true })
+        .style(Style::default().bg(theme.user_message_bg))
+}
 
-    // 工具调用信息（如果有）
-    if let Some(tool_call_id) = message.metadata.get("tool_call_id") {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Tool call: ", Style::default().fg(theme.text_dim)),
-            Span::styled(tool_call_id, Style::default().fg(theme.tool_message)),
-        ]));
+fn render_assistant_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
+    let markdown_text = parse_markdown(&message.content, theme);
+    let mut lines = Vec::new();
+    for line in markdown_text.lines {
+        // 助手消息第一行加 ● 前缀，其余行缩进对齐
+        let is_first = lines.is_empty();
+        let mut spans = Vec::new();
+        if is_first {
+            spans.push(Span::styled("● ", Style::default().fg(theme.assistant_message)));
+        } else {
+            spans.push(Span::styled("  ", Style::default()));
+        }
+        for span in line.spans {
+            spans.push(span);
+        }
+        lines.push(Line::from(spans));
     }
+    Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
+}
 
-    // 底部空行
-    lines.push(Line::from(""));
+fn render_system_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
+    let markdown_text = parse_markdown(&message.content, theme);
+    let mut lines = Vec::new();
+    for line in markdown_text.lines {
+        let mut spans = Vec::new();
+        spans.push(Span::styled("  ", Style::default()));
+        for span in line.spans {
+            spans.push(span);
+        }
+        lines.push(Line::from(spans));
+    }
+    Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC))
+}
 
+fn render_tool_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled("⎿ ", Style::default().fg(theme.text_dim)),
+        Span::styled(&message.content, Style::default().fg(theme.text_dim)),
+    ]));
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
 }
 
@@ -105,13 +126,6 @@ pub fn role_icon(role: MessageRole) -> &'static str {
         MessageRole::System => "⚙️",
         MessageRole::Tool => "🔧",
     }
-}
-
-/// 格式化时间
-fn format_time(time: &std::time::SystemTime) -> String {
-    use chrono::{DateTime, Local};
-    let datetime: DateTime<Local> = (*time).into();
-    datetime.format("%H:%M:%S").to_string()
 }
 
 #[cfg(test)]
