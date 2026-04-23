@@ -17,7 +17,7 @@ pub use app::TuiApp;
 use crate::engine::lsp::LspManager;
 use crate::engine::streaming::StreamingQueryEngine;
 use crate::engine::worktree::WorktreeManager;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout},
@@ -115,10 +115,20 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut TuiApp) -> an
             .unwrap_or_else(|| std::time::Duration::from_secs(0));
 
         if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if handle_key_event(key, app).await? {
-                    return Ok(());
+            match event::read()? {
+                Event::Key(key) => {
+                    if handle_key_event(key, app).await? {
+                        return Ok(());
+                    }
                 }
+                Event::Mouse(mouse) => {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => app.scroll_up(),
+                        MouseEventKind::ScrollDown => app.scroll_down(),
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         }
 

@@ -27,13 +27,11 @@ pub fn render_message<'a>(
 fn render_user_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
     let markdown_text = parse_markdown(&message.content, theme);
     let mut lines = Vec::new();
-    // 用户消息：无额外前缀，内容直接展示
     for line in markdown_text.lines {
         lines.push(line);
     }
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: true })
-        .style(Style::default().bg(theme.user_message_bg))
 }
 
 fn render_assistant_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
@@ -69,7 +67,7 @@ fn render_system_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::th
     }
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: true })
-        .style(Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC))
+        .style(Style::default().fg(theme.text).add_modifier(Modifier::ITALIC))
 }
 
 fn render_tool_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
