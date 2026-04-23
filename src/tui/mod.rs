@@ -654,6 +654,8 @@ async fn handle_fallback_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
         KeyCode::Up => {
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 app.history_prev();
+            } else if app.input.is_cursor_on_first_line() {
+                app.scroll_up();
             } else {
                 app.input.move_cursor_up();
             }
@@ -661,10 +663,14 @@ async fn handle_fallback_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
         KeyCode::Down => {
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 app.history_next();
+            } else if app.input.is_cursor_on_last_line() {
+                app.scroll_down();
             } else {
                 app.input.move_cursor_down();
             }
         }
+        KeyCode::PageUp => app.scroll_up_half_page(),
+        KeyCode::PageDown => app.scroll_down_half_page(),
         _ => {}
     }
     Ok(false)

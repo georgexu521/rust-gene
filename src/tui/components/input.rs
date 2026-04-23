@@ -219,6 +219,18 @@ impl InputState {
         self.value.lines().count().max(1)
     }
 
+    /// 光标是否在第一行
+    pub fn is_cursor_on_first_line(&self) -> bool {
+        let (line, _) = self.cursor_line_column();
+        line == 0
+    }
+
+    /// 光标是否在最后一行
+    pub fn is_cursor_on_last_line(&self) -> bool {
+        let (line, _) = self.cursor_line_column();
+        line + 1 >= self.line_count()
+    }
+
     /// 获取字节位置（用于显示）
     pub fn cursor_byte_position(&self) -> usize {
         self.value
