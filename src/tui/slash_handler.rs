@@ -412,7 +412,7 @@ pub async fn handle_restore(app: &mut TuiApp, args: &str) -> String {
 
 // ─── System & Tools ───────────────────────────────────────────────────
 
-pub fn handle_status(app: &TuiApp) -> String {
+pub async fn handle_status(app: &TuiApp) -> String {
     let msg_count = app.messages.len();
     let mut lines = vec![];
 
@@ -420,7 +420,7 @@ pub fn handle_status(app: &TuiApp) -> String {
     lines.push(format!("Messages: {}", msg_count));
 
     if let Some(ref engine) = app.streaming_engine {
-        let history_len = futures::executor::block_on(engine.get_history()).len();
+        let history_len = engine.get_history().await.len();
         lines.push(format!("History: {} turns", history_len));
 
         // 模型信息
@@ -432,7 +432,7 @@ pub fn handle_status(app: &TuiApp) -> String {
 
         // 工具统计
         let tracker = engine.cost_tracker();
-        let tracker_guard = futures::executor::block_on(tracker.lock());
+        let tracker_guard = tracker.lock().await;
         lines.push(format!(
             "Cost: ${:.4} ({} tokens)",
             tracker_guard.estimated_cost_usd, tracker_guard.total_tokens.total
@@ -2098,10 +2098,10 @@ pub async fn handle_btw(app: &mut TuiApp, args: &str) -> String {
 }
 
 /// /context - 显示当前上下文状态
-pub fn handle_context(app: &TuiApp) -> String {
+pub async fn handle_context(app: &TuiApp) -> String {
     let msg_count = app.messages.len();
     let history_len = if let Some(ref engine) = app.streaming_engine {
-        futures::executor::block_on(engine.get_history()).len()
+        engine.get_history().await.len()
     } else {
         0
     };
@@ -2115,7 +2115,7 @@ pub fn handle_context(app: &TuiApp) -> String {
         .unwrap_or_else(|| "none".to_string());
 
     let engine_info = if let Some(ref engine) = app.streaming_engine {
-        let history = futures::executor::block_on(engine.get_history());
+        let history = engine.get_history().await;
 
         let approximate_tokens = history.iter().map(|m| {
             match m {
@@ -2543,7 +2543,7 @@ pub async fn handle_orchestrate(app: &mut TuiApp, args: &str) -> String {
 // ─── Batch 1 Commands (Phase 10) ──────────────────────────────────────────────
 
 /// /session - 会话管理
-pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
+pub async fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
     let args = args.trim();
     if args.is_empty() || args == "list" {
         // List sessions
@@ -2580,7 +2580,7 @@ pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
         match app.session_manager.list_sessions(20) {
             Ok(sessions) if n > 0 && n <= sessions.len() => {
                 let session = &sessions[n - 1];
-                futures::executor::block_on(app.restore_session(&session.id))
+                app.restore_session(&session.id).await
             }
             _ => "Invalid session number. Use /session list to see available.".to_string(),
         }
@@ -2593,7 +2593,7 @@ pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
             .unwrap_or("New Session");
         match app.session_manager.start_session(title, "kimi-k2.5") {
             Ok(id) => {
-                let _ = futures::executor::block_on(app.restore_session(&id));
+                let _ = app.restore_session(&id).await;
                 format!("Created new session: {}", title)
             }
             Err(e) => format!("Failed to create session: {}", e),
@@ -2607,7 +2607,7 @@ pub fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
         "Usage: /session new <title>".to_string()
     } else {
         // Fallback: try switch by full session ID
-        futures::executor::block_on(app.restore_session(args))
+        app.restore_session(args).await
     }
 }
 
@@ -2887,9 +2887,9 @@ pub fn handle_share(app: &mut TuiApp, _args: &str) -> String {
 }
 
 /// /token - 显示 token 使用情况
-pub fn handle_token(app: &TuiApp) -> String {
+pub async fn handle_token(app: &TuiApp) -> String {
     if let Some(ref engine) = app.streaming_engine {
-        let tracker = futures::executor::block_on(engine.cost_tracker().lock());
+        let tracker = engine.cost_tracker().lock().await;
         let report = tracker.generate_report();
         format!("Token Usage:\n{}", report)
     } else {
@@ -3073,7 +3073,7 @@ pub fn handle_profiling(app: &TuiApp) -> String {
 }
 
 /// /prompt - Show/edit system prompt
-pub fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
+pub async fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
     let args = args.trim();
     if args.is_empty() || args == "show" {
         return match read_prompt_file() {
@@ -3119,9 +3119,9 @@ pub fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
             .session_manager
             .add_message(crate::state::MessageRole::System, &content);
         if let Some(ref engine) = app.streaming_engine {
-            futures::executor::block_on(engine.set_history(message_items_to_api_messages(
+            engine.set_history(message_items_to_api_messages(
                 &app.messages,
-            )));
+            )).await;
         }
         return "Custom system prompt applied to current session context.".to_string();
     }
@@ -4576,12 +4576,12 @@ pub fn handle_skills(_app: &TuiApp) -> String {
 }
 
 /// Get diagnostic suggestions based on recent failures
-pub fn get_failure_suggestions(app: &TuiApp) -> String {
+pub async fn get_failure_suggestions(app: &TuiApp) -> String {
     let Some(ref engine) = app.streaming_engine else {
         return String::new();
     };
 
-    let tracker_guard = futures::executor::block_on(engine.cost_tracker().lock());
+    let tracker_guard = engine.cost_tracker().lock().await;
 
     // Get top failure reasons
     let mut agg: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
@@ -4929,7 +4929,7 @@ pub async fn handle_load_session(app: &mut TuiApp, args: &str) -> String {
 }
 
 /// /merge - Merge sessions
-pub fn handle_merge(app: &mut TuiApp, args: &str) -> String {
+pub async fn handle_merge(app: &mut TuiApp, args: &str) -> String {
     let args = args.trim();
     if args.is_empty() {
         return "Usage: /merge <session_id> into current".to_string();
@@ -4982,9 +4982,9 @@ pub fn handle_merge(app: &mut TuiApp, args: &str) -> String {
     }
 
     if let Some(ref engine) = app.streaming_engine {
-        futures::executor::block_on(engine.set_history(message_items_to_api_messages(
+        engine.set_history(message_items_to_api_messages(
             &app.messages,
-        )));
+        )).await;
     }
 
     format!(
@@ -5037,11 +5037,11 @@ pub fn handle_cleanup(app: &mut TuiApp, args: &str) -> String {
 }
 
 /// /compact - Compact context
-pub fn handle_compact(app: &mut TuiApp) -> String {
+pub async fn handle_compact(app: &mut TuiApp) -> String {
     let Some(ref engine) = app.streaming_engine else {
         return "Engine not initialized; cannot compact context.".to_string();
     };
-    let history_before = futures::executor::block_on(engine.get_history());
+    let history_before = engine.get_history().await;
     if history_before.is_empty() {
         return "No history to compact.".to_string();
     }
@@ -5052,12 +5052,12 @@ pub fn handle_compact(app: &mut TuiApp) -> String {
         return "Context compressor unavailable.".to_string();
     };
     let compacted = {
-        let mut guard = futures::executor::block_on(comp.lock());
+        let mut guard = comp.lock().await;
         guard.micro_compress(&history_before)
     };
     let after_msgs = compacted.len();
     let after_tokens = crate::engine::context_compressor::estimate_messages_tokens(&compacted);
-    futures::executor::block_on(engine.set_history(compacted.clone()));
+    engine.set_history(compacted.clone()).await;
 
     app.messages = compacted
         .into_iter()
@@ -5704,7 +5704,7 @@ fn cleanup_logs() -> String {
 }
 
 /// /bookmark - Bookmark locations
-pub fn handle_bookmark(app: &mut TuiApp, args: &str) -> String {
+pub async fn handle_bookmark(app: &mut TuiApp, args: &str) -> String {
     let args = args.trim();
     if args.is_empty() || args == "list" {
         return match load_bookmarks() {
@@ -5780,10 +5780,10 @@ pub fn handle_bookmark(app: &mut TuiApp, args: &str) -> String {
             };
 
             if let Some(session_id) = target.strip_prefix("session:") {
-                return futures::executor::block_on(app.restore_session(session_id));
+                return app.restore_session(session_id).await;
             }
             if target.starts_with("sess_") {
-                return futures::executor::block_on(app.restore_session(target));
+                return app.restore_session(target).await;
             }
             format!("Bookmark '{}' -> {}", name, target)
         }
@@ -6479,10 +6479,10 @@ mod tests {
         assert!(sanitize_note_name("").is_none());
     }
 
-    #[test]
-    fn test_bookmark_usage_without_name() {
+    #[tokio::test]
+    async fn test_bookmark_usage_without_name() {
         let mut app = crate::tui::app::TuiApp::new();
-        let msg = super::handle_bookmark(&mut app, "add");
+        let msg = super::handle_bookmark(&mut app, "add").await;
         assert!(msg.starts_with("Usage: /bookmark add"));
     }
 

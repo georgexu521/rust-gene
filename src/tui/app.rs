@@ -956,18 +956,18 @@ impl TuiApp {
                     "Model: unavailable (no engine connected)".to_string()
                 }
             }
-"/status" => slash::handle_status(self),
+"/status" => slash::handle_status(self).await,
             "/resume" => slash::handle_resume(self, args).await,
             "/rewind" => slash::handle_rewind(self, args),
             // Phase 10 Batch 1: Session & Control Commands
-            "/session" => slash::handle_session_cmd(self, args),
+            "/session" => slash::handle_session_cmd(self, args).await,
             "/undo" => slash::handle_undo(self, args),
             "/redo" => slash::handle_redo(self, args),
             "/retry" => slash::handle_retry(self, args).await,
             "/stop" => slash::handle_stop(self, args),
             "/reload" => slash::handle_reload(self, args).await,
             "/share" => slash::handle_share(self, args),
-            "/cost" | "/token" => slash::handle_token(self),
+            "/cost" | "/token" => slash::handle_token(self).await,
             "/diff" => {
                 let tool = crate::tools::GitTool;
                 let range = if args.trim().is_empty() {
@@ -1049,7 +1049,7 @@ impl TuiApp {
             // Phase 10 Batch 2: hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color
             "/hooks" => slash::handle_hooks(self),
             "/profiling" => slash::handle_profiling(self),
-            "/prompt" => slash::handle_prompt(self, args),
+            "/prompt" => slash::handle_prompt(self, args).await,
             "/migrate" => slash::handle_migrate(self, args).await,
             "/focus" => slash::handle_focus(self, args),
             "/pause" => slash::handle_pause(self, args),
@@ -1083,7 +1083,7 @@ impl TuiApp {
             "/skip" => slash::handle_skip(self),
             // Phase 9 Task 3: New high-value commands
             "/btw" => slash::handle_btw(self, args).await,
-            "/context" => slash::handle_context(self),
+            "/context" => slash::handle_context(self).await,
             "/git" => slash::handle_git(self, args).await,
             "/history" => slash::handle_history(self, args),
             "/mode" => slash::handle_mode(self, args),
@@ -1122,11 +1122,11 @@ impl TuiApp {
             "/import" => slash::handle_import(self, args).await,
             "/save-session" => slash::handle_save_session(self),
             "/load-session" => slash::handle_load_session(self, args).await,
-            "/merge" => slash::handle_merge(self, args),
+            "/merge" => slash::handle_merge(self, args).await,
             "/cleanup" => slash::handle_cleanup(self, args),
-            "/compact" => slash::handle_compact(self),
+            "/compact" => slash::handle_compact(self).await,
             "/snippet" => slash::handle_snippet(self, args),
-            "/bookmark" => slash::handle_bookmark(self, args),
+            "/bookmark" => slash::handle_bookmark(self, args).await,
             "/tag" => slash::handle_tag(self, args),
             "/search" => slash::handle_search(self, args),
             "/filter" => slash::handle_filter(self, args),
