@@ -5,7 +5,7 @@ use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType, AgentStatus};
 use crate::engine::QueryEngine;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
 
 /// Agent 配置
@@ -122,8 +122,8 @@ impl AgentConfig {
 pub struct AgentHandle {
     pub id: AgentId,
     pub config: AgentConfig,
-    /// 共享状态 - Agent 和 Manager 都持有同一个 Arc
-    pub status: Arc<RwLock<AgentStatus>>,
+    /// 共享状态 - 通过 watch channel 订阅状态变化
+    pub status: watch::Receiver<AgentStatus>,
 }
 
 /// Agent 实例
@@ -132,8 +132,10 @@ pub struct Agent {
     pub id: AgentId,
     /// 配置
     pub config: AgentConfig,
-    /// 共享状态（与 AgentHandle 共享同一个 Arc）
-    status: Arc<RwLock<AgentStatus>>,
+    /// 状态发送端
+    status_tx: watch::Sender<AgentStatus>,
+    /// 状态接收端（与 AgentHandle 共享同一个 watch channel）
+    status_rx: watch::Receiver<AgentStatus>,
     /// 消息接收通道
     pub receiver: mpsc::Receiver<AgentMessage>,
     /// 消息发送通道（用于向父 Agent 发送消息）
@@ -159,10 +161,12 @@ impl Agent {
     ) -> Self {
         info!("Creating new agent: {} ({})", id, config.name);
 
+        let (status_tx, status_rx) = watch::channel(AgentStatus::Pending);
         Self {
             id,
             config,
-            status: Arc::new(RwLock::new(AgentStatus::Pending)),
+            status_tx,
+            status_rx,
             receiver,
             sender,
             result_sender: None,
@@ -178,25 +182,24 @@ impl Agent {
         self
     }
 
-    /// 获取句柄（共享同一个状态 Arc）
+    /// 获取句柄（共享同一个 watch channel）
     pub fn handle(&self) -> AgentHandle {
         AgentHandle {
             id: self.id.clone(),
             config: self.config.clone(),
-            status: self.status.clone(),
+            status: self.status_rx.clone(),
         }
     }
 
     /// 设置状态
-    async fn set_status(&self, status: AgentStatus) {
-        let mut s = self.status.write().await;
-        *s = status;
+    fn set_status(&self, status: AgentStatus) {
+        let _ = self.status_tx.send(status);
     }
 
     /// 启动 Agent
     pub async fn run(mut self) {
         info!("Agent {} starting...", self.id);
-        self.set_status(AgentStatus::Running).await;
+        self.set_status(AgentStatus::Running);
 
         // 发送就绪消息给父 Agent
         if let Some(ref sender) = self.sender {
@@ -209,32 +212,31 @@ impl Agent {
             let _ = sender.send(ready_msg).await;
         }
 
-        // 主循环
-        // TODO: 将 status 的 RwLock 替换为 watch::channel，以消除这里的轮询
-        let check_interval = tokio::time::Duration::from_millis(500);
+        // 主循环 - 使用 watch channel 等待状态变化，消除轮询
         loop {
+            // 先检查当前状态，如果是终态立即退出
+            if self.status_rx.borrow().is_terminal() {
+                break;
+            }
+
             tokio::select! {
                 Some(msg) = self.receiver.recv() => {
                     if let Err(e) = self.handle_message(msg).await {
                         error!("Agent {} failed to handle message: {}", self.id, e);
                     }
                 }
-                _ = tokio::time::sleep(check_interval) => {
-                    // 周期性检查，防止外部直接设置 terminal 状态后卡在 recv()
+                Ok(()) = self.status_rx.changed() => {
+                    // 状态发生变化，循环会重新检查
                 }
                 else => {
                     // 通道关闭
                     break;
                 }
             }
-
-            if self.status.read().await.is_terminal() {
-                break;
-            }
         }
 
         // 发送最终结果给 AgentManager
-        let final_status = *self.status.read().await;
+        let final_status = *self.status_rx.borrow();
         if let Some(ref result_sender) = self.result_sender {
             let result = AgentResult {
                 agent_id: self.id.clone(),
@@ -266,7 +268,7 @@ impl Agent {
             AgentMessageType::Control => {
                 // 控制命令
                 if msg.content == "stop" {
-                    self.set_status(AgentStatus::Cancelled).await;
+                    self.set_status(AgentStatus::Cancelled);
                 }
             }
             AgentMessageType::Query => {
@@ -286,7 +288,7 @@ impl Agent {
     async fn execute_task(&mut self, task: &str) -> anyhow::Result<()> {
         info!("Agent {} executing task: {}", self.id, task);
         self.task_history.push(task.to_string());
-        self.set_status(AgentStatus::Running).await;
+        self.set_status(AgentStatus::Running);
 
         // 使用 QueryEngine 的 query_with_tools 执行任务（子 Agent 也能使用工具）
         let mut options = crate::engine::query_engine::QueryOptions::default()
@@ -309,7 +311,7 @@ impl Agent {
             Ok(query_result) => {
                 if let Some(limit) = self.config.max_cost_usd {
                     if cost_delta > limit {
-                        self.set_status(AgentStatus::Failed).await;
+                        self.set_status(AgentStatus::Failed);
                         let content = format!(
                             "Task exceeded cost budget: used ${:.4}, limit ${:.4}\nPartial result:\n{}",
                             cost_delta, limit, query_result.content
@@ -317,20 +319,20 @@ impl Agent {
                         self.last_result = Some(content.clone());
                         content
                     } else {
-                        self.set_status(AgentStatus::Completed).await;
+                        self.set_status(AgentStatus::Completed);
                         let content = format!("Task completed:\n{}", query_result.content);
                         self.last_result = Some(query_result.content);
                         content
                     }
                 } else {
-                    self.set_status(AgentStatus::Completed).await;
+                    self.set_status(AgentStatus::Completed);
                     let content = format!("Task completed:\n{}", query_result.content);
                     self.last_result = Some(query_result.content);
                     content
                 }
             }
             Err(e) => {
-                self.set_status(AgentStatus::Failed).await;
+                self.set_status(AgentStatus::Failed);
                 let content = format!("Task failed: {}", e);
                 self.last_result = Some(content.clone());
                 content

@@ -380,9 +380,8 @@ impl AgentManager {
                     .filter_map(|(id, handle)| {
                         if handle
                             .status
-                            .try_read()
-                            .map(|s| s.is_terminal())
-                            .unwrap_or(false)
+                            .borrow()
+                            .is_terminal()
                         {
                             Some(id.clone())
                         } else {
@@ -577,7 +576,7 @@ impl AgentManager {
     pub async fn get_status(&self, agent_id: &AgentId) -> Option<AgentStatus> {
         let agents = self.agents.read().await;
         if let Some(handle) = agents.get(agent_id) {
-            Some(*handle.status.read().await)
+            Some(*handle.status.borrow())
         } else {
             None
         }
@@ -617,23 +616,45 @@ impl AgentManager {
         agent_id: &AgentId,
         timeout_secs: u64,
     ) -> anyhow::Result<AgentStatus> {
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(timeout_secs);
+        let agents = self.agents.read().await;
+        let mut status_rx = if let Some(handle) = agents.get(agent_id) {
+            handle.status.clone()
+        } else {
+            return Err(anyhow::anyhow!("Agent {} not found", agent_id));
+        };
+        drop(agents); // 释放锁，避免持有锁等待
 
-        loop {
-            if let Some(status) = self.get_status(agent_id).await {
-                if status.is_terminal() {
-                    return Ok(status);
+        // 先检查当前状态
+        let current = *status_rx.borrow();
+        if current.is_terminal() {
+            return Ok(current);
+        }
+
+        // 使用 watch channel 等待状态变化，消除轮询
+        let timeout = tokio::time::Duration::from_secs(timeout_secs);
+        let result = tokio::time::timeout(timeout, async {
+            loop {
+                match status_rx.changed().await {
+                    Ok(()) => {
+                        let status = *status_rx.borrow();
+                        if status.is_terminal() {
+                            return Ok(status);
+                        }
+                    }
+                    Err(_) => {
+                        return Err(anyhow::anyhow!(
+                            "Agent {} status channel closed",
+                            agent_id
+                        ));
+                    }
                 }
-            } else {
-                return Err(anyhow::anyhow!("Agent {} not found", agent_id));
             }
+        })
+        .await;
 
-            if start.elapsed() > timeout {
-                return Err(anyhow::anyhow!("Timeout waiting for agent {}", agent_id));
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        match result {
+            Ok(status) => status,
+            Err(_) => Err(anyhow::anyhow!("Timeout waiting for agent {}", agent_id)),
         }
     }
 
@@ -645,7 +666,7 @@ impl AgentManager {
 
         let mut completed = Vec::new();
         for (id, handle) in agents.iter() {
-            if handle.status.read().await.is_terminal() {
+            if handle.status.borrow().is_terminal() {
                 completed.push(id.clone());
             }
         }

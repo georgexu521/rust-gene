@@ -132,7 +132,7 @@ pub async fn handle_agents(app: &TuiApp) -> String {
         } else {
             let mut lines = vec![format!("Agents ({}):", agents.len())];
             for handle in agents.iter().take(30) {
-                let status = *handle.status.read().await;
+                let status = *handle.status.borrow();
                 lines.push(format!(
                     "- {} [{:?}] [{}] {}",
                     handle.id,
@@ -195,7 +195,7 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
                     *role_counts
                         .entry(handle.config.role.display_name().to_string())
                         .or_insert(0) += 1;
-                    let status_label = format!("{:?}", *handle.status.read().await);
+                    let status_label = format!("{:?}", *handle.status.borrow());
                     *status_counts.entry(status_label).or_insert(0) += 1;
                 }
                 let role_line = role_counts
