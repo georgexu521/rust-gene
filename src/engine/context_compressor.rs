@@ -343,6 +343,60 @@ impl Default for TimeBasedConfig {
     }
 }
 
+/// 压缩级别（分层压缩流水线）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionLevel {
+    /// 不压缩
+    None,
+    /// 轻量：只裁剪旧工具输出（最快，零 LLM 调用）
+    Light,
+    /// 中等：裁剪 + 启发式摘要（快速，不依赖 LLM）
+    Medium,
+    /// 重度：裁剪 + LLM 摘要（最高质量，但有延迟和成本）
+    Heavy,
+}
+
+impl CompressionLevel {
+    /// 根据 token 使用率和历史自动选择压缩级别
+    pub fn auto_select(
+        usage_ratio: f64,
+        compression_count: u32,
+        consecutive_llm_failures: u32,
+        has_llm_provider: bool,
+    ) -> Self {
+        if usage_ratio < 0.7 {
+            CompressionLevel::Light
+        } else if usage_ratio < 0.85 {
+            // 中等负载：如果有 LLM 且未连续失败，用 Medium；否则 Light
+            if has_llm_provider && consecutive_llm_failures < 2 {
+                CompressionLevel::Medium
+            } else {
+                CompressionLevel::Light
+            }
+        } else {
+            // 高负载：必须压缩
+            if has_llm_provider && consecutive_llm_failures < 3 {
+                if compression_count < 2 {
+                    CompressionLevel::Heavy
+                } else {
+                    CompressionLevel::Medium
+                }
+            } else {
+                CompressionLevel::Medium
+            }
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            CompressionLevel::None => "none",
+            CompressionLevel::Light => "light",
+            CompressionLevel::Medium => "medium",
+            CompressionLevel::Heavy => "heavy",
+        }
+    }
+}
+
 /// 压缩警告状态（新增）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionWarning {
@@ -928,14 +982,87 @@ impl ContextCompressor {
         self.budget.needs_compression(tokens)
     }
 
-    /// 异步压缩消息列表
-    /// 优先尝试 LLM 生成高质量摘要，失败时回退到启发式摘要
-    pub async fn compress_async(&mut self, messages: &[Message]) -> Vec<Message> {
-        let has_provider = self.has_llm_provider();
+    /// 按级别压缩消息列表
+    pub fn compress_with_level(
+        &mut self,
+        messages: &[Message],
+        level: CompressionLevel,
+    ) -> Vec<Message> {
         let tokens_before = estimate_messages_tokens(messages);
         self.total_tokens_before += tokens_before;
 
-        let result = if has_provider
+        let result = match level {
+            CompressionLevel::None => messages.to_vec(),
+            CompressionLevel::Light => {
+                let r = self.micro_compress(messages);
+                let tokens_after = estimate_messages_tokens(&r);
+                self.total_tokens_after += tokens_after;
+                info!(
+                    "Light compression ({}): {} -> {} tokens",
+                    level.label(),
+                    tokens_before,
+                    tokens_after
+                );
+                r
+            }
+            CompressionLevel::Medium => {
+                let r = self.compress(messages);
+                let tokens_after = estimate_messages_tokens(&r);
+                self.total_tokens_after += tokens_after;
+                info!(
+                    "Medium compression ({}): {} -> {} tokens",
+                    level.label(),
+                    tokens_before,
+                    tokens_after
+                );
+                r
+            }
+            CompressionLevel::Heavy => {
+                // Heavy 需要 LLM，在 compress_async 中处理
+                let r = self.compress(messages);
+                let tokens_after = estimate_messages_tokens(&r);
+                self.total_tokens_after += tokens_after;
+                r
+            }
+        };
+
+        result
+    }
+
+    /// 异步压缩消息列表（分层压缩流水线）
+    /// 根据 token 使用率自动选择压缩级别：
+    /// - Light (<70%): 只裁剪工具输出
+    /// - Medium (70-85%): 裁剪 + 启发式摘要
+    /// - Heavy (>85%): 裁剪 + LLM 摘要
+    pub async fn compress_async(&mut self, messages: &[Message]) -> Vec<Message> {
+        let tokens_before = estimate_messages_tokens(messages);
+        let total = tokens_before + self.budget.system_prompt_tokens + self.budget.tool_schemas_tokens;
+        let usage_ratio = total as f64 / self.budget.max_context_tokens as f64;
+
+        let level = CompressionLevel::auto_select(
+            usage_ratio,
+            self.compression_count,
+            self.consecutive_llm_failures,
+            self.has_llm_provider(),
+        );
+
+        debug!(
+            "Compression auto-selected level={} (usage={:.1}%, count={}, llm_failures={})",
+            level.label(),
+            usage_ratio * 100.0,
+            self.compression_count,
+            self.consecutive_llm_failures
+        );
+
+        // Light/Medium 不需要 LLM，直接同步处理
+        if level == CompressionLevel::Light || level == CompressionLevel::Medium {
+            return self.compress_with_level(messages, level);
+        }
+
+        // Heavy: 尝试 LLM 摘要
+        self.total_tokens_before += tokens_before;
+
+        if self.has_llm_provider()
             && !self.is_in_cooldown()
             && self.consecutive_llm_failures < self.max_consecutive_llm_failures
         {
@@ -947,7 +1074,7 @@ impl ContextCompressor {
                     let tokens_after = estimate_messages_tokens(&compressed);
                     self.total_tokens_after += tokens_after;
                     info!(
-                        "LLM compression succeeded: {} -> {} tokens (saved {}%)",
+                        "Heavy (LLM) compression succeeded: {} -> {} tokens (saved {}%)",
                         tokens_before,
                         tokens_after,
                         if tokens_before > 0 {
@@ -966,7 +1093,7 @@ impl ContextCompressor {
                     let tokens_after = estimate_messages_tokens(&compressed);
                     self.total_tokens_after += tokens_after;
                     warn!(
-                        "LLM compression failed, fell back to heuristic: {} -> {} tokens",
+                        "LLM compression failed, fell back to medium: {} -> {} tokens",
                         tokens_before, tokens_after
                     );
                     compressed
@@ -975,7 +1102,7 @@ impl ContextCompressor {
         } else {
             if self.consecutive_llm_failures >= self.max_consecutive_llm_failures {
                 warn!(
-                    "LLM compression temporarily disabled after {} consecutive failures; using heuristic compression.",
+                    "LLM compression disabled after {} consecutive failures; using medium compression.",
                     self.consecutive_llm_failures
                 );
             }
@@ -983,9 +1110,7 @@ impl ContextCompressor {
             let tokens_after = estimate_messages_tokens(&compressed);
             self.total_tokens_after += tokens_after;
             compressed
-        };
-
-        result
+        }
     }
 
     /// 压缩消息列表
@@ -1605,6 +1730,11 @@ impl ContextCompressor {
     /// 获取当前累积摘要的引用
     pub fn accumulated_summary(&self) -> Option<&StructuredSummary> {
         self.accumulated_summary.as_ref()
+    }
+
+    /// 获取压缩元数据历史
+    pub fn compact_metadata_history(&self) -> &[CompactMetadata] {
+        &self.compact_metadata_history
     }
 
     /// 获取压缩统计
@@ -2380,6 +2510,117 @@ mod tests {
             _ => false,
         });
         assert!(preserved, "Compressed messages should preserve critical info");
+    }
+
+    #[test]
+    fn test_compress_50_turns_stability() {
+        // 50 turns: full compression pipeline should remain stable
+        let messages = create_long_conversation(50);
+        let tokens_before = estimate_messages_tokens(&messages);
+
+        let mut compressor = ContextCompressor::new(32_000);
+        let compressed = compressor.compress(&messages);
+        let tokens_after = estimate_messages_tokens(&compressed);
+
+        assert!(!compressed.is_empty());
+        assert!(
+            tokens_after < tokens_before,
+            "Compression should reduce tokens: {} -> {}",
+            tokens_before,
+            tokens_after
+        );
+
+        let stats = compressor.stats();
+        assert!(stats.compression_count >= 1, "Should have compressed at least once");
+    }
+
+    #[test]
+    fn test_compress_100_turns_stability() {
+        // 100 turns: aggressive compression
+        let messages = create_long_conversation(100);
+        let tokens_before = estimate_messages_tokens(&messages);
+
+        let mut compressor = ContextCompressor::new(32_000);
+        let compressed = compressor.compress(&messages);
+        let tokens_after = estimate_messages_tokens(&compressed);
+
+        assert!(!compressed.is_empty());
+        assert!(
+            tokens_after < tokens_before,
+            "Compression should reduce tokens: {} -> {}",
+            tokens_before,
+            tokens_after
+        );
+
+        // Multiple compressions should be stable
+        let recompressed = compressor.compress(&compressed);
+        assert!(!recompressed.is_empty());
+
+        let stats = compressor.stats();
+        assert!(stats.compression_count >= 2);
+    }
+
+    #[test]
+    fn test_compression_level_auto_select() {
+        // Low usage -> Light
+        let level = CompressionLevel::auto_select(0.5, 0, 0, true);
+        assert_eq!(level, CompressionLevel::Light);
+
+        // Medium usage with LLM -> Medium
+        let level = CompressionLevel::auto_select(0.75, 0, 0, true);
+        assert_eq!(level, CompressionLevel::Medium);
+
+        // Medium usage without LLM -> Light
+        let level = CompressionLevel::auto_select(0.75, 0, 0, false);
+        assert_eq!(level, CompressionLevel::Light);
+
+        // High usage with LLM, first compression -> Heavy
+        let level = CompressionLevel::auto_select(0.9, 0, 0, true);
+        assert_eq!(level, CompressionLevel::Heavy);
+
+        // High usage with LLM, already compressed -> Medium
+        let level = CompressionLevel::auto_select(0.9, 3, 0, true);
+        assert_eq!(level, CompressionLevel::Medium);
+
+        // High usage with LLM failures -> Medium
+        let level = CompressionLevel::auto_select(0.9, 0, 5, true);
+        assert_eq!(level, CompressionLevel::Medium);
+    }
+
+    #[test]
+    fn test_compress_with_level_none() {
+        let messages = create_long_conversation(10);
+        let mut compressor = ContextCompressor::new(128_000);
+        let compressed = compressor.compress_with_level(&messages, CompressionLevel::None);
+        assert_eq!(compressed.len(), messages.len());
+    }
+
+    #[test]
+    fn test_compress_with_level_light() {
+        let messages = create_long_conversation(20);
+        let tokens_before = estimate_messages_tokens(&messages);
+        let mut compressor = ContextCompressor::new(128_000);
+        let compressed = compressor.compress_with_level(&messages, CompressionLevel::Light);
+        let tokens_after = estimate_messages_tokens(&compressed);
+        assert!(!compressed.is_empty());
+        // Light compression trims tool results but doesn't summarize
+        assert!(tokens_after <= tokens_before);
+    }
+
+    #[test]
+    fn test_compress_with_level_medium() {
+        let messages = create_long_conversation(50);
+        let tokens_before = estimate_messages_tokens(&messages);
+        let mut compressor = ContextCompressor::new(32_000);
+        let compressed = compressor.compress_with_level(&messages, CompressionLevel::Medium);
+        let tokens_after = estimate_messages_tokens(&compressed);
+        assert!(!compressed.is_empty());
+        assert!(
+            tokens_after < tokens_before,
+            "Medium compression should reduce tokens: {} -> {}",
+            tokens_before,
+            tokens_after
+        );
     }
 
     #[test]

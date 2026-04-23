@@ -616,10 +616,18 @@ pub async fn handle_context(app: &TuiApp) -> String {
         .map(|s| s[..8.min(s.len())].to_string())
         .unwrap_or_else(|| "none".to_string());
 
-    let engine_info = if let Some(ref engine) = app.streaming_engine {
-        let history = engine.get_history().await;
+    let mut lines = vec![
+        "# Context Status".to_string(),
+        "".to_string(),
+        format!("Session: {}", session_id),
+        format!("Model: {} ({})", model, provider),
+        format!("Working dir: {}", working_dir),
+        "".to_string(),
+    ];
 
-        let approximate_tokens = history.iter().map(|m| {
+    if let Some(ref engine) = app.streaming_engine {
+        let history = engine.get_history().await;
+        let approximate_tokens: usize = history.iter().map(|m| {
             match m {
                 crate::services::api::Message::System { content } => content.len(),
                 crate::services::api::Message::User { content } => content.len(),
@@ -628,25 +636,78 @@ pub async fn handle_context(app: &TuiApp) -> String {
             }
         }).sum::<usize>() / 4;
 
-        format!(
-            "History turns: {}\nMessages in view: {}\nApproximate tokens: {}",
-            history_len,
-            msg_count,
-            approximate_tokens
-        )
-    } else {
-        "Engine not initialized".to_string()
-    };
+        lines.push(format!("History turns: {}", history_len));
+        lines.push(format!("Messages in view: {}", msg_count));
+        lines.push(format!("Approximate tokens: {}", approximate_tokens));
 
-    format!(
-        "# Context Status\n\n\
-         Session: {}\n\
-         Model: {} ({})\n\
-         Working dir: {}\n\
-         \n\
-         {}",
-        session_id, model, provider, working_dir, engine_info
-    )
+        // 压缩器状态
+        if let Some(compressor_arc) = engine.compressor() {
+            let comp = compressor_arc.lock().await;
+            let stats = comp.stats();
+
+            lines.push("".to_string());
+            lines.push("## Compression".to_string());
+            lines.push(format!("  Compression count: {}", stats.compression_count));
+            lines.push(format!("  Total tokens before: {}", stats.total_tokens_before));
+            lines.push(format!("  Total tokens after: {}", stats.total_tokens_after));
+            if stats.total_tokens_before > 0 {
+                let savings = (stats.total_tokens_before - stats.total_tokens_after) * 100
+                    / stats.total_tokens_before;
+                lines.push(format!("  Overall savings: {}%", savings));
+            }
+            lines.push(format!(
+                "  LLM attempts: {} (failures: {})",
+                stats.llm_compression_attempts, stats.llm_compression_failures
+            ));
+
+            // 压缩历史
+            let history = comp.compact_metadata_history();
+            if !history.is_empty() {
+                lines.push("".to_string());
+                lines.push("## Compression History".to_string());
+                for meta in history.iter().rev().take(5) {
+                    lines.push(format!(
+                        "  #{}: {} msgs -> {} msgs ({} -> {} tokens)",
+                        meta.sequence,
+                        meta.messages_before,
+                        meta.messages_after,
+                        meta.tokens_before,
+                        meta.tokens_after
+                    ));
+                }
+            }
+
+            // 累积摘要
+            if let Some(summary) = comp.accumulated_summary() {
+                if !summary.is_empty() {
+                    lines.push("".to_string());
+                    lines.push("## Accumulated Summary".to_string());
+                    if !summary.goal.is_empty() {
+                        lines.push(format!("  Goal: {}", summary.goal));
+                    }
+                    if !summary.progress_done.is_empty() {
+                        lines.push(format!("  Done: {}", summary.progress_done.join(", ")));
+                    }
+                    if !summary.files_modified.is_empty() {
+                        lines.push(format!(
+                            "  Files: {}",
+                            summary.files_modified.join(", ")
+                        ));
+                    }
+                    if !summary.next_steps.is_empty() {
+                        lines.push(format!(
+                            "  Next: {}",
+                            summary.next_steps.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+    } else {
+        lines.push("Engine not initialized".to_string());
+    }
+
+    lines.join("\n")
 }
 /// /git - 内联 Git 操作
 pub async fn handle_git(app: &mut TuiApp, args: &str) -> String {
