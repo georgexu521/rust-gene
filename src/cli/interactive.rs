@@ -1,7 +1,7 @@
 //! 交互式提示模块
 
 use priority_core::weight_engine::types::{
-    Project, Task, TaskId, TaskStatus, Weight,
+    Project, Task, TaskId, TaskStatus,
 };
 use std::io::{self, Write};
 use std::path::PathBuf;
