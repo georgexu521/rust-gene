@@ -202,24 +202,42 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
             }
         }
         app::AppMode::Chat | app::AppMode::VimNormal => {
-            // 主布局：垂直分为消息区和输入区
-            let main_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(3),
-                    Constraint::Length(5),
-                    Constraint::Length(1),
-                ])
-                .split(f.area());
+            if app.sidebar_visible {
+                // 侧边栏 + 主区域布局
+                let h_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+                    .split(f.area());
 
-            // 1. 消息区
-            screens::main_screen::render_chat_area(f, app, main_chunks[0]);
+                screens::main_screen::render_sidebar(f, app, h_chunks[0]);
 
-            // 2. 输入区
-            screens::main_screen::render_input_area(f, app, main_chunks[1]);
+                let main_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(3),
+                        Constraint::Length(5),
+                        Constraint::Length(1),
+                    ])
+                    .split(h_chunks[1]);
 
-            // 3. 状态栏
-            screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+                screens::main_screen::render_chat_area(f, app, main_chunks[0]);
+                screens::main_screen::render_input_area(f, app, main_chunks[1]);
+                screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+            } else {
+                // 主布局：垂直分为消息区和输入区
+                let main_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(3),
+                        Constraint::Length(5),
+                        Constraint::Length(1),
+                    ])
+                    .split(f.area());
+
+                screens::main_screen::render_chat_area(f, app, main_chunks[0]);
+                screens::main_screen::render_input_area(f, app, main_chunks[1]);
+                screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+            }
         }
         app::AppMode::Onboarding => {
             // 引导模式：全屏渲染引导弹窗
@@ -387,6 +405,10 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                     app.collapsed_indices.insert(idx);
                 }
             }
+            return Ok(false);
+        }
+        if key.code == KeyCode::Char('b') {
+            app.sidebar_visible = !app.sidebar_visible;
             return Ok(false);
         }
     }

@@ -375,6 +375,63 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
+/// 渲染会话侧边栏
+pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
+    use ratatui::widgets::{Block, Borders, List, ListItem};
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.border_active))
+        .title(" Sessions ")
+        .style(Style::default().bg(app.theme.bg));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let sessions = app
+        .session_manager
+        .list_sessions(20)
+        .unwrap_or_default();
+
+    let current_id = app.session_manager.current_session_id().unwrap_or("");
+
+    let items: Vec<ListItem> = sessions
+        .iter()
+        .enumerate()
+        .map(|(i, session)| {
+            let is_current = session.id == current_id;
+            let is_selected = i == app.sidebar_selected;
+
+            let title = if session.title.is_empty() {
+                format!("Session {}", &session.id[..8.min(session.id.len())])
+            } else {
+                session.title.clone()
+            };
+
+            let style = if is_current {
+                Style::default()
+                    .fg(app.theme.assistant_message)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_selected {
+                Style::default()
+                    .fg(app.theme.text_highlight)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(app.theme.text)
+            };
+
+            let prefix = if is_current { "● " } else { "○ " };
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(title, style),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items);
+    f.render_widget(list, inner);
+}
+
 /// 渲染消息搜索弹窗
 pub fn render_message_search(f: &mut Frame, app: &TuiApp, area: Rect) {
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};

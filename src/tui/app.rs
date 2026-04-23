@@ -212,6 +212,12 @@ pub struct TuiApp {
     pub message_search_state: crate::tui::components::message_search::MessageSearchState,
     /// 折叠的消息索引（Vim Normal 模式下 Tab 折叠/展开）
     pub collapsed_indices: std::collections::HashSet<usize>,
+    /// 会话侧边栏是否可见
+    pub sidebar_visible: bool,
+    /// 侧边栏选中索引
+    pub sidebar_selected: usize,
+    /// 打字机效果当前显示位置（字符数）
+    pub typewriter_position: usize,
     /// LSP 管理器
     pub lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     /// Worktree 管理器
@@ -328,6 +334,9 @@ impl TuiApp {
             diff_scroll_offset: 0,
             message_search_state: crate::tui::components::message_search::MessageSearchState::new(),
             collapsed_indices: std::collections::HashSet::new(),
+            sidebar_visible: false,
+            sidebar_selected: 0,
+            typewriter_position: 0,
             lsp_manager,
             worktree_manager,
             bundled_skills: {
@@ -508,7 +517,7 @@ impl TuiApp {
         }
     }
 
-    /// 刷新当前响应（从缓冲区读取最新的流式内容）
+    /// 刷新当前响应（从缓冲区读取最新的流式内容，带打字机效果）
     pub async fn refresh_response(&mut self) {
         if !self.is_querying {
             return;
@@ -524,10 +533,21 @@ impl TuiApp {
             t.clone()
         };
 
+        // 打字机效果：逐步显示字符
+        let total_chars = response.chars().count();
+        if self.typewriter_position < total_chars {
+            let remaining = total_chars - self.typewriter_position;
+            let increment = remaining.min(12); // ~48 chars/sec at 4Hz tick
+            self.typewriter_position += increment;
+        }
+
+        // 截取显示内容
+        let display_response: String = response.chars().take(self.typewriter_position).collect();
+
         // 更新最后一条助手消息
         if let Some(last_msg) = self.messages.last_mut() {
             if last_msg.role == MessageRole::Assistant {
-                let mut display_content = response.clone();
+                let mut display_content = display_response;
 
                 // 如果有正在执行的工具，显示状态
                 if !tools.is_empty() {
@@ -559,6 +579,14 @@ impl TuiApp {
 
             // 使用 AtomicBool 检测流是否完成（由后台任务设置）
             if self.stream_done.load(Ordering::SeqCst) {
+                // 确保显示完整内容（跳过打字机效果的剩余部分）
+                if let Some(last_msg) = self.messages.last_mut() {
+                    if last_msg.role == MessageRole::Assistant {
+                        let response = self.current_response.lock().await.clone();
+                        last_msg.content = response;
+                    }
+                }
+                self.typewriter_position = 0;
                 // 流式响应完成，发送终端通知
                 crate::tui::notify::send_notification("Priority Agent", "Response ready");
                 self.is_querying = false;
