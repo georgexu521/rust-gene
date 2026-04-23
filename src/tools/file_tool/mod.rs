@@ -569,12 +569,18 @@ async fn save_snapshot(
     content: &str,
     tool_name: &str,
 ) -> Result<PathBuf, String> {
+    // 消毒 session_id，防止路径注入
+    let safe_session_id: String = session_id
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+
     let ts = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f");
     let snap_dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".priority-agent")
         .join("snapshots")
-        .join(session_id)
+        .join(&safe_session_id)
         .join(ts.to_string());
 
     // 尝试将绝对路径转为相对于 working_dir 的路径，如果失败则使用简化文件名
@@ -1110,16 +1116,22 @@ pub fn is_allowed_absolute_path(path: &std::path::Path, working_dir: &std::path:
         return true;
     }
 
-    let mut allowed_roots = vec![normalize_path(&std::env::temp_dir())];
-    for root in [Path::new("/tmp"), Path::new("/var/tmp")] {
-        allowed_roots.push(normalize_path(root));
-        if root.exists() {
-            if let Ok(real_root) = std::fs::canonicalize(root) {
-                allowed_roots.push(normalize_path(&real_root));
-            }
-        }
+    // 如果 working_dir 在 /tmp 下，只允许访问 working_dir 内的路径
+    // 防止 /tmp/foo 工作目录下访问 /tmp/bar
+    let tmp_dir = normalize_path(&std::env::temp_dir());
+    let in_tmp = normalized_working.starts_with(&tmp_dir)
+        || normalized_working.starts_with(Path::new("/tmp"))
+        || normalized_working.starts_with(Path::new("/var/tmp"));
+    if in_tmp {
+        return false;
     }
 
+    // working_dir 不在 /tmp 下时，允许访问 /tmp 下的项目临时文件
+    let allowed_roots = [
+        normalize_path(Path::new("/tmp")),
+        normalize_path(Path::new("/var/tmp")),
+        tmp_dir,
+    ];
     let canonical_path = canonicalize_or_normalize(&normalized_path);
     allowed_roots
         .into_iter()

@@ -804,11 +804,11 @@ fn is_drift_interruption_signal(user_input: &str) -> bool {
 }
 
 /// 截断工具结果，如果超过阈值则写入磁盘
-fn truncate_tool_result(result: &mut ToolResult, tool_name: &str, tool_call_id: &str) {
+async fn truncate_tool_result(result: &mut ToolResult, tool_name: &str, tool_call_id: &str) {
     if result.content.len() > TOOL_RESULT_TRUNCATE_THRESHOLD {
         let cache_dir = tool_result_cache_dir();
         // 忽略 mkdir 错误（权限问题等）
-        let _ = std::fs::create_dir_all(&cache_dir);
+        let _ = tokio::fs::create_dir_all(&cache_dir).await;
 
         let filename = format!(
             "{}_{}_{}.txt",
@@ -821,7 +821,7 @@ fn truncate_tool_result(result: &mut ToolResult, tool_name: &str, tool_call_id: 
         );
         let file_path = cache_dir.join(&filename);
 
-        if std::fs::write(&file_path, &result.content).is_ok() {
+        if tokio::fs::write(&file_path, &result.content).await.is_ok() {
             let original = result.content.clone();
             let original_len = original.len();
             let target_half_bytes = 2048.min(original_len / 2);
@@ -1412,7 +1412,7 @@ impl ConversationLoop {
             let mut changed_files = Vec::new();
             for (tc, result) in results.iter_mut() {
                 // 截断过大的工具结果，写入磁盘
-                truncate_tool_result(result, &tc.name, &tc.id);
+                truncate_tool_result(result, &tc.name, &tc.id).await;
                 let result_content = format!(
                     "Result: {}\n{}",
                     if result.success { "OK" } else { "ERROR" },
@@ -2255,30 +2255,30 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_truncate_tool_result_handles_utf8_boundaries() {
+    #[tokio::test]
+    async fn test_truncate_tool_result_handles_utf8_boundaries() {
         let mut result = ToolResult::success("中".repeat(20_000));
-        truncate_tool_result(&mut result, "grep", "call_utf8");
+        truncate_tool_result(&mut result, "grep", "call_utf8").await;
         assert!(result.content.contains("Output truncated"));
     }
 
-    #[test]
-    fn test_truncate_tool_result_keeps_small_output_unchanged() {
+    #[tokio::test]
+    async fn test_truncate_tool_result_keeps_small_output_unchanged() {
         let original = "short output".to_string();
         let mut result = ToolResult::success(original.clone());
-        truncate_tool_result(&mut result, "grep", "call_small");
+        truncate_tool_result(&mut result, "grep", "call_small").await;
         assert_eq!(result.content, original);
     }
 
-    #[test]
-    fn test_truncate_tool_result_includes_head_and_tail_markers() {
+    #[tokio::test]
+    async fn test_truncate_tool_result_includes_head_and_tail_markers() {
         let mut result = ToolResult::success(format!(
             "{}\n{}\n{}",
             "A".repeat(40_000),
             "中".repeat(8_000),
             "Z".repeat(40_000)
         ));
-        truncate_tool_result(&mut result, "grep", "call_markers");
+        truncate_tool_result(&mut result, "grep", "call_markers").await;
         assert!(result.content.contains("--- First"));
         assert!(result.content.contains("--- Last"));
         assert!(result.content.contains("Output truncated"));
