@@ -404,7 +404,7 @@ impl RemoteSessionManager {
             let mut sessions = self.sessions.lock().unwrap();
             sessions.push(session.clone());
         }
-        let _ = self.save_sessions();
+        self.save_sessions().ok();
         session
     }
 
@@ -430,7 +430,7 @@ impl RemoteSessionManager {
                 return false;
             }
         }
-        let _ = self.save_sessions();
+        self.save_sessions().ok();
         true
     }
 
@@ -448,7 +448,7 @@ impl RemoteSessionManager {
                 return false;
             }
         }
-        let _ = self.save_sessions();
+        self.save_sessions().ok();
         true
     }
 
@@ -463,7 +463,7 @@ impl RemoteSessionManager {
                 return false;
             }
         }
-        let _ = self.save_sessions();
+        self.save_sessions().ok();
         true
     }
 
