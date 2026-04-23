@@ -907,9 +907,9 @@ pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
                 };
 
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    let _ = tokio::fs::create_dir_all(parent).await;
                 }
-                match std::fs::write(&path, content) {
+                match tokio::fs::write(&path, content).await {
                     Ok(_) => format!("Audit snapshot exported: {}", path.display()),
                     Err(e) => format!("Failed to export audit snapshot: {}", e),
                 }
@@ -1149,7 +1149,7 @@ pub async fn handle_explain(app: &mut TuiApp, args: &str) -> String {
                 match crate::tools::file_tool::resolve_path(args.trim(), &working_dir) {
                     Ok(path) => {
                         if path.exists() && path.is_file() {
-                            match std::fs::read_to_string(&path) {
+                            match tokio::fs::read_to_string(&path).await {
                                 Ok(content) => content,
                                 Err(e) => format!("Failed to read file: {}", e),
                             }
@@ -3142,13 +3142,19 @@ pub async fn handle_migrate(app: &mut TuiApp, args: &str) -> String {
             let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let migrations_dir = dir.join("migrations");
             if migrations_dir.exists() && migrations_dir.is_dir() {
-                let mut files: Vec<String> = match std::fs::read_dir(&migrations_dir) {
-                    Ok(read_dir) => read_dir
-                        .flatten()
-                        .map(|e| e.path())
-                        .filter(|p| p.is_file())
-                        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-                        .collect(),
+                let mut files: Vec<String> = match tokio::fs::read_dir(&migrations_dir).await {
+                    Ok(mut read_dir) => {
+                        let mut f = Vec::new();
+                        while let Ok(Some(entry)) = read_dir.next_entry().await {
+                            let p = entry.path();
+                            if p.is_file() {
+                                if let Some(n) = p.file_name() {
+                                    f.push(n.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                        f
+                    }
                     Err(_) => Vec::new(),
                 };
                 files.sort();
@@ -4451,9 +4457,16 @@ pub async fn handle_benchmark(app: &mut TuiApp, args: &str) -> String {
     if !script_path.exists() {
         let start = std::time::Instant::now();
         let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let entries = std::fs::read_dir(&dir)
-            .map(|it| it.flatten().count())
-            .unwrap_or(0);
+        let entries = match tokio::fs::read_dir(&dir).await {
+            Ok(mut it) => {
+                let mut count = 0;
+                while let Ok(Some(_)) = it.next_entry().await {
+                    count += 1;
+                }
+                count
+            }
+            Err(_) => 0,
+        };
         let fs_ms = start.elapsed().as_millis();
 
         let hist_start = std::time::Instant::now();
@@ -4863,7 +4876,7 @@ pub async fn handle_import(app: &mut TuiApp, args: &str) -> String {
     } else if !path.is_file() {
         format!("Not a file: {}", args)
     } else {
-        let text = match std::fs::read_to_string(path) {
+        let text = match tokio::fs::read_to_string(path).await {
             Ok(v) => v,
             Err(e) => return format!("Failed to read import file: {}", e),
         };
