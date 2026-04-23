@@ -809,8 +809,8 @@ fn generate_unified_diff(old_content: &str, new_content: &str, path: &str) -> Op
         .output()
         .ok()?;
 
-    let _ = std::fs::remove_file(&old_file);
-    let _ = std::fs::remove_file(&new_file);
+    let _ = std::fs::remove_file(&old_file).ok();
+    let _ = std::fs::remove_file(&new_file).ok();
 
     let diff = String::from_utf8_lossy(&output.stdout);
     if diff.is_empty() {
@@ -915,7 +915,7 @@ impl TuiApp {
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join(".priority-agent")
                     .join("MEMORY.md");
-                match std::fs::read_to_string(&path) {
+                match tokio::fs::read_to_string(&path).await {
                     Ok(content) if !content.trim().is_empty() => {
                         let preview: String = content.chars().take(2000).collect();
                         format!("Memory:\n{}", preview)
@@ -931,8 +931,8 @@ impl TuiApp {
                         .unwrap_or_else(|| std::path::PathBuf::from("."))
                         .join(".priority-agent")
                         .join("MEMORY.md");
-                    let _ = std::fs::create_dir_all(path.parent().unwrap());
-                    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+                    let _ = tokio::fs::create_dir_all(path.parent().unwrap()).await;
+                    let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
                     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M");
                     let entry = format!("\n## [NOTE] {}\n{}\n", timestamp, args);
                     let new_content = if existing.is_empty() {
@@ -940,7 +940,7 @@ impl TuiApp {
                     } else {
                         format!("{}{}", existing, entry)
                     };
-                    match std::fs::write(&path, &new_content) {
+                    match tokio::fs::write(&path, &new_content).await {
                         Ok(_) => format!("Saved: {}", args),
                         Err(e) => format!("Failed to save: {}", e),
                     }

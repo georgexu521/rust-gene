@@ -611,7 +611,9 @@ async fn save_snapshot(
         "original_path": path.to_string_lossy().to_string(),
         "timestamp": ts.to_string(),
     });
-    let _ = tokio::fs::write(&meta_path, meta.to_string()).await;
+    if let Err(e) = tokio::fs::write(&meta_path, meta.to_string()).await {
+        return Err(format!("Failed to write snapshot metadata: {}", e));
+    }
 
     // 记录编辑历史到 edits.json
     let edits_path = dirs::home_dir()

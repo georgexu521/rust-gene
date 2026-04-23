@@ -82,8 +82,8 @@ impl Tool for DiffTool {
                     .output();
 
                 // Clean up temp files
-                let _ = std::fs::remove_file(&old_file);
-                let _ = std::fs::remove_file(&new_file);
+                let _ = std::fs::remove_file(&old_file).ok();
+                let _ = std::fs::remove_file(&new_file).ok();
 
                 match output {
                     Ok(out) => {

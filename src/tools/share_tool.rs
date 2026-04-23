@@ -66,7 +66,7 @@ Useful for saving important conversations or sharing them with teammates."
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join(".priority-agent")
                 .join("shared");
-            let _ = std::fs::create_dir_all(&share_dir);
+            std::fs::create_dir_all(&share_dir).ok();
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
             let filename = match action {
                 "markdown" => format!("{}_{}.md", sanitize_filename(title), timestamp),

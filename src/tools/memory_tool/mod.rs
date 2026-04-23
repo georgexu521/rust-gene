@@ -53,7 +53,7 @@ impl Tool for MemorySaveTool {
 
         let path = memory_path();
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = tokio::fs::create_dir_all(parent).await;
         }
 
         // 读取现有内容

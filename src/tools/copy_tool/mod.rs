@@ -48,10 +48,12 @@ impl Tool for CopyTool {
 
             if let Ok(mut child) = result {
                 use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
-                    let _ = stdin.write_all(text.as_bytes());
-                }
-                if child.wait().is_ok() {
+                let write_ok = if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(text.as_bytes()).is_ok()
+                } else {
+                    true
+                };
+                if write_ok && child.wait().is_ok() {
                     return ToolResult::success("Text copied to clipboard");
                 }
             }
@@ -69,7 +71,9 @@ impl Tool for CopyTool {
             if let Ok(mut child) = result {
                 use std::io::Write;
                 if let Some(ref mut stdin) = child.stdin {
-                    let _ = stdin.write_all(text.as_bytes());
+                    if stdin.write_all(text.as_bytes()).is_err() {
+                        continue;
+                    }
                 }
                 if child.wait().is_ok() {
                     return ToolResult::success("Text copied to clipboard");
@@ -85,7 +89,9 @@ impl Tool for CopyTool {
             if let Ok(mut child) = result {
                 use std::io::Write;
                 if let Some(ref mut stdin) = child.stdin {
-                    let _ = stdin.write_all(text.as_bytes());
+                    if stdin.write_all(text.as_bytes()).is_err() {
+                        continue;
+                    }
                 }
                 if child.wait().is_ok() {
                     return ToolResult::success("Text copied to clipboard");
