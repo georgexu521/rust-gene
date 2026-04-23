@@ -269,7 +269,9 @@ impl MemoryManager {
                     );
                     let existing = std::fs::read_to_string(&path).unwrap_or_default();
                     let new_content = format!("{}{}", existing, entry);
-                    let _ = std::fs::write(&path, new_content);
+                    if let Err(e) = std::fs::write(&path, new_content) {
+                        debug!("Failed to write heuristic memory: {}", e);
+                    }
                 }
                 debug!(
                     "Forked mode: wrote {} heuristic memory bullets as cache hit",
@@ -330,7 +332,9 @@ Return exactly the word NONE if there is nothing critical to remember.";
                             );
                             let existing = std::fs::read_to_string(&path).unwrap_or_default();
                             let new_content = format!("{}{}", existing, entry);
-                            let _ = std::fs::write(&path, new_content);
+                            if let Err(e) = std::fs::write(&path, new_content) {
+                                debug!("Failed to write LLM memory: {}", e);
+                            }
                         }
                     }
                 }
@@ -466,7 +470,9 @@ Return exactly the word NONE if there is nothing critical to remember.";
         };
 
         let new_content = format!("{}{}{}", existing, header, entry);
-        let _ = std::fs::write(path, &new_content);
+        if let Err(e) = std::fs::write(path, &new_content) {
+            debug!("Failed to save memory: {}", e);
+        }
 
         debug!(
             "Memory saved: [{}] {}",
@@ -515,7 +521,9 @@ Return exactly the word NONE if there is nothing critical to remember.";
         };
 
         let new_content = format!("{}{}{}", existing, header, entry);
-        let _ = tokio::fs::write(path, &new_content).await;
+        if let Err(e) = tokio::fs::write(path, &new_content).await {
+            debug!("Failed to save memory (async): {}", e);
+        }
 
         debug!(
             "Memory saved (async): [{}] {}",

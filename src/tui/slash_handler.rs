@@ -202,7 +202,7 @@ pub fn handle_export(app: &TuiApp) -> String {
                     .join(".priority-agent")
                     .join(&filename);
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    std::fs::create_dir_all(parent).ok();
                 }
                 match std::fs::write(&path, &json) {
                     Ok(_) => format!("Session exported to: {}", path.display()),
@@ -1419,7 +1419,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
 
             if let Some(ref p) = path {
                 if let Some(parent) = p.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    std::fs::create_dir_all(parent).ok();
                 }
                 match std::fs::write(p, &content) {
                     Ok(_) => format!("Rules exported to: {}", p.display()),
@@ -1463,7 +1463,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             };
 
             if let Some(parent) = target_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                std::fs::create_dir_all(parent).ok();
             }
 
             let final_content = if merge && target_path.exists() {
@@ -2041,7 +2041,7 @@ pub fn handle_keybindings(app: &mut TuiApp, args: &str) -> String {
                 // Basic validation
                 if json_str.trim().starts_with("{") {
                     if let Some(parent) = kb_path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
+                        std::fs::create_dir_all(parent).ok();
                     }
                     match std::fs::write(&kb_path, json_str) {
                         Ok(_) => format!("Keybindings saved to {}", kb_path.display()),
@@ -2872,7 +2872,7 @@ pub fn handle_share(app: &mut TuiApp, _args: &str) -> String {
                     .join(".priority-agent")
                     .join(format!("share_{}.json", &id[..8.min(id.len())]));
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    std::fs::create_dir_all(parent).ok();
                 }
                 match std::fs::write(&path, &json) {
                     Ok(_) => format!("Session exported to: {}", path.display()),
@@ -3202,7 +3202,9 @@ pub fn handle_focus(app: &mut TuiApp, args: &str) -> String {
     app.focus_mode = enable;
     if let Ok(mut config) = crate::services::config::AppConfig::load() {
         config.ui.compact_mode = enable;
-        let _ = config.save();
+        if config.save().is_err() {
+            return format!("Focus mode set to {} (config save failed)", if enable { "on" } else { "off" });
+        }
         if let Some(ref mut settings) = app.settings_state {
             settings.config.ui.compact_mode = enable;
         }
@@ -4697,19 +4699,27 @@ pub fn handle_init(_app: &mut TuiApp, args: &str) -> String {
             let gitignore = project_path.join(".gitignore");
             let cargo_toml = project_path.join("Cargo.toml");
             let main_rs = project_path.join("src").join("main.rs");
-            let _ = std::fs::write(
+            if std::fs::write(
                 &readme,
                 format!("# {}\n\nInitialized by /init.\n", args.trim()),
-            );
-            let _ = std::fs::write(&gitignore, "target/\n*.log\n.env\n");
-            let _ = std::fs::write(
+            ).is_err() {
+                return format!("Project initialized at {} (README.md write failed)", project_path.display());
+            }
+            if std::fs::write(&gitignore, "target/\n*.log\n.env\n").is_err() {
+                return format!("Project initialized at {} (.gitignore write failed)", project_path.display());
+            }
+            if std::fs::write(
                 &cargo_toml,
                 format!(
                     "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
                     args.trim().replace('-', "_")
                 ),
-            );
-            let _ = std::fs::write(&main_rs, "fn main() {\n    println!(\"hello\");\n}\n");
+            ).is_err() {
+                return format!("Project initialized at {} (Cargo.toml write failed)", project_path.display());
+            }
+            if std::fs::write(&main_rs, "fn main() {\n    println!(\"hello\");\n}\n").is_err() {
+                return format!("Project initialized at {} (src/main.rs write failed)", project_path.display());
+            }
             format!("Project initialized at {}", project_path.display())
         }
         Err(e) => format!("Failed to initialize project: {}", e),
