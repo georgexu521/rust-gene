@@ -9,8 +9,6 @@ pub struct InputState {
     value: String,
     /// 光标位置（字符索引）
     cursor_position: usize,
-    /// 滚动偏移（用于长文本显示）
-    scroll_offset: usize,
 }
 
 impl InputState {
@@ -18,7 +16,6 @@ impl InputState {
         Self {
             value: String::new(),
             cursor_position: 0,
-            scroll_offset: 0,
         }
     }
 
@@ -198,19 +195,22 @@ impl InputState {
         self.cursor_position
     }
 
-    /// 获取光标所在的行和列
+    /// 获取光标所在的行和列（列使用显示宽度，支持 CJK/Emoji）
     pub fn cursor_line_column(&self) -> (usize, usize) {
         let chars: Vec<char> = self.value.chars().collect();
         let pos = self.cursor_position.min(chars.len());
-        let line = chars[..pos].iter().filter(|c| **c == '\n').count();
-        let line_start = chars[..pos]
+        let line = chars[..pos].iter().filter(|&&c| c == '\n').count();
+        let line_start_idx = chars[..pos]
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, c)| **c == '\n')
+            .find(|(_, &c)| c == '\n')
             .map(|(i, _)| i + 1)
             .unwrap_or(0);
-        let col = pos - line_start;
+        let col = chars[line_start_idx..pos]
+            .iter()
+            .map(|&c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
+            .sum();
         (line, col)
     }
 
@@ -232,7 +232,6 @@ impl InputState {
     pub fn clear(&mut self) {
         self.value.clear();
         self.cursor_position = 0;
-        self.scroll_offset = 0;
     }
 
     /// 设置值

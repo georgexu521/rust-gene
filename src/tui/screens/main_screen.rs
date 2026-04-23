@@ -267,13 +267,8 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         .split(area);
 
     // ── 左侧：状态图标 + 文字 ──
-    let spinner_frames = ['⠻', '⠹', '⠹', '⠸', '⠼', '⠴', '⠶', '⠷', '⠷', '⠿'];
-    let spinner_idx = (std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        / 100) as usize
-        % spinner_frames.len();
+    let spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let spinner_idx = app.tick_count % spinner_frames.len();
 
     let left_text = if app.is_querying {
         vec![
@@ -495,41 +490,44 @@ fn estimate_message_height(
     let base_height = 3; // header + blank line + trailing blank
     let effective_width = width.saturating_sub(4).max(1);
 
-    let content_height = if msg.role == crate::state::MessageRole::Assistant {
-        // Assistant messages: markdown rendering with code blocks, lists, etc.
-        let mut lines = 0;
-        let mut in_code_block = false;
-        for line in msg.content.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("```") {
-                in_code_block = !in_code_block;
-                lines += 1; // fence line
-            } else if in_code_block {
-                lines += 1;
-            } else if trimmed.starts_with('#') {
-                // Heading: rarely wraps
-                lines += 1;
-            } else if trimmed.is_empty() {
-                lines += 1;
-            } else {
-                let dw = unicode_width::UnicodeWidthStr::width(line);
-                lines += dw.div_ceil(effective_width);
-            }
-        }
-        lines.max(1)
-    } else {
-        // User/System/Tool: simple text wrapping
-        msg.content
-            .lines()
-            .map(|line| {
-                let dw = unicode_width::UnicodeWidthStr::width(line);
-                dw.div_ceil(effective_width)
-            })
-            .sum::<usize>()
-            .max(1)
-    };
+    let mut lines = 0;
+    let mut in_code_block = false;
+    let mut last_was_text = false;
 
-    base_height + content_height
+    for raw_line in msg.content.lines() {
+        let trimmed = raw_line.trim();
+
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            lines += 1; // fence line
+            last_was_text = false;
+        } else if in_code_block {
+            lines += 1;
+            last_was_text = false;
+        } else if trimmed.is_empty() {
+            if last_was_text {
+                lines += 1; // paragraph separator (parse_markdown adds this)
+            }
+            last_was_text = false;
+        } else if trimmed.starts_with('#') {
+            lines += 1;
+            last_was_text = true;
+        } else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            lines += 2; // horizontal rule + blank line
+            last_was_text = false;
+        } else {
+            let dw = unicode_width::UnicodeWidthStr::width(raw_line);
+            lines += dw.div_ceil(effective_width).max(1);
+            last_was_text = true;
+        }
+    }
+
+    // parse_markdown adds a blank line after the final paragraph
+    if last_was_text {
+        lines += 1;
+    }
+
+    base_height + lines.max(1)
 }
 
 /// 渲染帮助弹窗

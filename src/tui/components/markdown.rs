@@ -34,7 +34,7 @@ fn syntect_to_ratatui(style: syntect::highlighting::Style) -> Style {
 }
 
 /// 高亮代码块内容
-fn highlight_code_block(code: &str, language: &str) -> Vec<Line<'static>> {
+fn highlight_code_block(code: &str, language: &str, is_dark: bool) -> Vec<Line<'static>> {
     let ss = &*SYNTAX_SET;
     let ts = &*THEME_SET;
 
@@ -43,7 +43,8 @@ fn highlight_code_block(code: &str, language: &str) -> Vec<Line<'static>> {
         .or_else(|| ss.find_syntax_by_extension(language))
         .unwrap_or_else(|| ss.find_syntax_plain_text());
 
-    let theme = &ts.themes["base16-ocean.dark"];
+    let theme_name = if is_dark { "base16-ocean.dark" } else { "base16-ocean.light" };
+    let theme = ts.themes.get(theme_name).unwrap_or_else(|| &ts.themes["base16-ocean.dark"]);
     let mut highlighter = syntect::easy::HighlightLines::new(syntax, theme);
 
     let mut lines = Vec::new();
@@ -62,11 +63,13 @@ fn highlight_code_block(code: &str, language: &str) -> Vec<Line<'static>> {
 }
 
 /// 将 Markdown 文本转换为 ratatui::Text
-pub fn parse_markdown(text: &str) -> Text<'_> {
+pub fn parse_markdown<'a>(text: &'a str, theme: &crate::tui::theme::Theme) -> Text<'a> {
+    let is_dark = theme.is_dark();
+    let text_color = theme.text;
     let parser = pulldown_cmark::Parser::new(text);
     let mut lines: Vec<Line> = Vec::new();
     let mut current_line: Vec<Span> = Vec::new();
-    let mut current_style = Style::default().fg(Color::White);
+    let mut current_style = Style::default().fg(text_color);
     let mut in_code_block = false;
     let mut code_language = String::new();
     let mut code_block_buffer = String::new();
@@ -86,12 +89,13 @@ pub fn parse_markdown(text: &str) -> Text<'_> {
                     }
                     Tag::Link { .. } => {
                         current_style = current_style
-                            .fg(Color::Cyan)
+                            .fg(if is_dark { Color::Cyan } else { Color::Rgb(0, 100, 200) })
                             .add_modifier(Modifier::UNDERLINED);
                     }
                     Tag::Heading { level, .. } => {
-                        current_style =
-                            current_style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                        current_style = current_style
+                            .fg(if is_dark { Color::Yellow } else { Color::Rgb(180, 140, 0) })
+                            .add_modifier(Modifier::BOLD);
                         // 添加前导空格表示层级
                         let indent = "  ".repeat(level as usize);
                         pending_text.push_str(&indent);
@@ -147,10 +151,10 @@ pub fn parse_markdown(text: &str) -> Text<'_> {
                         current_style = current_style.remove_modifier(Modifier::ITALIC);
                     }
                     TagEnd::Link => {
-                        current_style = Style::default().fg(Color::White);
+                        current_style = Style::default().fg(text_color);
                     }
                     TagEnd::Heading(_) => {
-                        current_style = Style::default().fg(Color::White);
+                        current_style = Style::default().fg(text_color);
                         lines.push(Line::from(current_line));
                         current_line = Vec::new();
                     }
@@ -176,7 +180,7 @@ pub fn parse_markdown(text: &str) -> Text<'_> {
                     TagEnd::CodeBlock => {
                         in_code_block = false;
                         // 使用 syntect 高亮代码块
-                        let highlighted = highlight_code_block(&code_block_buffer, &code_language);
+                        let highlighted = highlight_code_block(&code_block_buffer, &code_language, is_dark);
                         lines.extend(highlighted);
                         lines.push(Line::from(Span::styled(
                             "```",
@@ -243,14 +247,16 @@ mod tests {
     #[test]
     fn test_parse_markdown_basic() {
         let text = "Hello **world** and *italic* text.";
-        let result = parse_markdown(text);
+        let theme = crate::tui::theme::Theme::dark();
+        let result = parse_markdown(text, &theme);
         assert!(!result.lines.is_empty());
     }
 
     #[test]
     fn test_parse_markdown_code_block() {
         let text = "```rust\nfn main() {}\n```";
-        let result = parse_markdown(text);
+        let theme = crate::tui::theme::Theme::dark();
+        let result = parse_markdown(text, &theme);
         let lines: Vec<_> = result.lines.iter().map(|l| l.to_string()).collect();
         assert!(lines.iter().any(|l| l.contains("fn main")));
     }
@@ -258,14 +264,15 @@ mod tests {
     #[test]
     fn test_parse_markdown_list() {
         let text = "- item 1\n- item 2";
-        let result = parse_markdown(text);
+        let theme = crate::tui::theme::Theme::dark();
+        let result = parse_markdown(text, &theme);
         assert!(!result.lines.is_empty());
     }
 
     #[test]
     fn test_highlight_code_block_rust() {
         let code = "fn main() {\n    println!(\"hello\");\n}\n";
-        let lines = highlight_code_block(code, "rust");
+        let lines = highlight_code_block(code, "rust", true);
         assert!(!lines.is_empty());
         // Should have 3 lines of code (plus maybe extra)
         assert!(lines.len() >= 3);
@@ -274,7 +281,7 @@ mod tests {
     #[test]
     fn test_highlight_code_block_unknown_lang() {
         let code = "some code here\n";
-        let lines = highlight_code_block(code, "unknown_lang_xyz");
+        let lines = highlight_code_block(code, "unknown_lang_xyz", true);
         assert!(!lines.is_empty());
         // Should fallback to plain text
         assert!(lines[0].to_string().contains("some code here"));

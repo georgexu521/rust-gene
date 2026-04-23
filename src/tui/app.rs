@@ -234,6 +234,8 @@ pub struct TuiApp {
     pub onboarding_state: Option<crate::onboarding::OnboardingState>,
     /// Plan Mode 状态标签缓存（用于状态栏显示，避免渲染时异步查询）
     pub plan_mode_label: Option<String>,
+    /// Tick 计数器（用于 spinner 等动画）
+    pub tick_count: usize,
 }
 
 impl TuiApp {
@@ -337,6 +339,7 @@ impl TuiApp {
             sidebar_visible: false,
             sidebar_selected: 0,
             typewriter_position: 0,
+            tick_count: 0,
             lsp_manager,
             worktree_manager,
             bundled_skills: {
@@ -523,49 +526,36 @@ impl TuiApp {
             return;
         }
 
-        let response = {
+        // 读取响应长度（最小化锁持有时间，避免克隆整个字符串）
+        let total_chars = {
             let resp = self.current_response.lock().await;
-            resp.clone()
+            resp.chars().count()
         };
 
-        let tools = {
-            let t = self.active_tools.lock().await;
-            t.clone()
-        };
-
-        // 打字机效果：逐步显示字符
-        let total_chars = response.chars().count();
+        // 更新打字机位置
         if self.typewriter_position < total_chars {
             let remaining = total_chars - self.typewriter_position;
-            let increment = remaining.min(12); // ~48 chars/sec at 4Hz tick
-            self.typewriter_position += increment;
+            self.typewriter_position += remaining.min(12); // ~48 chars/sec at 4Hz tick
         }
 
-        // 截取显示内容
-        let display_response: String = response.chars().take(self.typewriter_position).collect();
+        // 读取需要显示的内容和工具状态
+        let (display_response, tools_active, tools_names) = {
+            let resp = self.current_response.lock().await;
+            let tools = self.active_tools.lock().await;
+            let display: String = resp.chars().take(self.typewriter_position).collect();
+            let has_tools = !tools.is_empty();
+            let tools_list = if has_tools { tools.join(", ") } else { String::new() };
+            (display, has_tools, tools_list)
+        };
 
         // 更新最后一条助手消息
         if let Some(last_msg) = self.messages.last_mut() {
             if last_msg.role == MessageRole::Assistant {
-                let mut display_content = display_response;
-
-                // 如果有正在执行的工具，显示状态
-                if !tools.is_empty() {
-                    display_content.push_str(&format!("\n\n[Executing: {}]", tools.join(", ")));
+                let mut content = display_response;
+                if tools_active {
+                    content.push_str(&format!("\n\n[Executing: {}]", tools_names));
                 }
-
-                last_msg.content = display_content;
-            }
-        }
-
-        // 如果响应已完成（非查询状态），标记完成
-        if response.is_empty() && !tools.is_empty() {
-            // Still executing tools
-        } else if !response.is_empty() && self.is_querying {
-            // Check if stream is done by seeing if there are active tools
-            if tools.is_empty() {
-                // Stream might be done
-                // We'll use a simpler approach: check on tick
+                last_msg.content = content;
             }
         }
 
@@ -574,6 +564,8 @@ impl TuiApp {
 
     /// 定时更新 - 处理流式响应刷新和计划审批检查
     pub async fn on_tick(&mut self) {
+        self.tick_count += 1;
+
         if self.is_querying {
             self.refresh_response().await;
 
@@ -1305,23 +1297,19 @@ impl TuiApp {
         self.scroll_offset += 1;
     }
 
-    /// 滚动到底部
+    /// 滚动到底部（显示最新消息）
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = 0; // 0 表示底部
+        self.scroll_offset = self.messages.len().saturating_sub(1);
     }
 
     /// 向上滚动半页（Vim Ctrl+U）
     pub fn scroll_up_half_page(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_add(5);
+        self.scroll_offset = self.scroll_offset.saturating_sub(5);
     }
 
     /// 向下滚动半页（Vim Ctrl+D）
     pub fn scroll_down_half_page(&mut self) {
-        if self.scroll_offset > 5 {
-            self.scroll_offset -= 5;
-        } else {
-            self.scroll_offset = 0;
-        }
+        self.scroll_offset += 5;
     }
 
     /// 获取可见消息数量

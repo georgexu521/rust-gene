@@ -431,17 +431,24 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 app.mode = app::AppMode::VimNormal;
                 return Ok(false);
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 app.message_search_state.prev_result();
                 return Ok(false);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 app.message_search_state.next_result();
                 return Ok(false);
             }
-            KeyCode::Char('n') => {
+            KeyCode::Char('k') if app.message_search_state.query.is_empty() => {
+                app.message_search_state.prev_result();
+                return Ok(false);
+            }
+            KeyCode::Char('j') if app.message_search_state.query.is_empty() => {
+                app.message_search_state.next_result();
+                return Ok(false);
+            }
+            KeyCode::Char('n') if app.message_search_state.query.is_empty() => {
                 app.message_search_state.toggle_case_sensitive();
-                // Re-run search
                 let contents: Vec<String> = app.messages.iter().map(|m| m.content.clone()).collect();
                 app.message_search_state.search(&contents);
                 return Ok(false);

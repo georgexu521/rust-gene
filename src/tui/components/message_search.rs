@@ -75,7 +75,7 @@ impl MessageSearchState {
         self.case_sensitive = !self.case_sensitive;
     }
 
-    /// 执行搜索
+    /// 执行搜索（字符级索引，UTF-8 安全）
     pub fn search(&mut self, messages: &[String]) {
         self.results.clear();
 
@@ -83,52 +83,52 @@ impl MessageSearchState {
             return;
         }
 
-        let query = if self.case_sensitive {
-            self.query.clone()
+        let query_chars: Vec<char> = if self.case_sensitive {
+            self.query.chars().collect()
         } else {
-            self.query.to_lowercase()
+            self.query.to_lowercase().chars().collect()
         };
 
         for (msg_idx, message) in messages.iter().enumerate() {
-            let search_text = if self.case_sensitive {
-                message.clone()
+            let msg_chars: Vec<char> = message.chars().collect();
+            let search_chars: Vec<char> = if self.case_sensitive {
+                msg_chars.clone()
             } else {
-                message.to_lowercase()
+                message.to_lowercase().chars().collect()
             };
 
-            // 查找所有匹配位置
+            // 字符级查找，避免 byte 索引切分多字节字符
             let mut start = 0;
-            while let Some(pos) = search_text[start..].find(&query) {
-                let match_start = start + pos;
-                let match_end = match_start + query.len();
+            while start + query_chars.len() <= search_chars.len() {
+                let window = &search_chars[start..start + query_chars.len()];
+                if window == query_chars.as_slice() {
+                    let match_start = start;
+                    let match_end = start + query_chars.len();
 
-                // 提取上下文预览
-                let context_start = match_start.saturating_sub(30);
-                let context_end = (match_end + 30).min(message.len());
-                let preview = format!(
-                    "{}{}{}",
-                    if context_start > 0 { "..." } else { "" },
-                    &message[context_start..context_end],
-                    if context_end < message.len() {
-                        "..."
-                    } else {
-                        ""
-                    }
-                );
+                    // 字符安全的上下文提取
+                    let context_start = match_start.saturating_sub(30);
+                    let context_end = (match_end + 30).min(msg_chars.len());
+                    let preview_chars: String = msg_chars[context_start..context_end].iter().collect();
+                    let preview = format!(
+                        "{}{}{}",
+                        if context_start > 0 { "..." } else { "" },
+                        preview_chars,
+                        if context_end < msg_chars.len() { "..." } else { "" }
+                    );
 
-                // 计算行号
-                let line_number = message[..match_start].lines().count();
+                    // 计算行号（基于原始消息的字符位置）
+                    let line_number = msg_chars[..match_start].iter().filter(|&&c| c == '\n').count();
 
-                self.results.push(SearchResult {
-                    message_index: msg_idx,
-                    line_number,
-                    preview,
-                    matched_text: self.query.clone(),
-                });
+                    self.results.push(SearchResult {
+                        message_index: msg_idx,
+                        line_number,
+                        preview,
+                        matched_text: self.query.clone(),
+                    });
 
-                start = match_end;
-                if start >= message.len() {
-                    break;
+                    start = match_end;
+                } else {
+                    start += 1;
                 }
             }
         }

@@ -13,7 +13,7 @@ use ratatui::{
 /// 渲染消息为 Paragraph
 pub fn render_message<'a>(
     message: &'a MessageItem,
-    width: usize,
+    _width: usize,
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
     let (prefix, color) = match message.role {
@@ -39,41 +39,10 @@ pub fn render_message<'a>(
     lines.push(header);
     lines.push(Line::from(""));
 
-    // 消息内容（Assistant 使用 Markdown 渲染）
-    if message.role == MessageRole::Assistant {
-        let markdown_text = parse_markdown(&message.content);
-        for line in markdown_text.lines {
-            lines.push(line.clone());
-        }
-    } else {
-        let content_lines = wrap_text(&message.content, width.saturating_sub(4));
-        let mut in_code_block = false;
-        for line in content_lines {
-            let trimmed = line.trim();
-            if trimmed.starts_with("```") {
-                in_code_block = !in_code_block;
-                lines.push(Line::from(Span::styled(
-                    line,
-                    Style::default().fg(theme.border),
-                )));
-            } else if in_code_block {
-                // 代码块：高亮显示
-                lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(
-                        line,
-                        Style::default()
-                            .fg(theme.success)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                ]));
-            } else {
-                lines.push(Line::from(Span::styled(
-                    line,
-                    Style::default().fg(theme.text),
-                )));
-            }
-        }
+    // 消息内容（所有消息统一使用 Markdown 渲染）
+    let markdown_text = parse_markdown(&message.content, theme);
+    for line in markdown_text.lines {
+        lines.push(line);
     }
 
     // 工具调用信息（如果有）
@@ -145,51 +114,10 @@ fn format_time(time: &std::time::SystemTime) -> String {
     datetime.format("%H:%M:%S").to_string()
 }
 
-/// 简单文本换行
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![text.to_string()];
-    }
-
-    let mut result = Vec::new();
-    let mut current_line = String::new();
-
-    for word in text.split_whitespace() {
-        if current_line.len() + word.len() + 1 > width && !current_line.is_empty() {
-            result.push(current_line.clone());
-            current_line.clear();
-        }
-
-        if !current_line.is_empty() {
-            current_line.push(' ');
-        }
-        current_line.push_str(word);
-    }
-
-    if !current_line.is_empty() {
-        result.push(current_line);
-    }
-
-    // 如果没有内容，返回原始文本
-    if result.is_empty() {
-        result.push(text.to_string());
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tui::theme::Theme;
-
-    #[test]
-    fn test_wrap_text() {
-        let text = "Hello world this is a long text";
-        let wrapped = wrap_text(text, 10);
-        assert!(!wrapped.is_empty());
-        assert!(wrapped.iter().all(|line| line.len() <= 10));
-    }
 
     #[test]
     fn test_role_colors() {
