@@ -436,7 +436,7 @@ pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
 pub fn render_message_search(f: &mut Frame, app: &TuiApp, area: Rect) {
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-    let search_height = (area.height / 2).max(10).min(20);
+    let search_height = (area.height / 2).clamp(10, 20);
     let popup_area = centered_rect(80, search_height, area);
 
     f.render_widget(Clear, popup_area);
@@ -513,7 +513,7 @@ fn estimate_message_height(
                 lines += 1;
             } else {
                 let dw = unicode_width::UnicodeWidthStr::width(line);
-                lines += (dw + effective_width - 1) / effective_width;
+                lines += dw.div_ceil(effective_width);
             }
         }
         lines.max(1)
@@ -523,7 +523,7 @@ fn estimate_message_height(
             .lines()
             .map(|line| {
                 let dw = unicode_width::UnicodeWidthStr::width(line);
-                (dw + effective_width - 1) / effective_width
+                dw.div_ceil(effective_width)
             })
             .sum::<usize>()
             .max(1)

@@ -157,11 +157,16 @@ arboard = { version = "3.4", default-features = false, features = ["wayland-data
 
 ---
 
-## 执行顺序
+## 执行状态
 
-```
-Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7
-(基础)   (主题)    (高亮)    (状态栏)  (折叠)    (侧边栏)  (收尾)
-```
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| Phase 1 | 基础修复（消息高度、通知接入、消息搜索） | ✅ 完成 |
+| Phase 2 | 主题扩展 + 消息视觉区分 | ✅ 完成 |
+| Phase 3 | 代码块语法高亮（syntect） | ✅ 完成 |
+| Phase 4 | 状态栏重构 + 空状态美化 | ✅ 完成 |
+| Phase 5 | 消息折叠 + 日期分隔线 | ✅ 完成 |
+| Phase 6 | 多会话侧边栏 + 流式打字机效果 | ✅ 完成 |
+| Phase 7 | 测试 + 整合 + 提交 | ✅ 完成 |
 
-每个 Phase 完成后可以独立测试，确保不破坏现有功能。
+**总计**：7 个 commit，722 测试全部通过。
