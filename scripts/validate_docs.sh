@@ -55,11 +55,15 @@ fi
 
 # Run cargo test
 echo "Running cargo test..."
-if cargo test --quiet > /dev/null 2>&1; then
-    test_count=$(cargo test --quiet 2>&1 | grep -E "test result" | head -1)
+TEST_OUTPUT=$(mktemp)
+if cargo test --quiet > "$TEST_OUTPUT" 2>&1; then
+    test_count=$(grep -E "test result" "$TEST_OUTPUT" | head -1)
     echo "  [OK] Tests pass - $test_count"
+    rm -f "$TEST_OUTPUT"
 else
     echo "  [FAIL] Tests failed"
+    cat "$TEST_OUTPUT"
+    rm -f "$TEST_OUTPUT"
     exit 1
 fi
 

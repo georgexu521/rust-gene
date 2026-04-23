@@ -143,5 +143,5 @@ jobs:
         run: |
           VERSION="0.$(date +%Y%m%d%H%M)"
           echo "Creating release candidate: $VERSION"
-          echo "::set-output name=version::$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Release candidate $VERSION created from commit ${{ github.sha }}"

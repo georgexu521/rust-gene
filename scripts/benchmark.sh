@@ -4,8 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# 查找一个可用的随机端口
+find_free_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo "18787"
+}
+
 RUNS=3
-PORT=18787
+PORT="$(find_free_port)"
 LABEL="baseline"
 OUTPUT=""
 COMPARE_REPORT=""

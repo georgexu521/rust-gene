@@ -45,7 +45,7 @@ pub mod tools;
 pub mod tui;
 pub mod voice;
 
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +93,11 @@ async fn main() {
         .init();
 
     info!("Priority Agent starting...");
+
+    // 加载 .env 文件（如果存在）
+    if let Err(e) = dotenvy::dotenv() {
+        debug!(".env file not loaded: {}", e);
+    }
 
     // 解析命令行参数
     let args: Vec<String> = std::env::args().collect();
@@ -166,6 +171,15 @@ async fn main() {
         }
         StartupMode::Tui => {
             // 默认: TUI 模式 (需要 bootstrap 初始化所有组件)
+            // 检测是否在交互式终端中运行
+            if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                eprintln!("Error: TUI mode requires an interactive terminal.");
+                eprintln!("       Use --api to start the HTTP API server,");
+                eprintln!("       or --cli for the legacy command-line interface.");
+                eprintln!();
+                print_help();
+                std::process::exit(1);
+            }
             info!("Starting TUI...");
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
