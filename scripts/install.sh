@@ -66,6 +66,10 @@ mkdir -p "$BIN_DIR"
 cp "$SRC_BIN" "$BIN_DIR/priority-agent"
 chmod +x "$BIN_DIR/priority-agent"
 
+# 创建 pa symlink（快捷命令，默认进入 CLI 模式）
+ln -sf "$BIN_DIR/priority-agent" "$BIN_DIR/pa"
+echo "       Created shortcut: $BIN_DIR/pa -> priority-agent"
+
 echo "[3/4] Creating config directory $CONFIG_DIR..."
 mkdir -p "$CONFIG_DIR"
 
@@ -106,6 +110,7 @@ echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "Binary:     $BIN_DIR/priority-agent"
+echo "Shortcut:   $BIN_DIR/pa  (default: CLI mode)"
 echo "Config:     $CONFIG_DIR/"
 echo ""
 # Warn if prefix bin is not in PATH
@@ -119,5 +124,6 @@ echo "Next steps:"
 echo "  1. Set your LLM API key:"
 echo "     export MOONSHOT_API_KEY='your-key-here'"
 echo "  2. Or edit: $CONFIG_DIR/.env"
-echo "  3. Run: priority-agent"
+echo "  3. Run: pa                  # CLI mode (shortcut)"
+echo "     Run: priority-agent      # TUI mode (full name)"
 echo ""

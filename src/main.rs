@@ -57,30 +57,41 @@ enum StartupMode {
 }
 
 fn detect_startup_mode(args: &[String]) -> StartupMode {
+    let argv0 = std::env::args().next().unwrap_or_default();
+    let invoked_as_pa = argv0.ends_with("pa") || argv0.ends_with("pa.exe");
+
     let mode = args.get(1).map(|s| s.as_str());
     match mode {
         Some("--help") | Some("-h") | Some("help") => StartupMode::Help,
         Some("--api") => StartupMode::Api,
         Some("--cli") => StartupMode::Cli,
+        Some("--tui") => StartupMode::Tui,
+        _ if invoked_as_pa => StartupMode::Cli,
         _ => StartupMode::Tui,
     }
 }
 
 fn print_help() {
+    let argv0 = std::env::args().next().unwrap_or_else(|| "priority-agent".into());
+    let is_pa = argv0.ends_with("pa") || argv0.ends_with("pa.exe");
+    let bin = if is_pa { "pa" } else { "priority-agent" };
+
     println!("Priority Agent");
     println!();
     println!("Usage:");
-    println!("  priority-agent [--api [--port <PORT>]] [--cli] [--help]");
+    println!("  {bin} [--api [--port <PORT>]] [--cli] [--tui] [--help]");
     println!();
     println!("Modes:");
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
     println!("  --cli    Run legacy CLI mode (feature: legacy-cli)");
-    println!("  (none)   Start TUI mode (requires LLM API key)");
+    println!("  --tui    Start TUI mode");
+    println!("  (none)   Default: TUI for 'priority-agent', CLI for 'pa'");
     println!();
     println!("Examples:");
-    println!("  priority-agent");
-    println!("  priority-agent --api --port 8787");
-    println!("  priority-agent --cli");
+    println!("  {bin}                  # Default mode");
+    println!("  {bin} --api --port 8787 # HTTP API server");
+    println!("  {bin} --tui            # Force TUI mode");
+    println!("  priority-agent --cli   # Force CLI mode");
 }
 
 #[tokio::main]
