@@ -6,6 +6,7 @@ use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
 use anyhow::{Context, Result};
 use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
 use async_trait::async_trait;
+use reqwest::StatusCode;
 use tracing::info;
 
 /// MiniMax 客户端
@@ -13,6 +14,7 @@ pub struct MiniMaxClient {
     client: Client<OpenAIConfig>,
     model: String,
     base_url: String,
+    api_key: String,
 }
 
 impl MiniMaxClient {
@@ -36,6 +38,7 @@ impl MiniMaxClient {
             client,
             model,
             base_url,
+            api_key: api_key.to_string(),
         }
     }
 
@@ -53,31 +56,100 @@ impl MiniMaxClient {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
+
+    async fn fetch_error_body(
+        &self,
+        req: &async_openai::types::CreateChatCompletionRequest,
+    ) -> Option<(StatusCode, String)> {
+        let url = format!(
+            "{}/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .json(req)
+            .send()
+            .await
+            .ok()?;
+        let status = resp.status();
+        let body = resp.text().await.ok()?;
+        Some((status, body))
+    }
+
+    fn normalize_messages_for_minimax(
+        messages: Vec<crate::services::api::Message>,
+    ) -> Vec<crate::services::api::Message> {
+        let mut system_parts: Vec<String> = Vec::new();
+        let mut others: Vec<crate::services::api::Message> = Vec::new();
+
+        for msg in messages {
+            match msg {
+                crate::services::api::Message::System { content } => system_parts.push(content),
+                other => others.push(other),
+            }
+        }
+
+        if system_parts.is_empty() {
+            return others;
+        }
+
+        let merged_system = crate::services::api::Message::System {
+            content: system_parts.join("\n\n"),
+        };
+
+        let mut normalized = Vec::with_capacity(others.len() + 1);
+        normalized.push(merged_system);
+        normalized.extend(others);
+        normalized
+    }
 }
 
 #[async_trait]
 impl LlmProvider for MiniMaxClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         use super::openai_compat::{convert_request, convert_response};
+        let mut request = request;
+        request.messages = Self::normalize_messages_for_minimax(request.messages);
         let req = convert_request(request, &self.model);
-        let response = self
-            .client
-            .chat()
-            .create(req)
-            .await
-            .context("Failed to get response from MiniMax API")?;
+        let response = match self.client.chat().create(req.clone()).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                if let Some((status, body)) = self.fetch_error_body(&req).await {
+                    anyhow::bail!(
+                        "Failed to get response from MiniMax API: {} (status {}) body: {}",
+                        e,
+                        status,
+                        body
+                    );
+                }
+                return Err(e).context("Failed to get response from MiniMax API");
+            }
+        };
         convert_response(response)
     }
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatCompletionResponseStream> {
         use super::openai_compat::convert_request;
+        let mut request = request;
+        request.messages = Self::normalize_messages_for_minimax(request.messages);
         let mut req = convert_request(request, &self.model);
         req.stream = Some(true);
-        self.client
-            .chat()
-            .create_stream(req)
-            .await
-            .context("Failed to create streaming response from MiniMax API")
+        match self.client.chat().create_stream(req.clone()).await {
+            Ok(stream) => Ok(stream),
+            Err(e) => {
+                if let Some((status, body)) = self.fetch_error_body(&req).await {
+                    anyhow::bail!(
+                        "Failed to create streaming response from MiniMax API: {} (status {}) body: {}",
+                        e,
+                        status,
+                        body
+                    );
+                }
+                Err(e).context("Failed to create streaming response from MiniMax API")
+            }
+        }
     }
 
     fn base_url(&self) -> &str {

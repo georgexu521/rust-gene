@@ -523,6 +523,11 @@ impl WorkflowPlanner {
 
     fn infer_tool(description: &str) -> Option<String> {
         let d = description.to_lowercase();
+        let is_dir_op = d.contains("文件夹")
+            || d.contains("目录")
+            || d.contains("folder")
+            || d.contains("directory")
+            || d.contains("mkdir");
         let is_edit = d.contains("修改")
             || d.contains("修复")
             || d.contains("fix")
@@ -537,6 +542,11 @@ impl WorkflowPlanner {
         }
         if d.contains("glob") || d.contains("列出文件") || d.contains("list files") {
             return Some("glob".into());
+        }
+
+        // 目录类操作（优先于 file_write，避免“新建文件夹”误判为写文件）
+        if is_dir_op {
+            return Some("bash".into());
         }
 
         // 写入类
@@ -892,6 +902,10 @@ mod tests {
         assert_eq!(WorkflowPlanner::infer_tool("读取配置文件"), Some("file_read".into()));
         assert_eq!(WorkflowPlanner::infer_tool("修改登录逻辑"), Some("file_edit".into()));
         assert_eq!(WorkflowPlanner::infer_tool("创建新模块"), Some("file_write".into()));
+        assert_eq!(
+            WorkflowPlanner::infer_tool("在桌面新建一个 gex 文件夹"),
+            Some("bash".into())
+        );
         assert_eq!(WorkflowPlanner::infer_tool("运行 cargo test"), Some("bash".into()));
         assert_eq!(WorkflowPlanner::infer_tool("搜索 TODO"), Some("grep".into()));
         assert_eq!(WorkflowPlanner::infer_tool("随便什么步骤"), None);

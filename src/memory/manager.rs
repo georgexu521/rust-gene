@@ -15,6 +15,10 @@ use tracing::{debug, info, warn};
 const MAX_LEARNINGS_PER_TURN: usize = 3;
 const MAX_LEARNINGS_PER_SESSION_EXTRACT: usize = 6;
 
+fn log_preview(content: &str, max_chars: usize) -> String {
+    content.chars().take(max_chars).collect()
+}
+
 /// 记忆层级
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryTier {
@@ -447,7 +451,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
         if normalized_existing.contains(&normalized_content) {
             debug!(
                 "Skipping duplicate learning (already in file): {}",
-                &content[..content.len().min(50)]
+                log_preview(content, 50)
             );
             return;
         }
@@ -477,7 +481,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
         debug!(
             "Memory saved: [{}] {}",
             category,
-            &content[..content.len().min(50)]
+            log_preview(content, 50)
         );
     }
 
@@ -498,7 +502,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
         if normalized_existing.contains(&normalized_content) {
             debug!(
                 "Skipping duplicate learning (already in file, async): {}",
-                &content[..content.len().min(50)]
+                log_preview(content, 50)
             );
             return;
         }
@@ -528,7 +532,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
         debug!(
             "Memory saved (async): [{}] {}",
             category,
-            &content[..content.len().min(50)]
+            log_preview(content, 50)
         );
     }
 
@@ -820,7 +824,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
         if !Self::passes_quality_gate(content) {
             debug!(
                 "Skip low-signal memory candidate: {}",
-                &content[..content.len().min(60)]
+                log_preview(content, 60)
             );
             return;
         }
@@ -1283,5 +1287,21 @@ Always check logs first.
             third.contains("[execution] Task: fix bug | Outcome: Success"),
             "Different decision should be appended"
         );
+    }
+
+    #[test]
+    fn test_save_workflow_decision_with_utf8_content_does_not_panic() {
+        let mut mgr = MemoryManager::new();
+        let _ = std::fs::remove_file(&mgr.memory_path);
+
+        mgr.save_workflow_decision(
+            "gate",
+            "能帮我在桌面新建一个叫gex的文件夹吗",
+            "Workflow",
+            "No fast lane or heuristic match, defaulting to Workflow (M1)",
+        );
+
+        let memory = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+        assert!(memory.contains("能帮我在桌面新建一个叫gex的文件夹吗"));
     }
 }

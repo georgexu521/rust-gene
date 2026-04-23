@@ -1,5 +1,8 @@
 # Priority Agent 对比评估与优化路线图（2026-04-12）
 
+> Historical document: archived assessment snapshot from 2026-04-12.
+> Parts of this analysis may be outdated relative to current code.
+
 ## 1. 评估目的
 
 本文档用于对比 `rust-agent` 与两个参考项目：

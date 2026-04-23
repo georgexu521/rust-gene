@@ -23,7 +23,7 @@ use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, Tool
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
 use futures::StreamExt;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, warn};
@@ -33,6 +33,93 @@ use super::context_compressor::{
 };
 use super::hooks::{HookDecision, ToolHookManager};
 use super::streaming::StreamEvent;
+
+const THINK_OPEN_TAG: &str = "<think>";
+const THINK_CLOSE_TAG: &str = "</think>";
+
+#[derive(Default)]
+struct VisibleTextSanitizer {
+    buffer: String,
+    in_think_block: bool,
+}
+
+impl VisibleTextSanitizer {
+    fn push_chunk(&mut self, chunk: &str) -> String {
+        self.buffer.push_str(chunk);
+        self.drain_visible(false)
+    }
+
+    fn finish(&mut self) -> String {
+        self.drain_visible(true)
+    }
+
+    fn drain_visible(&mut self, flush_all: bool) -> String {
+        let mut out = String::new();
+        loop {
+            if self.in_think_block {
+                if let Some(end_idx) = self.buffer.find(THINK_CLOSE_TAG) {
+                    let drain_len = end_idx + THINK_CLOSE_TAG.len();
+                    self.buffer.drain(..drain_len);
+                    self.in_think_block = false;
+                    continue;
+                }
+
+                if flush_all {
+                    self.buffer.clear();
+                } else {
+                    let keep = THINK_CLOSE_TAG.len().saturating_sub(1);
+                    if self.buffer.len() > keep {
+                        let drain_len = floor_char_boundary(&self.buffer, self.buffer.len() - keep);
+                        self.buffer.drain(..drain_len);
+                    }
+                }
+                break;
+            }
+
+            if let Some(start_idx) = self.buffer.find(THINK_OPEN_TAG) {
+                out.push_str(&self.buffer[..start_idx]);
+                let drain_len = start_idx + THINK_OPEN_TAG.len();
+                self.buffer.drain(..drain_len);
+                self.in_think_block = true;
+                continue;
+            }
+
+            if flush_all {
+                out.push_str(&self.buffer);
+                self.buffer.clear();
+            } else {
+                let keep = THINK_OPEN_TAG.len().saturating_sub(1);
+                if self.buffer.len() > keep {
+                    let emit_len = floor_char_boundary(&self.buffer, self.buffer.len() - keep);
+                    out.push_str(&self.buffer[..emit_len]);
+                    self.buffer.drain(..emit_len);
+                }
+            }
+            break;
+        }
+
+        out
+    }
+}
+
+fn strip_think_blocks(text: &str) -> String {
+    let mut sanitizer = VisibleTextSanitizer::default();
+    let mut visible = sanitizer.push_chunk(text);
+    visible.push_str(&sanitizer.finish());
+    visible
+}
+
+fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn tool_call_fingerprint(tc: &ToolCall) -> String {
+    let args = serde_json::to_string(&tc.arguments).unwrap_or_else(|_| "null".to_string());
+    format!("{}|{}", tc.name, args)
+}
 
 /// 统一对话循环
 pub struct ConversationLoop {
@@ -267,14 +354,7 @@ impl ConversationLoop {
                             decision.reason(),
                         );
                     }
-                    if let Some(tx) = tx {
-                        let _ = tx
-                            .send(StreamEvent::TextChunk(format!(
-                                "[Workflow mode activated: {}]\n\n",
-                                decision.reason()
-                            )))
-                            .await;
-                    }
+                    debug!("Workflow mode activated: {}", decision.reason());
                     let workflow_executor = WorkflowRealStepExecutor {
                         tool_registry: self.tool_registry.clone(),
                         llm_provider: self.provider.clone(),
@@ -288,6 +368,7 @@ impl ConversationLoop {
                         .await
                     {
                         Ok(result) => {
+                            let workflow_report = strip_think_blocks(&result.final_report);
                             if let Some(ref mem_mgr) = self.memory_manager {
                                 let mut mem = mem_mgr.lock().await;
                                 mem.save_workflow_decision(
@@ -301,10 +382,15 @@ impl ConversationLoop {
                                 );
                             }
                             if let Some(tx) = tx {
+                                if !workflow_report.trim().is_empty() {
+                                    let _ = tx
+                                        .send(StreamEvent::TextChunk(workflow_report.clone()))
+                                        .await;
+                                }
                                 let _ = tx.send(StreamEvent::Complete).await;
                             }
                             return Ok(LoopResult {
-                                content: result.final_report,
+                                content: workflow_report,
                                 tool_calls: Vec::new(),
                                 iterations: 0,
                                 pre_executed_results: std::collections::HashMap::new(),
@@ -334,6 +420,8 @@ impl ConversationLoop {
         let mut final_content = String::new();
         let mut final_tool_calls = Vec::new();
         let mut iterations_used = 0;
+        let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
+        let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
 
         // ── 前置压缩（Preflight）─────────────────────────
         if let Some(ref compressor_mutex) = self.compressor {
@@ -493,13 +581,7 @@ impl ConversationLoop {
             let (content, tool_calls, pre_executed) = api_result?;
 
             if compressed_this_turn {
-                if let Some(tx) = tx {
-                    let _ = tx
-                        .send(StreamEvent::TextChunk(
-                            "\n[Context compressed due to size limits]\n".to_string(),
-                        ))
-                        .await;
-                }
+                debug!("Context compressed due to size limits");
             }
 
             final_content = content.clone();
@@ -528,6 +610,8 @@ impl ConversationLoop {
 
             let mut tool_results_text = String::new();
             let mut changed_files = Vec::new();
+            let mut any_tool_success = false;
+            let mut repeated_failed_tools = Vec::new();
             for (tc, result) in results.iter_mut() {
                 truncate_tool_result(result, &tc.name, &tc.id).await;
                 let result_content = format!(
@@ -539,10 +623,73 @@ impl ConversationLoop {
                 tool_results_text.push('\n');
                 messages.push(Message::tool(tc.id.clone(), result_content));
 
+                let fp = tool_call_fingerprint(tc);
+                if result.success {
+                    any_tool_success = true;
+                    failed_tool_fingerprints.remove(&fp);
+                    failed_tool_names.remove(&tc.name);
+                } else {
+                    let count = failed_tool_fingerprints.entry(fp).or_insert(0);
+                    *count += 1;
+                    if *count >= 2 {
+                        repeated_failed_tools.push(tc.name.clone());
+                    }
+                    let name_count = failed_tool_names.entry(tc.name.clone()).or_insert(0);
+                    *name_count += 1;
+                }
+
                 if result.success && (tc.name == "file_edit" || tc.name == "file_write") {
                     if let Some(path) = tc.arguments["path"].as_str() {
                         changed_files.push(std::path::PathBuf::from(path));
                     }
+                }
+            }
+
+            if !any_tool_success && !repeated_failed_tools.is_empty() {
+                repeated_failed_tools.sort();
+                repeated_failed_tools.dedup();
+                let stop_msg = format!(
+                    "[Stopped repeated failed tool attempts: {}]",
+                    repeated_failed_tools.join(", ")
+                );
+                debug!("{}", stop_msg);
+                if let Some(tx) = tx {
+                    let _ = tx.send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg))).await;
+                }
+                if final_content.trim().is_empty() {
+                    final_content = stop_msg;
+                } else {
+                    final_content.push('\n');
+                    final_content.push_str(&stop_msg);
+                }
+                break;
+            }
+
+            if !any_tool_success {
+                let mut noisy_by_name = Vec::new();
+                for (name, count) in &failed_tool_names {
+                    if *count >= 2 && !READ_ONLY_TOOLS.contains(&name.as_str()) {
+                        noisy_by_name.push(name.clone());
+                    }
+                }
+                if !noisy_by_name.is_empty() {
+                    noisy_by_name.sort();
+                    noisy_by_name.dedup();
+                    let stop_msg = format!(
+                        "[Stopped noisy retries after repeated failures: {}]",
+                        noisy_by_name.join(", ")
+                    );
+                    debug!("{}", stop_msg);
+                    if let Some(tx) = tx {
+                        let _ = tx.send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg))).await;
+                    }
+                    if final_content.trim().is_empty() {
+                        final_content = stop_msg;
+                    } else {
+                        final_content.push('\n');
+                        final_content.push_str(&stop_msg);
+                    }
+                    break;
                 }
             }
 
@@ -688,7 +835,7 @@ impl ConversationLoop {
         let response = self.provider.chat(request).await?;
         self.record_cost(&response).await;
 
-        let content = response.content.clone();
+        let content = strip_think_blocks(&response.content);
         let tool_calls = response.tool_calls.unwrap_or_default();
 
         Ok((content, tool_calls, std::collections::HashMap::new()))
@@ -709,9 +856,12 @@ impl ConversationLoop {
 
         match self.provider.chat_stream(request).await {
             Ok(mut stream) => {
+                let mut raw_content = String::new();
                 let mut full_content = String::new();
                 let mut collected_tool_calls: Vec<ToolCall> = Vec::new();
                 let mut raw_args_accum: Vec<String> = Vec::new();
+                let mut stream_failed: Option<String> = None;
+                let mut visible_sanitizer = VisibleTextSanitizer::default();
 
                 let _ = tx.send(StreamEvent::ThinkingStart).await;
 
@@ -731,9 +881,14 @@ impl ConversationLoop {
                             if let Some(choice) = chunk.choices.first() {
                                 if let Some(content) = &choice.delta.content {
                                     if !content.is_empty() {
-                                        full_content.push_str(content);
-                                        let _ =
-                                            tx.send(StreamEvent::TextChunk(content.clone())).await;
+                                        raw_content.push_str(content);
+                                        let visible_chunk = visible_sanitizer.push_chunk(content);
+                                        if !visible_chunk.is_empty() {
+                                            full_content.push_str(&visible_chunk);
+                                            let _ = tx
+                                                .send(StreamEvent::TextChunk(visible_chunk))
+                                                .await;
+                                        }
                                     }
                                 }
 
@@ -903,15 +1058,18 @@ impl ConversationLoop {
                         }
                         Err(e) => {
                             error!("Stream error: {}", e);
-                            let _ = tx
-                                .send(StreamEvent::Error(format!("Stream error: {}", e)))
-                                .await;
+                            stream_failed = Some(e.to_string());
                             break;
                         }
                     }
                 }
 
                 let _ = tx.send(StreamEvent::ThinkingComplete).await;
+                let visible_tail = visible_sanitizer.finish();
+                if !visible_tail.is_empty() {
+                    full_content.push_str(&visible_tail);
+                    let _ = tx.send(StreamEvent::TextChunk(visible_tail)).await;
+                }
 
                 for (i, tc) in collected_tool_calls.iter_mut().enumerate() {
                     if i < raw_args_accum.len() && !raw_args_accum[i].is_empty() {
@@ -939,21 +1097,79 @@ impl ConversationLoop {
                     }
                 }
 
+                // If streaming failed before receiving any usable content/tool calls,
+                // transparently fall back to non-streaming to improve provider compatibility.
+                if let Some(stream_err) = stream_failed {
+                    if raw_content.trim().is_empty() && collected_tool_calls.is_empty() {
+                        warn!(
+                            "Streaming yielded no content (error: {}), falling back to non-streaming",
+                            stream_err
+                        );
+                        let base_request =
+                            ChatRequest::new(&self.model).with_messages(fallback_messages.clone());
+                        let response = if let Some(tools) = fallback_tools.clone() {
+                            match self
+                                .provider
+                                .chat(base_request.clone().with_tools(tools))
+                                .await
+                            {
+                                Ok(r) => r,
+                                Err(with_tools_err) => {
+                                    warn!(
+                                        "Non-streaming fallback with tools failed: {}. Retrying without tools.",
+                                        with_tools_err
+                                    );
+                                    self.provider.chat(base_request).await?
+                                }
+                            }
+                        } else {
+                            self.provider.chat(base_request).await?
+                        };
+                        self.record_cost(&response).await;
+
+                        let content = strip_think_blocks(&response.content);
+                        if !content.is_empty() {
+                            let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
+                        }
+                        let tool_calls = response.tool_calls.unwrap_or_default();
+                        return Ok((content, tool_calls, std::collections::HashMap::new()));
+                    } else {
+                        let _ = tx
+                            .send(StreamEvent::Error(format!(
+                                "Stream interrupted: {}",
+                                stream_err
+                            )))
+                            .await;
+                    }
+                }
+
                 Ok((full_content, collected_tool_calls, pre_executed))
             }
             Err(e) => {
                 warn!("Streaming failed, falling back to non-streaming: {}", e);
-                let response = self
-                    .provider
-                    .chat(
-                        ChatRequest::new(&self.model)
-                            .with_messages(fallback_messages)
-                            .with_tools(fallback_tools.unwrap_or_default()),
-                    )
-                    .await?;
+                let base_request =
+                    ChatRequest::new(&self.model).with_messages(fallback_messages.clone());
+                let response = if let Some(tools) = fallback_tools.clone() {
+                    match self
+                        .provider
+                        .chat(base_request.clone().with_tools(tools))
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(with_tools_err) => {
+                            warn!(
+                                "Non-streaming fallback with tools failed: {}. Retrying without tools.",
+                                with_tools_err
+                            );
+                            self.provider.chat(base_request).await?
+                        }
+                    }
+                } else {
+                    self.provider.chat(base_request).await?
+                };
                 self.record_cost(&response).await;
 
-                let content = response.content.clone();
+                let content = strip_think_blocks(&response.content);
                 if !content.is_empty() {
                     let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
                 }
@@ -1339,6 +1555,33 @@ mod tests {
         let mut result = ToolResult::success("中".repeat(20_000));
         truncate_tool_result(&mut result, "grep", "call_utf8").await;
         assert!(result.content.contains("Output truncated"));
+    }
+
+    #[test]
+    fn test_strip_think_blocks_removes_internal_reasoning() {
+        let input = "你好<think>内部推理</think>世界";
+        assert_eq!(strip_think_blocks(input), "你好世界");
+    }
+
+    #[test]
+    fn test_visible_text_sanitizer_handles_split_think_tags() {
+        let mut sanitizer = VisibleTextSanitizer::default();
+        let mut out = String::new();
+        out.push_str(&sanitizer.push_chunk("你好<th"));
+        out.push_str(&sanitizer.push_chunk("ink>不该显示</th"));
+        out.push_str(&sanitizer.push_chunk("ink>世界"));
+        out.push_str(&sanitizer.finish());
+        assert_eq!(out, "你好世界");
+    }
+
+    #[test]
+    fn test_visible_text_sanitizer_preserves_utf8_chunks_without_panicking() {
+        let mut sanitizer = VisibleTextSanitizer::default();
+        let mut out = String::new();
+        out.push_str(&sanitizer.push_chunk("你"));
+        out.push_str(&sanitizer.push_chunk("好"));
+        out.push_str(&sanitizer.finish());
+        assert_eq!(out, "你好");
     }
 
     #[tokio::test]

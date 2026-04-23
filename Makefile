@@ -13,11 +13,10 @@ build:
 release:
 	cargo build --release --quiet
 
-install: release
+install:
 	./scripts/install.sh --release --prefix $(PREFIX)
 
-install-cli: release
-	./scripts/install.sh --release --features legacy-cli --prefix $(PREFIX)
+install-cli: install
 
 test:
 	cargo test --quiet
@@ -33,8 +32,8 @@ help:
 	@echo "Priority Agent - Makefile targets"
 	@echo ""
 	@echo "  make              Build release binary"
-	@echo "  make install      Build release + install to ~/.local/bin"
-	@echo "  make install-cli  Build release with CLI + install (recommended)"
+	@echo "  make install      Build release + install to ~/.local/bin (chat CLI enabled)"
+	@echo "  make install-cli  Alias of make install"
 	@echo "  make test         Run all tests"
 	@echo "  make clean        Clean build artifacts"
 	@echo "  make lint         Run fmt and clippy checks"

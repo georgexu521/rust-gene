@@ -11,35 +11,26 @@
 git clone https://github.com/yourusername/priority-agent
 cd priority-agent
 
-# 编译
-cargo build --release
+# 一键安装（默认启用 chat CLI）
+make install
 
 # 运行
-./target/release/priority-agent --help
+pa                  # chat CLI（推荐）
+priority-agent      # TUI 模式
 ```
 
 ### 基本使用
 
 ```bash
-# 初始化新项目
-priority-agent init
+# Chat CLI（Claude Code 风格）
+pa
 
-# 添加任务
-priority-agent add "实现用户认证系统"
-priority-agent add "设计数据库模型"
-priority-agent add "编写API文档"
+# 或显式进入 CLI
+priority-agent --cli
+priority-agent chat
 
-# 查看推荐任务
-priority-agent next
-
-# 标记任务完成
-priority-agent done task_1234567890
-
-# 查看进度
-priority-agent progress
-
-# 分析项目
-priority-agent analyze
+# API 模式
+priority-agent --api --port 8787
 ```
 
 ## 核心理念
@@ -91,16 +82,11 @@ priority-agent analyze
 
 | 命令 | 描述 | 示例 |
 |------|------|------|
-| `init` | 初始化新项目 | `priority-agent init` |
-| `add <名称>` | 添加新任务 | `priority-agent add "实现登录"` |
-| `list` | 列出所有任务 | `priority-agent list` |
-| `next` | 显示推荐任务 | `priority-agent next` |
-| `done <ID>` | 完成任务 | `priority-agent done task_123` |
-| `progress` | 显示进度 | `priority-agent progress` |
-| `analyze` | 分析项目结构 | `priority-agent analyze` |
-| `snapshot [名称]` | 创建快照 | `priority-agent snapshot "v1.0"` |
-| `restore <ID>` | 恢复快照 | `priority-agent restore snapshot_123` |
-| `interactive` | 交互模式 | `priority-agent i` |
+| `pa` | 进入 Chat CLI（推荐） | `pa` |
+| `priority-agent` | 进入 TUI 模式 | `priority-agent` |
+| `priority-agent --cli` | 强制进入 Chat CLI | `priority-agent --cli` |
+| `priority-agent chat` | 直接进入 Chat CLI | `priority-agent chat` |
+| `priority-agent --api --port 8787` | 启动 HTTP API | `priority-agent --api --port 8787` |
 
 ## 技术栈
 

@@ -1,5 +1,11 @@
 # 下一步对比结论（rust-agent vs claude/hermes，2026-04-12）
 
+> Historical document: archived assessment snapshot from 2026-04-12.
+> Some items are superseded by later implementation changes.
+
+> Historical note (updated 2026-04-23): this document is a dated assessment snapshot.
+> Some gaps listed below were already closed later (for example `scripts/install.sh`, CI count, and startup entry wiring).
+
 ## 1. 现状结论（已完成项）
 
 相较前一轮，你的项目已经补齐了不少核心短板：
@@ -33,7 +39,7 @@
 ### P1：工程化交付链路
 
 1. 安装/运维脚本
-- 当前缺少：`scripts/install.sh`、`scripts/setup.sh`、`doctor` 风格诊断入口。
+- 当前状态（2026-04-23）：`scripts/install.sh` 已存在并用于安装；`setup.sh` 与 `doctor` 入口仍可作为后续增强项。
 - 目标：新机器 5 分钟可用，常见配置错误可自动诊断。
 
 2. 发布与分发
@@ -41,7 +47,7 @@
 - 目标：支持“本地二进制 + 容器 + 包管理器”三种安装路径。
 
 3. CI 分层
-- 当前仅 1 个 workflow（`ci.yml`）。
+- 当前状态（2026-04-23）：已超过 1 个 workflow；后续可继续按发布/供应链维度拆分。
 - 对标 Hermes：测试、Docker 发布、Nix、文档检查、供应链审计分层。
 - 目标：至少拆分为 `tests.yml` / `release.yml` / `supply-chain.yml`。
 

@@ -239,6 +239,16 @@ impl WorkflowExecutor {
                 record.duration_ms,
                 record.retry_count
             ));
+            match &record.outcome {
+                ExecutionOutcome::Success(msg)
+                | ExecutionOutcome::Failed(msg)
+                | ExecutionOutcome::Skipped(msg)
+                | ExecutionOutcome::NeedsRefactor(msg) => {
+                    if !msg.trim().is_empty() {
+                        output.push_str(&format!("   ↳ {}\n", msg));
+                    }
+                }
+            }
         }
 
         output

@@ -1,0 +1,33 @@
+# Scripts Guide
+
+This directory mixes installer, CI helpers, and workflow research scripts.
+Use this file as the source of truth for what is on the critical path.
+
+## Core (user-facing)
+
+- `install.sh`: one-command local install (`make install` calls this).
+
+## CI/Automation Path
+
+- `lint-check.sh`: used by CI lint/check validation workflows.
+- `workflow-production-gates.sh`: orchestrates workflow gate scripts.
+- `workflow-m1-acceptance.sh`: acceptance checks for workflow milestones.
+- `workflow-gate-replay.sh`: gate replay harness.
+- `workflow-param-replay.sh`: parameter replay harness.
+- `workflow-weekly-report.sh`: weekly metrics reporting.
+- `workflow-real-devflow-round2.sh`: replay fixture wrapper.
+- `workflow-real-devflow-round3.sh`: replay fixture wrapper.
+
+## Manual Dev/Ops Utilities
+
+- `health-check.sh`: API health probe for local/manual ops.
+- `audit-api-smoke.sh`: audit endpoint smoke test.
+- `benchmark.sh`: local performance benchmark helper.
+- `validate_docs.sh`: manual docs/build consistency checker.
+- `generate-gate-replay-v2.sh`: regenerate replay samples json.
+
+## Policy
+
+- Prefer adding new scripts to one of the three sections above.
+- If a script is manual-only, keep it out of CI and document it here.
+- If a script is obsolete, remove it instead of leaving it undocumented.

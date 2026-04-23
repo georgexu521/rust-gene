@@ -18,7 +18,11 @@ impl Cli {
 
         let mut verbose = false;
         let mut config = None;
-        let mut command = Commands::Help;
+        let mut command = if args.len() <= 1 {
+            Commands::Interactive
+        } else {
+            Commands::Help
+        };
 
         let mut i = 1;
         while i < args.len() {
@@ -61,7 +65,7 @@ impl Cli {
                         };
                     }
                 }
-                "interactive" | "i" => command = Commands::Interactive,
+                "interactive" | "i" | "chat" => command = Commands::Interactive,
                 _ => {}
             }
             i += 1;
@@ -142,7 +146,7 @@ pub fn print_help() {
     println!("  analyze               分析项目结构");
     println!("  snapshot [名称]       创建项目快照");
     println!("  restore <快照ID>      恢复快照");
-    println!("  interactive, i        进入交互模式");
+    println!("  interactive, i, chat  进入聊天交互模式");
     println!("  help                  显示帮助");
     println!();
     println!("示例:");
@@ -151,4 +155,5 @@ pub fn print_help() {
     println!("  priority-agent next");
     println!("  priority-agent done task-1");
     println!("  priority-agent i");
+    println!("  pa");
 }

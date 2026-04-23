@@ -76,7 +76,7 @@ impl WorkflowPolicy {
     /// 从环境变量加载策略（单一入口）
     pub fn from_env() -> Self {
         let mut p = Self::default();
-        p.gate.workflow_enabled = env_bool("PRIORITY_AGENT_WORKFLOW_ENABLED", true);
+        p.gate.workflow_enabled = env_bool("PRIORITY_AGENT_WORKFLOW_ENABLED", false);
         p.gate.llm_classifier_enabled = env_bool("PRIORITY_AGENT_WORKFLOW_GATE_LLM", false);
 
         p.socratic.max_rounds = env_usize("PRIORITY_AGENT_SOCRATIC_MAX_ROUNDS", 5);

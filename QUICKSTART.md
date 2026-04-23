@@ -129,34 +129,26 @@ export MINIMAX_API_KEY="你的_MiniMax_Token_Plan_Key_这里"
 - `Ctrl+C` 或 `Ctrl+Q` 退出
 - 使用方向键浏览历史消息
 
-### 方式二：旧版 CLI 模式
+### 方式二：Chat CLI 模式
 
 ```bash
-# 显式使用旧版 CLI
-./target/debug/priority-agent --legacy
+# 显式使用 Chat CLI
+./target/debug/priority-agent --cli
+# 或
+./target/debug/priority-agent chat
 ```
 
-**旧版 CLI 命令**:
+**Chat CLI 常用命令**:
 
 ```bash
-# 1. 初始化项目
-./target/debug/priority-agent init
+# 1. 进入 CLI 聊天
+./target/debug/priority-agent --cli
 
-# 2. 添加任务
-./target/debug/priority-agent add "实现用户认证系统"
-./target/debug/priority-agent add "设计数据库模型"
-
-# 3. 查看推荐任务
-./target/debug/priority-agent next
-
-# 4. 标记任务完成
-./target/debug/priority-agent done task_1234567890
-
-# 5. 查看进度
-./target/debug/priority-agent progress
-
-# 6. AI 分析
-./target/debug/priority-agent ai-analyze
+# 2. 在聊天中用斜杠命令
+/help
+/tools
+/cost
+/exit
 ```
 
 ### 方式三：安装到系统 PATH
@@ -167,7 +159,7 @@ sudo cp target/release/priority-agent /usr/local/bin/
 
 # 然后可以直接使用
 priority-agent --help
-priority-agent init
+priority-agent chat
 ```
 
 ---
@@ -206,17 +198,15 @@ cargo test test_input_unicode
 cargo build
 
 # Step 2: 测试 CLI 模式（无需 API Key）
-./target/debug/priority-agent --legacy init
-./target/debug/priority-agent --legacy add "测试任务"
-./target/debug/priority-agent --legacy list
-./target/debug/priority-agent --legacy next
+./target/debug/priority-agent --cli
+# 进入后执行 /help 然后 /exit
 
 # Step 3: 测试 TUI 模式（需要 API Key）
 ./target/debug/priority-agent --tui
 # 按 Ctrl+C 退出
 
-# Step 4: 测试 AI 功能（需要 API Key）
-./target/debug/priority-agent --legacy ai-analyze
+# Step 4: 测试 API 模式（可选）
+./target/debug/priority-agent --api --port 8787
 ```
 
 ### 4. 快速测试脚本
@@ -236,11 +226,7 @@ cargo test
 
 echo ""
 echo "=== 测试 CLI 命令 ==="
-./target/debug/priority-agent --legacy init
-./target/debug/priority-agent --legacy add "测试任务 1"
-./target/debug/priority-agent --legacy add "测试任务 2"
-./target/debug/priority-agent --legacy list
-./target/debug/priority-agent --legacy next
+printf '/help\n/exit\n' | ./target/debug/priority-agent --cli
 
 echo ""
 echo "✅ 所有测试通过！"
@@ -296,7 +282,7 @@ source ~/.zshrc
 export LANG=en_US.UTF-8
 
 # 使用兼容模式运行
-./target/debug/priority-agent --legacy
+./target/debug/priority-agent --cli
 ```
 
 ### 问题 4: 测试失败
@@ -338,7 +324,7 @@ rm -rf ~/Library/Application\ Support/priority-agent/
 rm -rf ~/.local/share/priority-agent/
 
 # 然后重新初始化
-./target/debug/priority-agent init
+./target/debug/priority-agent --cli
 ```
 
 ---
@@ -363,14 +349,13 @@ cargo build
 
 # 测试流程
 cargo test
-./target/debug/priority-agent --legacy init
-./target/debug/priority-agent --legacy add "测试"
-./target/debug/priority-agent --legacy next
+./target/debug/priority-agent --cli
+# 进入后可执行: /help /tools /cost
 
 # 日常使用（安装后）
-priority-agent init
-priority-agent add "新任务"
-priority-agent next
+pa
+priority-agent
+priority-agent --api --port 8787
 ```
 
 ---

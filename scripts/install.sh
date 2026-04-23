@@ -8,10 +8,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 BUILD_TYPE="debug"
-FEATURES=""
+FEATURES="${FEATURES:-legacy-cli}"
+SKIP_BUILD=0
+SKIP_VERIFY=0
 INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local}"
-BIN_DIR="$INSTALL_PREFIX/bin"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/priority-agent"
+BIN_DIR=""
+CONFIG_DIR=""
 
 usage() {
   cat <<'EOF'
@@ -19,13 +21,18 @@ Usage: scripts/install.sh [options]
 
 Options:
   --release          Build in release mode (default: debug)
-  --features F       Comma-separated cargo features (e.g. legacy-cli)
+  --features F       Comma-separated cargo features (default: legacy-cli)
+  --no-cli           Build without legacy-cli feature
+  --skip-build       Skip cargo build and install existing binary from target/
+  --skip-verify      Skip final binary smoke-check
   --prefix PATH      Install prefix directory (default: ~/.local)
   --system           Install to /usr/local (requires sudo)
   -h, --help         Show this help
 
 Examples:
   scripts/install.sh --release --features legacy-cli
+  scripts/install.sh --release --no-cli
+  scripts/install.sh --release --skip-build
   scripts/install.sh --release --system
 EOF
 }
@@ -34,6 +41,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --release) BUILD_TYPE="release"; shift ;;
     --features) FEATURES="${2:-}"; shift 2 ;;
+    --no-cli) FEATURES=""; shift ;;
+    --skip-build) SKIP_BUILD=1; shift ;;
+    --skip-verify) SKIP_VERIFY=1; shift ;;
     --prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
     --system) INSTALL_PREFIX="/usr/local"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -41,10 +51,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+BIN_DIR="$INSTALL_PREFIX/bin"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/priority-agent"
+
 echo "=== Priority Agent Installer ==="
 echo ""
 echo "Build type:   $BUILD_TYPE"
 echo "Features:     ${FEATURES:-(none)}"
+echo "Skip build:   $SKIP_BUILD"
+echo "Skip verify:  $SKIP_VERIFY"
 echo "Install prefix: $INSTALL_PREFIX"
 echo ""
 
@@ -55,23 +70,37 @@ if ! command -v cargo &>/dev/null; then
   exit 1
 fi
 
-echo "[1/4] Building priority-agent..."
-CARGO_ARGS=()
 if [[ "$BUILD_TYPE" == "release" ]]; then
-  CARGO_ARGS+=("--release")
   SRC_BIN="target/release/priority-agent"
 else
   SRC_BIN="target/debug/priority-agent"
 fi
-if [[ -n "$FEATURES" ]]; then
-  CARGO_ARGS+=("--features" "$FEATURES")
-  echo "       Features: $FEATURES"
+
+if [[ "$SKIP_BUILD" -eq 0 ]]; then
+  echo "[1/4] Building priority-agent..."
+  BUILD_START_TS="$(date +%s)"
+  CARGO_ARGS=("--bin" "priority-agent")
+  if [[ "$BUILD_TYPE" == "release" ]]; then
+    CARGO_ARGS+=("--release")
+  fi
+  if [[ -n "$FEATURES" ]]; then
+    CARGO_ARGS+=("--features" "$FEATURES")
+    echo "       Features: $FEATURES"
+  fi
+  cargo build --quiet "${CARGO_ARGS[@]}"
+  BUILD_END_TS="$(date +%s)"
+  echo "       Build done in $((BUILD_END_TS - BUILD_START_TS))s"
+else
+  echo "[1/4] Skipping build, using existing binary: $SRC_BIN"
 fi
 
-cargo build --quiet "${CARGO_ARGS[@]}"
-
 if [[ ! -x "$SRC_BIN" ]]; then
-  echo "Error: Build failed - binary not found at $SRC_BIN"
+  if [[ "$SKIP_BUILD" -eq 1 ]]; then
+    echo "Error: --skip-build was set but binary not found at $SRC_BIN"
+    echo "       Run without --skip-build first."
+  else
+    echo "Error: Build failed - binary not found at $SRC_BIN"
+  fi
   exit 1
 fi
 
@@ -80,7 +109,7 @@ mkdir -p "$BIN_DIR"
 cp "$SRC_BIN" "$BIN_DIR/priority-agent"
 chmod +x "$BIN_DIR/priority-agent"
 
-# 创建 pa symlink（快捷命令，默认进入 CLI 模式）
+# 创建 pa symlink（快捷命令，默认进入 chat CLI 模式）
 ln -sf "$BIN_DIR/priority-agent" "$BIN_DIR/pa"
 echo "       Created shortcut: $BIN_DIR/pa -> priority-agent"
 
@@ -114,17 +143,21 @@ EOF
 fi
 
 echo "[4/4] Verifying installation..."
-if "$BIN_DIR/priority-agent" --help &>/dev/null; then
-  echo "       OK: binary works"
+if [[ "$SKIP_VERIFY" -eq 1 ]]; then
+  echo "       Skipped."
 else
-  echo "       Warning: binary test failed"
+  if "$BIN_DIR/priority-agent" --help &>/dev/null; then
+    echo "       OK: binary works"
+  else
+    echo "       Warning: binary test failed"
+  fi
 fi
 
 echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "Binary:     $BIN_DIR/priority-agent"
-echo "Shortcut:   $BIN_DIR/pa  (default: CLI mode)"
+echo "Shortcut:   $BIN_DIR/pa  (default: chat CLI mode)"
 echo "Config:     $CONFIG_DIR/"
 echo ""
 # Warn if prefix bin is not in PATH

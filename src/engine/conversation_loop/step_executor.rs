@@ -39,6 +39,11 @@ impl StepExecutor for WorkflowRealStepExecutor {
             .build_params(step, tool.parameters())
             .await
             .map_err(|e| format!("build params failed for tool '{}': {}", tool_name, e))?;
+        let command_preview = params
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         if let Some(err) = tool.validate_params(&params) {
             return Err(format!("invalid params for '{}': {}", tool_name, err));
@@ -46,13 +51,21 @@ impl StepExecutor for WorkflowRealStepExecutor {
 
         let result = tool.execute(params, self.base_context.clone()).await;
         if result.success {
-            Ok(format!("[{}] {}", tool_name, result.content))
+            if tool_name == "bash" && !command_preview.is_empty() {
+                Ok(format!(
+                    "[{} cmd={}] {}",
+                    tool_name, command_preview, result.content
+                ))
+            } else {
+                Ok(format!("[{}] {}", tool_name, result.content))
+            }
         } else {
-            Err(format!(
-                "[{}] {}",
-                tool_name,
-                result.error.clone().unwrap_or(result.content)
-            ))
+            let err_text = result.error.clone().unwrap_or(result.content);
+            if tool_name == "bash" && !command_preview.is_empty() {
+                Err(format!("[{} cmd={}] {}", tool_name, command_preview, err_text))
+            } else {
+                Err(format!("[{}] {}", tool_name, err_text))
+            }
         }
     }
 }
@@ -655,6 +668,9 @@ fn build_schema_hint(schema: &serde_json::Value, max_bytes: usize) -> String {
 
 fn extract_command(step: &str) -> Option<String> {
     let lower = step.to_lowercase();
+    if let Some(mkdir_cmd) = infer_mkdir_command(step) {
+        return Some(mkdir_cmd);
+    }
     for marker in ["`", "cmd:", "command:"] {
         if marker == "`" {
             if let Some(cmd) = extract_backtick(step) {
@@ -720,6 +736,89 @@ fn shell_safe_echo(s: &str) -> String {
     format!("\"{}\"", cleaned)
 }
 
+fn infer_mkdir_command(step: &str) -> Option<String> {
+    let lower = step.to_lowercase();
+    let is_dir_intent = lower.contains("文件夹")
+        || lower.contains("目录")
+        || lower.contains("folder")
+        || lower.contains("directory")
+        || lower.contains("mkdir")
+        || lower.contains("新建")
+        || lower.contains("创建");
+    if !is_dir_intent {
+        return None;
+    }
+
+    let name = extract_folder_name(step).unwrap_or_else(|| "new_folder".to_string());
+    let quoted_name = shell_single_quote(&name);
+    if lower.contains("桌面") || lower.contains("desktop") {
+        Some(format!("mkdir -p \"$HOME/Desktop/{}\"", quoted_name))
+    } else {
+        Some(format!("mkdir -p {}", quoted_name))
+    }
+}
+
+fn extract_folder_name(step: &str) -> Option<String> {
+    for token in step.split_whitespace() {
+        let t = token.trim_matches(|c: char| ",.;:()[]{}\"'`".contains(c));
+        if t.contains("Desktop/") || t.contains("desktop/") || t.contains("桌面/") {
+            if let Some(last) = t.rsplit('/').next() {
+                let s = sanitize_folder_name(last);
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+    }
+    if let Some(v) = extract_backtick(step) {
+        let s = sanitize_folder_name(&v);
+        if !s.is_empty() {
+            return Some(s);
+        }
+    }
+    if let Some(v) = extract_quoted(step) {
+        let s = sanitize_folder_name(&v);
+        if !s.is_empty() {
+            return Some(s);
+        }
+    }
+    if let Some(caps) = regex::Regex::new(r"(?:叫|名为)\s*([A-Za-z0-9_\-\.]+)")
+        .ok()
+        .and_then(|re| re.captures(step))
+    {
+        if let Some(m) = caps.get(1) {
+            let s = sanitize_folder_name(m.as_str());
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    if let Some(caps) = regex::Regex::new(r"([A-Za-z0-9_\-\.]+)\s*(?:文件夹|目录|folder|directory)")
+        .ok()
+        .and_then(|re| re.captures(step))
+    {
+        if let Some(m) = caps.get(1) {
+            let s = sanitize_folder_name(m.as_str());
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+fn sanitize_folder_name(name: &str) -> String {
+    name
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        .collect()
+}
+
+fn shell_single_quote(s: &str) -> String {
+    s.replace('\'', "'\"'\"'")
+}
+
 pub(crate) fn is_drift_interruption_signal(user_input: &str) -> bool {
     let lower = user_input.to_lowercase();
     let markers = [
@@ -734,4 +833,28 @@ pub(crate) fn is_drift_interruption_signal(user_input: &str) -> bool {
         "not the point",
     ];
     markers.iter().any(|m| lower.contains(m))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_command, infer_mkdir_command};
+
+    #[test]
+    fn test_infer_mkdir_command_desktop_folder() {
+        let cmd = infer_mkdir_command("请帮我在桌面新建一个叫gex的文件夹").unwrap();
+        assert_eq!(cmd, "mkdir -p \"$HOME/Desktop/gex\"");
+    }
+
+    #[test]
+    fn test_extract_command_prefers_mkdir_for_folder_intent() {
+        let cmd = extract_command("在桌面创建 test123 文件夹").unwrap();
+        assert!(cmd.contains("mkdir -p"));
+        assert!(cmd.contains("Desktop"));
+    }
+
+    #[test]
+    fn test_extract_command_handles_desktop_path_hint() {
+        let cmd = extract_command("执行 `mkdir ~/Desktop/gex` 创建目录").unwrap();
+        assert_eq!(cmd, "mkdir -p \"$HOME/Desktop/gex\"");
+    }
 }

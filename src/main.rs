@@ -56,6 +56,25 @@ enum StartupMode {
     Tui,
 }
 
+fn is_cli_subcommand(arg: &str) -> bool {
+    matches!(
+        arg,
+        "init"
+            | "add"
+            | "list"
+            | "next"
+            | "done"
+            | "progress"
+            | "analyze"
+            | "snapshot"
+            | "restore"
+            | "interactive"
+            | "i"
+            | "chat"
+            | "help"
+    )
+}
+
 fn detect_startup_mode(args: &[String]) -> StartupMode {
     let argv0 = std::env::args().next().unwrap_or_default();
     let invoked_as_pa = argv0.ends_with("pa") || argv0.ends_with("pa.exe");
@@ -66,6 +85,7 @@ fn detect_startup_mode(args: &[String]) -> StartupMode {
         Some("--api") => StartupMode::Api,
         Some("--cli") => StartupMode::Cli,
         Some("--tui") => StartupMode::Tui,
+        Some(sub) if is_cli_subcommand(sub) => StartupMode::Cli,
         _ if invoked_as_pa => StartupMode::Cli,
         _ => StartupMode::Tui,
     }
@@ -83,7 +103,7 @@ fn print_help() {
     println!();
     println!("Modes:");
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
-    println!("  --cli    Run legacy CLI mode (feature: legacy-cli)");
+    println!("  --cli    Run chat CLI mode (feature: legacy-cli)");
     println!("  --tui    Start TUI mode");
     println!("  (none)   Default: TUI for 'priority-agent', CLI for 'pa'");
     println!();
@@ -91,16 +111,26 @@ fn print_help() {
     println!("  {bin}                  # Default mode");
     println!("  {bin} --api --port 8787 # HTTP API server");
     println!("  {bin} --tui            # Force TUI mode");
-    println!("  priority-agent --cli   # Force CLI mode");
+    println!("  priority-agent --cli   # Force chat CLI mode");
+    println!("  priority-agent chat    # Enter chat CLI directly");
 }
 
 #[tokio::main]
 async fn main() {
-    // 初始化日志
+    // 解析命令行参数
+    let args: Vec<String> = std::env::args().collect();
+    let startup_mode = detect_startup_mode(&args);
+
+    // 初始化日志（交互模式默认降噪，仍可通过 RUST_LOG 覆盖）
+    let default_level = match startup_mode {
+        StartupMode::Api => "info",
+        StartupMode::Help | StartupMode::Cli | StartupMode::Tui => "warn",
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
+        .with_writer(std::io::stderr)
         .init();
 
     info!("Priority Agent starting...");
@@ -110,9 +140,7 @@ async fn main() {
         debug!(".env file not loaded: {}", e);
     }
 
-    // 解析命令行参数
-    let args: Vec<String> = std::env::args().collect();
-    match detect_startup_mode(&args) {
+    match startup_mode {
         StartupMode::Help => {
             print_help();
         }
@@ -266,6 +294,18 @@ mod tests {
         assert_eq!(
             detect_startup_mode(&["priority-agent".into(), "--unknown".into()]),
             StartupMode::Tui
+        );
+    }
+
+    #[test]
+    fn test_detect_startup_mode_cli_subcommands() {
+        assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "chat".into()]),
+            StartupMode::Cli
+        );
+        assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "init".into()]),
+            StartupMode::Cli
         );
     }
 }

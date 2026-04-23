@@ -315,15 +315,32 @@ pub trait Tool: Send + Sync {
                 // 类型检查
                 if let Some(value) = params.get(key) {
                     if let Some(type_str) = prop.get("type").and_then(|t| t.as_str()) {
-                        let actual_type = match value {
-                            Value::Null => "null",
-                            Value::Bool(_) => "boolean",
-                            Value::Number(_) => "number",
-                            Value::String(_) => "string",
-                            Value::Array(_) => "array",
-                            Value::Object(_) => "object",
+                        let type_matches = match (type_str, value) {
+                            ("any", _) => true,
+                            ("null", Value::Null) => true,
+                            ("boolean", Value::Bool(_)) => true,
+                            ("string", Value::String(_)) => true,
+                            ("array", Value::Array(_)) => true,
+                            ("object", Value::Object(_)) => true,
+                            ("number", Value::Number(_)) => true,
+                            ("integer", Value::Number(n)) => n.is_i64() || n.is_u64(),
+                            _ => false,
                         };
-                        if type_str != "any" && actual_type != type_str {
+                        if !type_matches {
+                            let actual_type = match value {
+                                Value::Null => "null",
+                                Value::Bool(_) => "boolean",
+                                Value::Number(n) => {
+                                    if n.is_i64() || n.is_u64() {
+                                        "integer"
+                                    } else {
+                                        "number"
+                                    }
+                                }
+                                Value::String(_) => "string",
+                                Value::Array(_) => "array",
+                                Value::Object(_) => "object",
+                            };
                             return Some(format!(
                                 "Parameter '{}' must be of type {}, got {}",
                                 key, type_str, actual_type
@@ -976,6 +993,35 @@ impl CachedToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    struct IntegerParamTool;
+
+    #[async_trait]
+    impl Tool for IntegerParamTool {
+        fn name(&self) -> &str {
+            "integer_param_tool"
+        }
+
+        fn description(&self) -> &str {
+            "test integer validation"
+        }
+
+        fn parameters(&self) -> Value {
+            json!({
+                "type": "object",
+                "properties": {
+                    "timeout": { "type": "integer" }
+                },
+                "required": ["timeout"]
+            })
+        }
+
+        async fn execute(&self, _params: Value, _context: ToolContext) -> ToolResult {
+            ToolResult::success("ok")
+        }
+    }
 
     #[test]
     fn test_tool_result() {
@@ -986,6 +1032,13 @@ mod tests {
         let error = ToolResult::error("Failed");
         assert!(!error.success);
         assert_eq!(error.error, Some("Failed".to_string()));
+    }
+
+    #[test]
+    fn test_validate_params_accepts_integer_type_for_json_number() {
+        let tool = IntegerParamTool;
+        let err = tool.validate_params(&json!({ "timeout": 60 }));
+        assert!(err.is_none(), "integer JSON number should pass schema validation");
     }
 
     #[test]

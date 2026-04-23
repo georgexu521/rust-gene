@@ -404,7 +404,7 @@
   },
   {
     "id": "C-06",
-    "task_description": "Split monolithic src/ into workspace: priority-core (lib) + priority-cli (bin)",
+    "task_description": "Split monolithic src/ into workspace: priority-core (lib) + cli-app (bin)",
     "complexity": "complex",
     "estimated_files": 10,
     "mainline_goal": "分离核心库和前端，支持多前端架构",
@@ -420,7 +420,7 @@
       "创建 priority-core/ 目录和 Cargo.toml",
       "迁移无依赖模块（errors, priority, weight_engine）",
       "逐步迁移其他模块",
-      "创建 priority-cli/ 迁移 TUI",
+      "创建 cli-app/ 迁移 TUI",
       "更新根 Cargo.toml workspace 声明",
       "验证 cargo build --workspace 通过"
     ],
