@@ -282,7 +282,7 @@ impl Default for QueryOptions {
         Self {
             max_tool_iterations: Some(10),
             context_messages: None,
-            temperature: Some(0.6),
+            temperature: Some(0.2),
             allowed_tools: None,
         }
     }

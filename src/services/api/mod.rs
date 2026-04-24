@@ -123,7 +123,7 @@ impl ChatRequest {
             model: model.into(),
             messages: Vec::new(),
             tools: None,
-            temperature: Some(0.6),
+            temperature: Some(0.2),
             max_tokens: None,
             thinking_budget: None,
         }

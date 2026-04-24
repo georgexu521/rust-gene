@@ -163,8 +163,7 @@ pub fn parse_markdown<'a>(text: &'a str, theme: &crate::tui::theme::Theme) -> Te
                             lines.push(Line::from(current_line));
                             current_line = Vec::new();
                         }
-                        // 段落之间添加空行
-                        lines.push(Line::from(""));
+                        // Note: no blank line between paragraphs for compact Claude Code style
                     }
                     TagEnd::List(_) => {
                         list_stack.pop();

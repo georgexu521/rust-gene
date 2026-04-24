@@ -358,7 +358,7 @@ fn estimate_message_height(
     if collapsed {
         return 2; // header + "..." indicator
     }
-    let base_height = 3; // header + blank line + trailing blank
+    let base_height = 1; // minimal spacing between messages
     let effective_width = width.saturating_sub(4).max(1);
 
     let mut lines = 0;
@@ -393,10 +393,7 @@ fn estimate_message_height(
         }
     }
 
-    // parse_markdown adds a blank line after the final paragraph
-    if last_was_text {
-        lines += 1;
-    }
+    // No trailing blank line (compact Claude Code style)
 
     base_height + lines.max(1)
 }

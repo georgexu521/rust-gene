@@ -526,7 +526,8 @@ impl ConversationLoop {
 
             let mut request = ChatRequest::new(&self.model)
                 .with_messages(request_messages)
-                .with_tools(tools.clone());
+                .with_tools(tools.clone())
+                .with_temperature(0.2);
 
             // ── 响应式压缩循环 ─────────────────────────────
             let mut compressed_this_turn = false;
@@ -568,7 +569,8 @@ impl ConversationLoop {
                                     comp.lock().await.compress_async(&msgs_for_comp).await;
                                 request = ChatRequest::new(&self.model)
                                     .with_messages(compressed)
-                                    .with_tools(tools.clone());
+                                    .with_tools(tools.clone())
+                                    .with_temperature(0.2);
                                 compressed_this_turn = true;
                             }
                         } else {
@@ -1106,7 +1108,7 @@ impl ConversationLoop {
                             stream_err
                         );
                         let base_request =
-                            ChatRequest::new(&self.model).with_messages(fallback_messages.clone());
+                            ChatRequest::new(&self.model).with_messages(fallback_messages.clone()).with_temperature(0.2);
                         let response = if let Some(tools) = fallback_tools.clone() {
                             match self
                                 .provider
@@ -1148,7 +1150,7 @@ impl ConversationLoop {
             Err(e) => {
                 warn!("Streaming failed, falling back to non-streaming: {}", e);
                 let base_request =
-                    ChatRequest::new(&self.model).with_messages(fallback_messages.clone());
+                    ChatRequest::new(&self.model).with_messages(fallback_messages.clone()).with_temperature(0.2);
                 let response = if let Some(tools) = fallback_tools.clone() {
                     match self
                         .provider

@@ -144,9 +144,9 @@ impl Theme {
             bg_popup: Color::Rgb(245, 245, 245),
             bg_selected: Color::Rgb(220, 220, 220),
             text: Color::Black,
-            text_dim: Color::Rgb(100, 100, 100),
-            text_highlight: Color::Blue,
-            border: Color::Rgb(180, 180, 180),
+            text_dim: Color::Rgb(80, 80, 80),
+            text_highlight: Color::Rgb(0, 80, 180),
+            border: Color::Rgb(160, 160, 160),
             border_active: Color::Blue,
             user_message: Color::Rgb(0, 100, 150),
             user_message_bg: Color::Rgb(240, 240, 240),
@@ -345,7 +345,7 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::dark()
+        Self::light()
     }
 }
 

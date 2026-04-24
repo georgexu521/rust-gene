@@ -32,6 +32,7 @@ fn render_user_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::them
     }
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: true })
+        .style(Style::default().bg(theme.user_message_bg))
 }
 
 fn render_assistant_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {

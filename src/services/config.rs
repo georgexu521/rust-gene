@@ -199,7 +199,7 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(),
+            theme: "light".to_string(),
             show_token_usage: true,
             compact_mode: false,
         }
