@@ -90,7 +90,7 @@ fn parse_memory_save_args(args: &str) -> (MemorySaveTarget, Option<&str>, &str) 
 
 fn build_welcome_content(is_first_run: bool) -> String {
     if is_first_run {
-        return "Welcome to Priority Agent\n\nPress Enter to start onboarding, or type /skip to skip.\n\nTips:\n- Ctrl+P opens the command palette\n- Type ? on an empty prompt for shortcuts\n- Use /init to create a project scaffold".to_string();
+        return "Priority Agent\n\nWelcome. Press Enter to start onboarding, or type /skip to skip.\n\nGetting started:\n- Ctrl+P opens the command palette\n- Ctrl+M changes model; Ctrl+L changes provider\n- Type ? on an empty prompt for shortcuts\n- Use /init <name> to create a project scaffold".to_string();
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -129,7 +129,7 @@ fn build_welcome_content(is_first_run: bool) -> String {
     };
 
     format!(
-        "Welcome to Priority Agent\n\nProject: {}\nPath: {}\n{}\n{}\nDetected: {}\n{}\n\nTips:\n- Ctrl+P opens commands; empty ? shows shortcuts\n- Ctrl+M changes model; Ctrl+L changes provider\n- Ctrl+O cycles tool details\n- /settings changes model, theme, permissions, and keys\n- /init <name> creates a project scaffold",
+        "Priority Agent\n\nWelcome back.\n\nProject overview:\n- Name: {}\n- Path: {}\n- {}\n- {}\n- Detected: {}\n{}\n\n{}\n\nNext actions:\n1. Ask a question about this codebase\n2. Run /quick for the command dashboard\n3. Run /init <name> to scaffold a new project\n4. Press Ctrl+P for commands, Ctrl+M for model, Ctrl+L for provider",
         project_name,
         cwd.display(),
         branch
@@ -137,6 +137,7 @@ fn build_welcome_content(is_first_run: bool) -> String {
             .unwrap_or_else(|| "Branch: none".to_string()),
         workspace_change_preview(&cwd),
         detected,
+        workspace_entries_preview(&cwd),
         recent_activity_preview()
     )
 }
@@ -161,18 +162,62 @@ fn workspace_change_preview(cwd: &std::path::Path) -> String {
     }
 }
 
-fn recent_activity_preview() -> String {
-    let Ok(manager) = crate::tui::session_manager::TuiSessionManager::new() else {
-        return "Recent: unavailable".to_string();
+fn workspace_entries_preview(cwd: &std::path::Path) -> String {
+    let Ok(entries) = std::fs::read_dir(cwd) else {
+        return "- Entries: unavailable".to_string();
     };
-    let Ok(sessions) = manager.list_sessions(3) else {
-        return "Recent: unavailable".to_string();
-    };
-    if sessions.is_empty() {
-        return "Recent: no prior sessions".to_string();
+
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') && name != ".priority-agent" {
+            continue;
+        }
+        if file_type.is_dir() {
+            dirs.push(name);
+        } else if file_type.is_file() {
+            files.push(name);
+        }
     }
 
-    let mut lines = vec!["Recent:".to_string()];
+    dirs.sort();
+    files.sort();
+    let dir_count = dirs.len();
+    let file_count = files.len();
+    let mut highlights = dirs
+        .iter()
+        .take(4)
+        .map(|name| format!("{}/", name))
+        .chain(files.iter().take(4).cloned())
+        .collect::<Vec<_>>();
+    if highlights.is_empty() {
+        highlights.push("empty workspace".to_string());
+    }
+
+    format!(
+        "- Entries: {} dirs, {} files ({})",
+        dir_count,
+        file_count,
+        highlights.join(", ")
+    )
+}
+
+fn recent_activity_preview() -> String {
+    let Ok(manager) = crate::tui::session_manager::TuiSessionManager::new() else {
+        return "Recent activity:\n- unavailable".to_string();
+    };
+    let Ok(sessions) = manager.list_sessions(3) else {
+        return "Recent activity:\n- unavailable".to_string();
+    };
+    if sessions.is_empty() {
+        return "Recent activity:\n- no prior sessions".to_string();
+    }
+
+    let mut lines = vec!["Recent activity:".to_string()];
     for session in sessions {
         let count = manager.message_count(&session.id).unwrap_or_default();
         let mut title = if session.title.trim().is_empty() {
@@ -2741,6 +2786,20 @@ mod tests {
         app.provider_select_query = "not-a-real-provider".to_string();
 
         assert!(app.provider_choices().is_empty());
+    }
+
+    #[test]
+    fn test_workspace_entries_preview_summarizes_top_level_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
+
+        let preview = workspace_entries_preview(dir.path());
+
+        assert!(preview.contains("1 dirs"));
+        assert!(preview.contains("1 files"));
+        assert!(preview.contains("src/"));
+        assert!(preview.contains("Cargo.toml"));
     }
 
     #[test]

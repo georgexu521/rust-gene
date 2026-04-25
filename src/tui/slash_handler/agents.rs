@@ -1421,7 +1421,7 @@ pub fn suggest_recovery(error: &str, _context: &str) -> String {
 /// /init - Initialize a new project
 pub fn handle_init(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        return "Usage: /init <project_name>\n\nCreates a small Rust project scaffold with README, Cargo.toml, src/main.rs, .gitignore, and .priority-agent/AGENTS.md.".to_string();
+        return "Project initializer\n\nUsage: /init <project_name>\n\nCreates:\n- README.md with next steps\n- Cargo.toml and src/main.rs\n- .gitignore\n- .priority-agent/AGENTS.md for project instructions\n\nAfter creation, cd into the project and run cargo check.".to_string();
     }
 
     let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -1490,7 +1490,8 @@ pub fn handle_init(_app: &mut TuiApp, args: &str) -> String {
                 );
             }
             format!(
-                "Project initialized\n\nPath: {}\nCreated:\n  - README.md\n  - Cargo.toml\n  - src/main.rs\n  - .gitignore\n  - .priority-agent/AGENTS.md\n\nNext:\n  cd {}\n  cargo check\n\nThen tell the agent what to build first.",
+                "Project initialized\n\nOverview:\n- Name: {}\n- Path: {}\n- Type: Rust binary scaffold\n- Instructions: .priority-agent/AGENTS.md\n\nCreated:\n- README.md\n- Cargo.toml\n- src/main.rs\n- .gitignore\n- .priority-agent/AGENTS.md\n\nNext actions:\n1. cd {}\n2. cargo check\n3. Tell the agent what to build first",
+                project_name,
                 project_path.display(),
                 project_path.display()
             )
