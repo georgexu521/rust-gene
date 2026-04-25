@@ -437,6 +437,12 @@ impl Keybindings {
             crate::tui::app::AppMode::MessageSearch => {
                 // MessageSearch 模式的键盘事件在 handle_key_event 中单独处理
             }
+            crate::tui::app::AppMode::CommandPalette
+            | crate::tui::app::AppMode::ShortcutHelp
+            | crate::tui::app::AppMode::ModelSelect
+            | crate::tui::app::AppMode::ProviderSelect => {
+                // Overlay modes are handled directly in handle_key_event.
+            }
         }
         AppAction::None
     }

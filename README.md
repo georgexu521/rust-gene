@@ -11,23 +11,22 @@
 git clone https://github.com/yourusername/priority-agent
 cd priority-agent
 
-# 一键安装（默认启用 chat CLI）
+# 一键安装
 make install
 
 # 运行
-pa                  # chat CLI（推荐）
-priority-agent      # TUI 模式
+pa                  # 交互式 CLI（推荐）
+priority-agent      # 交互式 CLI
 ```
 
 ### 基本使用
 
 ```bash
-# Chat CLI（Claude Code 风格）
+# 交互式 CLI（Claude Code / Codex 风格）
 pa
 
-# 或显式进入 CLI
+# 或显式进入 CLI（--tui 仍作为兼容别名）
 priority-agent --cli
-priority-agent chat
 
 # API 模式
 priority-agent --api --port 8787
@@ -82,10 +81,9 @@ priority-agent --api --port 8787
 
 | 命令 | 描述 | 示例 |
 |------|------|------|
-| `pa` | 进入 Chat CLI（推荐） | `pa` |
-| `priority-agent` | 进入 TUI 模式 | `priority-agent` |
-| `priority-agent --cli` | 强制进入 Chat CLI | `priority-agent --cli` |
-| `priority-agent chat` | 直接进入 Chat CLI | `priority-agent chat` |
+| `pa` | 进入交互式 CLI（推荐） | `pa` |
+| `priority-agent` | 进入交互式 CLI | `priority-agent` |
+| `priority-agent --cli` | 显式进入交互式 CLI | `priority-agent --cli` |
 | `priority-agent --api --port 8787` | 启动 HTTP API | `priority-agent --api --port 8787` |
 
 ## 技术栈
@@ -101,10 +99,7 @@ priority-agent --api --port 8787
 rust-agent/
 ├── src/
 │   ├── main.rs              # 主入口
-│   ├── cli/                 # CLI 界面
-│   │   ├── commands.rs      # 命令解析
-│   │   ├── display.rs       # 格式化输出
-│   │   └── interactive.rs   # 交互模式
+│   ├── tui/                 # 交互式 CLI 实现（ratatui/crossterm）
 │   ├── weight_engine/       # 权重计算核心
 │   │   ├── types.rs         # 核心类型
 │   │   └── calculator.rs    # 权重计算器

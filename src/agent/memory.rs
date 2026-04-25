@@ -527,8 +527,14 @@ mod tests {
         // 创建新的 store 实例，验证可以从磁盘加载
         let store2 = RoleMemoryStore::new();
         let mem2 = store2.get_or_create(role_name).await;
-        assert_eq!(mem2.load("plan_format").await, Some("markdown with steps".to_string()));
-        assert_eq!(mem2.load("risk_checklist").await, Some("5 items".to_string()));
+        assert_eq!(
+            mem2.load("plan_format").await,
+            Some("markdown with steps".to_string())
+        );
+        assert_eq!(
+            mem2.load("risk_checklist").await,
+            Some("5 items".to_string())
+        );
 
         // 清理
         store2.clear(role_name, true).await.unwrap();

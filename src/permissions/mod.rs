@@ -529,7 +529,11 @@ impl PermissionContext {
     }
 
     /// Enhanced decision with full explainability
-    pub fn explain_decision(&self, tool_name: &str, params: &serde_json::Value) -> ExplainableDecision {
+    pub fn explain_decision(
+        &self,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> ExplainableDecision {
         let effective_tool_name = if tool_name == "mcp_tool" {
             let server = params["server_name"].as_str().unwrap_or("");
             let t = params["tool_name"].as_str().unwrap_or("");
@@ -550,7 +554,10 @@ impl PermissionContext {
         // Build explanation
         let mut reasons = Vec::new();
         for (decision, rule) in &matching_rules {
-            reasons.push(format!("{:?} by {:?} rule '{}'", decision, rule.source, rule.pattern));
+            reasons.push(format!(
+                "{:?} by {:?} rule '{}'",
+                decision, rule.source, rule.pattern
+            ));
         }
         if reasons.is_empty() {
             reasons.push(format!("No matching rules, default to {:?}", base_decision));
@@ -564,7 +571,8 @@ impl PermissionContext {
                 warnings.push("HIGH_RISK_COMMAND: dangerous shell command detected".to_string());
             }
             if crate::security::is_dangerous_command(cmd) {
-                warnings.push("COMMAND_INJECTION: potentially malicious pattern detected".to_string());
+                warnings
+                    .push("COMMAND_INJECTION: potentially malicious pattern detected".to_string());
             }
         }
         if tool_name == "file_write" || tool_name == "file_edit" {
@@ -584,7 +592,10 @@ impl PermissionContext {
             reasons,
             risk_level: risk,
             warnings,
-            matched_rules: matching_rules.into_iter().map(|(d, r)| (d, r.clone())).collect(),
+            matched_rules: matching_rules
+                .into_iter()
+                .map(|(d, r)| (d, r.clone()))
+                .collect(),
         }
     }
 
@@ -600,8 +611,11 @@ impl PermissionContext {
             0.5 // No rules, moderate confidence in default
         } else {
             // More specific rules = higher confidence
-            let avg_pattern_len: f32 =
-                rules.iter().map(|(_, r)| r.pattern.len() as f32).sum::<f32>() / rules.len() as f32;
+            let avg_pattern_len: f32 = rules
+                .iter()
+                .map(|(_, r)| r.pattern.len() as f32)
+                .sum::<f32>()
+                / rules.len() as f32;
             (avg_pattern_len / 50.0).min(0.95)
         };
 
@@ -708,7 +722,7 @@ pub enum ClassifierError {
     /// Classification failed due to internal error
     Internal(String),
     /// Classifier unavailable (e.g., LLM not configured)
-   Unavailable(String),
+    Unavailable(String),
     /// Classification timed out
     Timeout,
 }
@@ -1025,9 +1039,16 @@ mod tests {
         ];
         for (name, description) in malicious_names {
             // Server names should not contain shell metacharacters or path traversal
-            let has_shell_chars = name.chars().any(|c| c == ';' || c == '|' || c == '&' || c == '$' || c == '`' || c == '<' || c == '>');
+            let has_shell_chars = name.chars().any(|c| {
+                c == ';' || c == '|' || c == '&' || c == '$' || c == '`' || c == '<' || c == '>'
+            });
             let has_traversal = name.contains("..");
-            assert!(has_shell_chars || has_traversal, "Should detect {}: {}", description, name);
+            assert!(
+                has_shell_chars || has_traversal,
+                "Should detect {}: {}",
+                description,
+                name
+            );
         }
     }
 
@@ -1035,7 +1056,8 @@ mod tests {
     fn test_security_replay_mcp_malicious_tool_name() {
         // Malicious tool name injection
         let malicious = "read_file'; exec('rm -rf /')";
-        let has_injection = malicious.contains('\'') || malicious.contains(';') || malicious.contains("exec");
+        let has_injection =
+            malicious.contains('\'') || malicious.contains(';') || malicious.contains("exec");
         assert!(has_injection);
     }
 
@@ -1077,8 +1099,14 @@ mod tests {
             let ctx = PermissionContext::new(".");
             let params = serde_json::json!({"path": path, "content": "malicious"});
             let decision = ctx.explain_decision("file_write", &params);
-            assert!(decision.warnings.iter().any(|w| w.contains("HIGH_RISK_PATH") || w.contains("PATH_TRAVERSAL")),
-                "Should warn about sensitive path: {}", path);
+            assert!(
+                decision
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("HIGH_RISK_PATH") || w.contains("PATH_TRAVERSAL")),
+                "Should warn about sensitive path: {}",
+                path
+            );
         }
     }
 
@@ -1092,9 +1120,18 @@ mod tests {
     #[test]
     fn test_security_replay_chmod_dangerous() {
         // Dangerous chmod - recursive permission changes to root
-        let dangerous_chmod = ["chmod -R 777 /", "chmod -R 000 /", "chmod 777 /", "chmod 000 /"];
+        let dangerous_chmod = [
+            "chmod -R 777 /",
+            "chmod -R 000 /",
+            "chmod 777 /",
+            "chmod 000 /",
+        ];
         for cmd in dangerous_chmod {
-            assert!(crate::security::is_dangerous_command(cmd), "Should detect dangerous chmod: {}", cmd);
+            assert!(
+                crate::security::is_dangerous_command(cmd),
+                "Should detect dangerous chmod: {}",
+                cmd
+            );
         }
     }
 
@@ -1110,7 +1147,11 @@ mod tests {
         // Kill critical processes via sudo
         let dangerous = ["sudo kill -9 1", "sudo killall -9 init"];
         for cmd in dangerous {
-            assert!(crate::security::is_dangerous_command(cmd), "Should detect: {}", cmd);
+            assert!(
+                crate::security::is_dangerous_command(cmd),
+                "Should detect: {}",
+                cmd
+            );
         }
     }
 }

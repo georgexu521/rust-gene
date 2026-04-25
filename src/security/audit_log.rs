@@ -160,15 +160,13 @@ impl SecurityAuditLog {
         success: bool,
         reason: &str,
     ) {
-        self.log(
-            SecurityEvent::new(
-                SecurityEventType::ToolExecution,
-                Some(tool_name),
-                params_summary,
-                if success { "SUCCESS" } else { "FAILED" },
-                reason,
-            ),
-        )
+        self.log(SecurityEvent::new(
+            SecurityEventType::ToolExecution,
+            Some(tool_name),
+            params_summary,
+            if success { "SUCCESS" } else { "FAILED" },
+            reason,
+        ))
         .await;
     }
 
@@ -180,15 +178,13 @@ impl SecurityAuditLog {
         approved: bool,
         reason: &str,
     ) {
-        self.log(
-            SecurityEvent::new(
-                SecurityEventType::UserApproval,
-                Some(tool_name),
-                params_summary,
-                if approved { "APPROVED" } else { "DENIED" },
-                reason,
-            ),
-        )
+        self.log(SecurityEvent::new(
+            SecurityEventType::UserApproval,
+            Some(tool_name),
+            params_summary,
+            if approved { "APPROVED" } else { "DENIED" },
+            reason,
+        ))
         .await;
     }
 
@@ -201,15 +197,13 @@ impl SecurityAuditLog {
         reason: &str,
         classifier_name: &str,
     ) {
-        self.log(
-            SecurityEvent::new(
-                SecurityEventType::ClassifierDecision,
-                Some(tool_name),
-                params_summary,
-                decision,
-                &format!("classifier={} | {}", classifier_name, reason),
-            ),
-        )
+        self.log(SecurityEvent::new(
+            SecurityEventType::ClassifierDecision,
+            Some(tool_name),
+            params_summary,
+            decision,
+            &format!("classifier={} | {}", classifier_name, reason),
+        ))
         .await;
     }
 
@@ -243,11 +237,26 @@ impl SecurityAuditLog {
     pub async fn summary_report(&self) -> String {
         let events = self.events.lock().await;
         let total = events.len();
-        let perm_count = events.iter().filter(|e| e.event_type == SecurityEventType::PermissionDecision).count();
-        let exec_count = events.iter().filter(|e| e.event_type == SecurityEventType::ToolExecution).count();
-        let user_count = events.iter().filter(|e| e.event_type == SecurityEventType::UserApproval).count();
-        let clsf_count = events.iter().filter(|e| e.event_type == SecurityEventType::ClassifierDecision).count();
-        let alert_count = events.iter().filter(|e| e.event_type == SecurityEventType::Alert).count();
+        let perm_count = events
+            .iter()
+            .filter(|e| e.event_type == SecurityEventType::PermissionDecision)
+            .count();
+        let exec_count = events
+            .iter()
+            .filter(|e| e.event_type == SecurityEventType::ToolExecution)
+            .count();
+        let user_count = events
+            .iter()
+            .filter(|e| e.event_type == SecurityEventType::UserApproval)
+            .count();
+        let clsf_count = events
+            .iter()
+            .filter(|e| e.event_type == SecurityEventType::ClassifierDecision)
+            .count();
+        let alert_count = events
+            .iter()
+            .filter(|e| e.event_type == SecurityEventType::Alert)
+            .count();
 
         format!(
             "Security Audit Summary:\n\
@@ -289,8 +298,14 @@ mod tests {
     #[tokio::test]
     async fn test_log_and_retrieve() {
         let log = SecurityAuditLog::new();
-        log.log_permission("bash", "rm -rf /tmp/test", "ASK", "dangerous pattern", "High")
-            .await;
+        log.log_permission(
+            "bash",
+            "rm -rf /tmp/test",
+            "ASK",
+            "dangerous pattern",
+            "High",
+        )
+        .await;
         log.log_execution("bash", "rm -rf /tmp/test", true, "executed after approval")
             .await;
 
@@ -317,11 +332,15 @@ mod tests {
     #[tokio::test]
     async fn test_filter_by_type() {
         let log = SecurityAuditLog::new();
-        log.log_permission("bash", "cmd", "ASK", "test", "Low").await;
+        log.log_permission("bash", "cmd", "ASK", "test", "Low")
+            .await;
         log.log_execution("bash", "cmd", true, "ok").await;
-        log.log_user_approval("bash", "cmd", true, "user said yes").await;
+        log.log_user_approval("bash", "cmd", true, "user said yes")
+            .await;
 
-        let perms = log.events_by_type(SecurityEventType::PermissionDecision).await;
+        let perms = log
+            .events_by_type(SecurityEventType::PermissionDecision)
+            .await;
         assert_eq!(perms.len(), 1);
 
         let execs = log.events_by_type(SecurityEventType::ToolExecution).await;
@@ -331,9 +350,11 @@ mod tests {
     #[tokio::test]
     async fn test_summary_report() {
         let log = SecurityAuditLog::new();
-        log.log_permission("bash", "cmd", "ASK", "test", "Low").await;
+        log.log_permission("bash", "cmd", "ASK", "test", "Low")
+            .await;
         log.log_execution("bash", "cmd", true, "ok").await;
-        log.log_classifier("bash", "cmd", "ALLOW", "low risk", "llm").await;
+        log.log_classifier("bash", "cmd", "ALLOW", "low risk", "llm")
+            .await;
 
         let report = log.summary_report().await;
         assert!(report.contains("Total events: 3"));

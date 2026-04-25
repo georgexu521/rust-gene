@@ -93,6 +93,33 @@ impl ProviderRegistry {
     pub fn from_env() -> Self {
         let mut registry = Self::new();
 
+        // 加载默认的 MiniMax Provider（如果配置了）
+        if let Ok(api_key) = std::env::var("MINIMAX_API_KEY") {
+            let base_url = std::env::var("MINIMAX_BASE_URL")
+                .ok()
+                .unwrap_or_else(|| "https://api.minimaxi.com/v1".to_string());
+            let model = std::env::var("MINIMAX_MODEL")
+                .ok()
+                .unwrap_or_else(|| "MiniMax-M2.7".to_string());
+
+            let config = ProviderConfig {
+                name: "minimax".to_string(),
+                provider_type: ProviderType::Minimax,
+                api_key: api_key.clone(),
+                base_url: Some(base_url.clone()),
+                default_model: model.clone(),
+                enabled: true,
+            };
+
+            let provider = crate::services::api::minimax::MiniMaxClient::new(
+                &api_key,
+                Some(&base_url),
+                Some(&model),
+            );
+            registry.register("minimax".to_string(), Arc::new(provider), config);
+            registry.select("minimax".to_string());
+        }
+
         // 加载默认的 Kimi Provider（如果配置了）
         if let Ok(api_key) = std::env::var("MOONSHOT_API_KEY") {
             let base_url = std::env::var("MOONSHOT_BASE_URL")
@@ -125,7 +152,9 @@ impl ProviderRegistry {
             };
             let provider = crate::services::api::kimi::KimiClient::new(kimi_config);
             registry.register("kimi".to_string(), Arc::new(provider), config);
-            registry.select("kimi".to_string());
+            if registry.selected().is_none() {
+                registry.select("kimi".to_string());
+            }
         }
 
         // 加载默认的 OpenAI Provider（如果配置了）
@@ -217,7 +246,7 @@ impl ProviderRegistry {
                         config
                             .base_url
                             .as_deref()
-                            .unwrap_or("https://api.minimax.chat/v1"),
+                            .unwrap_or("https://api.minimaxi.com/v1"),
                     ),
                     Some(&config.default_model),
                 )) as Arc<dyn LlmProvider>)
@@ -407,13 +436,17 @@ pub async fn get_selected_provider() -> Option<Arc<dyn LlmProvider>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     #[test]
     fn test_provider_type_from_str() {
         assert_eq!(ProviderType::parse_lossy("kimi"), ProviderType::Kimi);
         assert_eq!(ProviderType::parse_lossy("moonshot"), ProviderType::Kimi);
         assert_eq!(ProviderType::parse_lossy("openai"), ProviderType::OpenAI);
-        assert_eq!(ProviderType::parse_lossy("anthropic"), ProviderType::Anthropic);
+        assert_eq!(
+            ProviderType::parse_lossy("anthropic"),
+            ProviderType::Anthropic
+        );
         assert_eq!(ProviderType::parse_lossy("unknown"), ProviderType::Custom);
     }
 
@@ -448,5 +481,24 @@ mod tests {
         assert_eq!(cfg.api_key, "k1");
         assert_eq!(cfg.base_url.as_deref(), Some("https://api.example.com/v1"));
         assert_eq!(cfg.default_model, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_from_env_prefers_minimax_when_configured() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("MINIMAX_API_KEY", "minimax-key");
+        env.set("MINIMAX_BASE_URL", "https://minimax.example/v1");
+        env.set("MINIMAX_MODEL", "MiniMax-Test");
+        env.set("OPENAI_API_KEY", "openai-key");
+        env.set("OPENAI_MODEL", "gpt-test");
+        env.remove("MOONSHOT_API_KEY");
+
+        let registry = ProviderRegistry::from_env();
+        assert_eq!(registry.selected(), Some("minimax"));
+        let cfg = registry.get_config("minimax").expect("minimax config");
+        assert_eq!(cfg.provider_type, ProviderType::Minimax);
+        assert_eq!(cfg.base_url.as_deref(), Some("https://minimax.example/v1"));
+        assert_eq!(cfg.default_model, "MiniMax-Test");
+        assert!(registry.get("openai").is_some());
     }
 }

@@ -16,8 +16,8 @@ pub mod utils;
 
 // Re-export all handler functions so they're accessible via `slash_handler::handle_*`
 pub use agents::*;
-pub use session::*;
 pub use config::*;
+pub use session::*;
 
 #[cfg(test)]
 mod tests {
@@ -33,7 +33,9 @@ mod tests {
     async fn test_git_rejects_dangerous_actions() {
         // This test verifies the semantic contract that /git should reject
         // dangerous actions like force push, rebase, reset --hard, etc.
-        let allowed_actions = ["status", "diff", "log", "branch", "checkout", "stash", "tag"];
+        let allowed_actions = [
+            "status", "diff", "log", "branch", "checkout", "stash", "tag",
+        ];
         let disallowed = ["push", "force-push", "rebase", "reset", "clean"];
 
         for action in disallowed {
@@ -106,8 +108,8 @@ mod tests {
 
     #[test]
     fn test_rollback_rejects_multiple_targets() {
-        let err = parse_rollback_args("HEAD~1 HEAD~2 --yes")
-            .expect_err("multiple targets should fail");
+        let err =
+            parse_rollback_args("HEAD~1 HEAD~2 --yes").expect_err("multiple targets should fail");
         assert!(err.contains("Too many arguments"));
     }
 
@@ -187,7 +189,10 @@ mod tests {
 
         assert_eq!(get_config_value(&cfg, "api.model").unwrap(), "gpt-4o");
         assert_eq!(get_config_value(&cfg, "api.temperature").unwrap(), "0.7");
-        assert_eq!(get_config_value(&cfg, "features.web_search").unwrap(), "false");
+        assert_eq!(
+            get_config_value(&cfg, "features.web_search").unwrap(),
+            "false"
+        );
     }
 
     #[test]
@@ -293,17 +298,26 @@ mod tests {
     #[test]
     fn test_focus_toggle_and_status() {
         let mut app = crate::tui::app::TuiApp::new();
-        assert_eq!(super::handle_focus(&mut app, "status"), "Focus mode: disabled");
+        assert_eq!(
+            super::handle_focus(&mut app, "status"),
+            "Focus mode: disabled"
+        );
         assert_eq!(super::handle_focus(&mut app, "on"), "Focus mode enabled.");
         assert!(app.focus_mode);
-        assert_eq!(super::handle_focus(&mut app, "toggle"), "Focus mode disabled.");
+        assert_eq!(
+            super::handle_focus(&mut app, "toggle"),
+            "Focus mode disabled."
+        );
         assert!(!app.focus_mode);
     }
 
     #[test]
     fn test_pause_toggle_and_status() {
         let mut app = crate::tui::app::TuiApp::new();
-        assert_eq!(super::handle_pause(&mut app, "status"), "Pause state: running");
+        assert_eq!(
+            super::handle_pause(&mut app, "status"),
+            "Pause state: running"
+        );
         let paused = super::handle_pause(&mut app, "pause");
         assert!(paused.contains("Agent paused"));
         assert!(app.paused);

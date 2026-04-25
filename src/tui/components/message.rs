@@ -24,18 +24,31 @@ pub fn render_message<'a>(
     }
 }
 
-fn render_user_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
+fn render_user_message<'a>(
+    message: &'a MessageItem,
+    theme: &'a crate::tui::theme::Theme,
+) -> Paragraph<'a> {
     let markdown_text = parse_markdown(&message.content, theme);
     let mut lines = Vec::new();
-    for line in markdown_text.lines {
-        lines.push(line);
+    for (idx, line) in markdown_text.lines.into_iter().enumerate() {
+        let mut spans = Vec::new();
+        if idx == 0 {
+            spans.push(Span::styled("› ", Style::default().fg(theme.text_dim)));
+        } else {
+            spans.push(Span::styled("  ", Style::default()));
+        }
+        spans.extend(line.spans);
+        lines.push(Line::from(spans));
     }
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: true })
         .style(Style::default().bg(theme.user_message_bg))
 }
 
-fn render_assistant_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
+fn render_assistant_message<'a>(
+    message: &'a MessageItem,
+    theme: &'a crate::tui::theme::Theme,
+) -> Paragraph<'a> {
     let markdown_text = parse_markdown(&message.content, theme);
     let mut lines = Vec::new();
     for line in markdown_text.lines {
@@ -43,7 +56,10 @@ fn render_assistant_message<'a>(message: &'a MessageItem, theme: &'a crate::tui:
         let is_first = lines.is_empty();
         let mut spans = Vec::new();
         if is_first {
-            spans.push(Span::styled("● ", Style::default().fg(theme.assistant_message)));
+            spans.push(Span::styled(
+                "● ",
+                Style::default().fg(theme.assistant_message),
+            ));
         } else {
             spans.push(Span::styled("  ", Style::default()));
         }
@@ -55,7 +71,10 @@ fn render_assistant_message<'a>(message: &'a MessageItem, theme: &'a crate::tui:
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
 }
 
-fn render_system_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
+fn render_system_message<'a>(
+    message: &'a MessageItem,
+    theme: &'a crate::tui::theme::Theme,
+) -> Paragraph<'a> {
     let markdown_text = parse_markdown(&message.content, theme);
     let mut lines = Vec::new();
     for line in markdown_text.lines {
@@ -68,10 +87,17 @@ fn render_system_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::th
     }
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: true })
-        .style(Style::default().fg(theme.text).add_modifier(Modifier::ITALIC))
+        .style(
+            Style::default()
+                .fg(theme.text)
+                .add_modifier(Modifier::ITALIC),
+        )
 }
 
-fn render_tool_message<'a>(message: &'a MessageItem, theme: &'a crate::tui::theme::Theme) -> Paragraph<'a> {
+fn render_tool_message<'a>(
+    message: &'a MessageItem,
+    theme: &'a crate::tui::theme::Theme,
+) -> Paragraph<'a> {
     let mut lines = Vec::new();
     lines.push(Line::from(vec![
         Span::styled("⎿ ", Style::default().fg(theme.text_dim)),

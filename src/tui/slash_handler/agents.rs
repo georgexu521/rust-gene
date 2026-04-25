@@ -255,7 +255,10 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
         };
         report.checks.push(crate::diagnostics::CheckResult::info(
             "tool_success_rate",
-            format!("calls={} success={} success_rate={:.1}%", total_calls, total_success, success_rate),
+            format!(
+                "calls={} success={} success_rate={:.1}%",
+                total_calls, total_success, success_rate
+            ),
         ));
 
         // W4-2: Coding quality metrics
@@ -308,7 +311,10 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
             };
             report.checks.push(crate::diagnostics::CheckResult::info(
                 "memory_cache",
-                format!("memory_extraction: hits={} misses={} hit_rate={:.1}%", hits, misses, mem_hit_rate),
+                format!(
+                    "memory_extraction: hits={} misses={} hit_rate={:.1}%",
+                    hits, misses, mem_hit_rate
+                ),
             ));
         }
 
@@ -370,16 +376,25 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
     }
 }
 /// Generate a live gap snapshot (W4-3)
-async fn generate_gap_snapshot(app: &TuiApp, report: &crate::diagnostics::DiagnosticReport) -> String {
+async fn generate_gap_snapshot(
+    app: &TuiApp,
+    report: &crate::diagnostics::DiagnosticReport,
+) -> String {
     let mut lines = vec![
         "=== Claude Code Gap Snapshot ===".to_string(),
-        format!("Generated: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
+        format!(
+            "Generated: {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        ),
         "".to_string(),
     ];
 
     // Count tools from registry
     let mut registry = crate::tools::ToolRegistry::default_registry();
-    let _injected = crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    let _injected = crate::tools::plugin_tool::register_enabled_plugin_tools(
+        &mut registry,
+        &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+    );
     let tool_count = registry.tool_names().len();
 
     // Count commands
@@ -387,7 +402,11 @@ async fn generate_gap_snapshot(app: &TuiApp, report: &crate::diagnostics::Diagno
 
     // Engine status
     let engine_ok = app.streaming_engine.is_some();
-    let model_name = app.streaming_engine.as_ref().map(|e| e.model_name()).unwrap_or_default();
+    let model_name = app
+        .streaming_engine
+        .as_ref()
+        .map(|e| e.model_name())
+        .unwrap_or_default();
 
     let tool_gap = if tool_count >= 64 {
         "0".to_string()
@@ -403,8 +422,14 @@ async fn generate_gap_snapshot(app: &TuiApp, report: &crate::diagnostics::Diagno
     lines.push("## Dimensions".to_string());
     lines.push("| Dimension | Ours | Claude | Gap |".to_string());
     lines.push("|-----------|------|--------|-----|".to_string());
-    lines.push(format!("| Tools     | {}   | 64     | {}  |", tool_count, tool_gap));
-    lines.push(format!("| Commands  | {}   | 101    | {}  |", cmd_count, cmd_gap));
+    lines.push(format!(
+        "| Tools     | {}   | 64     | {}  |",
+        tool_count, tool_gap
+    ));
+    lines.push(format!(
+        "| Commands  | {}   | 101    | {}  |",
+        cmd_count, cmd_gap
+    ));
     lines.push("| Agents    | 7    | 7      | 0   |".to_string());
     lines.push("| Transport | 3    | 3      | 0   |".to_string());
     lines.push("| Frontend  | 2    | 4      | -2  |".to_string());
@@ -413,7 +438,14 @@ async fn generate_gap_snapshot(app: &TuiApp, report: &crate::diagnostics::Diagno
     // Performance snapshot
     lines.push("## Performance Snapshot".to_string());
     for check in &report.checks {
-        if matches!(check.name.as_str(), "tool_latency_p95" | "tool_success_rate" | "coding_quality" | "context_compression" | "memory_cache") {
+        if matches!(
+            check.name.as_str(),
+            "tool_latency_p95"
+                | "tool_success_rate"
+                | "coding_quality"
+                | "context_compression"
+                | "memory_cache"
+        ) {
             lines.push(format!("- {}: {}", check.name, check.message));
         }
     }
@@ -593,7 +625,8 @@ pub fn handle_telemetry() -> String {
 /// /btw -随口说一句（one-off 注释，不影响对话）
 pub async fn handle_btw(app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        return "Usage: /btw <message> - Add a side note without disrupting the conversation".to_string();
+        return "Usage: /btw <message> - Add a side note without disrupting the conversation"
+            .to_string();
     }
     let note = format!("[btw] {}", args);
     app.add_system_message(note.clone());
@@ -602,17 +635,14 @@ pub async fn handle_btw(app: &mut TuiApp, args: &str) -> String {
 /// /context - 显示当前上下文状态
 pub async fn handle_context(app: &TuiApp) -> String {
     let msg_count = app.messages.len();
-    let history_len = if let Some(ref engine) = app.streaming_engine {
-        engine.get_history().await.len()
-    } else {
-        0
-    };
     let model = app.current_model_label();
     let provider = app.current_provider_label();
     let working_dir = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    let session_id = app.session_manager.current_session_id()
+    let session_id = app
+        .session_manager
+        .current_session_id()
         .map(|s| s[..8.min(s.len())].to_string())
         .unwrap_or_else(|| "none".to_string());
 
@@ -626,19 +656,66 @@ pub async fn handle_context(app: &TuiApp) -> String {
     ];
 
     if let Some(ref engine) = app.streaming_engine {
-        let history = engine.get_history().await;
-        let approximate_tokens: usize = history.iter().map(|m| {
-            match m {
-                crate::services::api::Message::System { content } => content.len(),
-                crate::services::api::Message::User { content } => content.len(),
-                crate::services::api::Message::Assistant { content, .. } => content.len(),
-                crate::services::api::Message::Tool { content, .. } => content.len(),
-            }
-        }).sum::<usize>() / 4;
+        let usage = engine.context_usage_report().await;
+        let usage_pct = if usage.max_context_tokens > 0 {
+            usage.total_estimated_tokens.saturating_mul(100) / usage.max_context_tokens
+        } else {
+            0
+        };
 
-        lines.push(format!("History turns: {}", history_len));
+        lines.push(format!("History turns: {}", usage.history_messages));
         lines.push(format!("Messages in view: {}", msg_count));
-        lines.push(format!("Approximate tokens: {}", approximate_tokens));
+        lines.push(format!(
+            "Estimated request tokens: {} / {} ({}%)",
+            usage.total_estimated_tokens, usage.max_context_tokens, usage_pct
+        ));
+        lines.push(format!(
+            "Stable prefix fingerprint: {}",
+            usage.stable_prefix_fingerprint
+        ));
+        lines.push("".to_string());
+        lines.push("## Request Budget".to_string());
+        lines.push(format!(
+            "  System prompt: {} tokens ({} chars, hash {})",
+            usage.prompt.total_tokens, usage.prompt.total_chars, usage.prompt.fingerprint
+        ));
+        for layer in &usage.prompt.layers {
+            lines.push(format!(
+                "    - {}: {} tokens, {} chars",
+                layer.name, layer.tokens, layer.chars
+            ));
+        }
+        lines.push(format!(
+            "  Conversation history: {} tokens ({} messages)",
+            usage.history_tokens, usage.history_messages
+        ));
+        lines.push(format!(
+            "  Tool schemas: {} tokens ({} tools)",
+            usage.tool_schema_tokens, usage.tool_count
+        ));
+        lines.push(format!(
+            "  Memory snapshot: {} tokens",
+            usage.memory_snapshot_tokens
+        ));
+        if !usage.relevant_memories.is_empty() {
+            lines.push("".to_string());
+            lines.push("## Relevant Memory Preview".to_string());
+            for memory in &usage.relevant_memories {
+                let snippet = memory
+                    .snippet
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let snippet = snippet.chars().take(180).collect::<String>();
+                lines.push(format!(
+                    "  - {} (score {}): {}",
+                    memory.source, memory.score, snippet
+                ));
+            }
+        }
 
         // 压缩器状态
         if let Some(compressor_arc) = engine.compressor() {
@@ -648,8 +725,14 @@ pub async fn handle_context(app: &TuiApp) -> String {
             lines.push("".to_string());
             lines.push("## Compression".to_string());
             lines.push(format!("  Compression count: {}", stats.compression_count));
-            lines.push(format!("  Total tokens before: {}", stats.total_tokens_before));
-            lines.push(format!("  Total tokens after: {}", stats.total_tokens_after));
+            lines.push(format!(
+                "  Total tokens before: {}",
+                stats.total_tokens_before
+            ));
+            lines.push(format!(
+                "  Total tokens after: {}",
+                stats.total_tokens_after
+            ));
             if stats.total_tokens_before > 0 {
                 let savings = (stats.total_tokens_before - stats.total_tokens_after) * 100
                     / stats.total_tokens_before;
@@ -689,16 +772,10 @@ pub async fn handle_context(app: &TuiApp) -> String {
                         lines.push(format!("  Done: {}", summary.progress_done.join(", ")));
                     }
                     if !summary.files_modified.is_empty() {
-                        lines.push(format!(
-                            "  Files: {}",
-                            summary.files_modified.join(", ")
-                        ));
+                        lines.push(format!("  Files: {}", summary.files_modified.join(", ")));
                     }
                     if !summary.next_steps.is_empty() {
-                        lines.push(format!(
-                            "  Next: {}",
-                            summary.next_steps.join(", ")
-                        ));
+                        lines.push(format!("  Next: {}", summary.next_steps.join(", ")));
                     }
                 }
             }
@@ -714,7 +791,9 @@ pub async fn handle_git(app: &mut TuiApp, args: &str) -> String {
     let tool = crate::tools::GitTool;
 
     // Validate git action to prevent arbitrary command injection
-    let allowed_actions = ["status", "diff", "log", "branch", "checkout", "stash", "tag"];
+    let allowed_actions = [
+        "status", "diff", "log", "branch", "checkout", "stash", "tag",
+    ];
     let action = if args.is_empty() {
         "status".to_string()
     } else {
@@ -734,7 +813,9 @@ pub async fn handle_git(app: &mut TuiApp, args: &str) -> String {
     if result.success {
         result.content
     } else {
-        result.error.unwrap_or_else(|| "Git command failed".to_string())
+        result
+            .error
+            .unwrap_or_else(|| "Git command failed".to_string())
     }
 }
 /// /history - 会话历史查看
@@ -838,7 +919,9 @@ pub async fn handle_package(app: &mut TuiApp, args: &str) -> String {
             if result.success {
                 format!("Dependencies:\n\n{}", result.content)
             } else {
-                result.error.unwrap_or_else(|| "Failed to list dependencies.".to_string())
+                result
+                    .error
+                    .unwrap_or_else(|| "Failed to list dependencies.".to_string())
             }
         }
         "outdated" => {
@@ -850,17 +933,17 @@ pub async fn handle_package(app: &mut TuiApp, args: &str) -> String {
             if result.success {
                 format!("Outdated packages:\n\n{}", result.content)
             } else {
-                result.error.unwrap_or_else(|| "Failed to check outdated packages.".to_string())
+                result
+                    .error
+                    .unwrap_or_else(|| "Failed to check outdated packages.".to_string())
             }
         }
-        _ => {
-            "Package Manager Commands:\n\n\
+        _ => "Package Manager Commands:\n\n\
                  /package list     - List package files in project\n\
                  /package deps     - Show installed dependencies\n\
                  /package outdated - Check for outdated packages\n\n\
                  Supported: npm (Node.js), cargo (Rust), go (Go)"
-                .to_string()
-        }
+            .to_string(),
     }
 }
 /// /teammate - 启动协作队友 Agent
@@ -915,7 +998,9 @@ pub async fn handle_critic(app: &mut TuiApp, args: &str) -> String {
             let diff = if result.success {
                 result.content
             } else {
-                result.error.unwrap_or_else(|| "No changes to review.".to_string())
+                result
+                    .error
+                    .unwrap_or_else(|| "No changes to review.".to_string())
             };
 
             let scope = if args.is_empty() {
@@ -1029,7 +1114,11 @@ pub async fn handle_dream(app: &mut TuiApp, args: &str) -> String {
             let prompt = format!(
                 "{}\n\n## Dream Task\n\n{}",
                 skill.content,
-                if args.is_empty() { "What would you like me to explore in the background?" } else { args }
+                if args.is_empty() {
+                    "What would you like me to explore in the background?"
+                } else {
+                    args
+                }
             );
             app.send_message(prompt).await;
             String::new()
@@ -1055,7 +1144,11 @@ pub async fn handle_custom(app: &mut TuiApp, args: &str) -> String {
             let prompt = format!(
                 "{}\n\n## Custom Agent Request\n\n{}",
                 skill.content,
-                if args.is_empty() { "Describe the custom agent you want to create:" } else { args }
+                if args.is_empty() {
+                    "Describe the custom agent you want to create:"
+                } else {
+                    args
+                }
             );
             app.send_message(prompt).await;
             String::new()
@@ -1081,7 +1174,11 @@ pub async fn handle_orchestrate(app: &mut TuiApp, args: &str) -> String {
             let prompt = format!(
                 "{}\n\n## Orchestration Task\n\n{}",
                 skill.content,
-                if args.is_empty() { "What complex task would you like me to coordinate?" } else { args }
+                if args.is_empty() {
+                    "What complex task would you like me to coordinate?"
+                } else {
+                    args
+                }
             );
             app.send_message(prompt).await;
             String::new()
@@ -1144,7 +1241,11 @@ pub async fn handle_npm(app: &mut TuiApp, args: &str) -> String {
                 "description": "Install npm package"
             });
             let result = tool.execute(params, ctx).await;
-            if result.success { result.content } else { result.error.unwrap_or_default() }
+            if result.success {
+                result.content
+            } else {
+                result.error.unwrap_or_default()
+            }
         }
         "update" => {
             let params = serde_json::json!({
@@ -1152,7 +1253,11 @@ pub async fn handle_npm(app: &mut TuiApp, args: &str) -> String {
                 "description": "Update npm packages"
             });
             let result = tool.execute(params, ctx).await;
-            if result.success { result.content } else { result.error.unwrap_or_default() }
+            if result.success {
+                result.content
+            } else {
+                result.error.unwrap_or_default()
+            }
         }
         "outdated" => {
             let params = serde_json::json!({
@@ -1160,7 +1265,11 @@ pub async fn handle_npm(app: &mut TuiApp, args: &str) -> String {
                 "description": "Check outdated packages"
             });
             let result = tool.execute(params, ctx).await;
-            if result.success { result.content } else { result.error.unwrap_or_default() }
+            if result.success {
+                result.content
+            } else {
+                result.error.unwrap_or_default()
+            }
         }
         "test" => {
             let params = serde_json::json!({
@@ -1168,7 +1277,11 @@ pub async fn handle_npm(app: &mut TuiApp, args: &str) -> String {
                 "description": "Run npm tests"
             });
             let result = tool.execute(params, ctx).await;
-            if result.success { result.content } else { result.error.unwrap_or_default() }
+            if result.success {
+                result.content
+            } else {
+                result.error.unwrap_or_default()
+            }
         }
         "run" => {
             let script = parts.get(1).unwrap_or(&"");
@@ -1182,11 +1295,13 @@ pub async fn handle_npm(app: &mut TuiApp, args: &str) -> String {
                 "description": "Run npm script"
             });
             let result = tool.execute(params, ctx).await;
-            if result.success { result.content } else { result.error.unwrap_or_default() }
+            if result.success {
+                result.content
+            } else {
+                result.error.unwrap_or_default()
+            }
         }
-        "" => {
-            "Usage: /npm [install|update|outdated|test|run] [args]".to_string()
-        }
+        "" => "Usage: /npm [install|update|outdated|test|run] [args]".to_string(),
         _ => {
             let cmd = args;
             let params = serde_json::json!({
@@ -1194,7 +1309,11 @@ pub async fn handle_npm(app: &mut TuiApp, args: &str) -> String {
                 "description": format!("npm {}", cmd)
             });
             let result = tool.execute(params, ctx).await;
-            if result.success { result.content } else { result.error.unwrap_or_default() }
+            if result.success {
+                result.content
+            } else {
+                result.error.unwrap_or_default()
+            }
         }
     }
 }
@@ -1224,22 +1343,38 @@ pub async fn get_failure_suggestions(app: &TuiApp) -> String {
         let reason_str: &str = reason.as_str();
         match reason_str {
             "timeout" => {
-                suggestions.push("Timeout: Try /retry to repeat, or /doctor to check tool latency".to_string());
+                suggestions.push(
+                    "Timeout: Try /retry to repeat, or /doctor to check tool latency".to_string(),
+                );
             }
             "permission" => {
-                suggestions.push("Permission denied: Use /permissions to check rules, or /doctor to diagnose".to_string());
+                suggestions.push(
+                    "Permission denied: Use /permissions to check rules, or /doctor to diagnose"
+                        .to_string(),
+                );
             }
             "not_found" => {
-                suggestions.push("Not found: Check file paths with /ls, or verify resource exists".to_string());
+                suggestions.push(
+                    "Not found: Check file paths with /ls, or verify resource exists".to_string(),
+                );
             }
             "hook_blocked" => {
-                suggestions.push("Hook blocked: Check PRE_TOOL_HOOK / POST_TOOL_HOOK env vars in /doctor".to_string());
+                suggestions.push(
+                    "Hook blocked: Check PRE_TOOL_HOOK / POST_TOOL_HOOK env vars in /doctor"
+                        .to_string(),
+                );
             }
             "dangerous_command" => {
-                suggestions.push("Dangerous command: Use /permissions to allow, or modify the command".to_string());
+                suggestions.push(
+                    "Dangerous command: Use /permissions to allow, or modify the command"
+                        .to_string(),
+                );
             }
             _ => {
-                suggestions.push(format!("Error '{}': Run /doctor for detailed diagnostics", reason_str));
+                suggestions.push(format!(
+                    "Error '{}': Run /doctor for detailed diagnostics",
+                    reason_str
+                ));
             }
         }
     }
@@ -1286,43 +1421,79 @@ pub fn suggest_recovery(error: &str, _context: &str) -> String {
 /// /init - Initialize a new project
 pub fn handle_init(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        return "Usage: /init <project_name>".to_string();
+        return "Usage: /init <project_name>\n\nCreates a small Rust project scaffold with README, Cargo.toml, src/main.rs, .gitignore, and .priority-agent/AGENTS.md.".to_string();
     }
 
     let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let project_path = dir.join(args);
+    let project_name = args.trim();
+    let project_path = dir.join(project_name);
 
     if project_path.exists() {
         return format!("Target already exists: {}", project_path.display());
     }
-    match std::fs::create_dir_all(project_path.join("src")) {
+    match std::fs::create_dir_all(project_path.join("src"))
+        .and_then(|_| std::fs::create_dir_all(project_path.join(".priority-agent")))
+    {
         Ok(_) => {
             let readme = project_path.join("README.md");
             let gitignore = project_path.join(".gitignore");
             let cargo_toml = project_path.join("Cargo.toml");
             let main_rs = project_path.join("src").join("main.rs");
+            let agents = project_path.join(".priority-agent").join("AGENTS.md");
             if std::fs::write(
                 &readme,
-                format!("# {}\n\nInitialized by /init.\n", args.trim()),
-            ).is_err() {
-                return format!("Project initialized at {} (README.md write failed)", project_path.display());
+                format!(
+                    "# {}\n\nInitialized by Priority Agent `/init`.\n\n## Next steps\n\n- Run `cargo test`\n- Describe the first feature you want the agent to build\n- Use `/settings` to confirm model and permission mode\n",
+                    project_name
+                ),
+            )
+            .is_err()
+            {
+                return format!(
+                    "Project initialized at {} (README.md write failed)",
+                    project_path.display()
+                );
             }
             if std::fs::write(&gitignore, "target/\n*.log\n.env\n").is_err() {
-                return format!("Project initialized at {} (.gitignore write failed)", project_path.display());
+                return format!(
+                    "Project initialized at {} (.gitignore write failed)",
+                    project_path.display()
+                );
             }
             if std::fs::write(
                 &cargo_toml,
                 format!(
                     "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
-                    args.trim().replace('-', "_")
+                    project_name.replace('-', "_")
                 ),
             ).is_err() {
                 return format!("Project initialized at {} (Cargo.toml write failed)", project_path.display());
             }
             if std::fs::write(&main_rs, "fn main() {\n    println!(\"hello\");\n}\n").is_err() {
-                return format!("Project initialized at {} (src/main.rs write failed)", project_path.display());
+                return format!(
+                    "Project initialized at {} (src/main.rs write failed)",
+                    project_path.display()
+                );
             }
-            format!("Project initialized at {}", project_path.display())
+            if std::fs::write(
+                &agents,
+                format!(
+                    "# Project Instructions\n\nProject: {}\n\n## Working style\n\n- Prefer small, verified changes.\n- Run relevant tests after edits.\n- Keep user-facing CLI output concise and useful.\n\n## Commands\n\n- `cargo test`\n- `cargo check`\n",
+                    project_name
+                ),
+            )
+            .is_err()
+            {
+                return format!(
+                    "Project initialized at {} (.priority-agent/AGENTS.md write failed)",
+                    project_path.display()
+                );
+            }
+            format!(
+                "Project initialized\n\nPath: {}\nCreated:\n  - README.md\n  - Cargo.toml\n  - src/main.rs\n  - .gitignore\n  - .priority-agent/AGENTS.md\n\nNext:\n  cd {}\n  cargo check\n\nThen tell the agent what to build first.",
+                project_path.display(),
+                project_path.display()
+            )
         }
         Err(e) => format!("Failed to initialize project: {}", e),
     }
@@ -1366,17 +1537,20 @@ pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
 /// /key - API key management
 pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        let has_key = std::env::var("MOONSHOT_API_KEY").is_ok()
-            || std::env::var("OPENAI_API_KEY").is_ok();
+        let has_key =
+            std::env::var("MOONSHOT_API_KEY").is_ok() || std::env::var("OPENAI_API_KEY").is_ok();
         return if has_key {
             "API key is set. Use /model to see which model is active.".to_string()
         } else {
-            "No API key set. Set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.".to_string()
+            "No API key set. Set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable."
+                .to_string()
         };
     }
 
     match args.trim() {
-        "show" => "API key not shown for security. Set MOONSHOT_API_KEY or OPENAI_API_KEY.".to_string(),
+        "show" => {
+            "API key not shown for security. Set MOONSHOT_API_KEY or OPENAI_API_KEY.".to_string()
+        }
         "clear" => {
             std::env::remove_var("OPENAI_API_KEY");
             std::env::remove_var("MOONSHOT_API_KEY");
@@ -1389,9 +1563,13 @@ pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
 /// /status - Detailed status
 pub fn handle_status_detailed(_app: &TuiApp) -> String {
     let mut lines = vec!["Detailed Status:".to_string()];
-    lines.push("  Mode: TUI".to_string());
+    lines.push("  Mode: interactive CLI".to_string());
     lines.push(format!("  Rust version: {}", std::env::consts::OS));
-    format!("{}\n{}", lines.join("\n"), "Use /doctor for full diagnostics")
+    format!(
+        "{}\n{}",
+        lines.join("\n"),
+        "Use /doctor for full diagnostics"
+    )
 }
 /// /health - Health check
 pub fn handle_health(_app: &TuiApp) -> String {

@@ -65,9 +65,7 @@ static READ_FILES: Lazy<Mutex<HashMap<String, HashSet<String>>>> =
 /// 标记文件已被读取（用于 must-read-before-edit 检查）
 pub fn mark_file_read(session_id: &str, file_path: &str) {
     let mut tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
-    let session_files = tracker
-        .entry(session_id.to_string())
-        .or_default();
+    let session_files = tracker.entry(session_id.to_string()).or_default();
     session_files.insert(file_path.to_string());
 }
 
@@ -398,7 +396,10 @@ impl Tool for FileWriteTool {
         let cp_mgr = crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await;
         {
             let mut cp = cp_mgr.lock().await;
-            if let Err(e) = cp.create_checkpoint("file_write", None, None, &[path.clone()]).await {
+            if let Err(e) = cp
+                .create_checkpoint("file_write", None, None, &[path.clone()])
+                .await
+            {
                 warn!("Failed to create checkpoint for file_write: {}", e);
             }
         }
@@ -573,7 +574,13 @@ async fn save_snapshot(
     // 消毒 session_id，防止路径注入
     let safe_session_id: String = session_id
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     let ts = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f");
@@ -828,7 +835,10 @@ impl Tool for FileEditTool {
         let cp_mgr = crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await;
         {
             let mut cp = cp_mgr.lock().await;
-            if let Err(e) = cp.create_checkpoint("file_edit", None, None, &[path.clone()]).await {
+            if let Err(e) = cp
+                .create_checkpoint("file_edit", None, None, &[path.clone()])
+                .await
+            {
                 warn!("Failed to create checkpoint for file_edit: {}", e);
             }
         }
@@ -1481,8 +1491,13 @@ mod tests {
 
         let _ = tokio::fs::remove_file(path).await;
         let _ = tokio::fs::remove_dir_all(
-            dirs::home_dir().unwrap().join(".priority-agent").join("checkpoints").join(format!("session-{}", session_id))
-        ).await;
+            dirs::home_dir()
+                .unwrap()
+                .join(".priority-agent")
+                .join("checkpoints")
+                .join(format!("session-{}", session_id)),
+        )
+        .await;
     }
 
     #[tokio::test]

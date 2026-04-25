@@ -3,7 +3,7 @@
 //! 统一管理所有 slash 命令，支持别名、分类、帮助信息。
 //! 借鉴 Hermes 的 CommandDef 设计。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// 命令定义
 #[derive(Clone)]
@@ -185,7 +185,8 @@ impl CommandRegistry {
 
     /// 按分类列出命令
     pub fn by_category(&self) -> std::collections::HashMap<&'static str, Vec<&CommandDef>> {
-        let mut result: std::collections::HashMap<&'static str, Vec<&CommandDef>> = Default::default();
+        let mut result: std::collections::HashMap<&'static str, Vec<&CommandDef>> =
+            Default::default();
         for (cat, cmd_names) in &self.categories {
             let cmds: Vec<&CommandDef> = cmd_names
                 .iter()
@@ -198,13 +199,134 @@ impl CommandRegistry {
 
     /// 获取实验性命令
     pub fn experimental_commands(&self) -> Vec<&CommandDef> {
-        self.commands.values().filter(|cmd| cmd.experimental).collect()
+        self.commands
+            .values()
+            .filter(|cmd| cmd.experimental)
+            .collect()
     }
 
     /// 获取占位命令
     pub fn placeholder_commands(&self) -> Vec<&CommandDef> {
-        self.commands.values().filter(|cmd| cmd.placeholder).collect()
+        self.commands
+            .values()
+            .filter(|cmd| cmd.placeholder)
+            .collect()
     }
+
+    /// 命令面板候选项，使用轻量 fuzzy 排序，并过滤别名重复项。
+    pub fn palette_items(&self, query: &str, limit: usize) -> Vec<&CommandDef> {
+        let query = query.trim().to_ascii_lowercase();
+        let mut seen = HashSet::new();
+        let mut scored = Vec::new();
+
+        for cmd in self.commands.values() {
+            if !seen.insert(cmd.name) {
+                continue;
+            }
+            let haystack = format!(
+                "{} {} {} {}",
+                cmd.name,
+                cmd.aliases.join(" "),
+                cmd.category,
+                cmd.description
+            )
+            .to_ascii_lowercase();
+            let Some(score) = command_match_score(&query, &haystack, cmd) else {
+                continue;
+            };
+            scored.push((score, cmd.category, cmd.name, cmd));
+        }
+
+        scored.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| a.1.cmp(b.1))
+                .then_with(|| a.2.cmp(b.2))
+        });
+
+        if query.is_empty() {
+            let mut grouped: BTreeMap<&str, Vec<&CommandDef>> = BTreeMap::new();
+            for (_, category, _, cmd) in scored {
+                grouped.entry(category).or_default().push(cmd);
+            }
+            let mut items = Vec::new();
+            for commands in grouped.values_mut() {
+                commands.sort_by_key(|cmd| cmd.name);
+                for cmd in commands.iter().take(limit.saturating_sub(items.len())) {
+                    items.push(*cmd);
+                    if items.len() >= limit {
+                        return items;
+                    }
+                }
+            }
+            return items;
+        }
+
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, _, cmd)| cmd)
+            .collect()
+    }
+}
+
+fn command_match_score(query: &str, haystack: &str, cmd: &CommandDef) -> Option<i32> {
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let slashless = cmd.name.trim_start_matches('/').to_ascii_lowercase();
+    let mut score = fuzzy_score(query, haystack)?;
+    if slashless == query {
+        score += 10_000;
+    } else if slashless.starts_with(query) {
+        score += 5_000;
+    } else if cmd.name.to_ascii_lowercase().contains(query) {
+        score += 2_500;
+    }
+    if cmd
+        .aliases
+        .iter()
+        .any(|alias| alias.trim_start_matches('/').eq_ignore_ascii_case(query))
+    {
+        score += 4_000;
+    }
+    Some(score)
+}
+
+fn fuzzy_score(query: &str, haystack: &str) -> Option<i32> {
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let mut score = 0_i32;
+    let mut search_from = 0_usize;
+    let mut prev_match: Option<usize> = None;
+
+    for q in query.chars() {
+        let slice = haystack.get(search_from..)?;
+        let rel = slice.find(q)?;
+        let pos = search_from + rel;
+        score += 100;
+        if let Some(prev) = prev_match {
+            if pos == prev + 1 {
+                score += 80;
+            } else {
+                score -= ((pos - prev).min(20) as i32) * 2;
+            }
+        }
+        if pos == 0 || haystack.as_bytes().get(pos.saturating_sub(1)) == Some(&b'/') {
+            score += 60;
+        } else if matches!(
+            haystack.as_bytes().get(pos.saturating_sub(1)),
+            Some(b' ' | b'-' | b'_')
+        ) {
+            score += 35;
+        }
+        prev_match = Some(pos);
+        search_from = pos + q.len_utf8();
+    }
+
+    Some(score)
 }
 
 impl Default for CommandRegistry {
@@ -247,6 +369,14 @@ pub const CMD_COST: CommandDef =
 
 pub const CMD_MODEL: CommandDef =
     CommandDef::new("/model", &[], "Info", "/model", "Show current model");
+
+pub const CMD_PROVIDER: CommandDef = CommandDef::new(
+    "/provider",
+    &[],
+    "Info",
+    "/provider",
+    "Show or switch LLM provider",
+);
 
 pub const CMD_STATUS: CommandDef =
     CommandDef::new("/status", &[], "Info", "/status", "Show session status");
@@ -807,13 +937,8 @@ pub const CMD_PREAMBLE: CommandDef = CommandDef::new(
     "Customize agent preamble",
 );
 
-pub const CMD_UNTRAP: CommandDef = CommandDef::new(
-    "/untrap",
-    &[],
-    "General",
-    "/untrap",
-    "Reset trapped state",
-);
+pub const CMD_UNTRAP: CommandDef =
+    CommandDef::new("/untrap", &[], "General", "/untrap", "Reset trapped state");
 
 pub const CMD_VERBOSE: CommandDef = CommandDef::new(
     "/verbose",
@@ -888,13 +1013,8 @@ pub const CMD_BENCHMARK: CommandDef = CommandDef::new(
     "Run performance benchmark",
 );
 
-pub const CMD_TEST: CommandDef = CommandDef::new(
-    "/test",
-    &[],
-    "Info",
-    "/test [filter]",
-    "Run tests",
-);
+pub const CMD_TEST: CommandDef =
+    CommandDef::new("/test", &[], "Info", "/test [filter]", "Run tests");
 
 // Note: CMD_DEBUG not added - bundled skill handles /debug
 
@@ -906,13 +1026,8 @@ pub const CMD_TRACE: CommandDef = CommandDef::new(
     "Tracing controls",
 );
 
-pub const CMD_SKILLS: CommandDef = CommandDef::new(
-    "/skills",
-    &[],
-    "Info",
-    "/skills",
-    "List available skills",
-);
+pub const CMD_SKILLS: CommandDef =
+    CommandDef::new("/skills", &[], "Info", "/skills", "List available skills");
 
 // Phase 10 Extended 2: More commands
 pub const CMD_INIT: CommandDef = CommandDef::new(
@@ -931,13 +1046,8 @@ pub const CMD_LOGIN: CommandDef = CommandDef::new(
     "Authenticate with provider",
 );
 
-pub const CMD_LOGOUT: CommandDef = CommandDef::new(
-    "/logout",
-    &[],
-    "General",
-    "/logout",
-    "Logout from provider",
-);
+pub const CMD_LOGOUT: CommandDef =
+    CommandDef::new("/logout", &[], "General", "/logout", "Logout from provider");
 
 pub const CMD_KEY: CommandDef = CommandDef::new(
     "/key",
@@ -947,45 +1057,19 @@ pub const CMD_KEY: CommandDef = CommandDef::new(
     "API key management",
 );
 
-pub const CMD_HEALTH: CommandDef = CommandDef::new(
-    "/health",
-    &[],
-    "Info",
-    "/health",
-    "Health check",
-);
+pub const CMD_HEALTH: CommandDef =
+    CommandDef::new("/health", &[], "Info", "/health", "Health check");
 
-pub const CMD_PING: CommandDef = CommandDef::new(
-    "/ping",
-    &[],
-    "Info",
-    "/ping",
-    "Latency check",
-);
+pub const CMD_PING: CommandDef = CommandDef::new("/ping", &[], "Info", "/ping", "Latency check");
 
-pub const CMD_UPTIME: CommandDef = CommandDef::new(
-    "/uptime",
-    &[],
-    "Info",
-    "/uptime",
-    "Show uptime",
-);
+pub const CMD_UPTIME: CommandDef =
+    CommandDef::new("/uptime", &[], "Info", "/uptime", "Show uptime");
 
-pub const CMD_VERSION: CommandDef = CommandDef::new(
-    "/version",
-    &[],
-    "Info",
-    "/version",
-    "Show version",
-);
+pub const CMD_VERSION: CommandDef =
+    CommandDef::new("/version", &[], "Info", "/version", "Show version");
 
-pub const CMD_ABOUT: CommandDef = CommandDef::new(
-    "/about",
-    &[],
-    "Info",
-    "/about",
-    "About this agent",
-);
+pub const CMD_ABOUT: CommandDef =
+    CommandDef::new("/about", &[], "Info", "/about", "About this agent");
 
 // Phase 10 Extended 3: Session management and utility commands
 pub const CMD_RESET: CommandDef = CommandDef::new(
@@ -1068,13 +1152,8 @@ pub const CMD_BOOKMARK: CommandDef = CommandDef::new(
     "Bookmark locations",
 );
 
-pub const CMD_TAG: CommandDef = CommandDef::new(
-    "/tag",
-    &[],
-    "General",
-    "/tag [add|list|find]",
-    "Tag items",
-);
+pub const CMD_TAG: CommandDef =
+    CommandDef::new("/tag", &[], "General", "/tag [add|list|find]", "Tag items");
 
 pub const CMD_SEARCH_CMD: CommandDef = CommandDef::new(
     "/search",
@@ -1117,13 +1196,8 @@ pub const CMD_SHORTCUTS: CommandDef = CommandDef::new(
     "Show keyboard shortcuts",
 );
 
-pub const CMD_QUICK: CommandDef = CommandDef::new(
-    "/quick",
-    &[],
-    "General",
-    "/quick",
-    "Quick actions menu",
-);
+pub const CMD_QUICK: CommandDef =
+    CommandDef::new("/quick", &[], "General", "/quick", "Quick actions menu");
 
 pub const CMD_FEEDBACK: CommandDef = CommandDef::new(
     "/feedback",
@@ -1143,6 +1217,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_SAVE);
     registry.register(&CMD_COST);
     registry.register(&CMD_MODEL);
+    registry.register(&CMD_PROVIDER);
     registry.register(&CMD_STATUS);
     registry.register(&CMD_TOOLS);
     registry.register(&CMD_TASKS);
@@ -1172,7 +1247,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_HISTORY);
     registry.register(&CMD_MODE);
     registry.register(&CMD_PACKAGE);
-// Phase 9 Task 1: Advanced Agent Types
+    // Phase 9 Task 1: Advanced Agent Types
     registry.register(&CMD_TEAMMATE);
     registry.register(&CMD_CRITIC);
     registry.register(&CMD_ASSISTANT);
@@ -1281,6 +1356,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_SAVE,
     &CMD_COST,
     &CMD_MODEL,
+    &CMD_PROVIDER,
     &CMD_STATUS,
     &CMD_TOOLS,
     &CMD_TASKS,
@@ -1415,5 +1491,28 @@ mod tests {
         assert!(help.contains("/cost"));
         assert!(help.contains("General:"));
         assert!(help.contains("Memory:"));
+    }
+
+    #[test]
+    fn test_palette_items_filters_and_deduplicates_aliases() {
+        let registry = default_command_registry();
+        let items = registry.palette_items("help", 20);
+        assert!(items.iter().any(|cmd| cmd.name == "/help"));
+        let help_count = items.iter().filter(|cmd| cmd.name == "/help").count();
+        assert_eq!(help_count, 1);
+    }
+
+    #[test]
+    fn test_palette_items_rank_exact_command_above_description_match() {
+        let registry = default_command_registry();
+        let items = registry.palette_items("model", 20);
+        assert_eq!(items.first().map(|cmd| cmd.name), Some("/model"));
+    }
+
+    #[test]
+    fn test_palette_items_support_subsequence_query() {
+        let registry = default_command_registry();
+        let items = registry.palette_items("prv", 20);
+        assert!(items.iter().any(|cmd| cmd.name == "/provider"));
     }
 }

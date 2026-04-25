@@ -222,7 +222,10 @@ impl ResultFusion {
         for result in &results {
             // 按内容分组作为简单冲突检测
             let key = result.content.chars().take(100).collect::<String>();
-            evidence.entry(key).or_default().push(result.agent_id.clone());
+            evidence
+                .entry(key)
+                .or_default()
+                .push(result.agent_id.clone());
         }
 
         // 检测是否有低置信度冲突
@@ -315,7 +318,11 @@ impl AgentAuditor {
     pub async fn get_records(&self, agent_id: Option<&AgentId>) -> Vec<AgentAuditRecord> {
         let records = self.records.read().await;
         match agent_id {
-            Some(id) => records.iter().filter(|r| &r.agent_id == id).cloned().collect(),
+            Some(id) => records
+                .iter()
+                .filter(|r| &r.agent_id == id)
+                .cloned()
+                .collect(),
             None => records.clone(),
         }
     }
@@ -378,11 +385,7 @@ impl AgentManager {
                 let completed: Vec<_> = agents
                     .iter()
                     .filter_map(|(id, handle)| {
-                        if handle
-                            .status
-                            .borrow()
-                            .is_terminal()
-                        {
+                        if handle.status.borrow().is_terminal() {
                             Some(id.clone())
                         } else {
                             None
@@ -642,10 +645,7 @@ impl AgentManager {
                         }
                     }
                     Err(_) => {
-                        return Err(anyhow::anyhow!(
-                            "Agent {} status channel closed",
-                            agent_id
-                        ));
+                        return Err(anyhow::anyhow!("Agent {} status channel closed", agent_id));
                     }
                 }
             }

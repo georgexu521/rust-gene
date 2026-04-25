@@ -153,10 +153,7 @@ impl WeightRule for RiskRule {
         let tool_name = ctx.tool.as_deref().unwrap_or("none");
         let explanation = format!(
             "Risk+{}(tool={}={}, desc={})",
-            raw,
-            tool_name,
-            tool_score,
-            desc_score
+            raw, tool_name, tool_score, desc_score
         );
 
         DimensionScore {
@@ -206,8 +203,7 @@ impl ImpactRule {
         }
 
         // 配置文件
-        if d.contains("config") || d.contains("配置") || d.contains("toml") || d.contains("env")
-        {
+        if d.contains("config") || d.contains("配置") || d.contains("toml") || d.contains("env") {
             score += 2;
         }
 
@@ -493,8 +489,18 @@ impl DriftPenaltyRule {
 
         // 检查是否在做明显无关的事情
         let drift_indicators = [
-            "文档", "注释", "doc", "comment", "格式", "format", "风格", "style",
-            "重命名", "rename", "变量名", "naming",
+            "文档",
+            "注释",
+            "doc",
+            "comment",
+            "格式",
+            "format",
+            "风格",
+            "style",
+            "重命名",
+            "rename",
+            "变量名",
+            "naming",
         ];
         let has_drift_indicator = drift_indicators.iter().any(|ind| desc_lower.contains(ind));
 
@@ -523,7 +529,15 @@ impl WeightRule for DriftPenaltyRule {
         let drift_multiplier = self.feedback.get_drift_multiplier();
         let weighted = raw as f64 * self.multiplier * drift_multiplier;
 
-        let mut explanation = format!("Drift{}{}", raw, if is_drift { format!("({})", detail) } else { String::new() });
+        let mut explanation = format!(
+            "Drift{}{}",
+            raw,
+            if is_drift {
+                format!("({})", detail)
+            } else {
+                String::new()
+            }
+        );
         if drift_multiplier > 1.01 {
             explanation.push_str(&format!(" [hist_mul={:.2}x]", drift_multiplier));
         }
@@ -583,7 +597,9 @@ impl WeightEngine {
             Box::new(ImpactRule::with_multiplier(multipliers.impact)),
             Box::new(ComplexityRule::with_multiplier(multipliers.complexity)),
             Box::new(BlockerValueRule::with_multiplier(multipliers.blocker)),
-            Box::new(DependencyPenaltyRule::with_multiplier(multipliers.dependency)),
+            Box::new(DependencyPenaltyRule::with_multiplier(
+                multipliers.dependency,
+            )),
             Box::new(DriftPenaltyRule::with_multiplier(multipliers.drift)),
             Box::new(HistoricalFailureRule::with_multiplier(
                 multipliers.historical_failure,
@@ -622,14 +638,13 @@ impl WeightEngine {
 
     /// 批量计算并排序（高权重在前）
     pub fn compute_and_sort(&self, contexts: Vec<StepContext>) -> Vec<WeightedStep> {
-        let mut results: Vec<WeightedStep> = contexts
-            .iter()
-            .map(|ctx| self.compute(ctx))
-            .collect();
+        let mut results: Vec<WeightedStep> = contexts.iter().map(|ctx| self.compute(ctx)).collect();
         results.sort_by(|a, b| {
-            b.normalized_score
-                .cmp(&a.normalized_score)
-                .then_with(|| b.raw_score.partial_cmp(&a.raw_score).unwrap_or(std::cmp::Ordering::Equal))
+            b.normalized_score.cmp(&a.normalized_score).then_with(|| {
+                b.raw_score
+                    .partial_cmp(&a.raw_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         });
         results
     }
@@ -657,16 +672,17 @@ impl WeightEngine {
     }
 
     /// 格式化可解释性文本
-    fn format_explanation(
-        scores: &[DimensionScore],
-        raw: f64,
-        normalized: u32,
-    ) -> String {
+    fn format_explanation(scores: &[DimensionScore], raw: f64, normalized: u32) -> String {
         let parts: Vec<String> = scores
             .iter()
             .map(|s| format!("{}={:.1}", s.dimension.name(), s.weighted_score))
             .collect();
-        format!("{} => Raw={:.1} => Score={}", parts.join(", "), raw, normalized)
+        format!(
+            "{} => Raw={:.1} => Score={}",
+            parts.join(", "),
+            raw,
+            normalized
+        )
     }
 }
 

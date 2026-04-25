@@ -181,6 +181,7 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
         Ok(id) => {
             use crate::state::{MessageItem, MessageRole};
             app.messages.clear();
+            app.clear_tool_transcript();
             let welcome = MessageItem {
                 id: "welcome".to_string(),
                 role: MessageRole::System,
@@ -268,7 +269,8 @@ pub async fn handle_batch(_app: &mut TuiApp, args: &str) -> String {
     if args.trim().is_empty() {
         return "Usage: /batch <task description> [--files <patterns>...]\n\
                 Example: /batch Rename all User references to Account --files src/**/*.rs\n\
-                Set PRIORITY_AGENT_BATCH_REFACTOR=1 to enable.".to_string();
+                Set PRIORITY_AGENT_BATCH_REFACTOR=1 to enable."
+            .to_string();
     }
 
     // 解析参数
@@ -286,7 +288,8 @@ pub async fn handle_batch(_app: &mut TuiApp, args: &str) -> String {
     if !batch.is_enabled() {
         return "Batch refactor is not enabled.\n\
                 Set environment variable: PRIORITY_AGENT_BATCH_REFACTOR=1\n\
-                Optional: PRIORITY_AGENT_BATCH_MAX_PARALLEL=10".to_string();
+                Optional: PRIORITY_AGENT_BATCH_MAX_PARALLEL=10"
+            .to_string();
     }
 
     // 如果没有指定文件，尝试自动发现
@@ -306,17 +309,27 @@ pub async fn handle_batch(_app: &mut TuiApp, args: &str) -> String {
         Ok(result) => {
             let mut lines = vec![
                 format!("## Batch Refactor Result: {:?}", result.status),
-                format!("Units: {} | Duration: {}ms", result.units.len(), result.total_duration_ms),
+                format!(
+                    "Units: {} | Duration: {}ms",
+                    result.units.len(),
+                    result.total_duration_ms
+                ),
                 String::new(),
             ];
 
             let success_count = result.units.iter().filter(|u| u.success).count();
             let fail_count = result.units.len() - success_count;
-            lines.push(format!("✅ Success: {} | ❌ Failed: {}", success_count, fail_count));
+            lines.push(format!(
+                "✅ Success: {} | ❌ Failed: {}",
+                success_count, fail_count
+            ));
 
             for unit in &result.units {
                 let icon = if unit.success { "✅" } else { "❌" };
-                lines.push(format!("{} {} ({}ms)", icon, unit.unit_id, unit.duration_ms));
+                lines.push(format!(
+                    "{} {} ({}ms)",
+                    icon, unit.unit_id, unit.duration_ms
+                ));
                 if !unit.output.is_empty() {
                     for line in unit.output.lines().take(5) {
                         lines.push(format!("   {}", line));
@@ -346,14 +359,24 @@ pub async fn handle_checkpoints(app: &TuiApp) -> String {
     }
 
     let mut lines = vec![
-        format!("Checkpoints for session (total: {}, files tracked: {})",
-            stats.total_checkpoints, stats.total_files_tracked),
+        format!(
+            "Checkpoints for session (total: {}, files tracked: {})",
+            stats.total_checkpoints, stats.total_files_tracked
+        ),
         String::new(),
     ];
 
     for c in checkpoints.iter().rev().take(20) {
-        let files: Vec<String> = c.file_backups.iter()
-            .map(|f| format!("{} {}", if f.existed_before { "📝" } else { "🆕" }, f.original_path))
+        let files: Vec<String> = c
+            .file_backups
+            .iter()
+            .map(|f| {
+                format!(
+                    "{} {}",
+                    if f.existed_before { "📝" } else { "🆕" },
+                    f.original_path
+                )
+            })
             .collect();
         lines.push(format!(
             "[{}] {} ({} files)\n  tool: {} | {}",
@@ -366,7 +389,10 @@ pub async fn handle_checkpoints(app: &TuiApp) -> String {
     }
 
     if checkpoints.len() > 20 {
-        lines.push(format!("\n... and {} more checkpoints", checkpoints.len() - 20));
+        lines.push(format!(
+            "\n... and {} more checkpoints",
+            checkpoints.len() - 20
+        ));
     }
 
     lines.join("\n")
@@ -374,7 +400,8 @@ pub async fn handle_checkpoints(app: &TuiApp) -> String {
 
 pub async fn handle_restore(app: &mut TuiApp, args: &str) -> String {
     if args.trim().is_empty() {
-        return "Usage: /restore <checkpoint_id>\nUse /checkpoints to list available checkpoints.".to_string();
+        return "Usage: /restore <checkpoint_id>\nUse /checkpoints to list available checkpoints."
+            .to_string();
     }
 
     let session_id = match app.session_manager.current_session_id() {
@@ -390,19 +417,28 @@ pub async fn handle_restore(app: &mut TuiApp, args: &str) -> String {
         Ok(result) => {
             let mut lines = vec![format!("Restored checkpoint: {}", result.checkpoint_id)];
             if !result.restored_files.is_empty() {
-                lines.push(format!("\nRestored {} file(s):", result.restored_files.len()));
+                lines.push(format!(
+                    "\nRestored {} file(s):",
+                    result.restored_files.len()
+                ));
                 for f in &result.restored_files {
                     lines.push(format!("  ✅ {}", f));
                 }
             }
             if !result.removed_files.is_empty() {
-                lines.push(format!("\nRemoved {} file(s) (did not exist before checkpoint):", result.removed_files.len()));
+                lines.push(format!(
+                    "\nRemoved {} file(s) (did not exist before checkpoint):",
+                    result.removed_files.len()
+                ));
                 for f in &result.removed_files {
                     lines.push(format!("  🗑️  {}", f));
                 }
             }
             if !result.failed_files.is_empty() {
-                lines.push(format!("\nFailed to restore {} file(s):", result.failed_files.len()));
+                lines.push(format!(
+                    "\nFailed to restore {} file(s):",
+                    result.failed_files.len()
+                ));
                 for (f, e) in &result.failed_files {
                     lines.push(format!("  ❌ {} — {}", f, e));
                 }
@@ -1109,7 +1145,11 @@ pub async fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
         }
     } else if args == "current" {
         // Show current session
-        let id = app.session_manager.current_session_id().map(|s| s.to_string()).unwrap_or_else(|| "none".to_string());
+        let id = app
+            .session_manager
+            .current_session_id()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "none".to_string());
         let title = app.session_manager.current_session_title();
         format!("Current session: {} ({})", title, &id[..8.min(id.len())])
     } else if args.starts_with("new") {
@@ -1190,7 +1230,10 @@ pub async fn handle_retry(app: &mut TuiApp, args: &str) -> String {
 
     // Keep persistence and engine history consistent with truncated UI messages.
     if let Some(session_id) = app.session_manager.current_session_id() {
-        if let Err(e) = app.session_manager.replace_messages(session_id, &app.messages) {
+        if let Err(e) = app
+            .session_manager
+            .replace_messages(session_id, &app.messages)
+        {
             return format!("Retry failed to rewrite session messages: {}", e);
         }
     }
@@ -1249,7 +1292,10 @@ pub async fn handle_export_data(app: &mut TuiApp, args: &str) -> String {
     let ctx = app.build_tool_context().await;
 
     let format = if args.is_empty() { "json" } else { args };
-    let session_id = app.session_manager.current_session_id().unwrap_or("unknown");
+    let session_id = app
+        .session_manager
+        .current_session_id()
+        .unwrap_or("unknown");
 
     let cmd = match format {
         "json" => format!("echo 'Session {}' > /tmp/export.json && cat /tmp/export.json", &session_id[..8.min(session_id.len())]),
@@ -1262,7 +1308,11 @@ pub async fn handle_export_data(app: &mut TuiApp, args: &str) -> String {
         "description": "Export session data"
     });
     let result = tool.execute(params, ctx).await;
-    if result.success { result.content } else { result.error.unwrap_or_default() }
+    if result.success {
+        result.content
+    } else {
+        result.error.unwrap_or_default()
+    }
 }
 
 /// /import - Import data
@@ -1295,7 +1345,10 @@ pub async fn handle_import(app: &mut TuiApp, args: &str) -> String {
         let mut imported = 0usize;
         for m in messages {
             let role_str = m.get("role").and_then(|v| v.as_str()).unwrap_or("system");
-            let content = m.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+            let content = m
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             if content.is_empty() {
                 continue;
             }
@@ -1396,9 +1449,9 @@ pub async fn handle_merge(app: &mut TuiApp, args: &str) -> String {
     }
 
     if let Some(ref engine) = app.streaming_engine {
-        engine.set_history(message_items_to_api_messages(
-            &app.messages,
-        )).await;
+        engine
+            .set_history(message_items_to_api_messages(&app.messages))
+            .await;
     }
 
     format!(
@@ -1458,7 +1511,9 @@ pub async fn handle_compact(app: &mut TuiApp) -> String {
         })
         .collect();
     if let Some(session_id) = app.session_manager.current_session_id() {
-        let _ = app.session_manager.replace_messages(session_id, &app.messages);
+        let _ = app
+            .session_manager
+            .replace_messages(session_id, &app.messages);
     }
     format!(
         "Context compacted: messages {} -> {}, tokens {} -> {}.",
@@ -1513,9 +1568,11 @@ pub fn handle_cleanup(app: &mut TuiApp, args: &str) -> String {
 pub fn handle_reset(app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() || args == "session" {
         app.messages.clear();
+        app.clear_tool_transcript();
         "Session reset. Messages cleared.".to_string()
     } else if args == "all" {
         app.messages.clear();
+        app.clear_tool_transcript();
         "Full reset not yet implemented.".to_string()
     } else {
         "Usage: /reset [session|all]".to_string()
@@ -1550,7 +1607,8 @@ pub fn handle_snippet(app: &mut TuiApp, args: &str) -> String {
                 match app.messages.last() {
                     Some(msg) => msg.content.clone(),
                     None => {
-                        return "No message available to save. Provide content explicitly.".to_string();
+                        return "No message available to save. Provide content explicitly."
+                            .to_string();
                     }
                 }
             } else {
@@ -1584,7 +1642,7 @@ pub fn handle_snippet(app: &mut TuiApp, args: &str) -> String {
             Ok(names) if names.is_empty() => "No snippets saved.".to_string(),
             Ok(names) => format!("Snippets:\n- {}", names.join("\n- ")),
             Err(e) => format!("Failed to list snippets: {}", e),
-        }
+        },
         _ => "Usage: /snippet [save|load|list]".to_string(),
     }
 }

@@ -116,7 +116,9 @@ impl QualityGates {
         let min_idx = all_gates.iter().position(|g| *g == min_level).unwrap_or(0);
 
         // All gates up to min_level must be passed
-        all_gates[..=min_idx].iter().all(|g| self.passed_gates.contains(g))
+        all_gates[..=min_idx]
+            .iter()
+            .all(|g| self.passed_gates.contains(g))
     }
 
     /// 生成门禁报告
@@ -130,7 +132,10 @@ impl QualityGates {
             GateLevel::PerformanceMet,
         ];
 
-        let mut lines = vec!["Quality Gates Report".to_string(), "=====================".to_string()];
+        let mut lines = vec![
+            "Quality Gates Report".to_string(),
+            "=====================".to_string(),
+        ];
 
         for gate in &all_gates {
             let status = if self.passed_gates.contains(gate) {
@@ -151,10 +156,7 @@ pub fn check_env_gates() -> Vec<GateResult> {
     let mut results = vec![];
 
     // Check PRIORITY_AGENT_* environment variables
-    let required_vars = [
-        "PRIORITY_AGENT_AUTO_TEST",
-        "PRIORITY_AGENT_SMART_EDIT",
-    ];
+    let required_vars = ["PRIORITY_AGENT_AUTO_TEST", "PRIORITY_AGENT_SMART_EDIT"];
 
     for var in required_vars {
         let exists = std::env::var(var).is_ok();

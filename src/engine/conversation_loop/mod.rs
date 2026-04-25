@@ -12,7 +12,7 @@ mod step_executor;
 mod tool_execution;
 
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
-pub(crate) use step_executor::{WorkflowRealStepExecutor, is_drift_interruption_signal};
+pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 pub(crate) use tool_execution::{
     is_read_only, read_only_tool_concurrency, safe_prefix_by_bytes, truncate_tool_result,
     READ_ONLY_TOOLS,
@@ -109,6 +109,19 @@ fn strip_think_blocks(text: &str) -> String {
     visible
 }
 
+async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent>) {
+    if let Some(usage) = &response.usage {
+        let _ = tx
+            .send(StreamEvent::Usage {
+                prompt_tokens: usage.prompt_tokens,
+                completion_tokens: usage.completion_tokens,
+                reasoning_tokens: usage.reasoning_tokens,
+                cached_tokens: usage.cached_tokens,
+            })
+            .await;
+    }
+}
+
 fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
     while idx > 0 && !s.is_char_boundary(idx) {
         idx -= 1;
@@ -136,7 +149,7 @@ pub struct ConversationLoop {
     worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
     hook_manager: Option<Arc<ToolHookManager>>,
     /// 上下文压缩器
-    compressor: Option<Mutex<ContextCompressor>>,
+    compressor: Option<Arc<Mutex<ContextCompressor>>>,
     /// 记忆管理器（预取 + 围栏注入 + 同步）
     memory_manager: Option<Arc<Mutex<crate::memory::MemoryManager>>>,
     /// 工具权限模式（由上层引擎注入）
@@ -210,10 +223,15 @@ impl ConversationLoop {
 
     /// 启用上下文压缩（设置最大上下文 token 数）
     pub fn with_compression(mut self, max_context_tokens: u64) -> Self {
-        self.compressor = Some(Mutex::new(
+        self.compressor = Some(Arc::new(Mutex::new(
             ContextCompressor::new(max_context_tokens)
                 .with_llm_provider(self.provider.clone(), &self.model),
-        ));
+        )));
+        self
+    }
+
+    pub fn with_compressor(mut self, compressor: Arc<Mutex<ContextCompressor>>) -> Self {
+        self.compressor = Some(compressor);
         self
     }
 
@@ -423,6 +441,22 @@ impl ConversationLoop {
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
 
+        // ── 记忆围栏注入：先注入，再让 preflight 统计真实请求大小 ──
+        if let Some(ref mem_mutex) = self.memory_manager {
+            let mem = mem_mutex.lock().await;
+            let snapshot = mem.get_snapshot();
+            if !snapshot.is_empty() && !messages.iter().any(|m| {
+                matches!(m, Message::System { content } if content.contains("<memory-context>"))
+            }) {
+                let insert_pos = messages
+                    .iter()
+                    .position(|m| !matches!(m, Message::System { .. }))
+                    .unwrap_or(messages.len());
+                messages.insert(insert_pos, Message::system(&snapshot));
+                debug!("Injected memory context fence at position {}", insert_pos);
+            }
+        }
+
         // ── 前置压缩（Preflight）─────────────────────────
         if let Some(ref compressor_mutex) = self.compressor {
             let mut no_gain_passes = 0u8;
@@ -430,7 +464,9 @@ impl ConversationLoop {
                 let compressor = compressor_mutex.lock().await;
                 let tool_tokens = estimate_tool_schemas_tokens(&tools);
                 let msg_tokens = estimate_messages_tokens(&messages);
-                if !compressor.preflight_check(&messages, msg_tokens, tool_tokens) {
+                // `messages` already includes the system prompt at this point,
+                // so only add tool schema tokens as external request overhead.
+                if !compressor.preflight_check(&messages, 0, tool_tokens) {
                     break;
                 }
                 debug!(
@@ -466,20 +502,6 @@ impl ConversationLoop {
             let _ = tx.send(StreamEvent::Start).await;
         }
 
-        // ── 记忆围栏注入 ───────────────────────────────
-        if let Some(ref mem_mutex) = self.memory_manager {
-            let mem = mem_mutex.lock().await;
-            let snapshot = mem.get_snapshot();
-            if !snapshot.is_empty() {
-                let insert_pos = messages
-                    .iter()
-                    .position(|m| !matches!(m, Message::System { .. }))
-                    .unwrap_or(messages.len());
-                messages.insert(insert_pos, Message::system(&snapshot));
-                debug!("Injected memory context fence at position {}", insert_pos);
-            }
-        }
-
         // ── 迭代预算 ─────────────────────────────────────
         let mut effective_iterations: usize = 0;
 
@@ -511,7 +533,9 @@ impl ConversationLoop {
                     .rposition(|m| matches!(m, Message::User { .. }))
                 {
                     if let Message::User { content } = &request_messages[last_user_idx] {
-                        let prefetch = mem.prefetch(content);
+                        let prefetch = mem
+                            .prefetch_with_llm_rerank(content, self.provider.as_ref(), &self.model)
+                            .await;
                         if !prefetch.is_empty() {
                             let enhanced = format!(
                                 "{}\n<relevant-memory>\n{}\n</relevant-memory>",
@@ -656,7 +680,9 @@ impl ConversationLoop {
                 );
                 debug!("{}", stop_msg);
                 if let Some(tx) = tx {
-                    let _ = tx.send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg))).await;
+                    let _ = tx
+                        .send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg)))
+                        .await;
                 }
                 if final_content.trim().is_empty() {
                     final_content = stop_msg;
@@ -683,7 +709,9 @@ impl ConversationLoop {
                     );
                     debug!("{}", stop_msg);
                     if let Some(tx) = tx {
-                        let _ = tx.send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg))).await;
+                        let _ = tx
+                            .send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg)))
+                            .await;
                     }
                     if final_content.trim().is_empty() {
                         final_content = stop_msg;
@@ -880,6 +908,22 @@ impl ConversationLoop {
                 while let Some(result) = stream.next().await {
                     match result {
                         Ok(chunk) => {
+                            if let Some(usage) = &chunk.usage {
+                                let _ = tx
+                                    .send(StreamEvent::Usage {
+                                        prompt_tokens: usage.prompt_tokens,
+                                        completion_tokens: usage.completion_tokens,
+                                        reasoning_tokens: usage
+                                            .completion_tokens_details
+                                            .as_ref()
+                                            .and_then(|d| d.reasoning_tokens),
+                                        cached_tokens: usage
+                                            .prompt_tokens_details
+                                            .as_ref()
+                                            .and_then(|d| d.cached_tokens),
+                                    })
+                                    .await;
+                            }
                             if let Some(choice) = chunk.choices.first() {
                                 if let Some(content) = &choice.delta.content {
                                     if !content.is_empty() {
@@ -1047,9 +1091,9 @@ impl ConversationLoop {
                             }
 
                             let truncated = chunk.choices.iter().any(|c| {
-                                c.finish_reason.as_ref().is_some_and(|fr| {
-                                    format!("{:?}", fr).contains("Length")
-                                })
+                                c.finish_reason
+                                    .as_ref()
+                                    .is_some_and(|fr| format!("{:?}", fr).contains("Length"))
                             });
                             if truncated {
                                 let _ = tx.send(StreamEvent::OutputTruncated).await;
@@ -1107,8 +1151,9 @@ impl ConversationLoop {
                             "Streaming yielded no content (error: {}), falling back to non-streaming",
                             stream_err
                         );
-                        let base_request =
-                            ChatRequest::new(&self.model).with_messages(fallback_messages.clone()).with_temperature(0.2);
+                        let base_request = ChatRequest::new(&self.model)
+                            .with_messages(fallback_messages.clone())
+                            .with_temperature(0.2);
                         let response = if let Some(tools) = fallback_tools.clone() {
                             match self
                                 .provider
@@ -1128,6 +1173,7 @@ impl ConversationLoop {
                             self.provider.chat(base_request).await?
                         };
                         self.record_cost(&response).await;
+                        emit_usage_event(&response, tx).await;
 
                         let content = strip_think_blocks(&response.content);
                         if !content.is_empty() {
@@ -1149,8 +1195,9 @@ impl ConversationLoop {
             }
             Err(e) => {
                 warn!("Streaming failed, falling back to non-streaming: {}", e);
-                let base_request =
-                    ChatRequest::new(&self.model).with_messages(fallback_messages.clone()).with_temperature(0.2);
+                let base_request = ChatRequest::new(&self.model)
+                    .with_messages(fallback_messages.clone())
+                    .with_temperature(0.2);
                 let response = if let Some(tools) = fallback_tools.clone() {
                     match self
                         .provider
@@ -1170,6 +1217,7 @@ impl ConversationLoop {
                     self.provider.chat(base_request).await?
                 };
                 self.record_cost(&response).await;
+                emit_usage_event(&response, tx).await;
 
                 let content = strip_think_blocks(&response.content);
                 if !content.is_empty() {
@@ -1427,7 +1475,9 @@ impl ConversationLoop {
                         }
                     }
                     if approved {
-                        if context.permission_context.mode == crate::permissions::PermissionMode::Once {
+                        if context.permission_context.mode
+                            == crate::permissions::PermissionMode::Once
+                        {
                             context.permission_context.grant_once(&tool_name);
                         }
                         if let Some(tx) = tx {
@@ -1471,7 +1521,11 @@ impl ConversationLoop {
                 if let Some(ref log) = self.audit_log {
                     let decision = if result.success {
                         "EXECUTED"
-                    } else if result.error.as_deref().unwrap_or("").contains("Permission denied")
+                    } else if result
+                        .error
+                        .as_deref()
+                        .unwrap_or("")
+                        .contains("Permission denied")
                     {
                         "DENIED"
                     } else {
@@ -1484,8 +1538,16 @@ impl ConversationLoop {
                 if let Some(ref tracker) = self.denial_tracker {
                     if result.success {
                         tracker.record_success().await;
-                    } else if result.error.as_deref().unwrap_or("").contains("Permission denied")
-                        || result.error.as_deref().unwrap_or("").contains("Dangerous command")
+                    } else if result
+                        .error
+                        .as_deref()
+                        .unwrap_or("")
+                        .contains("Permission denied")
+                        || result
+                            .error
+                            .as_deref()
+                            .unwrap_or("")
+                            .contains("Dangerous command")
                     {
                         tracker
                             .record_denial(
@@ -1547,7 +1609,6 @@ mod tests {
     use crate::test_utils::env_guard::EnvVarGuard;
     use crate::tools::{FileReadTool, FileWriteTool};
     use async_openai::types::ChatCompletionResponseStream;
-    use serde::Deserialize;
     use std::collections::VecDeque;
     use std::sync::Mutex as StdMutex;
     use tempfile::tempdir;
@@ -1688,17 +1749,6 @@ mod tests {
         responses: StdMutex<VecDeque<ChatResponse>>,
     }
 
-    fn workflow_test_executor() -> WorkflowRealStepExecutor {
-        WorkflowRealStepExecutor {
-            tool_registry: Arc::new(ToolRegistry::new()),
-            llm_provider: Arc::new(MockLlmProvider {
-                responses: StdMutex::new(VecDeque::new()),
-            }),
-            model: "mock-model".to_string(),
-            base_context: ToolContext::new(".", "workflow-test"),
-        }
-    }
-
     #[async_trait::async_trait]
     impl LlmProvider for MockLlmProvider {
         async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
@@ -1805,12 +1855,19 @@ mod tests {
         let tool_registry = Arc::new(registry);
         let cost_tracker = Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new()));
 
-        let loop_instance = ConversationLoop::new(provider, tool_registry, cost_tracker, "test".into())
-            .with_max_iterations(5);
+        let loop_instance =
+            ConversationLoop::new(provider, tool_registry, cost_tracker, "test".into())
+                .with_max_iterations(5);
 
         let messages = vec![Message::user("write code and fix issues")];
-        let result = loop_instance.run(messages).await.expect("loop should succeed");
+        let result = loop_instance
+            .run(messages)
+            .await
+            .expect("loop should succeed");
 
-        assert!(result.iterations >= 2, "should iterate at least twice for write+fix");
+        assert!(
+            result.iterations >= 2,
+            "should iterate at least twice for write+fix"
+        );
     }
 }

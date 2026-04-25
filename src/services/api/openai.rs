@@ -65,8 +65,12 @@ impl LlmProvider for OpenAiClient {
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatCompletionResponseStream> {
         use super::openai_compat::convert_request;
+        use async_openai::types::ChatCompletionStreamOptions;
         let mut req = convert_request(request, &self.model);
         req.stream = Some(true);
+        req.stream_options = Some(ChatCompletionStreamOptions {
+            include_usage: true,
+        });
         self.client
             .chat()
             .create_stream(req)

@@ -43,7 +43,9 @@ impl std::str::FromStr for ThemePreset {
             "nord" => Ok(ThemePreset::Nord),
             "dracula" => Ok(ThemePreset::Dracula),
             "gruvbox-dark" | "gruvbox_dark" | "gruvbox" => Ok(ThemePreset::GruvboxDark),
-            "catppuccin-mocha" | "catppuccin_mocha" | "catppuccin" => Ok(ThemePreset::CatppuccinMocha),
+            "catppuccin-mocha" | "catppuccin_mocha" | "catppuccin" => {
+                Ok(ThemePreset::CatppuccinMocha)
+            }
             _ => Err(format!("Unknown theme preset: {}", s)),
         }
     }
@@ -144,13 +146,13 @@ impl Theme {
             bg_popup: Color::Rgb(245, 245, 245),
             bg_selected: Color::Rgb(220, 220, 220),
             text: Color::Black,
-            text_dim: Color::Rgb(80, 80, 80),
+            text_dim: Color::Rgb(95, 95, 95),
             text_highlight: Color::Rgb(0, 80, 180),
-            border: Color::Rgb(160, 160, 160),
+            border: Color::Rgb(185, 185, 185),
             border_active: Color::Blue,
-            user_message: Color::Rgb(0, 100, 150),
-            user_message_bg: Color::Rgb(240, 240, 240),
-            assistant_message: Color::Rgb(0, 120, 0),
+            user_message: Color::Rgb(90, 90, 90),
+            user_message_bg: Color::Rgb(246, 246, 246),
+            assistant_message: Color::Rgb(0, 0, 0),
             system_message: Color::Rgb(180, 140, 0),
             tool_message: Color::Rgb(140, 0, 140),
             success: Color::Rgb(0, 140, 0),

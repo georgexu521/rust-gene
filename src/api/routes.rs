@@ -502,7 +502,10 @@ async fn export_audit_handler(
     let path_buf = if let Some(path_str) = req.path.as_deref() {
         let path = std::path::PathBuf::from(path_str);
         // 拒绝包含 .. 的路径
-        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(ApiError::BadRequest(
                 "path contains '..' which is not allowed".into(),
             ));

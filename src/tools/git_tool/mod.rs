@@ -293,11 +293,7 @@ impl Tool for GitTool {
                 if branch.is_empty() {
                     return ToolResult::error("Branch name required");
                 }
-                Command::new("git")
-                    .arg("branch")
-                    .arg(branch)
-                    .output()
-                    .await
+                Command::new("git").arg("branch").arg(branch).output().await
             }
             _ => {
                 return ToolResult::error(format!("Unknown git action: {}", action));
@@ -442,7 +438,9 @@ mod tests {
             "git commit: 'fix bug'"
         );
         assert_eq!(
-            tool.to_classifier_input(&json!({ "action": "push", "remote": "origin", "force": true })),
+            tool.to_classifier_input(
+                &json!({ "action": "push", "remote": "origin", "force": true })
+            ),
             "git push: remote=origin force=true"
         );
         assert_eq!(

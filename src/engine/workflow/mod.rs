@@ -12,17 +12,19 @@ pub mod executor;
 pub mod feedback;
 pub mod gate;
 pub mod metrics;
-pub mod policy;
 pub mod planner;
+pub mod policy;
 pub mod questioning;
 pub mod weights;
 
-pub use executor::{ExecutionOutcome, ExecutionRecord, NoOpStepExecutor, StepExecutor, WorkflowExecutor};
+pub use executor::{
+    ExecutionOutcome, ExecutionRecord, NoOpStepExecutor, StepExecutor, WorkflowExecutor,
+};
 pub use feedback::{FeedbackEngine, HistoricalFailureRule};
-pub use metrics::WorkflowMetrics;
-pub use policy::{GatePolicy, SocraticPolicy, WeightMultipliers, WorkflowPolicy};
 pub use gate::{Gate, GateDecision};
+pub use metrics::WorkflowMetrics;
 pub use planner::WorkflowPlanner;
+pub use policy::{GatePolicy, SocraticPolicy, WeightMultipliers, WorkflowPolicy};
 pub use questioning::{ActiveQuestioningEngine, QuestionNode, ThinkingResult};
 pub use weights::{
     BlockerValueRule, ComplexityRule, DependencyPenaltyRule, DimensionScore, DriftPenaltyRule,
@@ -246,10 +248,8 @@ impl WorkflowEngine {
         // 7. REWEIGHT（如有 NeedsRefactor 的步骤）
         if needs_reweight {
             sm.transition(WorkflowState::Reweight);
-            let planner = WorkflowPlanner::with_llm_and_policy(
-                self.llm_provider.clone(),
-                &self.policy,
-            );
+            let planner =
+                WorkflowPlanner::with_llm_and_policy(self.llm_provider.clone(), &self.policy);
             planner.reweight(&mut plan, mainline_goal);
 
             // 补充执行：对 [重构] 失败步骤进行“受控重试”。
@@ -267,16 +267,16 @@ impl WorkflowEngine {
                 .steps
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| {
-                    matches!(s.status, crate::engine::plan_mode::StepStatus::Pending)
-                })
+                .filter(|(_, s)| matches!(s.status, crate::engine::plan_mode::StepStatus::Pending))
                 .count();
             if remaining > 0 {
                 sm.transition(WorkflowState::Executing {
                     current_step: 0,
                     total: remaining,
                 });
-                let extra_log = self.run_executing(&mut plan, step_executor, &mut sm).await?;
+                let extra_log = self
+                    .run_executing(&mut plan, step_executor, &mut sm)
+                    .await?;
                 execution_log.extend(extra_log);
             }
         }
@@ -339,9 +339,10 @@ impl WorkflowEngine {
         };
         match decision {
             GateDecision::Workflow { .. } => Ok(()),
-            GateDecision::Direct { reason } => {
-                Err(format!("Gate decided Direct mode, skip workflow: {}", reason))
-            }
+            GateDecision::Direct { reason } => Err(format!(
+                "Gate decided Direct mode, skip workflow: {}",
+                reason
+            )),
         }
     }
 
@@ -358,16 +359,11 @@ impl WorkflowEngine {
             .map_err(|e| format!("Thinking failed: {}", e))
     }
 
-    async fn run_planning(
-        &self,
-        thinking_result: &ThinkingResult,
-        mainline_goal: &str,
-    ) -> Plan {
-        let planner = WorkflowPlanner::with_llm_and_policy(
-            self.llm_provider.clone(),
-            &self.policy,
-        );
-        planner.plan_with_recursion(thinking_result, mainline_goal).await
+    async fn run_planning(&self, thinking_result: &ThinkingResult, mainline_goal: &str) -> Plan {
+        let planner = WorkflowPlanner::with_llm_and_policy(self.llm_provider.clone(), &self.policy);
+        planner
+            .plan_with_recursion(thinking_result, mainline_goal)
+            .await
     }
 
     async fn run_executing(
@@ -437,7 +433,10 @@ impl WorkflowEngine {
             };
             output.push_str(&format!(
                 "{} {}. {} (weight={})\n",
-                status_icon, i + 1, step.description, step.weight
+                status_icon,
+                i + 1,
+                step.description,
+                step.weight
             ));
         }
         output.push('\n');
@@ -556,7 +555,11 @@ mod tests {
             .run("实现用户认证系统", "实现用户认证系统", &MockStepExecutor)
             .await;
 
-        assert!(result.is_ok(), "Workflow should complete: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Workflow should complete: {:?}",
+            result.err()
+        );
         let workflow_result = result.unwrap();
 
         // I-02: 复杂任务进入 Workflow，产出结果

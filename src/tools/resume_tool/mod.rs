@@ -34,7 +34,8 @@ impl Tool for ResumeTool {
     }
 
     async fn execute(&self, params: Value, context: ToolContext) -> ToolResult {
-        let session_id = params.get("session_id")
+        let session_id = params
+            .get("session_id")
             .and_then(|v| v.as_str())
             .unwrap_or(&context.session_id);
 

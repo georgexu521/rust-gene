@@ -35,7 +35,8 @@ impl Tool for BriefTool {
     }
 
     async fn execute(&self, params: Value, context: ToolContext) -> ToolResult {
-        let format = params.get("format")
+        let format = params
+            .get("format")
             .and_then(|v| v.as_str())
             .unwrap_or("short");
 
@@ -44,7 +45,8 @@ impl Tool for BriefTool {
 
         let brief_content = match format {
             "full" => {
-                format!(r#"Current Session Summary
+                format!(
+                    r#"Current Session Summary
 =====================
 
 Session ID: {}
@@ -61,10 +63,13 @@ Task Progress:
 
 Context Window:
 - Use /context to see context usage
-"#, session_info)
+"#,
+                    session_info
+                )
             }
             _ => {
-                format!(r#"Task Brief
+                format!(
+                    r#"Task Brief
 =========
 Session: {}
 
@@ -72,7 +77,9 @@ Current work in progress. Use:
 - /tasks    : View tasks
 - /history  : View history
 - /context  : View context
-- /cost     : View costs"#, session_info)
+- /cost     : View costs"#,
+                    session_info
+                )
             }
         };
 

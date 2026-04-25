@@ -97,7 +97,10 @@ impl SloTracker {
     /// 记录一个样本
     pub fn record(&mut self, value: f64) {
         let now = Instant::now();
-        self.samples.push_back(MetricSample { timestamp: now, value });
+        self.samples.push_back(MetricSample {
+            timestamp: now,
+            value,
+        });
         self.cleanup(now);
     }
 
@@ -171,10 +174,10 @@ pub struct SloBoard {
 impl SloBoard {
     pub fn new() -> Self {
         let targets = vec![
-            SloTarget::availability(99.5, 60),   // 99.5% 可用性
-            SloTarget::latency(500.0, 15),        // P500 延迟 < 500ms
-            SloTarget::cost(10.0, 60),            // 每小时成本 < $10
-            SloTarget::error_rate(1.0, 30),      // 错误率 < 1%
+            SloTarget::availability(99.5, 60), // 99.5% 可用性
+            SloTarget::latency(500.0, 15),     // P500 延迟 < 500ms
+            SloTarget::cost(10.0, 60),         // 每小时成本 < $10
+            SloTarget::error_rate(1.0, 30),    // 错误率 < 1%
         ];
 
         Self {
@@ -184,28 +187,44 @@ impl SloBoard {
 
     /// 记录可用性样本
     pub fn record_availability(&mut self, value: f64) {
-        if let Some(tracker) = self.trackers.iter_mut().find(|t| t.target.metric == SloMetric::Availability) {
+        if let Some(tracker) = self
+            .trackers
+            .iter_mut()
+            .find(|t| t.target.metric == SloMetric::Availability)
+        {
             tracker.record(value);
         }
     }
 
     /// 记录延迟样本
     pub fn record_latency(&mut self, value_ms: f64) {
-        if let Some(tracker) = self.trackers.iter_mut().find(|t| t.target.metric == SloMetric::Latency) {
+        if let Some(tracker) = self
+            .trackers
+            .iter_mut()
+            .find(|t| t.target.metric == SloMetric::Latency)
+        {
             tracker.record(value_ms);
         }
     }
 
     /// 记录成本样本
     pub fn record_cost(&mut self, value_usd: f64) {
-        if let Some(tracker) = self.trackers.iter_mut().find(|t| t.target.metric == SloMetric::Cost) {
+        if let Some(tracker) = self
+            .trackers
+            .iter_mut()
+            .find(|t| t.target.metric == SloMetric::Cost)
+        {
             tracker.record(value_usd);
         }
     }
 
     /// 记录错误样本
     pub fn record_error(&mut self) {
-        if let Some(tracker) = self.trackers.iter_mut().find(|t| t.target.metric == SloMetric::ErrorRate) {
+        if let Some(tracker) = self
+            .trackers
+            .iter_mut()
+            .find(|t| t.target.metric == SloMetric::ErrorRate)
+        {
             tracker.record(1.0);
         }
     }

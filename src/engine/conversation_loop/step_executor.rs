@@ -21,7 +21,10 @@ pub(crate) struct WorkflowRealStepExecutor {
 
 #[async_trait::async_trait]
 impl StepExecutor for WorkflowRealStepExecutor {
-    async fn execute_step(&self, step: &crate::engine::plan_mode::PlanStep) -> Result<String, String> {
+    async fn execute_step(
+        &self,
+        step: &crate::engine::plan_mode::PlanStep,
+    ) -> Result<String, String> {
         let Some(tool_name) = step.tool.as_deref() else {
             return Ok(format!(
                 "[workflow] non-executable planning step: {}",
@@ -62,7 +65,10 @@ impl StepExecutor for WorkflowRealStepExecutor {
         } else {
             let err_text = result.error.clone().unwrap_or(result.content);
             if tool_name == "bash" && !command_preview.is_empty() {
-                Err(format!("[{} cmd={}] {}", tool_name, command_preview, err_text))
+                Err(format!(
+                    "[{} cmd={}] {}",
+                    tool_name, command_preview, err_text
+                ))
             } else {
                 Err(format!("[{}] {}", tool_name, err_text))
             }
@@ -104,8 +110,11 @@ impl WorkflowRealStepExecutor {
                 Ok(serde_json::json!({ "path": path, "content": content }))
             }
             "grep" => {
-                let pattern = extract_quoted(&step.description)
-                    .unwrap_or_else(|| first_keyword(&step.description).unwrap_or("TODO").to_string());
+                let pattern = extract_quoted(&step.description).unwrap_or_else(|| {
+                    first_keyword(&step.description)
+                        .unwrap_or("TODO")
+                        .to_string()
+                });
                 let path = guess_path(&step.description).unwrap_or_else(|| ".".to_string());
                 Ok(serde_json::json!({ "pattern": pattern, "path": path }))
             }
@@ -139,8 +148,9 @@ impl WorkflowRealStepExecutor {
             }
             "json_query" => Ok(infer_json_query_params(&step.description)),
             "file_edit" => {
-                let path = guess_path(&step.description)
-                    .ok_or_else(|| "file_edit requires explicit path in step description".to_string())?;
+                let path = guess_path(&step.description).ok_or_else(|| {
+                    "file_edit requires explicit path in step description".to_string()
+                })?;
                 if let Some((old_s, new_s)) = extract_replace_triplet(&step.description) {
                     Ok(serde_json::json!({
                         "path": path,
@@ -495,7 +505,11 @@ fn infer_project_list_action(step: &str) -> (&'static str, Option<String>) {
         let query = extract_quoted(step).or_else(|| guess_path(step));
         return ("dir", query);
     }
-    if lower.contains("search") || lower.contains("查找") || lower.contains("搜索") || lower.contains("fuzzy") {
+    if lower.contains("search")
+        || lower.contains("查找")
+        || lower.contains("搜索")
+        || lower.contains("fuzzy")
+    {
         let query = extract_quoted(step).or_else(|| first_keyword(step).map(str::to_string));
         return ("search", query);
     }
@@ -530,14 +544,14 @@ fn infer_todo_items(step: &str) -> Vec<serde_json::Value> {
         .take(5)
     {
         let lower = part.to_lowercase();
-        let status = if lower.contains("完成") || lower.contains("done") || lower.contains("completed")
-        {
-            "completed"
-        } else if lower.contains("进行中") || lower.contains("in progress") {
-            "in_progress"
-        } else {
-            "pending"
-        };
+        let status =
+            if lower.contains("完成") || lower.contains("done") || lower.contains("completed") {
+                "completed"
+            } else if lower.contains("进行中") || lower.contains("in progress") {
+                "in_progress"
+            } else {
+                "pending"
+            };
         let priority = if lower.contains("高优") || lower.contains("high") {
             "high"
         } else if lower.contains("低优") || lower.contains("low") {
@@ -638,9 +652,17 @@ fn build_schema_hint(schema: &serde_json::Value, max_bytes: usize) -> String {
         let enum_vals = prop
             .get("enum")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().take(6).filter_map(|x| x.as_str()).collect::<Vec<_>>())
+            .map(|arr| {
+                arr.iter()
+                    .take(6)
+                    .filter_map(|x| x.as_str())
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
-        let default = prop.get("default").cloned().unwrap_or(serde_json::Value::Null);
+        let default = prop
+            .get("default")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let desc = prop
             .get("description")
             .and_then(|v| v.as_str())
@@ -808,8 +830,7 @@ fn extract_folder_name(step: &str) -> Option<String> {
 }
 
 fn sanitize_folder_name(name: &str) -> String {
-    name
-        .trim()
+    name.trim()
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
         .collect()

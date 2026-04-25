@@ -161,13 +161,13 @@ mod tests {
     fn test_role_parsing() {
         assert_eq!(AgentRole::parse("teammate"), Some(AgentRole::Teammate));
         assert_eq!(AgentRole::parse("Teammate"), Some(AgentRole::Teammate));
-        assert_eq!(
-            AgentRole::parse("dream_task"),
-            Some(AgentRole::DreamTask)
-        );
+        assert_eq!(AgentRole::parse("dream_task"), Some(AgentRole::DreamTask));
         assert_eq!(AgentRole::parse("dreamtask"), Some(AgentRole::DreamTask));
         assert_eq!(AgentRole::parse("plan"), Some(AgentRole::Plan));
-        assert_eq!(AgentRole::parse("verification"), Some(AgentRole::Verification));
+        assert_eq!(
+            AgentRole::parse("verification"),
+            Some(AgentRole::Verification)
+        );
         assert_eq!(AgentRole::parse("verify"), Some(AgentRole::Verification));
         assert_eq!(AgentRole::parse("guide"), Some(AgentRole::Guide));
         assert_eq!(AgentRole::parse("advisor"), Some(AgentRole::Advisor));
@@ -189,7 +189,11 @@ mod tests {
             AgentRole::Specialist,
             AgentRole::DreamTask,
         ] {
-            assert!(!role.system_prompt_prefix().is_empty(), "role {:?} has empty prefix", role);
+            assert!(
+                !role.system_prompt_prefix().is_empty(),
+                "role {:?} has empty prefix",
+                role
+            );
         }
     }
 }

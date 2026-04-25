@@ -208,7 +208,12 @@ mod tests {
         }
         assert_eq!(state.recent_denials.len(), MAX_RECENT_DENIALS);
         // 最新的应该是 cmd29
-        assert!(state.recent_denials.last().unwrap().display.contains("cmd29"));
+        assert!(state
+            .recent_denials
+            .last()
+            .unwrap()
+            .display
+            .contains("cmd29"));
     }
 
     #[test]
@@ -227,7 +232,9 @@ mod tests {
     async fn test_tracker_async() {
         let tracker = DenialTracker::new();
         tracker.record_denial("bash", "rm -rf /", "dangerous").await;
-        tracker.record_denial("bash", "dd if=/dev/zero", "dangerous").await;
+        tracker
+            .record_denial("bash", "dd if=/dev/zero", "dangerous")
+            .await;
 
         assert_eq!(tracker.get_state().await.consecutive_denials, 2);
 

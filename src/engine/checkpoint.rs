@@ -307,12 +307,19 @@ impl CheckpointManager {
             }
         }
 
-        info!("Pruned {} old checkpoints, {} remaining", to_remove, self.checkpoints.len());
+        info!(
+            "Pruned {} old checkpoints, {} remaining",
+            to_remove,
+            self.checkpoints.len()
+        );
         Ok(())
     }
 
     /// 恢复到指定 checkpoint 的状态
-    pub async fn restore_checkpoint(&self, checkpoint_id: impl AsRef<str>) -> Result<RestoreResult, String> {
+    pub async fn restore_checkpoint(
+        &self,
+        checkpoint_id: impl AsRef<str>,
+    ) -> Result<RestoreResult, String> {
         let checkpoint_id = checkpoint_id.as_ref();
         let checkpoint = self
             .checkpoints
@@ -326,7 +333,10 @@ impl CheckpointManager {
 
         for backup in &checkpoint.file_backups {
             let original = Path::new(&backup.original_path);
-            let backup_full = self.checkpoints_dir.join(&checkpoint.id).join(&backup.backup_relative_path);
+            let backup_full = self
+                .checkpoints_dir
+                .join(&checkpoint.id)
+                .join(&backup.backup_relative_path);
 
             if backup.existed_before {
                 // 恢复文件内容
@@ -334,7 +344,10 @@ impl CheckpointManager {
                     match fs::copy(&backup_full, original).await {
                         Ok(_) => {
                             restored_files.push(backup.original_path.clone());
-                            info!("Restored file {:?} from checkpoint {}", original, checkpoint_id);
+                            info!(
+                                "Restored file {:?} from checkpoint {}",
+                                original, checkpoint_id
+                            );
                         }
                         Err(e) => {
                             failed_files.push((backup.original_path.clone(), e.to_string()));
@@ -343,18 +356,19 @@ impl CheckpointManager {
                     }
                 } else {
                     // 备份文件不存在（可能是之前清理了），尝试找更早的 checkpoint
-                    match self.find_earlier_backup(&backup.original_path, checkpoint.sequence).await {
-                        Some(earlier_backup) => {
-                            match fs::copy(&earlier_backup, original).await {
-                                Ok(_) => {
-                                    restored_files.push(backup.original_path.clone());
-                                    info!("Restored file {:?} from earlier checkpoint", original);
-                                }
-                                Err(e) => {
-                                    failed_files.push((backup.original_path.clone(), e.to_string()));
-                                }
+                    match self
+                        .find_earlier_backup(&backup.original_path, checkpoint.sequence)
+                        .await
+                    {
+                        Some(earlier_backup) => match fs::copy(&earlier_backup, original).await {
+                            Ok(_) => {
+                                restored_files.push(backup.original_path.clone());
+                                info!("Restored file {:?} from earlier checkpoint", original);
                             }
-                        }
+                            Err(e) => {
+                                failed_files.push((backup.original_path.clone(), e.to_string()));
+                            }
+                        },
                         None => {
                             failed_files.push((
                                 backup.original_path.clone(),
@@ -370,7 +384,10 @@ impl CheckpointManager {
                         failed_files.push((backup.original_path.clone(), e.to_string()));
                     } else {
                         removed_files.push(backup.original_path.clone());
-                        info!("Removed file {:?} (did not exist before checkpoint)", original);
+                        info!(
+                            "Removed file {:?} (did not exist before checkpoint)",
+                            original
+                        );
                     }
                 }
             }
@@ -385,14 +402,21 @@ impl CheckpointManager {
     }
 
     /// 查找更早的 backup（用于当前 checkpoint 的 backup 文件缺失时回退）
-    async fn find_earlier_backup(&self, original_path: &str, before_sequence: u64) -> Option<PathBuf> {
+    async fn find_earlier_backup(
+        &self,
+        original_path: &str,
+        before_sequence: u64,
+    ) -> Option<PathBuf> {
         for cp in self.checkpoints.iter().rev() {
             if cp.sequence >= before_sequence {
                 continue;
             }
             for backup in &cp.file_backups {
                 if backup.original_path == original_path && backup.existed_before {
-                    let path = self.checkpoints_dir.join(&cp.id).join(&backup.backup_relative_path);
+                    let path = self
+                        .checkpoints_dir
+                        .join(&cp.id)
+                        .join(&backup.backup_relative_path);
                     if path.exists() {
                         return Some(path);
                     }
@@ -468,7 +492,11 @@ impl CheckpointManager {
     }
 
     /// 获取某个 checkpoint 时某个文件的内容
-    async fn get_file_at_checkpoint(&self, file_path: &str, checkpoint: &Checkpoint) -> Option<String> {
+    async fn get_file_at_checkpoint(
+        &self,
+        file_path: &str,
+        checkpoint: &Checkpoint,
+    ) -> Option<String> {
         let backup = checkpoint
             .file_backups
             .iter()
@@ -478,7 +506,10 @@ impl CheckpointManager {
             return None;
         }
 
-        let backup_full = self.checkpoints_dir.join(&checkpoint.id).join(&backup.backup_relative_path);
+        let backup_full = self
+            .checkpoints_dir
+            .join(&checkpoint.id)
+            .join(&backup.backup_relative_path);
         if backup_full.exists() {
             fs::read_to_string(&backup_full).await.ok()
         } else {
@@ -559,17 +590,25 @@ impl FileDiff {
                 patch.to_string()
             }
             (None, Some(new)) => {
-                format!("--- /dev/null\n+++ {}\n@@ -0,0 +1,{} @@\n{}",
+                format!(
+                    "--- /dev/null\n+++ {}\n@@ -0,0 +1,{} @@\n{}",
                     self.path,
                     new.lines().count(),
-                    new.lines().map(|l| format!("+{}", l)).collect::<Vec<_>>().join("\n")
+                    new.lines()
+                        .map(|l| format!("+{}", l))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 )
             }
             (Some(old), None) => {
-                format!("--- {}\n+++ /dev/null\n@@ -1,{} +0,0 @@\n{}",
+                format!(
+                    "--- {}\n+++ /dev/null\n@@ -1,{} +0,0 @@\n{}",
                     self.path,
                     old.lines().count(),
-                    old.lines().map(|l| format!("-{}", l)).collect::<Vec<_>>().join("\n")
+                    old.lines()
+                        .map(|l| format!("-{}", l))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 )
             }
             (None, None) => String::new(),
@@ -581,11 +620,14 @@ impl FileDiff {
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-static CHECKPOINT_MANAGERS: once_cell::sync::Lazy<std::sync::Mutex<HashMap<String, Arc<Mutex<CheckpointManager>>>>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+static CHECKPOINT_MANAGERS: once_cell::sync::Lazy<
+    std::sync::Mutex<HashMap<String, Arc<Mutex<CheckpointManager>>>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// 获取或创建 CheckpointManager
-pub async fn get_checkpoint_manager(session_id: impl Into<String>) -> Arc<Mutex<CheckpointManager>> {
+pub async fn get_checkpoint_manager(
+    session_id: impl Into<String>,
+) -> Arc<Mutex<CheckpointManager>> {
     let session_id = session_id.into();
     {
         let managers = CHECKPOINT_MANAGERS.lock().unwrap();
@@ -628,12 +670,18 @@ mod tests {
 
         // 修改文件
         std::fs::write(&test_file, "modified content").unwrap();
-        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "modified content");
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "modified content"
+        );
 
         // 恢复
         let result = mgr.restore_checkpoint(&cp.id).await.unwrap();
         assert_eq!(result.restored_files.len(), 1);
-        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "original content");
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "original content"
+        );
     }
 
     #[tokio::test]

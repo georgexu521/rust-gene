@@ -35,7 +35,8 @@ impl Tool for ContextTool {
     }
 
     async fn execute(&self, params: Value, _context: ToolContext) -> ToolResult {
-        let action = params.get("action")
+        let action = params
+            .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("status");
 

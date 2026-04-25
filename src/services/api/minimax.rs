@@ -61,10 +61,7 @@ impl MiniMaxClient {
         &self,
         req: &async_openai::types::CreateChatCompletionRequest,
     ) -> Option<(StatusCode, String)> {
-        let url = format!(
-            "{}/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let client = reqwest::Client::new();
         let resp = client
             .post(url)
@@ -132,10 +129,14 @@ impl LlmProvider for MiniMaxClient {
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatCompletionResponseStream> {
         use super::openai_compat::convert_request;
+        use async_openai::types::ChatCompletionStreamOptions;
         let mut request = request;
         request.messages = Self::normalize_messages_for_minimax(request.messages);
         let mut req = convert_request(request, &self.model);
         req.stream = Some(true);
+        req.stream_options = Some(ChatCompletionStreamOptions {
+            include_usage: true,
+        });
         match self.client.chat().create_stream(req.clone()).await {
             Ok(stream) => Ok(stream),
             Err(e) => {

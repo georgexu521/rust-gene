@@ -29,7 +29,12 @@ impl Tool for CostTool {
     }
 
     async fn execute(&self, _params: Value, context: ToolContext) -> ToolResult {
-        let tracker = context.cost_tracker.as_ref().expect("cost_tracker not configured").lock().await;
+        let tracker = context
+            .cost_tracker
+            .as_ref()
+            .expect("cost_tracker not configured")
+            .lock()
+            .await;
 
         let total_requests = tracker.total_requests;
         let total_tokens = tracker.total_tokens.total;

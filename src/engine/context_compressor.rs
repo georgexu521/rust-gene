@@ -90,16 +90,19 @@ impl CompactMetadata {
             }
         }
 
-        Some((Self {
-            sequence: seq,
-            boundary_id: id,
-            preserved_tail_count: preserved,
-            messages_before: before_msgs,
-            messages_after: after_msgs,
-            tokens_before: before_tok,
-            tokens_after: after_tok,
-            timestamp,
-        }, clean_text))
+        Some((
+            Self {
+                sequence: seq,
+                boundary_id: id,
+                preserved_tail_count: preserved,
+                messages_before: before_msgs,
+                messages_after: after_msgs,
+                tokens_before: before_tok,
+                tokens_after: after_tok,
+                timestamp,
+            },
+            clean_text,
+        ))
     }
 }
 
@@ -1036,7 +1039,8 @@ impl ContextCompressor {
     /// - Heavy (>85%): 裁剪 + LLM 摘要
     pub async fn compress_async(&mut self, messages: &[Message]) -> Vec<Message> {
         let tokens_before = estimate_messages_tokens(messages);
-        let total = tokens_before + self.budget.system_prompt_tokens + self.budget.tool_schemas_tokens;
+        let total =
+            tokens_before + self.budget.system_prompt_tokens + self.budget.tool_schemas_tokens;
         let usage_ratio = total as f64 / self.budget.max_context_tokens as f64;
 
         let level = CompressionLevel::auto_select(
@@ -1293,7 +1297,11 @@ impl ContextCompressor {
 
         self.compression_count += 1;
 
-        info!("Compressed to {} messages (compact_boundary #{})", result.len(), self.compact_sequence);
+        info!(
+            "Compressed to {} messages (compact_boundary #{})",
+            result.len(),
+            self.compact_sequence
+        );
         result
     }
 
@@ -1536,7 +1544,9 @@ impl ContextCompressor {
                     // 只有当工具结果同时包含错误和成功标志时，才认为"错误已解决"
                     let lower = content.to_lowercase();
                     let has_error = lower.contains("error") || lower.contains("failed");
-                    let has_success = lower.contains("ok") || lower.contains("success") || lower.contains("passed");
+                    let has_success = lower.contains("ok")
+                        || lower.contains("success")
+                        || lower.contains("passed");
                     if has_error && has_success {
                         new_summary
                             .progress_done
@@ -2281,7 +2291,7 @@ mod tests {
                         completion_tokens: 50,
                         total_tokens: 150,
                         reasoning_tokens: None,
-                    cached_tokens: None,
+                        cached_tokens: None,
                     }),
                 }),
                 None => Err(anyhow::anyhow!("Mock LLM error")),
@@ -2413,7 +2423,10 @@ mod tests {
                     arguments: serde_json::json!({"command": "echo done"}),
                 }],
             ));
-            messages.push(Message::tool(format!("call_{}", i), "Command executed successfully".to_string()));
+            messages.push(Message::tool(
+                format!("call_{}", i),
+                "Command executed successfully".to_string(),
+            ));
         }
         messages
     }
@@ -2425,7 +2438,11 @@ mod tests {
         let tokens = estimate_messages_tokens(&messages);
 
         // With 50 turns, we should have token usage (threshold adjusted for estimation method)
-        assert!(tokens > 1000, "50 turns should use >1000 tokens, got {}", tokens);
+        assert!(
+            tokens > 1000,
+            "50 turns should use >1000 tokens, got {}",
+            tokens
+        );
 
         // Test that micro_compress doesn't panic and produces valid output
         let mut compressor = ContextCompressor::new(128_000);
@@ -2446,7 +2463,11 @@ mod tests {
         let tokens = estimate_messages_tokens(&messages);
 
         // With 100 turns, significant token usage
-        assert!(tokens > 2000, "100 turns should use >2000 tokens, got {}", tokens);
+        assert!(
+            tokens > 2000,
+            "100 turns should use >2000 tokens, got {}",
+            tokens
+        );
 
         // Test micro_compress
         let mut compressor = ContextCompressor::new(128_000);
@@ -2466,7 +2487,11 @@ mod tests {
         let tokens = estimate_messages_tokens(&messages);
 
         // With 200 turns, very high token usage
-        assert!(tokens > 4000, "200 turns should use >4000 tokens, got {}", tokens);
+        assert!(
+            tokens > 4000,
+            "200 turns should use >4000 tokens, got {}",
+            tokens
+        );
 
         // Test micro_compress handles large inputs
         let mut compressor = ContextCompressor::new(128_000);
@@ -2483,8 +2508,12 @@ mod tests {
     fn test_micro_compress_quality_preservation() {
         // Verify that micro_compress preserves critical content
         let mut messages = vec![Message::system("You are a helpful assistant.")];
-        messages.push(Message::user("Remember: the API endpoint is at localhost:8080".to_string()));
-        messages.push(Message::assistant("I'll remember that the API is at localhost:8080".to_string()));
+        messages.push(Message::user(
+            "Remember: the API endpoint is at localhost:8080".to_string(),
+        ));
+        messages.push(Message::assistant(
+            "I'll remember that the API is at localhost:8080".to_string(),
+        ));
 
         // Add many filler messages
         for i in 0..50 {
@@ -2495,10 +2524,15 @@ mod tests {
         // Critical info should be preserved - check in original messages
         let api_reference = "localhost:8080";
         let has_critical = messages.iter().any(|m| match m {
-            Message::User { content, .. } | Message::Assistant { content, .. } => content.contains(api_reference),
+            Message::User { content, .. } | Message::Assistant { content, .. } => {
+                content.contains(api_reference)
+            }
             _ => false,
         });
-        assert!(has_critical, "Original messages should contain critical info");
+        assert!(
+            has_critical,
+            "Original messages should contain critical info"
+        );
 
         let mut compressor = ContextCompressor::new(128_000);
         let compressed = compressor.micro_compress(&messages);
@@ -2506,10 +2540,15 @@ mod tests {
         // After compression, the critical info should still be present
         // (micro_compress doesn't remove content, just trims tool results)
         let preserved = compressed.iter().any(|m| match m {
-            Message::User { content, .. } | Message::Assistant { content, .. } => content.contains(api_reference),
+            Message::User { content, .. } | Message::Assistant { content, .. } => {
+                content.contains(api_reference)
+            }
             _ => false,
         });
-        assert!(preserved, "Compressed messages should preserve critical info");
+        assert!(
+            preserved,
+            "Compressed messages should preserve critical info"
+        );
     }
 
     #[test]
@@ -2531,7 +2570,10 @@ mod tests {
         );
 
         let stats = compressor.stats();
-        assert!(stats.compression_count >= 1, "Should have compressed at least once");
+        assert!(
+            stats.compression_count >= 1,
+            "Should have compressed at least once"
+        );
     }
 
     #[test]
@@ -2660,7 +2702,10 @@ mod tests {
 
         // With small window, even few messages might approach limit
         let warning = compressor.warning_level(&low_messages);
-        assert!(matches!(warning, CompressionWarning::None | CompressionWarning::Approaching));
+        assert!(matches!(
+            warning,
+            CompressionWarning::None | CompressionWarning::Approaching
+        ));
     }
 
     #[test]
@@ -2682,7 +2727,8 @@ mod tests {
         assert!(marker.contains("id=cb-test-123"));
 
         // Parse it back
-        let (parsed, clean) = CompactMetadata::parse_from_text(&format!("Summary text{}", marker)).unwrap();
+        let (parsed, clean) =
+            CompactMetadata::parse_from_text(&format!("Summary text{}", marker)).unwrap();
         assert_eq!(parsed.sequence, 1);
         assert_eq!(parsed.boundary_id, "cb-test-123");
         assert_eq!(parsed.preserved_tail_count, 3);
@@ -2735,11 +2781,17 @@ mod tests {
 
         // hot_files 应该包含出现频率高的文件
         assert!(!smc.hot_files.is_empty(), "Should detect hot files");
-        assert!(smc.hot_files.iter().any(|f| f.contains("src/main.rs")), "Should detect main.rs");
+        assert!(
+            smc.hot_files.iter().any(|f| f.contains("src/main.rs")),
+            "Should detect main.rs"
+        );
 
         // pending_tasks 应该包含 TODO
         assert!(!smc.pending_tasks.is_empty(), "Should detect pending tasks");
-        assert!(smc.pending_tasks.iter().any(|t| t.contains("TODO")), "Should detect TODO");
+        assert!(
+            smc.pending_tasks.iter().any(|t| t.contains("TODO")),
+            "Should detect TODO"
+        );
     }
 
     #[test]
@@ -2765,7 +2817,8 @@ mod tests {
     #[test]
     fn test_extract_compact_boundaries_from_messages() {
         let msg1 = Message::system("Normal system message");
-        let msg2 = Message::user(format!("User message with boundary{}\nmore text",
+        let msg2 = Message::user(format!(
+            "User message with boundary{}\nmore text",
             CompactMetadata {
                 sequence: 2,
                 boundary_id: "cb-abc".to_string(),
@@ -2775,7 +2828,8 @@ mod tests {
                 tokens_before: 5000,
                 tokens_after: 2000,
                 timestamp: "2026-04-23T10:00:00+08:00".to_string(),
-            }.to_boundary_marker()
+            }
+            .to_boundary_marker()
         ));
 
         let boundaries = extract_compact_boundaries(&[msg1, msg2]);

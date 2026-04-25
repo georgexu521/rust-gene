@@ -348,7 +348,12 @@ impl BatchRefactor {
 
         // Step 2: 运行项目验证
         let verify_result = if is_rust {
-            Self::run_command_in_worktree(worktree_path, "cargo", &["check", "--message-format=short"]).await
+            Self::run_command_in_worktree(
+                worktree_path,
+                "cargo",
+                &["check", "--message-format=short"],
+            )
+            .await
         } else if is_node {
             Self::run_command_in_worktree(worktree_path, "npm", &["run", "lint"]).await
         } else if is_python {
@@ -414,18 +419,29 @@ impl BatchRefactor {
         if output.status.success() {
             Ok(format!("{}{}", stdout, stderr))
         } else {
-            Err(format!("Exit code: {:?}\nstdout: {}\nstderr: {}",
-                output.status.code(), stdout, stderr))
+            Err(format!(
+                "Exit code: {:?}\nstdout: {}\nstderr: {}",
+                output.status.code(),
+                stdout,
+                stderr
+            ))
         }
     }
 
     /// 清理 worktree
     pub async fn cleanup_worktree(&self, unit: &RefactorUnit) -> Result<(), String> {
-        let worktree_path = self.working_dir.parent().unwrap_or(&self.working_dir).join(format!(
-            "{}-wt-{}",
-            self.working_dir.file_name().unwrap_or_default().to_string_lossy(),
-            unit.id
-        ));
+        let worktree_path = self
+            .working_dir
+            .parent()
+            .unwrap_or(&self.working_dir)
+            .join(format!(
+                "{}-wt-{}",
+                self.working_dir
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+                unit.id
+            ));
 
         if worktree_path.exists() {
             // 先移除 worktree

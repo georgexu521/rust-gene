@@ -108,16 +108,24 @@ impl MessageSearchState {
                     // 字符安全的上下文提取
                     let context_start = match_start.saturating_sub(30);
                     let context_end = (match_end + 30).min(msg_chars.len());
-                    let preview_chars: String = msg_chars[context_start..context_end].iter().collect();
+                    let preview_chars: String =
+                        msg_chars[context_start..context_end].iter().collect();
                     let preview = format!(
                         "{}{}{}",
                         if context_start > 0 { "..." } else { "" },
                         preview_chars,
-                        if context_end < msg_chars.len() { "..." } else { "" }
+                        if context_end < msg_chars.len() {
+                            "..."
+                        } else {
+                            ""
+                        }
                     );
 
                     // 计算行号（基于原始消息的字符位置）
-                    let line_number = msg_chars[..match_start].iter().filter(|&&c| c == '\n').count();
+                    let line_number = msg_chars[..match_start]
+                        .iter()
+                        .filter(|&&c| c == '\n')
+                        .count();
 
                     self.results.push(SearchResult {
                         message_index: msg_idx,

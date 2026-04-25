@@ -67,7 +67,11 @@ impl LlmSecurityClassifier {
         let params_str = serde_json::to_string_pretty(params).unwrap_or_default();
         // 截断过长的参数（控制成本）
         let truncated = if params_str.len() > 800 {
-            format!("{}... [truncated, {} bytes total]", &params_str[..800], params_str.len())
+            format!(
+                "{}... [truncated, {} bytes total]",
+                &params_str[..800],
+                params_str.len()
+            )
         } else {
             params_str
         };
@@ -95,10 +99,7 @@ impl LlmSecurityClassifier {
             _ => super::PermissionDecision::Ask,
         };
 
-        let confidence = parsed["confidence"]
-            .as_f64()
-            .unwrap_or(0.5)
-            .clamp(0.0, 1.0) as f32;
+        let confidence = parsed["confidence"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) as f32;
 
         let reason = parsed["reason"]
             .as_str()
@@ -233,10 +234,7 @@ mod tests {
     #[test]
     fn test_extract_json_plain() {
         let raw = r#"{"decision": "deny", "confidence": 0.95, "reason": "dangerous"}"#;
-        assert_eq!(
-            LlmSecurityClassifier::extract_json(raw),
-            raw
-        );
+        assert_eq!(LlmSecurityClassifier::extract_json(raw), raw);
     }
 
     #[test]
@@ -276,7 +274,8 @@ mod tests {
     #[test]
     fn test_build_classification_prompt_truncation() {
         let large_params = serde_json::json!({"content": "x".repeat(2000)});
-        let prompt = LlmSecurityClassifier::build_classification_prompt("file_write", &large_params);
+        let prompt =
+            LlmSecurityClassifier::build_classification_prompt("file_write", &large_params);
         assert!(prompt.contains("truncated"));
         assert!(prompt.len() < 1500);
     }

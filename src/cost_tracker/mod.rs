@@ -623,10 +623,7 @@ Tool Usage:
             .iter()
             .map(|(model, stats)| {
                 let cached_info = if stats.tokens.cached > 0 {
-                    format!(
-                        " (cached: {})",
-                        stats.tokens.cached
-                    )
+                    format!(" (cached: {})", stats.tokens.cached)
                 } else {
                     String::new()
                 };
@@ -694,7 +691,12 @@ fn now_epoch_ms() -> u64 {
 }
 
 /// 计算成本（基于 Kimi API 定价）
-fn calculate_cost(model: &str, prompt_tokens: u64, completion_tokens: u64, cached_tokens: u64) -> f64 {
+fn calculate_cost(
+    model: &str,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    cached_tokens: u64,
+) -> f64 {
     // 价格（每 1K tokens）
     let (prompt_price, completion_price) = match model {
         "kimi-k2.5" => (0.0015, 0.0060), // $1.5 / $6.0 per 1M tokens

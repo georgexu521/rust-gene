@@ -147,10 +147,27 @@ impl SocraticSession {
 
         // 条件 2：复杂关键词
         let complex_keywords = [
-            "设计", "重构", "架构", "分析", "评估", "优化",
-            "design", "refactor", "architecture", "analyze", "evaluate", "optimize",
-            "系统", "模块", "集成", "方案", "策略",
-            "system", "module", "integration", "strategy",
+            "设计",
+            "重构",
+            "架构",
+            "分析",
+            "评估",
+            "优化",
+            "design",
+            "refactor",
+            "architecture",
+            "analyze",
+            "evaluate",
+            "optimize",
+            "系统",
+            "模块",
+            "集成",
+            "方案",
+            "策略",
+            "system",
+            "module",
+            "integration",
+            "strategy",
         ];
         if complex_keywords.iter().any(|kw| t.contains(kw)) {
             return true;
@@ -164,7 +181,15 @@ impl SocraticSession {
         }
 
         // 条件 4：模糊/探索性词汇
-        let fuzzy_keywords = ["看看", "研究", "调研", "调查", "review", "research", "investigate"];
+        let fuzzy_keywords = [
+            "看看",
+            "研究",
+            "调研",
+            "调查",
+            "review",
+            "research",
+            "investigate",
+        ];
         if fuzzy_keywords.iter().any(|kw| t.contains(kw)) {
             return true;
         }
@@ -664,7 +689,9 @@ mod tests {
 
     #[test]
     fn test_should_auto_trigger_multi_domain() {
-        assert!(SocraticSession::should_auto_trigger("设计数据库表并编写前端界面"));
+        assert!(SocraticSession::should_auto_trigger(
+            "设计数据库表并编写前端界面"
+        ));
     }
 
     #[test]

@@ -83,24 +83,29 @@ impl Tool for GitHubTool {
         let action = params["action"].as_str().unwrap_or("collect");
 
         match action {
-            "collect" => {
-                match crate::github::GitHubData::collect().await {
-                    Ok(data) => {
-                        let formatted = data.format_for_llm();
-                        if formatted.trim().is_empty() {
-                            ToolResult::success(
+            "collect" => match crate::github::GitHubData::collect().await {
+                Ok(data) => {
+                    let formatted = data.format_for_llm();
+                    if formatted.trim().is_empty() {
+                        ToolResult::success(
                                 "No GitHub data available. Make sure you are in a Git repository with a GitHub remote and that the `gh` CLI is installed and authenticated."
                             )
-                        } else {
-                            ToolResult::success(formatted)
-                        }
+                    } else {
+                        ToolResult::success(formatted)
                     }
-                    Err(e) => ToolResult::error(format!("Failed to collect GitHub data: {}", e)),
                 }
-            }
+                Err(e) => ToolResult::error(format!("Failed to collect GitHub data: {}", e)),
+            },
             "pr_list" => {
                 let out = Command::new("gh")
-                    .args(["pr", "list", "--limit", "20", "--json", "number,title,author,state,url"])
+                    .args([
+                        "pr",
+                        "list",
+                        "--limit",
+                        "20",
+                        "--json",
+                        "number,title,author,state,url",
+                    ])
                     .output()
                     .await;
                 match out {
@@ -116,7 +121,14 @@ impl Tool for GitHubTool {
             }
             "issue_list" => {
                 let out = Command::new("gh")
-                    .args(["issue", "list", "--limit", "20", "--json", "number,title,author,state,url"])
+                    .args([
+                        "issue",
+                        "list",
+                        "--limit",
+                        "20",
+                        "--json",
+                        "number,title,author,state,url",
+                    ])
                     .output()
                     .await;
                 match out {
@@ -161,7 +173,16 @@ impl Tool for GitHubTool {
                 }
 
                 let mut cmd = Command::new("gh");
-                cmd.args(["pr", "create", "--title", title, "--base", base, "--head", &current_branch]);
+                cmd.args([
+                    "pr",
+                    "create",
+                    "--title",
+                    title,
+                    "--base",
+                    base,
+                    "--head",
+                    &current_branch,
+                ]);
                 if draft {
                     cmd.arg("--draft");
                 }
@@ -198,7 +219,9 @@ mod tests {
     #[tokio::test]
     async fn test_github_tool_collect() {
         let tool = GitHubTool;
-        let result = tool.execute(json!({"action": "collect"}), ToolContext::new(".", "test")).await;
+        let result = tool
+            .execute(json!({"action": "collect"}), ToolContext::new(".", "test"))
+            .await;
         // 结果可能成功也可能提示 gh 未安装
         assert!(
             result.success,

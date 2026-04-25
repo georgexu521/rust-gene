@@ -119,7 +119,8 @@ impl Plan {
     }
 
     pub fn add_step(mut self, description: impl Into<String>, tool: Option<&str>) -> Self {
-        self.steps.push(PlanStep::new(description, tool.map(String::from)));
+        self.steps
+            .push(PlanStep::new(description, tool.map(String::from)));
         self
     }
 

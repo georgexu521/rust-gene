@@ -24,6 +24,7 @@ pub mod mcp;
 pub mod mcp_server;
 pub mod plan_mode;
 pub mod prompt_builder;
+pub mod prompt_context;
 pub mod query_engine;
 pub mod socratic;
 pub mod socratic_executor;
@@ -32,8 +33,8 @@ pub mod swarm;
 pub mod symbol_index;
 pub mod tool_orchestration;
 pub mod turn_state;
-pub mod worktree;
 pub mod workflow;
+pub mod worktree;
 
 pub use query_engine::QueryEngine;
 
@@ -171,6 +172,9 @@ pub struct ConversationLoopBuilder {
     llm_memory_extraction: bool,
     approval_channel: Option<std::sync::Arc<self::conversation_loop::ToolApprovalChannel>>,
     allowed_tools: Option<std::collections::HashSet<String>>,
+    compressor: Option<
+        std::sync::Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
+    >,
 }
 
 impl ConversationLoopBuilder {
@@ -196,6 +200,7 @@ impl ConversationLoopBuilder {
             llm_memory_extraction: false,
             approval_channel: None,
             allowed_tools: None,
+            compressor: None,
         }
     }
 
@@ -269,6 +274,24 @@ impl ConversationLoopBuilder {
         self
     }
 
+    pub fn with_compressor(
+        mut self,
+        compressor: std::sync::Arc<
+            tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>,
+        >,
+    ) -> Self {
+        self.compressor = Some(compressor);
+        self
+    }
+
+    pub fn with_compression(mut self, max_context_tokens: u64) -> Self {
+        self.compressor = Some(std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::engine::context_compressor::ContextCompressor::new(max_context_tokens)
+                .with_llm_provider(self.provider.clone(), &self.model),
+        )));
+        self
+    }
+
     pub fn build(self) -> self::conversation_loop::ConversationLoop {
         let mut lp = self::conversation_loop::ConversationLoop::new(
             self.provider,
@@ -303,6 +326,9 @@ impl ConversationLoopBuilder {
         }
         if let Some(allowed_tools) = self.allowed_tools {
             lp = lp.with_allowed_tools(allowed_tools);
+        }
+        if let Some(compressor) = self.compressor {
+            lp = lp.with_compressor(compressor);
         }
 
         lp

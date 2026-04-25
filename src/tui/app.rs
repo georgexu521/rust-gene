@@ -1,4 +1,4 @@
-//! TUI 应用状态管理
+//! 交互式终端 CLI 应用状态管理
 //!
 //! 对应 Claude Code 中的 AppState 概念
 
@@ -7,14 +7,38 @@ use crate::permissions::{PermissionMode, PermissionRules, RuleSource, SourcedRul
 use crate::state::{AppContext, MessageItem, MessageRole, TaskItem};
 use crate::tools::Tool;
 use crate::tui::components::input::InputState;
+use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunView};
 use futures::StreamExt;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use super::commands::{default_command_registry, CommandRegistry};
+
+const LONG_PASTE_CHAR_THRESHOLD: usize = 600;
+const LONG_PASTE_LINE_THRESHOLD: usize = 12;
+
+#[derive(Debug, Clone)]
+struct PastedBlock {
+    placeholder: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StreamUsageSnapshot {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub reasoning_tokens: Option<u32>,
+    pub cached_tokens: Option<u32>,
+}
+
+impl StreamUsageSnapshot {
+    pub fn total_tokens(self) -> u32 {
+        self.prompt_tokens + self.completion_tokens
+    }
+}
 
 pub(crate) fn permission_mode_name(mode: PermissionMode) -> &'static str {
     match mode {
@@ -34,6 +58,149 @@ pub(crate) fn parse_permission_mode(mode: &str) -> Option<PermissionMode> {
         "read_only" | "readonly" => Some(PermissionMode::ReadOnly),
         "once" => Some(PermissionMode::Once),
         _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemorySaveTarget {
+    Auto,
+    User,
+    Topic,
+}
+
+fn parse_memory_save_args(args: &str) -> (MemorySaveTarget, Option<&str>, &str) {
+    let trimmed = args.trim();
+    if let Some(rest) = trimmed.strip_prefix("--user ") {
+        return (MemorySaveTarget::User, None, rest.trim());
+    }
+    if let Some(rest) = trimmed.strip_prefix("--topic=") {
+        let mut parts = rest.trim().splitn(2, char::is_whitespace);
+        let topic = parts.next().filter(|part| !part.trim().is_empty());
+        let content = parts.next().unwrap_or("").trim();
+        return (MemorySaveTarget::Topic, topic, content);
+    }
+    if let Some(rest) = trimmed.strip_prefix("--topic ") {
+        let mut parts = rest.trim().splitn(2, char::is_whitespace);
+        let topic = parts.next().filter(|part| !part.trim().is_empty());
+        let content = parts.next().unwrap_or("").trim();
+        return (MemorySaveTarget::Topic, topic, content);
+    }
+    (MemorySaveTarget::Auto, None, trimmed)
+}
+
+fn build_welcome_content(is_first_run: bool) -> String {
+    if is_first_run {
+        return "Welcome to Priority Agent\n\nPress Enter to start onboarding, or type /skip to skip.\n\nTips:\n- Ctrl+P opens the command palette\n- Type ? on an empty prompt for shortcuts\n- Use /init to create a project scaffold".to_string();
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let project_name = cwd
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("workspace");
+    let branch = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(&cwd)
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                (!text.is_empty()).then_some(text)
+            } else {
+                None
+            }
+        });
+    let markers = [
+        ("Rust", "Cargo.toml"),
+        ("Node", "package.json"),
+        ("Python", "pyproject.toml"),
+        ("Git", ".git"),
+        ("Agent", "AGENTS.md"),
+    ];
+    let detected = markers
+        .iter()
+        .filter_map(|(label, path)| cwd.join(path).exists().then_some(*label))
+        .collect::<Vec<_>>();
+    let detected = if detected.is_empty() {
+        "plain workspace".to_string()
+    } else {
+        detected.join(", ")
+    };
+
+    format!(
+        "Welcome to Priority Agent\n\nProject: {}\nPath: {}\n{}\n{}\nDetected: {}\n{}\n\nTips:\n- Ctrl+P opens commands; empty ? shows shortcuts\n- Ctrl+M changes model; Ctrl+L changes provider\n- Ctrl+O cycles tool details\n- /settings changes model, theme, permissions, and keys\n- /init <name> creates a project scaffold",
+        project_name,
+        cwd.display(),
+        branch
+            .map(|b| format!("Branch: {}", b))
+            .unwrap_or_else(|| "Branch: none".to_string()),
+        workspace_change_preview(&cwd),
+        detected,
+        recent_activity_preview()
+    )
+}
+
+fn workspace_change_preview(cwd: &std::path::Path) -> String {
+    let Ok(out) = std::process::Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(cwd)
+        .output()
+    else {
+        return "Changes: not a git repository".to_string();
+    };
+    if !out.status.success() {
+        return "Changes: not a git repository".to_string();
+    }
+    let lines = String::from_utf8_lossy(&out.stdout);
+    let changed = lines.lines().filter(|line| !line.trim().is_empty()).count();
+    if changed == 0 {
+        "Changes: clean".to_string()
+    } else {
+        format!("Changes: {} files", changed)
+    }
+}
+
+fn recent_activity_preview() -> String {
+    let Ok(manager) = crate::tui::session_manager::TuiSessionManager::new() else {
+        return "Recent: unavailable".to_string();
+    };
+    let Ok(sessions) = manager.list_sessions(3) else {
+        return "Recent: unavailable".to_string();
+    };
+    if sessions.is_empty() {
+        return "Recent: no prior sessions".to_string();
+    }
+
+    let mut lines = vec!["Recent:".to_string()];
+    for session in sessions {
+        let count = manager.message_count(&session.id).unwrap_or_default();
+        let mut title = if session.title.trim().is_empty() {
+            format!("Session {}", &session.id[..8.min(session.id.len())])
+        } else {
+            session.title
+        };
+        if title.chars().count() > 42 {
+            title = format!("{}…", title.chars().take(41).collect::<String>());
+        }
+        lines.push(format!(
+            "  - {} ({} msgs, {})",
+            title, count, session.updated_at
+        ));
+    }
+    lines.join("\n")
+}
+
+fn read_git_branch_fast(cwd: &std::path::Path) -> Option<String> {
+    let head_path = cwd.join(".git").join("HEAD");
+    let head = std::fs::read_to_string(head_path).ok()?;
+    let head = head.trim();
+    if let Some(branch) = head.strip_prefix("ref: refs/heads/") {
+        Some(branch.to_string())
+    } else if head.len() >= 7 {
+        Some(head.chars().take(7).collect())
+    } else {
+        None
     }
 }
 
@@ -129,7 +296,7 @@ pub(crate) fn persist_permission_rule(
     Ok(path)
 }
 
-/// TUI 应用模式
+/// 交互式 CLI 应用模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
     Chat,
@@ -141,9 +308,32 @@ pub enum AppMode {
     VimNormal,
     Onboarding,
     MessageSearch,
+    CommandPalette,
+    ShortcutHelp,
+    ModelSelect,
+    ProviderSelect,
 }
 
-/// TUI 应用状态
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub provider: String,
+    pub model: String,
+    pub note: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderChoice {
+    pub name: String,
+    pub provider_type: String,
+    pub model: String,
+    pub base_url: String,
+    pub configured: bool,
+    pub active: bool,
+    pub note: String,
+}
+
+/// 交互式 CLI 应用状态
 pub struct TuiApp {
     /// 当前模式
     pub mode: AppMode,
@@ -175,8 +365,19 @@ pub struct TuiApp {
     pub streaming_engine: Option<Arc<StreamingQueryEngine>>,
     /// 当前流式响应缓冲
     current_response: Arc<Mutex<String>>,
-    /// 正在使用的工具列表
-    active_tools: Arc<Mutex<Vec<String>>>,
+    /// 工具运行视图状态（后台流更新，前台 tick 同步快照）
+    tool_runs: Arc<Mutex<Vec<ToolRunView>>>,
+    /// 当前工具运行视图快照
+    pub tool_runs_snapshot: Vec<ToolRunView>,
+    /// 历史工具运行视图，按触发该轮的用户消息 id 锚定
+    pub tool_runs_by_message_id: HashMap<String, Vec<ToolRunView>>,
+    current_tool_anchor_id: Option<String>,
+    /// 是否展开工具 transcript 细节
+    pub transcript_expanded: bool,
+    /// 当前展开的单个工具 id；None 表示全部折叠
+    pub expanded_tool_run_id: Option<String>,
+    stream_usage: Arc<Mutex<Option<StreamUsageSnapshot>>>,
+    pub stream_usage_snapshot: Option<StreamUsageSnapshot>,
     /// 流是否已完成（由后台任务设置）
     stream_done: Arc<AtomicBool>,
     /// 后台流式任务句柄（用于取消）
@@ -236,6 +437,20 @@ pub struct TuiApp {
     pub plan_mode_label: Option<String>,
     /// Tick 计数器（用于 spinner 等动画）
     pub tick_count: usize,
+    /// 被折叠的长粘贴块，发送时还原
+    pasted_blocks: Vec<PastedBlock>,
+    /// 命令面板搜索词
+    pub command_palette_query: String,
+    /// 命令面板选中项
+    pub command_palette_selected: usize,
+    /// 模型选择器选中项
+    pub model_select_selected: usize,
+    /// 最近一次模型切换提示
+    pub model_notice: Option<String>,
+    /// Provider 选择器选中项
+    pub provider_select_selected: usize,
+    /// 最近一次 provider 切换提示
+    pub provider_notice: Option<String>,
 }
 
 impl TuiApp {
@@ -278,11 +493,7 @@ impl TuiApp {
         let is_first_run = onboarding_manager.is_first_run();
 
         // 添加欢迎消息
-        let welcome_content = if is_first_run {
-            "Welcome to Priority Agent! This is your first time here.\nPress Enter to start the onboarding guide, or type /skip to skip.".to_string()
-        } else {
-            "Welcome to Priority Agent! Type your message and press Enter to chat.\nPress Ctrl+C to exit.".to_string()
-        };
+        let welcome_content = build_welcome_content(is_first_run);
         let welcome_message = MessageItem {
             id: "welcome".to_string(),
             role: MessageRole::System,
@@ -317,7 +528,14 @@ impl TuiApp {
             history_index: None,
             streaming_engine: engine,
             current_response: Arc::new(Mutex::new(String::new())),
-            active_tools: Arc::new(Mutex::new(Vec::new())),
+            tool_runs: Arc::new(Mutex::new(Vec::new())),
+            tool_runs_snapshot: Vec::new(),
+            tool_runs_by_message_id: HashMap::new(),
+            current_tool_anchor_id: None,
+            transcript_expanded: false,
+            expanded_tool_run_id: None,
+            stream_usage: Arc::new(Mutex::new(None)),
+            stream_usage_snapshot: None,
             stream_done: Arc::new(AtomicBool::new(true)),
             stream_handle: None,
             session_manager,
@@ -356,18 +574,26 @@ impl TuiApp {
                 crate::tui::theme::Theme::from_name(&config.ui.theme)
             },
             onboarding_state,
+            pasted_blocks: Vec::new(),
+            command_palette_query: String::new(),
+            command_palette_selected: 0,
+            model_select_selected: 0,
+            model_notice: None,
+            provider_select_selected: 0,
+            provider_notice: None,
         }
     }
 
     /// 提交用户消息
     pub async fn submit_message(&mut self) {
-        let content = self.input.value().to_string();
+        let content = self.expand_paste_placeholders(self.input.value());
         if content.trim().is_empty() {
             return;
         }
 
         // 清空输入
         self.input.clear();
+        self.pasted_blocks.clear();
 
         // 处理斜杠命令
         if content.starts_with('/') {
@@ -376,6 +602,304 @@ impl TuiApp {
         }
 
         self.send_message(content).await;
+    }
+
+    /// 插入粘贴内容；长粘贴折叠为占位符，避免输入区撑满屏幕
+    pub fn insert_paste(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+
+        let char_count = text.chars().count();
+        let line_count = text.lines().count().max(1);
+        if char_count < LONG_PASTE_CHAR_THRESHOLD && line_count < LONG_PASTE_LINE_THRESHOLD {
+            self.input.insert_str(&text);
+            return;
+        }
+
+        let paste_id = self.pasted_blocks.len() + 1;
+        let placeholder = format!(
+            "[[paste:{} {} lines {} chars]]",
+            paste_id, line_count, char_count
+        );
+        self.pasted_blocks.push(PastedBlock {
+            placeholder: placeholder.clone(),
+            content: text,
+        });
+        self.input.insert_str(&placeholder);
+    }
+
+    pub fn pasted_block_count(&self) -> usize {
+        self.pasted_blocks
+            .iter()
+            .filter(|block| self.input.value().contains(&block.placeholder))
+            .count()
+    }
+
+    fn expand_paste_placeholders(&self, content: &str) -> String {
+        let mut expanded = content.to_string();
+        for block in &self.pasted_blocks {
+            expanded = expanded.replace(&block.placeholder, &block.content);
+        }
+        expanded
+    }
+
+    pub fn open_command_palette(&mut self) {
+        self.command_palette_query.clear();
+        self.command_palette_selected = 0;
+        self.mode = AppMode::CommandPalette;
+    }
+
+    pub fn close_command_palette(&mut self) {
+        self.command_palette_query.clear();
+        self.command_palette_selected = 0;
+        self.mode = if self.vim_mode {
+            AppMode::VimNormal
+        } else {
+            AppMode::Chat
+        };
+    }
+
+    pub fn command_palette_items(&self) -> Vec<&crate::tui::commands::CommandDef> {
+        self.command_registry
+            .palette_items(&self.command_palette_query, 18)
+    }
+
+    pub fn command_palette_next(&mut self) {
+        let len = self.command_palette_items().len();
+        if len > 0 {
+            self.command_palette_selected = (self.command_palette_selected + 1).min(len - 1);
+        }
+    }
+
+    pub fn command_palette_prev(&mut self) {
+        self.command_palette_selected = self.command_palette_selected.saturating_sub(1);
+    }
+
+    pub fn command_palette_push(&mut self, c: char) {
+        self.command_palette_query.push(c);
+        self.command_palette_selected = 0;
+    }
+
+    pub fn command_palette_backspace(&mut self) {
+        self.command_palette_query.pop();
+        self.command_palette_selected = 0;
+    }
+
+    pub fn accept_command_palette_selection(&mut self) {
+        let selected = self
+            .command_palette_items()
+            .get(self.command_palette_selected)
+            .map(|cmd| cmd.name.to_string());
+        if let Some(name) = selected {
+            self.input.set_value(format!("{} ", name));
+        }
+        self.close_command_palette();
+    }
+
+    pub fn open_shortcut_help(&mut self) {
+        self.mode = AppMode::ShortcutHelp;
+    }
+
+    pub fn close_shortcut_help(&mut self) {
+        self.mode = if self.vim_mode {
+            AppMode::VimNormal
+        } else {
+            AppMode::Chat
+        };
+    }
+
+    pub fn open_model_select(&mut self) {
+        self.model_select_selected = self
+            .model_choices()
+            .iter()
+            .position(|choice| choice.active)
+            .unwrap_or(0);
+        self.mode = AppMode::ModelSelect;
+    }
+
+    pub fn close_model_select(&mut self) {
+        self.mode = if self.vim_mode {
+            AppMode::VimNormal
+        } else {
+            AppMode::Chat
+        };
+    }
+
+    pub fn model_choices(&self) -> Vec<ModelChoice> {
+        let provider = self.current_provider_label();
+        let current = self.current_model_label();
+        let mut models = match provider.as_str() {
+            "MiniMax" => vec!["MiniMax-M2.7", "MiniMax-M1"],
+            "OpenAI" => vec!["gpt-4o", "gpt-4o-mini"],
+            "Kimi" => vec!["kimi-k2.5", "kimi-k2.5-thinking"],
+            _ => vec![current.as_str()],
+        };
+        if !models.iter().any(|m| *m == current) {
+            models.insert(0, current.as_str());
+        }
+        models
+            .into_iter()
+            .map(|model| ModelChoice {
+                provider: provider.clone(),
+                model: model.to_string(),
+                note: if model == current {
+                    "current".to_string()
+                } else {
+                    "same provider, takes effect next request".to_string()
+                },
+                active: model == current,
+            })
+            .collect()
+    }
+
+    pub fn model_select_next(&mut self) {
+        let len = self.model_choices().len();
+        if len > 0 {
+            self.model_select_selected = (self.model_select_selected + 1).min(len - 1);
+        }
+    }
+
+    pub fn model_select_prev(&mut self) {
+        self.model_select_selected = self.model_select_selected.saturating_sub(1);
+    }
+
+    pub fn accept_model_selection(&mut self) {
+        let Some(choice) = self
+            .model_choices()
+            .get(self.model_select_selected)
+            .cloned()
+        else {
+            self.close_model_select();
+            return;
+        };
+        if let Some(engine) = &self.streaming_engine {
+            engine.set_model(choice.model.clone());
+        }
+        if let Ok(mut config) = crate::services::config::AppConfig::load() {
+            config.api.model = choice.model.clone();
+            let _ = config.save();
+        }
+        self.model_notice = Some(format!("Model switched to {}", choice.model));
+        self.close_model_select();
+    }
+
+    pub fn open_provider_select(&mut self) {
+        self.provider_select_selected = self
+            .provider_choices()
+            .iter()
+            .position(|choice| choice.active)
+            .unwrap_or(0);
+        self.mode = AppMode::ProviderSelect;
+    }
+
+    pub fn close_provider_select(&mut self) {
+        self.mode = if self.vim_mode {
+            AppMode::VimNormal
+        } else {
+            AppMode::Chat
+        };
+    }
+
+    pub fn provider_choices(&self) -> Vec<ProviderChoice> {
+        let active_base = self.current_provider_base_url();
+        let registry = crate::services::api::provider::ProviderRegistry::from_env();
+        let mut choices = registry
+            .list_configs()
+            .into_iter()
+            .map(|cfg| {
+                let base_url = cfg.base_url.unwrap_or_default();
+                let active = !active_base.is_empty() && active_base == base_url;
+                ProviderChoice {
+                    name: cfg.name,
+                    provider_type: format!("{:?}", cfg.provider_type),
+                    model: cfg.default_model,
+                    base_url,
+                    configured: true,
+                    active,
+                    note: if active {
+                        "current".to_string()
+                    } else {
+                        "configured".to_string()
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for (name, env_key, default_model, provider_type) in [
+            ("minimax", "MINIMAX_API_KEY", "MiniMax-M2.7", "Minimax"),
+            ("openai", "OPENAI_API_KEY", "gpt-4o", "OpenAI"),
+            ("kimi", "MOONSHOT_API_KEY", "kimi-k2.5", "Kimi"),
+        ] {
+            if choices.iter().any(|choice| choice.name == name) {
+                continue;
+            }
+            choices.push(ProviderChoice {
+                name: name.to_string(),
+                provider_type: provider_type.to_string(),
+                model: default_model.to_string(),
+                base_url: String::new(),
+                configured: false,
+                active: false,
+                note: format!("missing {}", env_key),
+            });
+        }
+
+        choices.sort_by_key(|choice| (!choice.active, !choice.configured, choice.name.clone()));
+        choices
+    }
+
+    pub fn provider_select_next(&mut self) {
+        let len = self.provider_choices().len();
+        if len > 0 {
+            self.provider_select_selected = (self.provider_select_selected + 1).min(len - 1);
+        }
+    }
+
+    pub fn provider_select_prev(&mut self) {
+        self.provider_select_selected = self.provider_select_selected.saturating_sub(1);
+    }
+
+    pub fn accept_provider_selection(&mut self) -> String {
+        let Some(choice) = self
+            .provider_choices()
+            .get(self.provider_select_selected)
+            .cloned()
+        else {
+            self.close_provider_select();
+            return "No provider selected.".to_string();
+        };
+        let result = self.switch_provider_by_name(&choice.name);
+        self.close_provider_select();
+        result
+    }
+
+    pub fn switch_provider_by_name(&mut self, name: &str) -> String {
+        let registry = crate::services::api::provider::ProviderRegistry::from_env();
+        let Some(provider) = registry.get(name) else {
+            return format!("Provider '{}' is not configured. Use /provider list to inspect required environment variables.", name);
+        };
+        let Some(config) = registry.get_config(name).cloned() else {
+            return format!("Provider '{}' has no config.", name);
+        };
+        if let Some(engine) = &self.streaming_engine {
+            engine.set_provider(provider, config.default_model.clone());
+        }
+        if let Ok(mut app_config) = crate::services::config::AppConfig::load() {
+            app_config.api.model = config.default_model.clone();
+            app_config.api.base_url = config.base_url.clone().unwrap_or_default();
+            let _ = app_config.save();
+        }
+        self.provider_notice = Some(format!(
+            "Provider switched to {} ({})",
+            config.name, config.default_model
+        ));
+        format!(
+            "Provider switched to {}\nModel: {}\nBase URL: {}",
+            config.name,
+            config.default_model,
+            config.base_url.unwrap_or_default()
+        )
     }
 
     /// 发送消息到 LLM（核心逻辑，可被 skill 调用复用）
@@ -404,8 +928,9 @@ impl TuiApp {
         }
 
         // 添加用户消息
+        let user_msg_id = format!("msg_{}", self.messages.len());
         let user_msg = MessageItem {
-            id: format!("msg_{}", self.messages.len()),
+            id: user_msg_id.clone(),
             role: MessageRole::User,
             content: content.clone(),
             timestamp: std::time::SystemTime::now(),
@@ -436,16 +961,23 @@ impl TuiApp {
         self.scroll_to_bottom();
 
         // 使用流式引擎发送查询
-        if let Some(ref engine) = self.streaming_engine {
+        if let Some(engine) = self.streaming_engine.clone() {
             // 清空当前响应缓冲
             {
                 let mut resp = self.current_response.lock().await;
                 resp.clear();
             }
             {
-                let mut tools = self.active_tools.lock().await;
-                tools.clear();
+                let mut tool_runs = self.tool_runs.lock().await;
+                tool_runs.clear();
             }
+            {
+                let mut usage = self.stream_usage.lock().await;
+                *usage = None;
+            }
+            self.tool_runs_snapshot.clear();
+            self.current_tool_anchor_id = Some(user_msg_id);
+            self.stream_usage_snapshot = None;
             // 标记流未完成
             self.stream_done.store(false, Ordering::SeqCst);
 
@@ -458,11 +990,13 @@ impl TuiApp {
                 metadata: Default::default(),
             };
             self.messages.push(assistant_msg);
+            self.scroll_to_bottom();
 
             // 启动流式查询（在后台任务中）
             let engine_clone = engine.clone();
             let response_clone = self.current_response.clone();
-            let tools_clone = self.active_tools.clone();
+            let tool_runs_clone = self.tool_runs.clone();
+            let usage_clone = self.stream_usage.clone();
             let done_flag = self.stream_done.clone();
             let user_msg = content.clone();
 
@@ -475,28 +1009,54 @@ impl TuiApp {
                             let mut resp = response_clone.lock().await;
                             resp.push_str(&text);
                         }
-                        StreamEvent::ToolCallStart { name, .. } => {
-                            let mut tools = tools_clone.lock().await;
-                            tools.push(name);
+                        StreamEvent::ToolCallStart { id, name } => {
+                            let mut runs = tool_runs_clone.lock().await;
+                            upsert_tool_run(&mut runs, id, name);
                         }
-                        StreamEvent::ToolExecutionComplete { .. } => {
-                            let mut tools = tools_clone.lock().await;
-                            if !tools.is_empty() {
-                                tools.remove(0);
-                            }
+                        StreamEvent::ToolCallArgs { id, args_delta } => {
+                            let mut runs = tool_runs_clone.lock().await;
+                            with_tool_run(&mut runs, &id, |run| run.push_args_delta(&args_delta));
+                        }
+                        StreamEvent::ToolExecutionStart { id, name } => {
+                            let mut runs = tool_runs_clone.lock().await;
+                            with_tool_run(&mut runs, &id, |run| run.mark_running(name));
+                        }
+                        StreamEvent::ToolExecutionProgress { id, progress } => {
+                            let mut runs = tool_runs_clone.lock().await;
+                            with_tool_run(&mut runs, &id, |run| run.push_progress(progress));
+                        }
+                        StreamEvent::ToolExecutionComplete { id, result } => {
+                            let mut runs = tool_runs_clone.lock().await;
+                            with_tool_run(&mut runs, &id, |run| run.mark_complete(result));
                         }
                         StreamEvent::Complete => {
                             done_flag.store(true, Ordering::SeqCst);
                             break;
                         }
                         StreamEvent::PermissionRequest {
-                            tool_name, prompt, ..
+                            id,
+                            tool_name,
+                            arguments,
+                            prompt: _,
                         } => {
-                            let mut resp = response_clone.lock().await;
-                            resp.push_str(&format!(
-                                "\n\n[Permission request: {}]\n{}",
-                                tool_name, prompt
-                            ));
+                            let mut runs = tool_runs_clone.lock().await;
+                            with_tool_run(&mut runs, &id, |run| {
+                                run.mark_waiting_permission(tool_name, arguments)
+                            });
+                        }
+                        StreamEvent::Usage {
+                            prompt_tokens,
+                            completion_tokens,
+                            reasoning_tokens,
+                            cached_tokens,
+                        } => {
+                            let mut usage = usage_clone.lock().await;
+                            *usage = Some(StreamUsageSnapshot {
+                                prompt_tokens,
+                                completion_tokens,
+                                reasoning_tokens,
+                                cached_tokens,
+                            });
                         }
                         StreamEvent::Error(e) => {
                             let mut resp = response_clone.lock().await;
@@ -539,23 +1099,27 @@ impl TuiApp {
         }
 
         // 读取需要显示的内容和工具状态
-        let (display_response, tools_active, tools_names) = {
+        let (display_response, tool_runs_snapshot) = {
             let resp = self.current_response.lock().await;
-            let tools = self.active_tools.lock().await;
+            let tool_runs = self.tool_runs.lock().await;
             let display: String = resp.chars().take(self.typewriter_position).collect();
-            let has_tools = !tools.is_empty();
-            let tools_list = if has_tools { tools.join(", ") } else { String::new() };
-            (display, has_tools, tools_list)
+            (display, tool_runs.clone())
         };
+        self.tool_runs_snapshot = tool_runs_snapshot;
+        if let Some(anchor_id) = &self.current_tool_anchor_id {
+            if self.tool_runs_snapshot.is_empty() {
+                self.tool_runs_by_message_id.remove(anchor_id);
+            } else {
+                self.tool_runs_by_message_id
+                    .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
+            }
+        }
+        self.stream_usage_snapshot = *self.stream_usage.lock().await;
 
         // 更新最后一条助手消息
         if let Some(last_msg) = self.messages.last_mut() {
             if last_msg.role == MessageRole::Assistant {
-                let mut content = display_response;
-                if tools_active {
-                    content.push_str(&format!("\n\n[Executing: {}]", tools_names));
-                }
-                last_msg.content = content;
+                last_msg.content = display_response;
             }
         }
 
@@ -575,6 +1139,16 @@ impl TuiApp {
                 if let Some(last_msg) = self.messages.last_mut() {
                     if last_msg.role == MessageRole::Assistant {
                         let response = self.current_response.lock().await.clone();
+                        self.tool_runs_snapshot = self.tool_runs.lock().await.clone();
+                        if let Some(anchor_id) = &self.current_tool_anchor_id {
+                            if self.tool_runs_snapshot.is_empty() {
+                                self.tool_runs_by_message_id.remove(anchor_id);
+                            } else {
+                                self.tool_runs_by_message_id
+                                    .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
+                            }
+                        }
+                        self.stream_usage_snapshot = *self.stream_usage.lock().await;
                         last_msg.content = response;
                     }
                 }
@@ -582,6 +1156,7 @@ impl TuiApp {
                 // 流式响应完成，发送终端通知
                 crate::tui::notify::send_notification("Priority Agent", "Response ready");
                 self.is_querying = false;
+                self.current_tool_anchor_id = None;
             }
         }
 
@@ -610,7 +1185,9 @@ impl TuiApp {
         let state = plan_manager.get_state().await;
         self.plan_mode_label = match state {
             crate::engine::plan_mode::PlanModeState::Off => None,
-            crate::engine::plan_mode::PlanModeState::Generating => Some("[PLAN: generating]".to_string()),
+            crate::engine::plan_mode::PlanModeState::Generating => {
+                Some("[PLAN: generating]".to_string())
+            }
             crate::engine::plan_mode::PlanModeState::Clarifying { ref question } => {
                 let q = if question.len() > 20 {
                     format!("{}...", &question[..20])
@@ -619,7 +1196,9 @@ impl TuiApp {
                 };
                 Some(format!("[PLAN: clarifying \"{}\"]", q))
             }
-            crate::engine::plan_mode::PlanModeState::WaitingApproval => Some("[PLAN: awaiting approval]".to_string()),
+            crate::engine::plan_mode::PlanModeState::WaitingApproval => {
+                Some("[PLAN: awaiting approval]".to_string())
+            }
             crate::engine::plan_mode::PlanModeState::Executing { current_step } => {
                 Some(format!("[PLAN: step {}]", current_step + 1))
             }
@@ -636,7 +1215,7 @@ impl TuiApp {
         }
 
         if let Some((plan, tx)) = plan_manager.approval_channel().take_pending().await {
-            info!("TUI received pending plan: {}", plan.title);
+            info!("CLI received pending plan: {}", plan.title);
             self.pending_plan = Some(plan);
             self.plan_response_tx = Some(tx);
             self.plan_modification_input.clear();
@@ -674,7 +1253,7 @@ impl TuiApp {
 
         if let Some((request, tx)) = channel.take_pending().await {
             info!(
-                "TUI received pending permission request: {}",
+                "CLI received pending permission request: {}",
                 request.prompt
             );
             self.pending_permission_request = Some(request);
@@ -823,7 +1402,7 @@ impl TuiApp {
         };
 
         if let Some((question, options, tx)) = channel.take_pending().await {
-            info!("TUI received pending question: {}", question);
+            info!("CLI received pending question: {}", question);
             self.pending_question = Some(question);
             self.pending_question_options = options;
             self.question_response_tx = Some(tx);
@@ -900,55 +1479,265 @@ impl TuiApp {
                     engine.clear_history().await;
                 }
                 self.messages.clear();
+                self.clear_tool_transcript();
                 "Conversation history cleared.".to_string()
             }
             "/memory" => {
-                let path = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join(".priority-agent")
-                    .join("MEMORY.md");
-                match tokio::fs::read_to_string(&path).await {
-                    Ok(content) if !content.trim().is_empty() => {
-                        let preview: String = content.chars().take(2000).collect();
-                        format!("Memory:\n{}", preview)
+                let query = args.trim();
+                let maintain = query == "--maintain";
+                let latest_user_message = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == MessageRole::User)
+                    .map(|m| m.content.as_str())
+                    .unwrap_or("");
+
+                let memory_manager = if let Some(ref engine) = self.streaming_engine {
+                    engine.memory_manager()
+                } else {
+                    None
+                };
+
+                if let Some(memory_manager) = memory_manager {
+                    let mem = memory_manager.lock().await;
+                    if maintain {
+                        let report = mem.maintain_memory();
+                        report.format()
+                    } else {
+                        let summary = mem.memory_summary();
+                        let project = mem.load_tier(crate::memory::manager::MemoryTier::Project);
+                        let user = mem.load_tier(crate::memory::manager::MemoryTier::User);
+                        let preview_query = if query.is_empty() {
+                            latest_user_message
+                        } else {
+                            query
+                        };
+                        let relevant = mem.preview_relevant_memories(preview_query, 5);
+
+                        let mut lines = vec![
+                            "# Memory".to_string(),
+                            "".to_string(),
+                            summary.format(),
+                            "".to_string(),
+                        ];
+
+                        if !query.is_empty() {
+                            let hits = mem.search(query);
+                            lines.push("## Search".to_string());
+                            if hits.is_empty() {
+                                lines.push(format!("No memories matching '{}'.", query));
+                            } else {
+                                for hit in hits {
+                                    let hit = hit.lines().take(4).collect::<Vec<_>>().join(" ");
+                                    lines.push(format!(
+                                        "- {}",
+                                        hit.chars().take(220).collect::<String>()
+                                    ));
+                                }
+                            }
+                            lines.push("".to_string());
+                        }
+
+                        if !relevant.is_empty() {
+                            lines.push("## Relevant Preview".to_string());
+                            for item in relevant {
+                                let snippet = item
+                                    .snippet
+                                    .lines()
+                                    .map(str::trim)
+                                    .filter(|line| !line.is_empty())
+                                    .take(2)
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                lines.push(format!(
+                                    "- {} (score {}): {}",
+                                    item.source,
+                                    item.score,
+                                    snippet.chars().take(220).collect::<String>()
+                                ));
+                            }
+                            lines.push("".to_string());
+                        }
+
+                        if !project.trim().is_empty() {
+                            lines.push("## Project Memory Index".to_string());
+                            lines.push(project.chars().take(1800).collect());
+                            lines.push("".to_string());
+                        }
+                        if !user.trim().is_empty() {
+                            lines.push("## User Preferences".to_string());
+                            lines.push(user.chars().take(1000).collect());
+                        }
+
+                        if lines.len() <= 4 {
+                            "No memory saved yet. Use /save <text> to save.".to_string()
+                        } else {
+                            lines.join("\n")
+                        }
                     }
-                    _ => "No memory saved yet. Use /save <text> to save.".to_string(),
+                } else {
+                    let mut mem = crate::memory::MemoryManager::new();
+                    mem.freeze_snapshot();
+                    if maintain {
+                        let report = mem.maintain_memory();
+                        report.format()
+                    } else {
+                        let summary = mem.memory_summary();
+                        let project = mem.load_tier(crate::memory::manager::MemoryTier::Project);
+                        if project.trim().is_empty() {
+                            "No memory saved yet. Use /save <text> to save.".to_string()
+                        } else {
+                            format!("# Memory\n\n{}\n\n{}", summary.format(), project)
+                        }
+                    }
                 }
             }
             "/save" => {
                 if args.is_empty() {
-                    "Usage: /save <text to remember>".to_string()
+                    "Usage: /save <text> | /save --topic <name> <text> | /save --user <text>"
+                        .to_string()
                 } else {
-                    let path = dirs::home_dir()
-                        .unwrap_or_else(|| std::path::PathBuf::from("."))
-                        .join(".priority-agent")
-                        .join("MEMORY.md");
-                    let _ = tokio::fs::create_dir_all(path.parent().unwrap()).await;
-                    let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-                    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M");
-                    let entry = format!("\n## [NOTE] {}\n{}\n", timestamp, args);
-                    let new_content = if existing.is_empty() {
-                        format!("# Priority Agent Memory\n{}", entry)
+                    let (save_target, save_topic, save_content) = parse_memory_save_args(args);
+                    if save_content.trim().is_empty() {
+                        "Usage: /save <text> | /save --topic <name> <text> | /save --user <text>"
+                            .to_string()
                     } else {
-                        format!("{}{}", existing, entry)
-                    };
-                    match tokio::fs::write(&path, &new_content).await {
-                        Ok(_) => format!("Saved: {}", args),
-                        Err(e) => format!("Failed to save: {}", e),
+                        let memory_manager = if let Some(ref engine) = self.streaming_engine {
+                            engine.memory_manager()
+                        } else {
+                            None
+                        };
+
+                        if let Some(memory_manager) = memory_manager {
+                            let mem = memory_manager.lock().await;
+                            match save_target {
+                                MemorySaveTarget::User => {
+                                    mem.add_learning_async(save_content, "preference").await;
+                                }
+                                MemorySaveTarget::Topic => {
+                                    mem.add_topic_learning_async(
+                                        save_content,
+                                        "note",
+                                        save_topic.unwrap_or("notes"),
+                                    )
+                                    .await;
+                                }
+                                MemorySaveTarget::Auto => {
+                                    mem.add_auto_learning_async(save_content, "note").await;
+                                }
+                            }
+                            format!("Saved: {}", save_content)
+                        } else {
+                            let mem = crate::memory::MemoryManager::new();
+                            match save_target {
+                                MemorySaveTarget::User => {
+                                    mem.add_learning_async(save_content, "preference").await;
+                                }
+                                MemorySaveTarget::Topic => {
+                                    mem.add_topic_learning_async(
+                                        save_content,
+                                        "note",
+                                        save_topic.unwrap_or("notes"),
+                                    )
+                                    .await;
+                                }
+                                MemorySaveTarget::Auto => {
+                                    mem.add_auto_learning_async(save_content, "note").await;
+                                }
+                            }
+                            format!("Saved: {}", save_content)
+                        }
                     }
                 }
             }
             "/model" => {
-                if self.streaming_engine.is_some() {
+                let args = args.trim();
+                if let Some(model) = args
+                    .strip_prefix("set ")
+                    .or_else(|| args.strip_prefix("switch "))
+                    .map(str::trim)
+                    .filter(|m| !m.is_empty())
+                {
+                    if let Some(engine) = &self.streaming_engine {
+                        engine.set_model(model.to_string());
+                    }
+                    if let Ok(mut config) = crate::services::config::AppConfig::load() {
+                        config.api.model = model.to_string();
+                        let _ = config.save();
+                    }
+                    self.model_notice = Some(format!("Model switched to {}", model));
+                    format!("Model switched to {}. Next request will use it.", model)
+                } else if args == "list" {
+                    let lines = self
+                        .model_choices()
+                        .into_iter()
+                        .map(|choice| {
+                            format!(
+                                "{} {} ({})",
+                                if choice.active { "*" } else { "-" },
+                                choice.model,
+                                choice.note
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!("Models for {}:\n{}", self.current_provider_label(), lines)
+                } else if self.streaming_engine.is_some() {
                     let model = self.current_model_label();
                     let provider = self.current_provider_label();
                     let base = self.current_provider_base_url();
-                    format!("Model: {} (via {})\nBase URL: {}", model, provider, base)
+                    format!(
+                        "Model: {} (via {})\nBase URL: {}\n\nUse Ctrl+M for the model picker, /model list, or /model set <name>.",
+                        model, provider, base
+                    )
                 } else {
                     "Model: unavailable (no engine connected)".to_string()
                 }
             }
-"/status" => slash::handle_status(self).await,
+            "/provider" => {
+                let args = args.trim();
+                if let Some(provider) = args
+                    .strip_prefix("set ")
+                    .or_else(|| args.strip_prefix("switch "))
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                {
+                    self.switch_provider_by_name(provider)
+                } else if args == "list" {
+                    let lines = self
+                        .provider_choices()
+                        .into_iter()
+                        .map(|choice| {
+                            format!(
+                                "{} {:<10} {:<12} {:<20} {}{}",
+                                if choice.active { "*" } else { "-" },
+                                choice.name,
+                                choice.provider_type,
+                                choice.model,
+                                choice.note,
+                                if choice.base_url.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" - {}", choice.base_url)
+                                }
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!("Providers:\n{}", lines)
+                } else if self.streaming_engine.is_some() {
+                    format!(
+                        "Provider: {}\nModel: {}\nBase URL: {}\n\nUse Ctrl+L for the provider picker, /provider list, or /provider switch <name>.",
+                        self.current_provider_label(),
+                        self.current_model_label(),
+                        self.current_provider_base_url()
+                    )
+                } else {
+                    "Provider: unavailable (no engine connected)".to_string()
+                }
+            }
+            "/status" => slash::handle_status(self).await,
             "/resume" => slash::handle_resume(self, args).await,
             "/rewind" => slash::handle_rewind(self, args),
             // Phase 10 Batch 1: Session & Control Commands
@@ -1145,6 +1934,7 @@ impl TuiApp {
             Ok(messages) => {
                 // 清空当前消息
                 self.messages.clear();
+                self.clear_tool_transcript();
 
                 // 加载会话消息到 UI
                 for msg in messages {
@@ -1299,7 +2089,10 @@ impl TuiApp {
 
     /// 滚动到底部（显示最新消息）
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = self.messages.len().saturating_sub(1);
+        // Use messages.len() as a bottom-anchor sentinel. The renderer knows the
+        // available viewport height, so it can choose the earliest message that
+        // still keeps the latest exchange visible.
+        self.scroll_offset = self.messages.len();
     }
 
     /// 向上滚动半页（Vim Ctrl+U）
@@ -1329,7 +2122,7 @@ impl TuiApp {
     /// 当前 Provider 名称（用于状态展示）
     pub fn current_provider_label(&self) -> String {
         if let Some(ref engine) = self.streaming_engine {
-            provider_name_from_base_url(engine.provider_base_url()).to_string()
+            provider_name_from_base_url(&engine.provider_base_url()).to_string()
         } else {
             "unknown".to_string()
         }
@@ -1338,10 +2131,117 @@ impl TuiApp {
     /// 当前 Provider Base URL（用于状态展示）
     pub fn current_provider_base_url(&self) -> String {
         if let Some(ref engine) = self.streaming_engine {
-            engine.provider_base_url().to_string()
+            engine.provider_base_url()
         } else {
             "unknown".to_string()
         }
+    }
+
+    pub fn workspace_status_label(&self) -> String {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let name = cwd
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace");
+        if let Some(branch) = read_git_branch_fast(&cwd) {
+            format!("{}@{}", name, branch)
+        } else {
+            name.to_string()
+        }
+    }
+
+    pub fn current_permission_label(&self) -> String {
+        if let Some(ref engine) = self.streaming_engine {
+            permission_mode_name(engine.permission_mode()).replace('_', "-")
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    pub fn active_tool_count(&self) -> usize {
+        self.tool_runs_snapshot
+            .iter()
+            .filter(|run| run.is_active())
+            .count()
+    }
+
+    pub fn current_tool_status_label(&self) -> Option<String> {
+        let active = self
+            .tool_runs_snapshot
+            .iter()
+            .rev()
+            .find(|run| run.is_active())?;
+        Some(format!(
+            "{} {}s",
+            active.summary(),
+            active.elapsed().as_secs()
+        ))
+    }
+
+    pub fn stream_usage_label(&self) -> Option<String> {
+        let usage = self.stream_usage_snapshot?;
+        let mut label = format!("{} tokens", usage.total_tokens());
+        if let Some(reasoning) = usage.reasoning_tokens {
+            label.push_str(&format!(" / {} reasoning", reasoning));
+        }
+        if let Some(cached) = usage.cached_tokens {
+            label.push_str(&format!(" / {} cached", cached));
+        }
+        Some(label)
+    }
+
+    pub fn toggle_transcript_expanded(&mut self) {
+        self.transcript_expanded = !self.transcript_expanded;
+        self.expanded_tool_run_id = None;
+    }
+
+    pub fn cycle_expanded_tool_run(&mut self) {
+        let ids = self
+            .visible_tool_run_ids()
+            .into_iter()
+            .collect::<Vec<String>>();
+        if ids.is_empty() {
+            self.transcript_expanded = !self.transcript_expanded;
+            self.expanded_tool_run_id = None;
+            return;
+        }
+
+        self.transcript_expanded = false;
+        self.expanded_tool_run_id = match self.expanded_tool_run_id.as_deref() {
+            None => ids.first().cloned(),
+            Some(current) => ids
+                .iter()
+                .position(|id| id == current)
+                .and_then(|idx| ids.get(idx + 1).cloned()),
+        };
+    }
+
+    fn visible_tool_run_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        for msg in &self.messages {
+            if let Some(runs) = self.tool_runs_for_message(&msg.id) {
+                ids.extend(runs.iter().map(|run| run.id.clone()));
+            }
+        }
+        ids
+    }
+
+    pub fn is_tool_run_expanded(&self, run: &ToolRunView) -> bool {
+        self.transcript_expanded || self.expanded_tool_run_id.as_deref() == Some(run.id.as_str())
+    }
+
+    pub fn tool_runs_for_message(&self, message_id: &str) -> Option<&[ToolRunView]> {
+        self.tool_runs_by_message_id
+            .get(message_id)
+            .map(Vec::as_slice)
+    }
+
+    pub fn clear_tool_transcript(&mut self) {
+        self.tool_runs_snapshot.clear();
+        self.tool_runs_by_message_id.clear();
+        self.current_tool_anchor_id = None;
+        self.expanded_tool_run_id = None;
+        self.stream_usage_snapshot = None;
     }
 
     /// 获取消息（考虑滚动）
@@ -1370,14 +2270,189 @@ impl Default for TuiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::api::{
+        ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
+    };
+    use async_openai::types::ChatCompletionResponseStream;
+    use async_trait::async_trait;
+
+    struct MockProvider;
+
+    #[async_trait]
+    impl LlmProvider for MockProvider {
+        async fn chat(&self, _request: LlmChatRequest) -> anyhow::Result<LlmChatResponse> {
+            Ok(LlmChatResponse {
+                content: "ok".to_string(),
+                tool_calls: None,
+                usage: Some(Usage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    total_tokens: 2,
+                    reasoning_tokens: None,
+                    cached_tokens: None,
+                }),
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: LlmChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("not implemented in TUI test"))
+        }
+
+        fn base_url(&self) -> &str {
+            "https://api.openai.com/v1"
+        }
+
+        fn default_model(&self) -> &str {
+            "mock-model"
+        }
+    }
 
     #[test]
-    fn test_tui_app_new() {
+    fn test_cli_app_new() {
         let app = TuiApp::new();
         assert_eq!(app.messages.len(), 1); // 欢迎消息
         assert!(!app.is_querying);
         assert!(!app.paused);
         assert!(!app.focus_mode);
+    }
+
+    #[test]
+    fn test_parse_memory_save_args() {
+        assert_eq!(
+            parse_memory_save_args("remember this"),
+            (MemorySaveTarget::Auto, None, "remember this")
+        );
+        assert_eq!(
+            parse_memory_save_args("--user reply in Chinese"),
+            (MemorySaveTarget::User, None, "reply in Chinese")
+        );
+        assert_eq!(
+            parse_memory_save_args("--topic tui-design keep bottom anchored"),
+            (
+                MemorySaveTarget::Topic,
+                Some("tui-design"),
+                "keep bottom anchored"
+            )
+        );
+        assert_eq!(
+            parse_memory_save_args("--topic=context-management track token budget"),
+            (
+                MemorySaveTarget::Topic,
+                Some("context-management"),
+                "track token budget"
+            )
+        );
+    }
+
+    #[test]
+    fn test_stream_usage_label_includes_reasoning_and_cached_tokens() {
+        let mut app = TuiApp::new();
+        app.stream_usage_snapshot = Some(StreamUsageSnapshot {
+            prompt_tokens: 100,
+            completion_tokens: 25,
+            reasoning_tokens: Some(12),
+            cached_tokens: Some(80),
+        });
+
+        assert_eq!(
+            app.stream_usage_label().as_deref(),
+            Some("125 tokens / 12 reasoning / 80 cached")
+        );
+    }
+
+    #[test]
+    fn test_short_paste_inserts_directly() {
+        let mut app = TuiApp::new();
+        app.input.insert_str("prefix ");
+        app.insert_paste("你好\nworld".to_string());
+
+        assert_eq!(app.input.value(), "prefix 你好\nworld");
+        assert_eq!(app.pasted_block_count(), 0);
+    }
+
+    #[test]
+    fn test_long_paste_uses_placeholder_and_expands() {
+        let mut app = TuiApp::new();
+        let pasted = (0..20)
+            .map(|idx| format!("line {}", idx))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        app.input.insert_str("please inspect ");
+        app.insert_paste(pasted.clone());
+
+        assert_eq!(app.pasted_block_count(), 1);
+        assert!(app.input.value().contains("[[paste:1 20 lines"));
+        assert_eq!(
+            app.expand_paste_placeholders(app.input.value()),
+            format!("please inspect {}", pasted)
+        );
+    }
+
+    #[test]
+    fn test_command_palette_accept_inserts_selected_command() {
+        let mut app = TuiApp::new();
+        app.open_command_palette();
+        app.command_palette_push('h');
+        app.command_palette_push('e');
+        app.accept_command_palette_selection();
+
+        assert_eq!(app.mode, AppMode::Chat);
+        assert!(app.input.value().starts_with('/'));
+        assert!(app.input.value().ends_with(' '));
+    }
+
+    #[test]
+    fn test_cycle_expanded_tool_run_moves_through_visible_tools() {
+        let mut app = TuiApp::new();
+        let user = MessageItem {
+            id: "user_1".to_string(),
+            role: MessageRole::User,
+            content: "run tools".to_string(),
+            timestamp: std::time::SystemTime::now(),
+            metadata: Default::default(),
+        };
+        app.messages.push(user);
+        app.tool_runs_by_message_id.insert(
+            "user_1".to_string(),
+            vec![
+                ToolRunView::new("tool_1".to_string(), "bash".to_string()),
+                ToolRunView::new("tool_2".to_string(), "grep".to_string()),
+            ],
+        );
+
+        app.cycle_expanded_tool_run();
+        assert_eq!(app.expanded_tool_run_id.as_deref(), Some("tool_1"));
+        app.cycle_expanded_tool_run();
+        assert_eq!(app.expanded_tool_run_id.as_deref(), Some("tool_2"));
+        app.cycle_expanded_tool_run();
+        assert_eq!(app.expanded_tool_run_id, None);
+    }
+
+    #[test]
+    fn test_model_selection_updates_engine_model() {
+        let mut app = TuiApp::new();
+        app.streaming_engine = Some(Arc::new(
+            crate::engine::streaming::StreamingQueryEngine::new(
+                Arc::new(MockProvider),
+                Arc::new(crate::tools::ToolRegistry::new()),
+                "gpt-4o",
+            ),
+        ));
+        app.open_model_select();
+        let choices = app.model_choices();
+        let target = choices
+            .iter()
+            .position(|choice| choice.model == "gpt-4o-mini")
+            .expect("openai preset expected");
+        app.model_select_selected = target;
+        app.accept_model_selection();
+
+        assert_eq!(app.current_model_label(), "gpt-4o-mini");
+        assert_eq!(app.mode, AppMode::Chat);
     }
 
     #[tokio::test]
@@ -1390,6 +2465,23 @@ mod tests {
         let last = app.messages.last().expect("system message expected");
         assert_eq!(last.role, MessageRole::System);
         assert!(last.content.contains("Agent is paused"));
+    }
+
+    #[tokio::test]
+    async fn test_send_message_keeps_bottom_anchor_after_assistant_placeholder() {
+        let mut app = TuiApp::new();
+        app.streaming_engine = Some(Arc::new(
+            crate::engine::streaming::StreamingQueryEngine::new(
+                Arc::new(MockProvider),
+                Arc::new(crate::tools::ToolRegistry::new()),
+                "mock-model",
+            ),
+        ));
+
+        app.send_message("hello".to_string()).await;
+
+        assert_eq!(app.messages.last().unwrap().role, MessageRole::Assistant);
+        assert_eq!(app.scroll_offset, app.messages.len());
     }
 
     #[tokio::test]

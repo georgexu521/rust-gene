@@ -212,7 +212,10 @@ impl McpServer {
 
     /// 处理请求
     async fn handle_request(&self, req: McpRequest) -> McpResponse {
-        debug!("MCP server {} received: {} {:?}", self.config.name, req.method, req.id);
+        debug!(
+            "MCP server {} received: {} {:?}",
+            self.config.name, req.method, req.id
+        );
 
         let result: Result<Value, McpError> = match req.method.as_str() {
             "tools/list" => Ok(self.handle_list_tools()),
@@ -241,7 +244,10 @@ impl McpServer {
                 "serverInfo": { "name": self.config.name, "version": "1.0.0" }
             })),
             "ping" => Ok(json!({})),
-            _ => Err(McpError::method_not_found(format!("Unknown method: {}", req.method)))
+            _ => Err(McpError::method_not_found(format!(
+                "Unknown method: {}",
+                req.method
+            ))),
         };
 
         match result {
@@ -300,7 +306,9 @@ impl McpServer {
                         "id": Value::Null,
                         "error": { "code": -32700, "message": "Parse error" }
                     });
-                    stdout.write_all(serde_json::to_string(&error_resp).unwrap().as_bytes()).await?;
+                    stdout
+                        .write_all(serde_json::to_string(&error_resp).unwrap().as_bytes())
+                        .await?;
                     stdout.write_all(b"\n").await?;
                     stdout.flush().await?;
                     continue;
@@ -393,8 +401,7 @@ impl McpServerManager {
         context: ToolContext,
     ) -> anyhow::Result<()> {
         let name = config.name.clone();
-        let server = McpServer::new(config, tool_registry)
-            .with_context(context);
+        let server = McpServer::new(config, tool_registry).with_context(context);
 
         let server = Arc::new(server);
         self.servers.insert(name.clone(), server.clone());

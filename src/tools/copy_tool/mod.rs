@@ -34,9 +34,7 @@ impl Tool for CopyTool {
     }
 
     async fn execute(&self, params: Value, _context: ToolContext) -> ToolResult {
-        let text = params.get("text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
 
         // Use platform-specific clipboard copy
         #[cfg(target_os = "macos")]

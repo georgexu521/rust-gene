@@ -6,8 +6,8 @@
 //! 3. LLM Classifier（可选，M1 中暂不提供默认实现）
 
 use super::policy::GatePolicy;
-use std::sync::LazyLock;
 use crate::services::api::{ChatRequest, LlmProvider, Message};
+use std::sync::LazyLock;
 
 /// 闸门判定结果
 #[derive(Debug, Clone, PartialEq)]
@@ -39,11 +39,20 @@ impl GateDecision {
 static FAST_LANE_PATTERNS: LazyLock<Vec<(&'static str, &'static str)>> = LazyLock::new(|| {
     vec![
         // 帮助类命令
-        (r"^/(help|clear|status|doctor|quit|memory|save|load|cost|token|model|tools)\b", "help_cmd"),
+        (
+            r"^/(help|clear|status|doctor|quit|memory|save|load|cost|token|model|tools)\b",
+            "help_cmd",
+        ),
         // 只读系统查询
-        (r"^(git status|ls|cat|echo|pwd|whoami|uname|date)\b", "readonly_query"),
+        (
+            r"^(git status|ls|cat|echo|pwd|whoami|uname|date)\b",
+            "readonly_query",
+        ),
         // 问候闲聊
-        (r"^(你好|在吗|谢谢|再见|hi\b|hello\b|thanks\b|hey\b)\b", "greeting"),
+        (
+            r"^(你好|在吗|谢谢|再见|hi\b|hello\b|thanks\b|hey\b)\b",
+            "greeting",
+        ),
     ]
 });
 
@@ -67,19 +76,47 @@ fn fast_lane_check(input: &str) -> Option<GateDecision> {
 
 /// 高风险关键词 — 命中即 Workflow
 const HIGH_RISK_KEYWORDS: &[&str] = &[
-    "重构", "redesign", "architecture", "拆分", "解耦",
-    "所有文件", "批量", "全局", "cross-module",
-    "新增模块", "实现系统", "添加引擎", "引入框架",
-    "删除", "迁移", "升级", "替换底层",
-    " redesign ", " refactor ", " restructure ",
-    " implement system ", " add engine ",
+    "重构",
+    "redesign",
+    "architecture",
+    "拆分",
+    "解耦",
+    "所有文件",
+    "批量",
+    "全局",
+    "cross-module",
+    "新增模块",
+    "实现系统",
+    "添加引擎",
+    "引入框架",
+    "删除",
+    "迁移",
+    "升级",
+    "替换底层",
+    " redesign ",
+    " refactor ",
+    " restructure ",
+    " implement system ",
+    " add engine ",
 ];
 
 /// 低风险关键词 — 无高风险词时判定为 Direct
 const LOW_RISK_KEYWORDS: &[&str] = &[
-    "修复", "fix", "改正", "typo", "纠正",
-    "查看", "显示", "列出", "grep", "find",
-    "改", "调参数", "开关", "更新版本", "修改",
+    "修复",
+    "fix",
+    "改正",
+    "typo",
+    "纠正",
+    "查看",
+    "显示",
+    "列出",
+    "grep",
+    "find",
+    "改",
+    "调参数",
+    "开关",
+    "更新版本",
+    "修改",
 ];
 
 fn heuristic_scan(input: &str) -> Option<GateDecision> {
@@ -207,15 +244,20 @@ impl Gate {
             input
         );
         let mut request = ChatRequest::new(model)
-            .with_messages(vec![Message::system("只输出 JSON，不要解释。"), Message::user(&prompt)])
+            .with_messages(vec![
+                Message::system("只输出 JSON，不要解释。"),
+                Message::user(&prompt),
+            ])
             .with_temperature(0.0);
         request.max_tokens = Some(120);
 
         match provider.chat(request).await {
-            Ok(resp) => Self::parse_llm_decision(&resp.content).unwrap_or_else(|| GateDecision::Workflow {
-                reason: "LLM classifier parse failed, defaulting to Workflow".into(),
-                confidence: 0.5,
-            }),
+            Ok(resp) => {
+                Self::parse_llm_decision(&resp.content).unwrap_or_else(|| GateDecision::Workflow {
+                    reason: "LLM classifier parse failed, defaulting to Workflow".into(),
+                    confidence: 0.5,
+                })
+            }
             Err(_) => GateDecision::Workflow {
                 reason: "LLM classifier failed, defaulting to Workflow".into(),
                 confidence: 0.5,

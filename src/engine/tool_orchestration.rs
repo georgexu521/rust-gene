@@ -301,30 +301,32 @@ impl ToolOrchestrator {
             if let Some(diagnostic_tracker) = &context.diagnostic_tracker {
                 // 获取工具关联的文件路径（如果有）
                 if let Some(path) = self.get_tool_related_path(&call) {
-                    let diags: Vec<crate::engine::DiagnosticEntry> = if let Some(ref lsp) = context.lsp_manager {
-                        let path_str = path.to_string_lossy();
-                        lsp.get_diagnostics(&path_str).await
-                            .into_iter()
-                            .map(|d| crate::engine::DiagnosticEntry {
-                                message: d.message,
-                                severity: match d.severity {
-                                    Some(1) => crate::engine::DiagnosticSeverity::Error,
-                                    Some(2) => crate::engine::DiagnosticSeverity::Warning,
-                                    Some(3) => crate::engine::DiagnosticSeverity::Information,
-                                    _ => crate::engine::DiagnosticSeverity::Hint,
-                                },
-                                source: d.source.unwrap_or_default(),
-                                range: crate::engine::DiagnosticRange {
-                                    start_line: d.range.start.line,
-                                    start_col: d.range.start.character,
-                                    end_line: d.range.end.line,
-                                    end_col: d.range.end.character,
-                                },
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
+                    let diags: Vec<crate::engine::DiagnosticEntry> =
+                        if let Some(ref lsp) = context.lsp_manager {
+                            let path_str = path.to_string_lossy();
+                            lsp.get_diagnostics(&path_str)
+                                .await
+                                .into_iter()
+                                .map(|d| crate::engine::DiagnosticEntry {
+                                    message: d.message,
+                                    severity: match d.severity {
+                                        Some(1) => crate::engine::DiagnosticSeverity::Error,
+                                        Some(2) => crate::engine::DiagnosticSeverity::Warning,
+                                        Some(3) => crate::engine::DiagnosticSeverity::Information,
+                                        _ => crate::engine::DiagnosticSeverity::Hint,
+                                    },
+                                    source: d.source.unwrap_or_default(),
+                                    range: crate::engine::DiagnosticRange {
+                                        start_line: d.range.start.line,
+                                        start_col: d.range.start.character,
+                                        end_line: d.range.end.line,
+                                        end_col: d.range.end.character,
+                                    },
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                     diagnostic_tracker.before_edit(&path, diags).await;
                 }
             }

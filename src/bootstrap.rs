@@ -274,7 +274,7 @@ pub async fn init_components(
     // SessionStore 接入
     if let Some(ref store) = session_store {
         let session_id = format!("session-{}", uuid::Uuid::new_v4());
-        let _ = store.create_session(&session_id, "TUI Session", &model);
+        let _ = store.create_session(&session_id, "CLI Session", &model);
         streaming_engine_builder =
             streaming_engine_builder.with_session_store(store.clone(), session_id);
     }

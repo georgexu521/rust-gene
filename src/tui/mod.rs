@@ -1,6 +1,6 @@
-//! TUI (Terminal User Interface) 模块
+//! Interactive terminal CLI 模块
 //!
-//! 使用 ratatui 实现类似 Claude Code 的终端界面
+//! 使用 ratatui 实现类似 Claude Code 的终端交互体验
 
 pub mod app;
 pub mod commands;
@@ -11,13 +11,17 @@ pub mod screens;
 pub mod session_manager;
 pub mod slash_handler;
 pub mod theme;
+pub mod tool_view;
 
 pub use app::TuiApp;
 
 use crate::engine::lsp::LspManager;
 use crate::engine::streaming::StreamingQueryEngine;
 use crate::engine::worktree::WorktreeManager;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseEventKind,
+};
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout},
@@ -29,13 +33,13 @@ use std::io;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// 主 TUI 运行函数
+/// 主交互式 CLI 运行函数
 pub async fn run_tui(
     engine: Arc<StreamingQueryEngine>,
     lsp_manager: Option<Arc<LspManager>>,
     worktree_manager: Option<Arc<WorktreeManager>>,
 ) -> anyhow::Result<()> {
-    info!("Starting TUI...");
+    info!("Starting interactive terminal CLI...");
 
     // 初始化终端
     crossterm::terminal::enable_raw_mode()?;
@@ -43,7 +47,8 @@ pub async fn run_tui(
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
+        crossterm::event::EnableMouseCapture,
+        EnableBracketedPaste
     )?;
 
     // 设置 panic hook：panic 时自动恢复终端，防止卡终端
@@ -53,7 +58,8 @@ pub async fn run_tui(
         let _ = crossterm::execute!(
             io::stdout(),
             crossterm::terminal::LeaveAlternateScreen,
-            crossterm::event::DisableMouseCapture
+            crossterm::event::DisableMouseCapture,
+            DisableBracketedPaste
         );
         default_panic_hook(info);
     }));
@@ -93,7 +99,8 @@ pub async fn run_tui(
     crossterm::execute!(
         terminal.backend_mut(),
         crossterm::terminal::LeaveAlternateScreen,
-        crossterm::event::DisableMouseCapture
+        crossterm::event::DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
@@ -121,13 +128,12 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut TuiApp) -> an
                         return Ok(());
                     }
                 }
-                Event::Mouse(mouse) => {
-                    match mouse.kind {
-                        MouseEventKind::ScrollUp => app.scroll_up(),
-                        MouseEventKind::ScrollDown => app.scroll_down(),
-                        _ => {}
-                    }
-                }
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => app.scroll_up(),
+                    MouseEventKind::ScrollDown => app.scroll_down(),
+                    _ => {}
+                },
+                Event::Paste(text) => app.insert_paste(text),
                 _ => {}
             }
         }
@@ -211,7 +217,12 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 );
             }
         }
-        app::AppMode::Chat | app::AppMode::VimNormal => {
+        app::AppMode::Chat
+        | app::AppMode::VimNormal
+        | app::AppMode::CommandPalette
+        | app::AppMode::ShortcutHelp
+        | app::AppMode::ModelSelect
+        | app::AppMode::ProviderSelect => {
             if app.sidebar_visible {
                 // 侧边栏 + 主区域布局
                 let h_chunks = Layout::default()
@@ -247,6 +258,22 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 screens::main_screen::render_chat_area(f, app, main_chunks[0]);
                 screens::main_screen::render_input_area(f, app, main_chunks[1]);
                 screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+            }
+
+            match app.mode {
+                app::AppMode::CommandPalette => {
+                    screens::main_screen::render_command_palette(f, app, f.area());
+                }
+                app::AppMode::ShortcutHelp => {
+                    screens::main_screen::render_shortcut_help(f, app, f.area());
+                }
+                app::AppMode::ModelSelect => {
+                    screens::main_screen::render_model_select(f, app, f.area());
+                }
+                app::AppMode::ProviderSelect => {
+                    screens::main_screen::render_provider_select(f, app, f.area());
+                }
+                _ => {}
             }
         }
         app::AppMode::Onboarding => {
@@ -308,6 +335,28 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     // AskUser 模式特殊处理
     if app.mode == app::AppMode::AskUser {
         return handle_ask_user_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::CommandPalette {
+        return handle_command_palette_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::ShortcutHelp {
+        app.close_shortcut_help();
+        return Ok(false);
+    }
+
+    if app.mode == app::AppMode::ModelSelect {
+        return handle_model_select_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::ProviderSelect {
+        return handle_provider_select_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::PermissionApproval && key.code == KeyCode::Esc {
+        app.respond_to_permission(false);
+        return Ok(false);
     }
 
     // Diff 查看器模式：滚动 + Cancel/Quit
@@ -389,6 +438,32 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return handle_settings_key_event(key, app).await;
     }
 
+    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.open_command_palette();
+        return Ok(false);
+    }
+
+    if key.code == KeyCode::Char('m') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.open_model_select();
+        return Ok(false);
+    }
+
+    if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.open_provider_select();
+        return Ok(false);
+    }
+
+    if matches!(key.code, KeyCode::F(1)) || (key.code == KeyCode::Char('?') && app.input.is_empty())
+    {
+        app.open_shortcut_help();
+        return Ok(false);
+    }
+
+    if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.cycle_expanded_tool_run();
+        return Ok(false);
+    }
+
     // VimNormal 模式：添加 Ctrl+D/U 半页滚动（直接处理，不经过 action_for）
     if app.mode == app::AppMode::VimNormal {
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -459,19 +534,22 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             }
             KeyCode::Char('n') if app.message_search_state.query.is_empty() => {
                 app.message_search_state.toggle_case_sensitive();
-                let contents: Vec<String> = app.messages.iter().map(|m| m.content.clone()).collect();
+                let contents: Vec<String> =
+                    app.messages.iter().map(|m| m.content.clone()).collect();
                 app.message_search_state.search(&contents);
                 return Ok(false);
             }
             KeyCode::Backspace => {
                 app.message_search_state.pop_char();
-                let contents: Vec<String> = app.messages.iter().map(|m| m.content.clone()).collect();
+                let contents: Vec<String> =
+                    app.messages.iter().map(|m| m.content.clone()).collect();
                 app.message_search_state.search(&contents);
                 return Ok(false);
             }
             KeyCode::Char(c) => {
                 app.message_search_state.push_char(c);
-                let contents: Vec<String> = app.messages.iter().map(|m| m.content.clone()).collect();
+                let contents: Vec<String> =
+                    app.messages.iter().map(|m| m.content.clone()).collect();
                 app.message_search_state.search(&contents);
                 return Ok(false);
             }
@@ -642,6 +720,55 @@ async fn handle_ask_user_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
         KeyCode::Right => app.input.move_cursor_right(),
         KeyCode::Home => app.input.move_cursor_to_start(),
         KeyCode::End => app.input.move_cursor_to_end(),
+        _ => {}
+    }
+    Ok(false)
+}
+
+async fn handle_command_palette_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => app.close_command_palette(),
+        KeyCode::Enter => app.accept_command_palette_selection(),
+        KeyCode::Up => app.command_palette_prev(),
+        KeyCode::Down => app.command_palette_next(),
+        KeyCode::Backspace => app.command_palette_backspace(),
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.close_command_palette();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            app.command_palette_push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+async fn handle_model_select_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => app.close_model_select(),
+        KeyCode::Enter => app.accept_model_selection(),
+        KeyCode::Up => app.model_select_prev(),
+        KeyCode::Down => app.model_select_next(),
+        KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.close_model_select();
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+async fn handle_provider_select_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => app.close_provider_select(),
+        KeyCode::Enter => {
+            let result = app.accept_provider_selection();
+            app.add_system_message(result);
+        }
+        KeyCode::Up => app.provider_select_prev(),
+        KeyCode::Down => app.provider_select_next(),
+        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.close_provider_select();
+        }
         _ => {}
     }
     Ok(false)

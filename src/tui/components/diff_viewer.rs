@@ -100,16 +100,12 @@ pub fn render_diff_viewer(
         Span::styled(" close  ", Style::default().fg(theme.border)),
         Span::styled(
             "↑/↓",
-            Style::default()
-                .fg(theme.info)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
         ),
         Span::styled(" scroll  ", Style::default().fg(theme.border)),
         Span::styled(
             "PgUp/PgDn",
-            Style::default()
-                .fg(theme.info)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
         ),
         Span::styled(" page", Style::default().fg(theme.border)),
     ]));

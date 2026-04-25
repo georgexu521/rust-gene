@@ -7,7 +7,7 @@ use crate::tools::ToolRegistry;
 use anyhow::Result;
 use futures::Stream;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -58,14 +58,28 @@ pub enum StreamEvent {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct ContextUsageReport {
+    pub prompt: crate::engine::prompt_context::PromptContextReport,
+    pub history_messages: usize,
+    pub history_tokens: u64,
+    pub tool_count: usize,
+    pub tool_schema_tokens: u64,
+    pub memory_snapshot_tokens: u64,
+    pub relevant_memories: Vec<crate::memory::manager::MemoryMatch>,
+    pub max_context_tokens: u64,
+    pub total_estimated_tokens: u64,
+    pub stable_prefix_fingerprint: String,
+}
+
 /// 流式查询引擎
 pub struct StreamingQueryEngine {
     /// LLM 提供商
-    provider: Arc<dyn LlmProvider>,
+    provider: Arc<RwLock<Arc<dyn LlmProvider>>>,
     /// 工具注册表
     tool_registry: Arc<ToolRegistry>,
     /// 模型名称
-    model: String,
+    model: Arc<RwLock<String>>,
     /// 系统提示词
     system_prompt: String,
     /// 最大工具调用迭代次数
@@ -111,9 +125,9 @@ impl StreamingQueryEngine {
     ) -> Self {
         let provider_clone = provider.clone();
         Self {
-            provider,
+            provider: Arc::new(RwLock::new(provider)),
             tool_registry,
-            model: model.into(),
+            model: Arc::new(RwLock::new(model.into())),
             system_prompt: super::default_system_prompt(),
             max_iterations: 10,
             agent_manager: None,
@@ -173,9 +187,10 @@ impl StreamingQueryEngine {
 
     /// 设置最大上下文长度
     pub fn with_max_context(mut self, tokens: u64) -> Self {
+        let model = self.model_name();
         self.compressor = Arc::new(tokio::sync::Mutex::new(
             crate::engine::context_compressor::ContextCompressor::new(tokens)
-                .with_llm_provider(self.provider.clone(), &self.model),
+                .with_llm_provider(self.provider(), &model),
         ));
         self
     }
@@ -199,8 +214,34 @@ impl StreamingQueryEngine {
 
     /// 设置模型
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = model.into();
+        self.model = Arc::new(RwLock::new(model.into()));
         self
+    }
+
+    pub fn provider(&self) -> Arc<dyn LlmProvider> {
+        self.provider
+            .read()
+            .map(|provider| provider.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    }
+
+    pub fn set_provider(&self, provider: Arc<dyn LlmProvider>, model: impl Into<String>) {
+        if let Ok(mut current) = self.provider.write() {
+            *current = provider.clone();
+        }
+        self.set_model(model);
+        let model = self.model_name();
+        if let Ok(mut compressor) = self.compressor.try_lock() {
+            *compressor = crate::engine::context_compressor::ContextCompressor::new(128_000)
+                .with_llm_provider(provider, &model);
+        }
+    }
+
+    /// 运行时切换模型；下一次请求立即生效。
+    pub fn set_model(&self, model: impl Into<String>) {
+        if let Ok(mut current) = self.model.write() {
+            *current = model.into();
+        }
     }
 
     /// 设置系统提示词
@@ -344,14 +385,68 @@ impl StreamingQueryEngine {
         &self.tool_registry
     }
 
+    pub async fn context_usage_report(&self) -> ContextUsageReport {
+        let history = self.get_history().await;
+        let last_user = history
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                Message::User { content } => Some(content.as_str()),
+                _ => None,
+            })
+            .unwrap_or("");
+        let prompt = crate::engine::prompt_context::PromptContextAssembler::from_current_dir(
+            &self.system_prompt,
+        )
+        .report_for_turn(last_user, &history);
+        let history_tokens = crate::engine::context_compressor::estimate_messages_tokens(&history);
+        let (tool_count, tool_schema_tokens, tool_schema_fingerprint) =
+            estimate_registry_tool_schema_tokens(&self.tool_registry);
+        let (memory_snapshot_tokens, relevant_memories) =
+            if let Some(ref mem_mutex) = self.memory_manager {
+                let mem = mem_mutex.lock().await;
+                (
+                    crate::engine::context_compressor::estimate_tokens(&mem.get_snapshot()),
+                    mem.preview_relevant_memories(last_user, 5),
+                )
+            } else {
+                (0, Vec::new())
+            };
+        let max_context_tokens = {
+            let comp = self.compressor.lock().await;
+            comp.stats().max_context_tokens
+        };
+        let total_estimated_tokens =
+            prompt.total_tokens + history_tokens + tool_schema_tokens + memory_snapshot_tokens;
+
+        ContextUsageReport {
+            stable_prefix_fingerprint: crate::engine::prompt_context::stable_fingerprint(&format!(
+                "{}:{}",
+                prompt.fingerprint, tool_schema_fingerprint
+            )),
+            prompt,
+            history_messages: history.len(),
+            history_tokens,
+            tool_count,
+            tool_schema_tokens,
+            memory_snapshot_tokens,
+            relevant_memories,
+            max_context_tokens,
+            total_estimated_tokens,
+        }
+    }
+
     /// 获取当前模型名
-    pub fn model_name(&self) -> &str {
-        &self.model
+    pub fn model_name(&self) -> String {
+        self.model
+            .read()
+            .map(|model| model.clone())
+            .unwrap_or_default()
     }
 
     /// 获取当前 Provider 的 base URL（用于状态展示）
-    pub fn provider_base_url(&self) -> &str {
-        self.provider.base_url()
+    pub fn provider_base_url(&self) -> String {
+        self.provider().base_url().to_string()
     }
 
     /// 执行流式查询（支持多轮对话）
@@ -372,9 +467,9 @@ impl StreamingQueryEngine {
         let session_id = self.session_id.clone();
 
         let mut engine = StreamingEngineInner {
-            provider: self.provider.clone(),
+            provider: self.provider(),
             tool_registry: self.tool_registry.clone(),
-            model: self.model.clone(),
+            model: self.model_name(),
             system_prompt: self.system_prompt.clone(),
             max_iterations: self.max_iterations,
             agent_manager: self.agent_manager.clone(),
@@ -383,6 +478,7 @@ impl StreamingQueryEngine {
             lsp_manager: self.lsp_manager.clone(),
             worktree_manager: self.worktree_manager.clone(),
             memory_manager: self.memory_manager.clone(),
+            compressor: self.compressor.clone(),
             cost_tracker: self.cost_tracker.clone(),
             permission_mode: self.permission_mode(),
             llm_memory_extraction: self.llm_memory_extraction,
@@ -418,15 +514,13 @@ impl StreamingQueryEngine {
             // 3. 获取当前历史用于查询
             let messages_for_query = {
                 let hist = history.lock().await;
-                // 构建完整消息：system + history
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let layered =
-                    crate::instructions::compose_system_prompt(&engine.system_prompt, &cwd);
-                let composed =
-                    crate::engine::prompt_builder::compose_task_aware_system_prompt_with_history(
-                        &layered, &user_msg, &hist,
-                    );
-                let mut msgs = vec![Message::system(composed)];
+                // 构建完整消息：stable system prompt + history
+                let prompt_context =
+                    crate::engine::prompt_context::PromptContextAssembler::from_current_dir(
+                        &engine.system_prompt,
+                    )
+                    .build_for_turn(&user_msg, &hist);
+                let mut msgs = vec![Message::system(prompt_context.system_prompt)];
                 msgs.extend(hist.clone());
                 msgs
             };
@@ -496,6 +590,7 @@ impl StreamingQueryEngine {
                             lsp_manager: engine.lsp_manager.clone(),
                             worktree_manager: engine.worktree_manager.clone(),
                             memory_manager: engine.memory_manager.clone(),
+                            compressor: engine.compressor.clone(),
                             cost_tracker: engine.cost_tracker.clone(),
                             permission_mode: engine.permission_mode,
                             llm_memory_extraction: engine.llm_memory_extraction,
@@ -583,6 +678,30 @@ impl StreamingQueryEngine {
     }
 }
 
+fn estimate_registry_tool_schema_tokens(registry: &ToolRegistry) -> (usize, u64, String) {
+    let mut count = 0usize;
+    let mut tokens = 0u64;
+    let mut schema_text = String::new();
+    for tool in registry.iter_tools() {
+        count += 1;
+        let params = serde_json::to_string(&tool.parameters()).unwrap_or_default();
+        tokens += crate::engine::context_compressor::estimate_tokens(tool.name());
+        tokens += crate::engine::context_compressor::estimate_tokens(tool.description());
+        tokens += crate::engine::context_compressor::estimate_tokens(&params);
+        schema_text.push_str(tool.name());
+        schema_text.push('\n');
+        schema_text.push_str(tool.description());
+        schema_text.push('\n');
+        schema_text.push_str(&params);
+        schema_text.push('\n');
+    }
+    (
+        count,
+        tokens,
+        crate::engine::prompt_context::stable_fingerprint(&schema_text),
+    )
+}
+
 /// 内部执行引擎
 struct StreamingEngineInner {
     provider: Arc<dyn LlmProvider>,
@@ -596,6 +715,7 @@ struct StreamingEngineInner {
     lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
     memory_manager: Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>,
+    compressor: Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     permission_mode: crate::permissions::PermissionMode,
     llm_memory_extraction: bool,
@@ -715,7 +835,8 @@ impl StreamingEngineInner {
         )
         .with_max_iterations(self.max_iterations)
         .with_permission_mode(self.permission_mode)
-        .with_llm_memory_extraction(self.llm_memory_extraction);
+        .with_llm_memory_extraction(self.llm_memory_extraction)
+        .with_compressor(self.compressor.clone());
 
         if let Some(ref manager) = self.agent_manager {
             builder = builder.with_agent_manager(manager.clone());
@@ -744,10 +865,104 @@ impl StreamingEngineInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+
+    struct MockProvider;
+
+    #[async_trait]
+    impl LlmProvider for MockProvider {
+        async fn chat(
+            &self,
+            _request: crate::services::api::ChatRequest,
+        ) -> anyhow::Result<crate::services::api::ChatResponse> {
+            unimplemented!()
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: crate::services::api::ChatRequest,
+        ) -> anyhow::Result<async_openai::types::ChatCompletionResponseStream> {
+            unimplemented!()
+        }
+
+        fn base_url(&self) -> &str {
+            "mock://local"
+        }
+
+        fn default_model(&self) -> &str {
+            "mock-a"
+        }
+    }
+
+    struct NamedMockProvider {
+        base_url: &'static str,
+        model: &'static str,
+    }
+
+    #[async_trait]
+    impl LlmProvider for NamedMockProvider {
+        async fn chat(
+            &self,
+            _request: crate::services::api::ChatRequest,
+        ) -> anyhow::Result<crate::services::api::ChatResponse> {
+            unimplemented!()
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: crate::services::api::ChatRequest,
+        ) -> anyhow::Result<async_openai::types::ChatCompletionResponseStream> {
+            unimplemented!()
+        }
+
+        fn base_url(&self) -> &str {
+            self.base_url
+        }
+
+        fn default_model(&self) -> &str {
+            self.model
+        }
+    }
 
     #[test]
     fn test_stream_event_creation() {
         let event = StreamEvent::TextChunk("Hello".to_string());
         assert!(matches!(event, StreamEvent::TextChunk(_)));
+    }
+
+    #[test]
+    fn test_runtime_model_switch_updates_label() {
+        let engine = StreamingQueryEngine::new(
+            Arc::new(MockProvider),
+            Arc::new(ToolRegistry::new()),
+            "mock-a",
+        );
+        assert_eq!(engine.model_name(), "mock-a");
+        engine.set_model("mock-b");
+        assert_eq!(engine.model_name(), "mock-b");
+    }
+
+    #[test]
+    fn test_runtime_provider_switch_updates_provider_and_model() {
+        let engine = StreamingQueryEngine::new(
+            Arc::new(NamedMockProvider {
+                base_url: "mock://a",
+                model: "model-a",
+            }),
+            Arc::new(ToolRegistry::new()),
+            "model-a",
+        );
+
+        engine.set_provider(
+            Arc::new(NamedMockProvider {
+                base_url: "mock://b",
+                model: "model-b",
+            }),
+            "model-b",
+        );
+
+        assert_eq!(engine.provider_base_url(), "mock://b");
+        assert_eq!(engine.model_name(), "model-b");
+        assert_eq!(engine.provider().default_model(), "model-b");
     }
 }

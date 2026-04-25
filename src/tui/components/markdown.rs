@@ -43,8 +43,15 @@ fn highlight_code_block(code: &str, language: &str, is_dark: bool) -> Vec<Line<'
         .or_else(|| ss.find_syntax_by_extension(language))
         .unwrap_or_else(|| ss.find_syntax_plain_text());
 
-    let theme_name = if is_dark { "base16-ocean.dark" } else { "base16-ocean.light" };
-    let theme = ts.themes.get(theme_name).unwrap_or_else(|| &ts.themes["base16-ocean.dark"]);
+    let theme_name = if is_dark {
+        "base16-ocean.dark"
+    } else {
+        "base16-ocean.light"
+    };
+    let theme = ts
+        .themes
+        .get(theme_name)
+        .unwrap_or_else(|| &ts.themes["base16-ocean.dark"]);
     let mut highlighter = syntect::easy::HighlightLines::new(syntax, theme);
 
     let mut lines = Vec::new();
@@ -89,12 +96,20 @@ pub fn parse_markdown<'a>(text: &'a str, theme: &crate::tui::theme::Theme) -> Te
                     }
                     Tag::Link { .. } => {
                         current_style = current_style
-                            .fg(if is_dark { Color::Cyan } else { Color::Rgb(0, 100, 200) })
+                            .fg(if is_dark {
+                                Color::Cyan
+                            } else {
+                                Color::Rgb(0, 100, 200)
+                            })
                             .add_modifier(Modifier::UNDERLINED);
                     }
                     Tag::Heading { level, .. } => {
                         current_style = current_style
-                            .fg(if is_dark { Color::Yellow } else { Color::Rgb(180, 140, 0) })
+                            .fg(if is_dark {
+                                Color::Yellow
+                            } else {
+                                Color::Rgb(180, 140, 0)
+                            })
                             .add_modifier(Modifier::BOLD);
                         // 添加前导空格表示层级
                         let indent = "  ".repeat(level as usize);
@@ -115,9 +130,7 @@ pub fn parse_markdown<'a>(text: &'a str, theme: &crate::tui::theme::Theme) -> Te
                     Tag::CodeBlock(lang) => {
                         in_code_block = true;
                         code_language = match lang {
-                            pulldown_cmark::CodeBlockKind::Fenced(lang_str) => {
-                                lang_str.to_string()
-                            }
+                            pulldown_cmark::CodeBlockKind::Fenced(lang_str) => lang_str.to_string(),
                             pulldown_cmark::CodeBlockKind::Indented => String::new(),
                         };
                         code_block_buffer.clear();
@@ -179,7 +192,8 @@ pub fn parse_markdown<'a>(text: &'a str, theme: &crate::tui::theme::Theme) -> Te
                     TagEnd::CodeBlock => {
                         in_code_block = false;
                         // 使用 syntect 高亮代码块
-                        let highlighted = highlight_code_block(&code_block_buffer, &code_language, is_dark);
+                        let highlighted =
+                            highlight_code_block(&code_block_buffer, &code_language, is_dark);
                         lines.extend(highlighted);
                         lines.push(Line::from(Span::styled(
                             "```",

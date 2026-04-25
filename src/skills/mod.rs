@@ -14,8 +14,6 @@ mod types;
 
 pub use tools::{SkillListTool, SkillManageTool, SkillViewTool};
 pub use types::Skill;
-#[cfg(feature = "legacy-cli")]
-pub use types::SkillMeta;
 
 #[cfg(test)]
 mod tests {

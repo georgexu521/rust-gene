@@ -255,7 +255,10 @@ impl Tool for BashTool {
         let working_dir = if let Some(wd_str) = params["working_dir"].as_str() {
             let wd = std::path::PathBuf::from(wd_str);
             // 拒绝包含 .. 的路径
-            if wd.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            if wd
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
                 return ToolResult::error("working_dir cannot contain '..'");
             }
             // 如果是绝对路径，必须位于项目目录或临时目录下
@@ -265,7 +268,7 @@ impl Tool for BashTool {
                 let in_tmp = wd.starts_with("/tmp") || wd.starts_with("/var/tmp");
                 if !in_project && !in_tmp {
                     return ToolResult::error(
-                        "absolute working_dir must be within project directory or /tmp"
+                        "absolute working_dir must be within project directory or /tmp",
                     );
                 }
                 wd

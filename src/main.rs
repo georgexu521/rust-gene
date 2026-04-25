@@ -9,7 +9,7 @@ pub mod ai_analyzer;
 pub mod api;
 pub mod bootstrap;
 pub mod bridge;
-pub mod cli;
+pub mod changelog;
 pub mod context_manager;
 pub mod cost_tracker;
 pub mod diagnostics;
@@ -25,24 +25,23 @@ pub mod permissions;
 pub mod platform;
 pub mod plugins;
 pub mod priority;
+pub mod quality_gates;
 pub mod remote;
 pub mod security;
 pub mod services;
 pub mod session_store;
 pub mod skills;
+pub mod slo;
 pub mod state;
 pub mod task_analyzer;
 pub mod task_manager;
 pub mod team;
 pub mod telemetry;
-pub mod changelog;
-pub mod quality_gates;
-pub mod slo;
-pub mod version;
 #[cfg(test)]
 pub mod test_utils;
 pub mod tools;
 pub mod tui;
+pub mod version;
 pub mod voice;
 
 use tracing::{debug, error, info};
@@ -53,66 +52,40 @@ enum StartupMode {
     Help,
     Api,
     Cli,
-    Tui,
-}
-
-fn is_cli_subcommand(arg: &str) -> bool {
-    matches!(
-        arg,
-        "init"
-            | "add"
-            | "list"
-            | "next"
-            | "done"
-            | "progress"
-            | "analyze"
-            | "snapshot"
-            | "restore"
-            | "interactive"
-            | "i"
-            | "chat"
-            | "help"
-    )
 }
 
 fn detect_startup_mode(args: &[String]) -> StartupMode {
-    let argv0 = std::env::args().next().unwrap_or_default();
-    let invoked_as_pa = argv0.ends_with("pa") || argv0.ends_with("pa.exe");
-
     let mode = args.get(1).map(|s| s.as_str());
     match mode {
         Some("--help") | Some("-h") | Some("help") => StartupMode::Help,
         Some("--api") => StartupMode::Api,
-        Some("--cli") => StartupMode::Cli,
-        Some("--tui") => StartupMode::Tui,
-        Some(sub) if is_cli_subcommand(sub) => StartupMode::Cli,
-        _ if invoked_as_pa => StartupMode::Cli,
-        _ => StartupMode::Tui,
+        Some("--cli") | Some("--tui") => StartupMode::Cli,
+        _ => StartupMode::Cli,
     }
 }
 
 fn print_help() {
-    let argv0 = std::env::args().next().unwrap_or_else(|| "priority-agent".into());
+    let argv0 = std::env::args()
+        .next()
+        .unwrap_or_else(|| "priority-agent".into());
     let is_pa = argv0.ends_with("pa") || argv0.ends_with("pa.exe");
     let bin = if is_pa { "pa" } else { "priority-agent" };
 
     println!("Priority Agent");
     println!();
     println!("Usage:");
-    println!("  {bin} [--api [--port <PORT>]] [--cli] [--tui] [--help]");
+    println!("  {bin} [--api [--port <PORT>]] [--cli] [--help]");
     println!();
     println!("Modes:");
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
-    println!("  --cli    Run chat CLI mode (feature: legacy-cli)");
-    println!("  --tui    Start TUI mode");
-    println!("  (none)   Default: TUI for 'priority-agent', CLI for 'pa'");
+    println!("  --cli    Start interactive terminal CLI");
+    println!("  --tui    Alias for --cli (deprecated)");
+    println!("  (none)   Default: interactive terminal CLI");
     println!();
     println!("Examples:");
     println!("  {bin}                  # Default mode");
     println!("  {bin} --api --port 8787 # HTTP API server");
-    println!("  {bin} --tui            # Force TUI mode");
-    println!("  priority-agent --cli   # Force chat CLI mode");
-    println!("  priority-agent chat    # Enter chat CLI directly");
+    println!("  {bin} --cli            # Interactive terminal CLI");
 }
 
 #[tokio::main]
@@ -124,7 +97,7 @@ async fn main() {
     // 初始化日志（交互模式默认降噪，仍可通过 RUST_LOG 覆盖）
     let default_level = match startup_mode {
         StartupMode::Api => "info",
-        StartupMode::Help | StartupMode::Cli | StartupMode::Tui => "warn",
+        StartupMode::Help | StartupMode::Cli => "warn",
     };
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -197,29 +170,16 @@ async fn main() {
             }
         }
         StartupMode::Cli => {
-            // 传统 CLI 模式
-            #[cfg(feature = "legacy-cli")]
-            {
-                cli::run_cli().await;
-            }
-            #[cfg(not(feature = "legacy-cli"))]
-            {
-                eprintln!("CLI mode requires feature 'legacy-cli'");
-                std::process::exit(1);
-            }
-        }
-        StartupMode::Tui => {
-            // 默认: TUI 模式 (需要 bootstrap 初始化所有组件)
+            // 默认: 交互式终端 CLI（由 ratatui/crossterm 实现）
             // 检测是否在交互式终端中运行
             if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                eprintln!("Error: TUI mode requires an interactive terminal.");
-                eprintln!("       Use --api to start the HTTP API server,");
-                eprintln!("       or --cli for the legacy command-line interface.");
+                eprintln!("Error: CLI mode requires an interactive terminal.");
+                eprintln!("       Use --api to start the HTTP API server.");
                 eprintln!();
                 print_help();
                 std::process::exit(1);
             }
-            info!("Starting TUI...");
+            info!("Starting interactive CLI...");
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let (provider, model) = match bootstrap::init_provider() {
@@ -241,7 +201,7 @@ async fn main() {
                     )
                     .await
                     {
-                        error!("TUI failed: {}", e);
+                        error!("Interactive CLI failed: {}", e);
                         std::process::exit(1);
                     }
                 }
@@ -288,17 +248,21 @@ mod tests {
             StartupMode::Cli
         );
         assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "--tui".into()]),
+            StartupMode::Cli
+        );
+        assert_eq!(
             detect_startup_mode(&["priority-agent".into()]),
-            StartupMode::Tui
+            StartupMode::Cli
         );
         assert_eq!(
             detect_startup_mode(&["priority-agent".into(), "--unknown".into()]),
-            StartupMode::Tui
+            StartupMode::Cli
         );
     }
 
     #[test]
-    fn test_detect_startup_mode_cli_subcommands() {
+    fn test_legacy_cli_subcommands_fall_back_to_interactive_cli() {
         assert_eq!(
             detect_startup_mode(&["priority-agent".into(), "chat".into()]),
             StartupMode::Cli

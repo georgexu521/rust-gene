@@ -5,8 +5,8 @@
 //! they remain visible within the `tui` module but are not part of the public API.
 #![allow(dead_code)]
 
-pub(crate) use crate::tui::app::TuiApp;
 use crate::tools::Tool;
+pub(crate) use crate::tui::app::TuiApp;
 
 // ─── File-Path Helpers ──────────────────────────────────────────────────
 
@@ -158,11 +158,15 @@ pub(crate) fn message_items_to_api_messages(
     messages
         .iter()
         .map(|m| match m.role {
-            crate::state::MessageRole::User => crate::services::api::Message::user(m.content.clone()),
+            crate::state::MessageRole::User => {
+                crate::services::api::Message::user(m.content.clone())
+            }
             crate::state::MessageRole::Assistant => {
                 crate::services::api::Message::assistant(m.content.clone())
             }
-            crate::state::MessageRole::System => crate::services::api::Message::system(m.content.clone()),
+            crate::state::MessageRole::System => {
+                crate::services::api::Message::system(m.content.clone())
+            }
             crate::state::MessageRole::Tool => {
                 crate::services::api::Message::tool(String::new(), m.content.clone())
             }
@@ -206,7 +210,10 @@ pub(crate) fn format_config_summary(config: &crate::services::config::AppConfig)
     )
 }
 
-pub(crate) fn get_config_value(config: &crate::services::config::AppConfig, key: &str) -> Option<String> {
+pub(crate) fn get_config_value(
+    config: &crate::services::config::AppConfig,
+    key: &str,
+) -> Option<String> {
     match key {
         "api.base_url" => Some(config.api.base_url.clone()),
         "api.model" => Some(config.api.model.clone()),
@@ -222,7 +229,9 @@ pub(crate) fn get_config_value(config: &crate::services::config::AppConfig, key:
         "ui.show_token_usage" => Some(config.ui.show_token_usage.to_string()),
         "ui.compact_mode" => Some(config.ui.compact_mode.to_string()),
         "storage.persistence_enabled" => Some(config.storage.persistence_enabled.to_string()),
-        "storage.auto_save_interval_secs" => Some(config.storage.auto_save_interval_secs.to_string()),
+        "storage.auto_save_interval_secs" => {
+            Some(config.storage.auto_save_interval_secs.to_string())
+        }
         "features.mcp_enabled" => Some(config.features.mcp_enabled.to_string()),
         "features.skills_enabled" => Some(config.features.skills_enabled.to_string()),
         "features.web_search" => Some(config.features.web_search.to_string()),
@@ -332,9 +341,13 @@ pub(crate) fn merge_permission_toml(existing: &str, imported: &str) -> Result<St
         rules.retain(|r| seen.insert(r.pattern.clone()));
     };
 
-    existing_rules.always_allow.extend(imported_rules.always_allow);
+    existing_rules
+        .always_allow
+        .extend(imported_rules.always_allow);
     dedup(&mut existing_rules.always_allow);
-    existing_rules.always_deny.extend(imported_rules.always_deny);
+    existing_rules
+        .always_deny
+        .extend(imported_rules.always_deny);
     dedup(&mut existing_rules.always_deny);
     existing_rules.always_ask.extend(imported_rules.always_ask);
     dedup(&mut existing_rules.always_ask);
@@ -442,7 +455,11 @@ pub(crate) fn count_files_recursively(path: &std::path::Path) -> usize {
     count
 }
 
-pub(crate) fn collect_chrome_bookmarks(node: &serde_json::Value, out: &mut Vec<String>, limit: usize) {
+pub(crate) fn collect_chrome_bookmarks(
+    node: &serde_json::Value,
+    out: &mut Vec<String>,
+    limit: usize,
+) {
     if out.len() >= limit {
         return;
     }
@@ -610,10 +627,7 @@ pub(crate) async fn test_webhook(url: &str, payload: &str) -> Result<String, Str
             status, preview
         ))
     } else {
-        Err(format!(
-            "status {}. Response: {}",
-            status, preview
-        ))
+        Err(format!("status {}. Response: {}", status, preview))
     }
 }
 
@@ -873,12 +887,13 @@ pub(crate) fn load_bookmarks() -> Result<std::collections::HashMap<String, Strin
     if !path.exists() {
         return Ok(std::collections::HashMap::new());
     }
-    let text =
-        std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
     serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
-pub(crate) fn save_bookmarks(map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+pub(crate) fn save_bookmarks(
+    map: &std::collections::HashMap<String, String>,
+) -> Result<(), String> {
     let path = bookmarks_file();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
@@ -892,12 +907,13 @@ pub(crate) fn load_tags() -> Result<std::collections::HashMap<String, Vec<String
     if !path.exists() {
         return Ok(std::collections::HashMap::new());
     }
-    let text =
-        std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
     serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
-pub(crate) fn save_tags(map: &std::collections::HashMap<String, Vec<String>>) -> Result<(), String> {
+pub(crate) fn save_tags(
+    map: &std::collections::HashMap<String, Vec<String>>,
+) -> Result<(), String> {
     let path = tags_file();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
@@ -947,8 +963,7 @@ pub(crate) fn load_profile() -> Result<std::collections::HashMap<String, String>
     if !path.exists() {
         return Ok(std::collections::HashMap::new());
     }
-    let text =
-        std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
     serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
@@ -961,7 +976,10 @@ pub(crate) fn save_profile(map: &std::collections::HashMap<String, String>) -> R
     std::fs::write(&path, text).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
-pub(crate) fn append_feedback(session_id: &str, message: &str) -> Result<std::path::PathBuf, String> {
+pub(crate) fn append_feedback(
+    session_id: &str,
+    message: &str,
+) -> Result<std::path::PathBuf, String> {
     let path = feedback_file();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {}", parent.display(), e))?;

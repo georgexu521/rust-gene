@@ -43,7 +43,10 @@ impl WorkflowPlanner {
         }
     }
 
-    pub fn with_llm_and_policy(llm_provider: Arc<dyn LlmProvider>, policy: &WorkflowPolicy) -> Self {
+    pub fn with_llm_and_policy(
+        llm_provider: Arc<dyn LlmProvider>,
+        policy: &WorkflowPolicy,
+    ) -> Self {
         Self {
             weight_engine: WeightEngine::from_multipliers(&policy.weights),
             llm_provider: Some(llm_provider),
@@ -65,8 +68,7 @@ impl WorkflowPlanner {
         }
 
         // 推断每个步骤的工具
-        let tools: Vec<Option<String>> =
-            descriptions.iter().map(|d| Self::infer_tool(d)).collect();
+        let tools: Vec<Option<String>> = descriptions.iter().map(|d| Self::infer_tool(d)).collect();
 
         // 推断依赖关系
         let dependencies = Self::infer_dependencies(&descriptions, &tools);
@@ -167,9 +169,11 @@ impl WorkflowPlanner {
         }
 
         // 检查是否存在低置信度依赖（孤岛步骤）
-        let has_islands = plan.steps.iter().enumerate().any(|(i, s)| {
-            i > 0 && s.dependent_step_indices.is_empty()
-        });
+        let has_islands = plan
+            .steps
+            .iter()
+            .enumerate()
+            .any(|(i, s)| i > 0 && s.dependent_step_indices.is_empty());
 
         if !has_islands && plan.steps.len() <= 5 {
             return plan;
@@ -275,11 +279,23 @@ impl WorkflowPlanner {
     /// 简单子领域计数（通过领域关键词推断）
     fn count_subdomains(plan: &Plan) -> usize {
         let domains = [
-            ("数据库", vec!["数据库", "db", "sql", "表", "schema", "migration"]),
-            ("前端", vec!["前端", "ui", "界面", "react", "vue", "html", "css"]),
-            ("后端", vec!["后端", "api", "接口", "路由", "controller", "handler"]),
+            (
+                "数据库",
+                vec!["数据库", "db", "sql", "表", "schema", "migration"],
+            ),
+            (
+                "前端",
+                vec!["前端", "ui", "界面", "react", "vue", "html", "css"],
+            ),
+            (
+                "后端",
+                vec!["后端", "api", "接口", "路由", "controller", "handler"],
+            ),
             ("测试", vec!["测试", "test", "unit", "integration", "mock"]),
-            ("安全", vec!["安全", "auth", "认证", "加密", "permission", "login"]),
+            (
+                "安全",
+                vec!["安全", "auth", "认证", "加密", "permission", "login"],
+            ),
             ("部署", vec!["部署", "deploy", "docker", "ci", "cd", "k8s"]),
         ];
 
@@ -353,8 +369,7 @@ impl WorkflowPlanner {
         }
 
         // 用新的描述重新构建计划
-        let tools: Vec<Option<String>> =
-            descriptions.iter().map(|d| Self::infer_tool(d)).collect();
+        let tools: Vec<Option<String>> = descriptions.iter().map(|d| Self::infer_tool(d)).collect();
         let dependencies = Self::infer_dependencies(&descriptions, &tools);
 
         let mut steps = Vec::new();
@@ -422,10 +437,7 @@ impl WorkflowPlanner {
             let combined_desc = if read_steps.len() == 1 {
                 read_steps.into_iter().next().unwrap()
             } else {
-                format!(
-                    "合并读取/搜索: {}",
-                    read_steps.join("; ")
-                )
+                format!("合并读取/搜索: {}", read_steps.join("; "))
             };
 
             let read_step = PlanStep {
@@ -443,10 +455,7 @@ impl WorkflowPlanner {
         // 重新计算依赖（简单策略：写/改依赖合并后的 read 步骤）
         let read_step_idx = if has_read_steps { Some(0usize) } else { None };
         for (i, step) in atomic_steps.iter_mut().enumerate() {
-            if matches!(
-                step.tool.as_deref(),
-                Some("file_write") | Some("file_edit")
-            ) {
+            if matches!(step.tool.as_deref(), Some("file_write") | Some("file_edit")) {
                 if let Some(read_idx) = read_step_idx {
                     if i != read_idx && !step.dependent_step_indices.contains(&read_idx) {
                         step.dependent_step_indices.push(read_idx);
@@ -537,7 +546,8 @@ impl WorkflowPlanner {
         let is_search = d.contains("搜索") || d.contains("grep") || d.contains("find");
 
         // 读取类
-        if d.contains("读取") || d.contains("查看") || d.contains("read") || d.contains("cat ") {
+        if d.contains("读取") || d.contains("查看") || d.contains("read") || d.contains("cat ")
+        {
             return Some("file_read".into());
         }
         if d.contains("glob") || d.contains("列出文件") || d.contains("list files") {
@@ -566,9 +576,16 @@ impl WorkflowPlanner {
         }
 
         // 执行类
-        if d.contains("测试") || d.contains("test") || d.contains("编译") || d.contains("build")
-            || d.contains("cargo ") || d.contains("运行") || d.contains("run")
-            || d.contains("执行") || d.contains("deploy") || d.contains("启动")
+        if d.contains("测试")
+            || d.contains("test")
+            || d.contains("编译")
+            || d.contains("build")
+            || d.contains("cargo ")
+            || d.contains("运行")
+            || d.contains("run")
+            || d.contains("执行")
+            || d.contains("deploy")
+            || d.contains("启动")
             || d.contains("git ")
         {
             return Some("bash".into());
@@ -580,8 +597,7 @@ impl WorkflowPlanner {
         }
 
         // Web 类
-        if d.contains("web") || d.contains("fetch") || d.contains("url") || d.contains("网页")
-        {
+        if d.contains("web") || d.contains("fetch") || d.contains("url") || d.contains("网页") {
             return Some("web_fetch".into());
         }
 
@@ -607,10 +623,7 @@ impl WorkflowPlanner {
     /// 5. (M2) 语义关键词：基于/依赖/requires/depends on/build on
     ///
     /// 所有依赖只指向更小的索引，天然无环（P-05 保证）。
-    fn infer_dependencies(
-        descriptions: &[String],
-        tools: &[Option<String>],
-    ) -> Vec<Vec<usize>> {
+    fn infer_dependencies(descriptions: &[String], tools: &[Option<String>]) -> Vec<Vec<usize>> {
         let n = descriptions.len();
         let mut deps: Vec<Vec<usize>> = vec![vec![]; n];
         let lowered: Vec<String> = descriptions.iter().map(|d| d.to_lowercase()).collect();
@@ -717,7 +730,9 @@ impl WorkflowPlanner {
     /// 简单启发式：匹配 `xxx.rs`, `xxx.toml`, `xxx.md`, `xxx.json` 等常见文件扩展名。
     fn extract_file_references(description: &str) -> Vec<String> {
         let mut refs = Vec::new();
-        let exts = [".rs", ".toml", ".md", ".json", ".yaml", ".yml", ".js", ".ts", ".py", ".go"];
+        let exts = [
+            ".rs", ".toml", ".md", ".json", ".yaml", ".yml", ".js", ".ts", ".py", ".go",
+        ];
 
         for word in description.split_whitespace() {
             let trimmed = word.trim_matches(|c: char| c.is_ascii_punctuation());
@@ -804,7 +819,8 @@ mod tests {
         ThinkingResult {
             problem_statement: "实现用户认证系统".into(),
             key_uncertainties: vec!["数据库选型不确定".into()],
-            decision_basis: "1. 设计数据库表结构\n2. 实现登录接口\n3. 实现注册接口\n4. 编写测试验证".into(),
+            decision_basis:
+                "1. 设计数据库表结构\n2. 实现登录接口\n3. 实现注册接口\n4. 编写测试验证".into(),
             question_chain: vec![],
             total_token_cost: 500,
             convergence_reason: "executable_plan_formed".into(),
@@ -861,7 +877,8 @@ mod tests {
         let planner = WorkflowPlanner::new();
         let mut thinking = sample_thinking_result();
         // 构造一个包含顺序和测试依赖的描述
-        thinking.decision_basis = "1. 读取现有代码\n2. 然后修改登录逻辑\n3. 最后编写测试验证".into();
+        thinking.decision_basis =
+            "1. 读取现有代码\n2. 然后修改登录逻辑\n3. 最后编写测试验证".into();
         let plan = planner.plan(&thinking, "修复登录 bug");
 
         // "然后修改" 应该依赖步骤 0
@@ -899,15 +916,30 @@ mod tests {
 
     #[test]
     fn test_tool_inference() {
-        assert_eq!(WorkflowPlanner::infer_tool("读取配置文件"), Some("file_read".into()));
-        assert_eq!(WorkflowPlanner::infer_tool("修改登录逻辑"), Some("file_edit".into()));
-        assert_eq!(WorkflowPlanner::infer_tool("创建新模块"), Some("file_write".into()));
+        assert_eq!(
+            WorkflowPlanner::infer_tool("读取配置文件"),
+            Some("file_read".into())
+        );
+        assert_eq!(
+            WorkflowPlanner::infer_tool("修改登录逻辑"),
+            Some("file_edit".into())
+        );
+        assert_eq!(
+            WorkflowPlanner::infer_tool("创建新模块"),
+            Some("file_write".into())
+        );
         assert_eq!(
             WorkflowPlanner::infer_tool("在桌面新建一个 gex 文件夹"),
             Some("bash".into())
         );
-        assert_eq!(WorkflowPlanner::infer_tool("运行 cargo test"), Some("bash".into()));
-        assert_eq!(WorkflowPlanner::infer_tool("搜索 TODO"), Some("grep".into()));
+        assert_eq!(
+            WorkflowPlanner::infer_tool("运行 cargo test"),
+            Some("bash".into())
+        );
+        assert_eq!(
+            WorkflowPlanner::infer_tool("搜索 TODO"),
+            Some("grep".into())
+        );
         assert_eq!(WorkflowPlanner::infer_tool("随便什么步骤"), None);
     }
 
@@ -992,7 +1024,8 @@ mod tests {
             problem_statement: "重构代码".into(),
             key_uncertainties: vec![],
             // 步骤 0 和步骤 2 都提到 auth.rs → 步骤 2 应隐含依赖步骤 0
-            decision_basis: "1. 读取 auth.rs 了解现状\n2. 设计新接口\n3. 基于 auth.rs 实现新逻辑".into(),
+            decision_basis: "1. 读取 auth.rs 了解现状\n2. 设计新接口\n3. 基于 auth.rs 实现新逻辑"
+                .into(),
             question_chain: vec![],
             total_token_cost: 100,
             convergence_reason: "test".into(),
@@ -1036,8 +1069,8 @@ mod tests {
 
     #[test]
     fn test_needs_recursive_split_simple_plan() {
-        let plan = Plan::new("简单任务", "修一个 bug")
-            .add_step("修改一行代码", Some("file_edit".into()));
+        let plan =
+            Plan::new("简单任务", "修一个 bug").add_step("修改一行代码", Some("file_edit".into()));
         assert!(
             !WorkflowPlanner::needs_recursive_split(&plan),
             "Simple plan should not split"

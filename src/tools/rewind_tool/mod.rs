@@ -34,9 +34,7 @@ impl Tool for RewindTool {
     }
 
     async fn execute(&self, params: Value, _context: ToolContext) -> ToolResult {
-        let steps = params.get("steps")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(1) as usize;
+        let steps = params.get("steps").and_then(|v| v.as_i64()).unwrap_or(1) as usize;
 
         ToolResult::success(format!(
             "Rewound {} step(s).\n\nUse /history to view the conversation history.",

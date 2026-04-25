@@ -159,7 +159,11 @@ impl TuiSessionManager {
     }
 
     /// 用给定消息完整替换会话消息（先删后写）
-    pub fn replace_messages(&self, session_id: &str, messages: &[MessageItem]) -> anyhow::Result<()> {
+    pub fn replace_messages(
+        &self,
+        session_id: &str,
+        messages: &[MessageItem],
+    ) -> anyhow::Result<()> {
         self.store.delete_messages(session_id)?;
         for msg in messages {
             let role_str = match msg.role {
@@ -491,7 +495,8 @@ impl TuiSessionManager {
     }
 
     fn redo_edits_path(&self, session_id: &str) -> PathBuf {
-        self.snapshots_session_dir(session_id).join("redo_edits.json")
+        self.snapshots_session_dir(session_id)
+            .join("redo_edits.json")
     }
 
     fn load_edit_records(&self, path: &PathBuf) -> anyhow::Result<Vec<EditRecord>> {
@@ -546,7 +551,11 @@ impl TuiSessionManager {
     ) -> anyhow::Result<EditRecord> {
         let snapshot_dir = self.snapshots_session_dir(session_id).join(sub_dir);
         std::fs::create_dir_all(&snapshot_dir)?;
-        let snapshot_file = format!("{}_{}.txt", chrono::Utc::now().timestamp_millis(), Uuid::new_v4().simple());
+        let snapshot_file = format!(
+            "{}_{}.txt",
+            chrono::Utc::now().timestamp_millis(),
+            Uuid::new_v4().simple()
+        );
         std::fs::write(snapshot_dir.join(&snapshot_file), content)?;
 
         Ok(EditRecord {
@@ -844,12 +853,18 @@ mod tests {
         // Undo -> file returns to original.
         let undo_result = manager.rewind_last_edit(&session_id).unwrap();
         assert!(undo_result.contains("Rewound"));
-        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "original content");
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "original content"
+        );
 
         // Redo -> file returns to modified.
         let redo_result = manager.redo_last_edit(&session_id).unwrap();
         assert!(redo_result.contains("Redid"));
-        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "modified content");
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "modified content"
+        );
 
         // Cleanup.
         let _ = std::fs::remove_file(&test_file);

@@ -5,6 +5,7 @@
 use crate::tools::*;
 
 /// 示例：使用工具注册表执行工具
+#[allow(dead_code)]
 pub async fn example_tool_usage() {
     // 创建工具注册表
     let registry = ToolRegistry::default_registry();
@@ -68,6 +69,7 @@ pub async fn example_tool_usage() {
 }
 
 /// 示例：转换为 OpenAI 工具格式
+#[allow(dead_code)]
 pub fn example_openai_tools() {
     let registry = ToolRegistry::default_registry();
     let openai_tools = registry.to_openai_tools();
@@ -79,6 +81,7 @@ pub fn example_openai_tools() {
 }
 
 /// 示例：带 LLM 的工具调用循环
+#[allow(dead_code)]
 pub async fn example_tool_loop() {
     // TODO: Phase 3 实现完整的 LLM 工具调用循环
     // 这将展示如何：

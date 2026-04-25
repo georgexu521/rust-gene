@@ -8,7 +8,10 @@ pub fn send_notification(title: &str, body: &str) {
     // Try OSC 99 (kitty/ghostty) first
     print!("\x1b]99;i=1:d=0:p=body;{}\x1b\\", escape_osc(body));
     // Try OSC 9 (iTerm2) as fallback
-    print!("\x1b]9;{}\x1b\\", escape_osc(&format!("{}: {}", title, body)));
+    print!(
+        "\x1b]9;{}\x1b\\",
+        escape_osc(&format!("{}: {}", title, body))
+    );
     // Always send BEL as universal fallback
     print!("\x07");
     let _ = std::io::Write::flush(&mut std::io::stdout());

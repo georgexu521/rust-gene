@@ -41,6 +41,21 @@ impl InputState {
         self.cursor_position += 1;
     }
 
+    /// 插入字符串，保持光标位置按 Unicode 字符计数
+    pub fn insert_str(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let byte_pos = self
+            .value
+            .char_indices()
+            .nth(self.cursor_position)
+            .map(|(i, _)| i)
+            .unwrap_or(self.value.len());
+        self.value.insert_str(byte_pos, text);
+        self.cursor_position += text.chars().count();
+    }
+
     /// 在光标位置删除字符（退格）
     pub fn delete_char_before_cursor(&mut self) {
         if self.cursor_position > 0 {
@@ -306,5 +321,17 @@ mod tests {
         input.insert('好');
         assert_eq!(input.value(), "你好");
         assert_eq!(input.cursor_position(), 2);
+    }
+
+    #[test]
+    fn test_insert_str_unicode_at_cursor() {
+        let mut input = InputState::new();
+        input.insert_str("你好世界");
+        input.move_cursor_left();
+        input.move_cursor_left();
+        input.insert_str(" Rust ");
+
+        assert_eq!(input.value(), "你好 Rust 世界");
+        assert_eq!(input.cursor_position(), 8);
     }
 }

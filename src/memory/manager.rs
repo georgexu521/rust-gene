@@ -8,12 +8,19 @@
 
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 const MAX_LEARNINGS_PER_TURN: usize = 3;
 const MAX_LEARNINGS_PER_SESSION_EXTRACT: usize = 6;
+const MEMORY_DIR_NAME: &str = "memory";
+const MAX_MEMORY_FILES: usize = 24;
+const MEMORY_FILE_CHAR_LIMIT: usize = 2_000;
+const MEMORY_MANIFEST_CHAR_LIMIT: usize = 2_500;
+const ACTIVE_MEMORY_SECTION_LIMIT: usize = 40;
+const ACTIVE_MEMORY_KEEP_SECTIONS: usize = 30;
+const ACTIVE_MEMORY_CHAR_LIMIT: usize = 20_000;
 
 fn log_preview(content: &str, max_chars: usize) -> String {
     content.chars().take(max_chars).collect()
@@ -42,6 +49,8 @@ pub struct MemoryEntry {
 #[derive(Debug, Clone)]
 pub struct MemorySummary {
     pub project_memory_chars: usize,
+    pub project_memory_files: usize,
+    pub project_memory_file_chars: usize,
     pub user_memory_chars: usize,
     pub session_memory_items: usize,
     pub has_frozen_snapshot: bool,
@@ -51,11 +60,50 @@ impl MemorySummary {
     /// 获取格式化的摘要字符串
     pub fn format(&self) -> String {
         format!(
-            "Memory Tiers:\n  Project: {} chars\n  User: {} chars\n  Session: {} items\n  Frozen: {}",
+            "Memory Tiers:\n  Project: {} chars, {} files ({} chars)\n  User: {} chars\n  Session: {} items\n  Frozen: {}",
             self.project_memory_chars,
+            self.project_memory_files,
+            self.project_memory_file_chars,
             self.user_memory_chars,
             self.session_memory_items,
             if self.has_frozen_snapshot { "yes" } else { "no" }
+        )
+    }
+}
+
+/// 分主题记忆文件快照。
+#[derive(Debug, Clone)]
+pub struct MemoryFileSnapshot {
+    pub relative_path: String,
+    pub content: String,
+    pub chars: usize,
+}
+
+/// 相关记忆匹配结果（用于注入和可观测性）
+#[derive(Debug, Clone)]
+pub struct MemoryMatch {
+    pub source: String,
+    pub score: usize,
+    pub snippet: String,
+}
+
+/// 记忆维护结果。
+#[derive(Debug, Clone, Default)]
+pub struct MemoryMaintenanceReport {
+    pub files_scanned: usize,
+    pub duplicate_sections_removed: usize,
+    pub files_compacted: usize,
+    pub archives_created: usize,
+}
+
+impl MemoryMaintenanceReport {
+    pub fn format(&self) -> String {
+        format!(
+            "Memory Maintenance:\n  Files scanned: {}\n  Duplicate sections removed: {}\n  Files compacted: {}\n  Archives created: {}",
+            self.files_scanned,
+            self.duplicate_sections_removed,
+            self.files_compacted,
+            self.archives_created
         )
     }
 }
@@ -66,9 +114,12 @@ pub struct MemoryManager {
     memory_path: PathBuf,
     /// USER.md 路径（用户偏好）
     user_path: PathBuf,
+    /// 分主题长期记忆目录（~/.priority-agent/memory/*.md）
+    memory_dir: PathBuf,
     /// 冻结快照（会话开始时捕获，整个会话不变）
     frozen_memory: Option<String>,
     frozen_user: Option<String>,
+    frozen_memory_files: Vec<MemoryFileSnapshot>,
     /// 字符限制
     memory_char_limit: usize,
     user_char_limit: usize,
@@ -103,7 +154,14 @@ impl MemoryManager {
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".priority-agent");
 
+        Self::with_base_dir(base)
+    }
+
+    /// 使用指定 base dir 创建记忆管理器。主要用于测试，也让上层可注入项目级存储位置。
+    pub fn with_base_dir(base: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&base);
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        let _ = std::fs::create_dir_all(&memory_dir);
 
         // 从环境变量读取配置
         let forked_mode = std::env::var("PRIORITY_AGENT_LLM_MEMORY_FORKED")
@@ -119,8 +177,10 @@ impl MemoryManager {
         Self {
             memory_path: base.join("MEMORY.md"),
             user_path: base.join("USER.md"),
+            memory_dir,
             frozen_memory: None,
             frozen_user: None,
+            frozen_memory_files: Vec::new(),
             memory_char_limit: 3000,
             user_char_limit: 1500,
             prefetched_this_turn: false,
@@ -142,6 +202,7 @@ impl MemoryManager {
     pub fn freeze_snapshot(&mut self) {
         self.frozen_memory = std::fs::read_to_string(&self.memory_path).ok();
         self.frozen_user = std::fs::read_to_string(&self.user_path).ok();
+        self.frozen_memory_files = load_memory_files(&self.memory_dir);
         info!("Memory snapshot frozen for this session");
     }
 
@@ -149,6 +210,7 @@ impl MemoryManager {
     pub async fn freeze_snapshot_async(&mut self) {
         self.frozen_memory = tokio::fs::read_to_string(&self.memory_path).await.ok();
         self.frozen_user = tokio::fs::read_to_string(&self.user_path).await.ok();
+        self.frozen_memory_files = load_memory_files(&self.memory_dir);
         info!("Memory snapshot frozen for this session (async)");
     }
 
@@ -162,6 +224,12 @@ impl MemoryManager {
                 let truncated: String = trimmed.chars().take(self.memory_char_limit).collect();
                 parts.push(format!("## Project Memory\n{}", truncated));
             }
+        }
+
+        let manifest =
+            format_memory_file_manifest(&self.frozen_memory_files, MEMORY_MANIFEST_CHAR_LIMIT);
+        if !manifest.trim().is_empty() {
+            parts.push(format!("## Memory File Index\n{}", manifest));
         }
 
         if let Some(ref user) = self.frozen_user {
@@ -192,23 +260,66 @@ impl MemoryManager {
 
         // 从冻结快照中搜索（而非磁盘），保持一致性
         let memory_content = self.frozen_memory.clone().unwrap_or_default();
-        if memory_content.trim().is_empty() {
+        if memory_content.trim().is_empty() && self.frozen_memory_files.is_empty() {
             return String::new();
         }
 
-        // 简单关键词匹配搜索相关段落
-        let keywords = extract_keywords(user_message);
-        let relevant = search_memory(&memory_content, &keywords, 3);
+        let relevant = self.preview_relevant_memories(user_message, 5);
+        format_relevant_memory_block(relevant)
+    }
 
-        if relevant.is_empty() {
+    /// 预取：本地召回后使用 LLM 在小候选集内 rerank。
+    ///
+    /// LLM 失败或返回不可解析结果时自动回退到本地语义评分。
+    pub async fn prefetch_with_llm_rerank(
+        &mut self,
+        user_message: &str,
+        provider: &dyn LlmProvider,
+        model: &str,
+    ) -> String {
+        if self.prefetched_this_turn {
             String::new()
         } else {
-            let entries: Vec<String> = relevant
-                .into_iter()
-                .map(|e| format!("- {}", e.trim()))
-                .collect();
-            format!("[Relevant Memory]\n{}\n\n---\n", entries.join("\n"))
+            self.prefetched_this_turn = true;
+            let candidates = self.preview_relevant_memories(user_message, 10);
+            if candidates.is_empty() {
+                return String::new();
+            }
+
+            let selected =
+                rerank_memory_matches_with_llm(user_message, &candidates, provider, model, 5).await;
+            format_relevant_memory_block(selected)
         }
+    }
+
+    /// 预览当前 query 会命中的相关记忆，不改变本轮 prefetch 状态。
+    pub fn preview_relevant_memories(
+        &self,
+        user_message: &str,
+        max_results: usize,
+    ) -> Vec<MemoryMatch> {
+        let keywords = extract_keywords(user_message);
+        if keywords.is_empty() {
+            return Vec::new();
+        }
+
+        let memory_content = self.frozen_memory.clone().unwrap_or_default();
+        let memory_files = if self.frozen_memory_files.is_empty() {
+            load_memory_files(&self.memory_dir)
+        } else {
+            self.frozen_memory_files.clone()
+        };
+
+        let mut matches = Vec::new();
+        matches.extend(rank_memory_paragraphs(
+            "MEMORY.md",
+            &memory_content,
+            &keywords,
+        ));
+        matches.extend(rank_memory_files(&memory_files, &keywords));
+        matches.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.source.cmp(&b.source)));
+        matches.truncate(max_results);
+        matches
     }
 
     /// 同步：保存本轮对话中学习到的内容（启发式提取）
@@ -478,11 +589,69 @@ Return exactly the word NONE if there is nothing critical to remember.";
             debug!("Failed to save memory: {}", e);
         }
 
+        debug!("Memory saved: [{}] {}", category, log_preview(content, 50));
+    }
+
+    /// 添加学习内容到分主题记忆文件（同步版本）
+    pub fn add_topic_learning(&mut self, content: &str, category: &str, topic: &str) {
+        let Some(path) = topic_memory_path(&self.memory_dir, topic) else {
+            debug!("Skipping topic memory with invalid topic: {}", topic);
+            return;
+        };
+
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let normalized_existing = existing
+            .to_lowercase()
+            .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+        let normalized_content = content
+            .to_lowercase()
+            .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+        if normalized_existing.contains(&normalized_content) {
+            debug!(
+                "Skipping duplicate topic learning (already in file): {}",
+                log_preview(content, 50)
+            );
+            return;
+        }
+
+        let entry = format!(
+            "\n## [{}] {}\n{}\n",
+            category.to_uppercase(),
+            chrono::Local::now().format("%Y-%m-%d %H:%M"),
+            content
+        );
+        let header = if existing.trim().is_empty() {
+            "# Priority Agent Topic Memory\n".to_string()
+        } else {
+            String::new()
+        };
+        let new_content = format!("{}{}{}", existing, header, entry);
+
+        if let Err(e) = std::fs::write(&path, &new_content) {
+            debug!("Failed to save topic memory: {}", e);
+        }
+
         debug!(
-            "Memory saved: [{}] {}",
+            "Topic memory saved: [{}:{}] {}",
+            topic,
             category,
             log_preview(content, 50)
         );
+    }
+
+    /// 自动选择 USER.md、MEMORY.md 或分主题文件保存学习内容。
+    pub fn add_auto_learning(&mut self, content: &str, category: &str) {
+        if matches!(category, "preference" | "user") {
+            self.add_learning(content, category);
+        } else if let Some(topic) = infer_learning_topic(content, category) {
+            self.add_topic_learning(content, category, topic);
+        } else {
+            self.add_learning(content, category);
+        }
     }
 
     /// 添加学习内容（异步版本 — 推荐在异步上下文中使用）
@@ -536,6 +705,69 @@ Return exactly the word NONE if there is nothing critical to remember.";
         );
     }
 
+    /// 添加学习内容到分主题记忆文件（异步版本）
+    pub async fn add_topic_learning_async(&self, content: &str, category: &str, topic: &str) {
+        let Some(path) = topic_memory_path(&self.memory_dir, topic) else {
+            debug!("Skipping topic memory with invalid topic: {}", topic);
+            return;
+        };
+
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+
+        let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+        let normalized_existing = existing
+            .to_lowercase()
+            .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+        let normalized_content = content
+            .to_lowercase()
+            .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "");
+        if normalized_existing.contains(&normalized_content) {
+            debug!(
+                "Skipping duplicate topic learning (already in file, async): {}",
+                log_preview(content, 50)
+            );
+            return;
+        }
+
+        let entry = format!(
+            "\n## [{}] {}\n{}\n",
+            category.to_uppercase(),
+            chrono::Local::now().format("%Y-%m-%d %H:%M"),
+            content
+        );
+        let header = if existing.trim().is_empty() {
+            "# Priority Agent Topic Memory\n".to_string()
+        } else {
+            String::new()
+        };
+        let new_content = format!("{}{}{}", existing, header, entry);
+
+        if let Err(e) = tokio::fs::write(&path, &new_content).await {
+            debug!("Failed to save topic memory (async): {}", e);
+        }
+
+        debug!(
+            "Topic memory saved (async): [{}:{}] {}",
+            topic,
+            category,
+            log_preview(content, 50)
+        );
+    }
+
+    /// 自动选择 USER.md、MEMORY.md 或分主题文件保存学习内容（异步版本）。
+    pub async fn add_auto_learning_async(&self, content: &str, category: &str) {
+        if matches!(category, "preference" | "user") {
+            self.add_learning_async(content, category).await;
+        } else if let Some(topic) = infer_learning_topic(content, category) {
+            self.add_topic_learning_async(content, category, topic)
+                .await;
+        } else {
+            self.add_learning_async(content, category).await;
+        }
+    }
+
     /// 会话结束时批量提取学习内容（同步版本）
     pub fn flush_session(&mut self, messages: &[Message]) {
         let session_learnings = extract_session_learnings(messages);
@@ -545,7 +777,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
         if !pending.is_empty() {
             info!("Flushing {} learnings from session", pending.len());
             for learning in &pending {
-                self.add_learning(learning, "learned");
+                self.add_auto_learning(learning, "learned");
             }
         }
     }
@@ -559,7 +791,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
         if !pending.is_empty() {
             info!("Flushing {} learnings from session (async)", pending.len());
             for learning in &pending {
-                self.add_learning_async(learning, "learned").await;
+                self.add_auto_learning_async(learning, "learned").await;
             }
         }
     }
@@ -634,7 +866,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
 
                         debug!("Trailing run extracted {} memory bullets", bullets.len());
                         for bullet in bullets {
-                            self.add_learning_async(&bullet, "session").await;
+                            self.add_auto_learning_async(&bullet, "session").await;
                         }
                     }
                 }
@@ -736,7 +968,14 @@ Return exactly the word NONE if there is nothing critical to remember.";
     pub fn search(&self, query: &str) -> Vec<String> {
         let memory_content = std::fs::read_to_string(&self.memory_path).unwrap_or_default();
         let keywords = extract_keywords(query);
-        search_memory(&memory_content, &keywords, 5)
+        let mut results = search_memory(&memory_content, &keywords, 3);
+        results.extend(search_memory_files(
+            &load_memory_files(&self.memory_dir),
+            &keywords,
+            3,
+        ));
+        results.truncate(5);
+        results
     }
 
     /// 按层级搜索记忆
@@ -744,10 +983,13 @@ Return exactly the word NONE if there is nothing critical to remember.";
         match tier {
             MemoryTier::Session => {
                 // Session memory is in pending_learnings
-                self.pending_learnings.iter()
+                self.pending_learnings
+                    .iter()
                     .filter(|l| {
                         let keywords = extract_keywords(query);
-                        keywords.iter().any(|k| l.to_lowercase().contains(&k.to_lowercase()))
+                        keywords
+                            .iter()
+                            .any(|k| l.to_lowercase().contains(&k.to_lowercase()))
                     })
                     .take(5)
                     .cloned()
@@ -756,7 +998,14 @@ Return exactly the word NONE if there is nothing critical to remember.";
             MemoryTier::Project => {
                 let content = std::fs::read_to_string(&self.memory_path).unwrap_or_default();
                 let keywords = extract_keywords(query);
-                search_memory(&content, &keywords, 5)
+                let mut results = search_memory(&content, &keywords, 3);
+                results.extend(search_memory_files(
+                    &load_memory_files(&self.memory_dir),
+                    &keywords,
+                    3,
+                ));
+                results.truncate(5);
+                results
             }
             MemoryTier::User => {
                 let content = std::fs::read_to_string(&self.user_path).unwrap_or_default();
@@ -776,13 +1025,25 @@ Return exactly the word NONE if there is nothing critical to remember.";
             MemoryTier::Project => {
                 let content = std::fs::read_to_string(&self.memory_path).unwrap_or_default();
                 let trimmed = content.trim();
-                if trimmed.is_empty() {
+                let manifest =
+                    format_memory_file_manifest(&load_memory_files(&self.memory_dir), 2000);
+                if trimmed.is_empty() && manifest.trim().is_empty() {
                     String::new()
                 } else {
-                    format!(
-                        "[Project Memory]\n{}",
-                        trimmed.chars().take(self.memory_char_limit).collect::<String>()
-                    )
+                    let mut parts = Vec::new();
+                    if !trimmed.is_empty() {
+                        parts.push(format!(
+                            "[Project Memory]\n{}",
+                            trimmed
+                                .chars()
+                                .take(self.memory_char_limit)
+                                .collect::<String>()
+                        ));
+                    }
+                    if !manifest.trim().is_empty() {
+                        parts.push(format!("[Memory File Index]\n{}", manifest));
+                    }
+                    parts.join("\n\n")
                 }
             }
             MemoryTier::User => {
@@ -793,7 +1054,10 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 } else {
                     format!(
                         "[User Preferences]\n{}",
-                        trimmed.chars().take(self.user_char_limit).collect::<String>()
+                        trimmed
+                            .chars()
+                            .take(self.user_char_limit)
+                            .collect::<String>()
                     )
                 }
             }
@@ -805,6 +1069,8 @@ Return exactly the word NONE if there is nothing critical to remember.";
         let project_size = std::fs::read_to_string(&self.memory_path)
             .map(|s| s.len())
             .unwrap_or(0);
+        let memory_files = load_memory_files(&self.memory_dir);
+        let memory_file_chars = memory_files.iter().map(|file| file.chars).sum();
         let user_size = std::fs::read_to_string(&self.user_path)
             .map(|s| s.len())
             .unwrap_or(0);
@@ -812,10 +1078,53 @@ Return exactly the word NONE if there is nothing critical to remember.";
 
         MemorySummary {
             project_memory_chars: project_size,
+            project_memory_files: memory_files.len(),
+            project_memory_file_chars: memory_file_chars,
             user_memory_chars: user_size,
             session_memory_items: session_count,
-            has_frozen_snapshot: self.frozen_memory.is_some() || self.frozen_user.is_some(),
+            has_frozen_snapshot: self.frozen_memory.is_some()
+                || self.frozen_user.is_some()
+                || !self.frozen_memory_files.is_empty(),
         }
+    }
+
+    /// 维护长期记忆文件：去重 section，必要时归档过大的主题文件。
+    pub fn maintain_memory(&self) -> MemoryMaintenanceReport {
+        let mut report = MemoryMaintenanceReport::default();
+        let mut paths = vec![self.memory_path.clone(), self.user_path.clone()];
+        paths.extend(collect_memory_file_paths(&self.memory_dir, false));
+
+        for path in paths {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if content.trim().is_empty() {
+                continue;
+            }
+
+            report.files_scanned += 1;
+            let is_topic_file = path.starts_with(&self.memory_dir)
+                && !path
+                    .strip_prefix(&self.memory_dir)
+                    .map(|p| p.starts_with("archive"))
+                    .unwrap_or(false);
+            let result = maintain_memory_file(&path, &content, is_topic_file, &self.memory_dir);
+
+            match result {
+                Ok(file_report) => {
+                    report.duplicate_sections_removed += file_report.duplicates_removed;
+                    if file_report.compacted {
+                        report.files_compacted += 1;
+                    }
+                    if file_report.archived {
+                        report.archives_created += 1;
+                    }
+                }
+                Err(e) => debug!("Failed to maintain memory file {}: {}", path.display(), e),
+            }
+        }
+
+        report
     }
 
     /// 尝试添加学习内容到 pending，去重
@@ -919,6 +1228,655 @@ impl Default for MemoryManager {
     }
 }
 
+fn load_memory_files(memory_dir: &Path) -> Vec<MemoryFileSnapshot> {
+    let mut files = Vec::new();
+    collect_memory_files(memory_dir, memory_dir, &mut files);
+
+    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    files.truncate(MAX_MEMORY_FILES);
+    files
+}
+
+fn collect_memory_file_paths(memory_dir: &Path, include_archive: bool) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    collect_memory_file_paths_inner(memory_dir, memory_dir, include_archive, &mut paths);
+    paths.sort();
+    paths
+}
+
+fn collect_memory_file_paths_inner(
+    root: &Path,
+    dir: &Path,
+    include_archive: bool,
+    paths: &mut Vec<PathBuf>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+
+        if path.is_dir() {
+            let is_archive = path
+                .strip_prefix(root)
+                .map(|p| p.starts_with("archive"))
+                .unwrap_or(false);
+            if is_archive && !include_archive {
+                continue;
+            }
+            collect_memory_file_paths_inner(root, &path, include_archive, paths);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+            paths.push(path);
+        }
+    }
+}
+
+fn collect_memory_files(root: &Path, dir: &Path, files: &mut Vec<MemoryFileSnapshot>) {
+    if files.len() >= MAX_MEMORY_FILES {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        if files.len() >= MAX_MEMORY_FILES {
+            return;
+        }
+
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+
+        if path.is_dir() {
+            collect_memory_files(root, &path, files);
+            continue;
+        }
+
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let relative_path = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let chars = trimmed.chars().count();
+        let content: String = trimmed.chars().take(MEMORY_FILE_CHAR_LIMIT).collect();
+        files.push(MemoryFileSnapshot {
+            relative_path,
+            content,
+            chars,
+        });
+    }
+}
+
+fn format_memory_file_manifest(files: &[MemoryFileSnapshot], char_limit: usize) -> String {
+    let mut output = String::new();
+    for file in files {
+        let title = memory_file_title(file);
+        let line = format!(
+            "- {} ({} chars): {}\n",
+            file.relative_path, file.chars, title
+        );
+        if output.len() + line.len() > char_limit {
+            output.push_str("- ...\n");
+            break;
+        }
+        output.push_str(&line);
+    }
+    output.trim_end().to_string()
+}
+
+fn memory_file_title(file: &MemoryFileSnapshot) -> String {
+    file.content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| {
+            line.trim_start_matches('#')
+                .trim()
+                .chars()
+                .take(120)
+                .collect()
+        })
+        .unwrap_or_else(|| "untitled memory".to_string())
+}
+
+fn topic_memory_path(memory_dir: &Path, topic: &str) -> Option<PathBuf> {
+    let stem = sanitize_memory_topic(topic)?;
+    Some(memory_dir.join(format!("{}.md", stem)))
+}
+
+fn sanitize_memory_topic(topic: &str) -> Option<String> {
+    let mut output = String::new();
+    let mut last_dash = false;
+
+    for ch in topic.trim().chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch.is_alphanumeric() {
+            output.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            output.push('-');
+            last_dash = true;
+        }
+    }
+
+    let output = output
+        .trim_matches('-')
+        .chars()
+        .take(80)
+        .collect::<String>();
+    if output.is_empty() {
+        None
+    } else {
+        Some(output)
+    }
+}
+
+fn infer_learning_topic(content: &str, category: &str) -> Option<&'static str> {
+    let lower = content.to_lowercase();
+    let category = category.to_lowercase();
+
+    if category == "preference" || lower.contains("user preference") || lower.contains("偏好") {
+        return None;
+    }
+    if contains_any(
+        &lower,
+        &[
+            "tui", "terminal", "ui", "claude", "scroll", "界面", "设计", "滚动",
+        ],
+    ) {
+        return Some("tui-design");
+    }
+    if contains_any(
+        &lower,
+        &[
+            "context",
+            "prompt",
+            "token",
+            "memory",
+            "compression",
+            "上下文",
+            "提示词",
+            "记忆",
+        ],
+    ) {
+        return Some("context-management");
+    }
+    if contains_any(
+        &lower,
+        &["permission", "approval", "allow", "deny", "权限", "授权"],
+    ) {
+        return Some("permissions");
+    }
+    if contains_any(&lower, &["tool", "bash", "mcp", "工具"]) {
+        return Some("tools");
+    }
+    if contains_any(&lower, &["rust", "cargo", ".rs", "crate"]) {
+        return Some("rust-workflow");
+    }
+    if category == "decision" {
+        return Some("decisions");
+    }
+    if category == "convention" {
+        return Some("conventions");
+    }
+    None
+}
+
+fn contains_any(content: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| content.contains(needle))
+}
+
+fn search_memory_files(
+    files: &[MemoryFileSnapshot],
+    keywords: &[String],
+    max_results: usize,
+) -> Vec<String> {
+    if keywords.is_empty() || files.is_empty() {
+        return Vec::new();
+    }
+
+    let mut scored: Vec<(usize, String)> = files
+        .iter()
+        .filter_map(|file| {
+            let lower = file.content.to_lowercase();
+            let score = keywords
+                .iter()
+                .filter(|keyword| lower.contains(keyword.as_str()))
+                .count();
+            if score == 0 {
+                return None;
+            }
+
+            let snippet = best_memory_file_snippet(&file.content, keywords);
+            Some((
+                score,
+                format!("[memory/{}]\n{}", file.relative_path, snippet),
+            ))
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored
+        .into_iter()
+        .take(max_results)
+        .map(|(_, content)| content)
+        .collect()
+}
+
+fn format_relevant_memory_block(relevant: Vec<MemoryMatch>) -> String {
+    if relevant.is_empty() {
+        return String::new();
+    }
+
+    let entries: Vec<String> = relevant
+        .into_iter()
+        .map(|entry| {
+            format!(
+                "- [{} score:{}]\n{}",
+                entry.source,
+                entry.score,
+                entry.snippet.trim()
+            )
+        })
+        .collect();
+    format!("[Relevant Memory]\n{}\n\n---\n", entries.join("\n"))
+}
+
+async fn rerank_memory_matches_with_llm(
+    user_message: &str,
+    candidates: &[MemoryMatch],
+    provider: &dyn LlmProvider,
+    model: &str,
+    max_results: usize,
+) -> Vec<MemoryMatch> {
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidate_text = String::new();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let snippet = candidate
+            .snippet
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(6)
+            .collect::<Vec<_>>()
+            .join(" ");
+        candidate_text.push_str(&format!(
+            "[{}] source={} local_score={}\n{}\n\n",
+            idx,
+            candidate.source,
+            candidate.score,
+            snippet.chars().take(700).collect::<String>()
+        ));
+    }
+
+    let system_prompt = "You rank memory snippets for an AI coding assistant. \
+Return only a JSON array of candidate ids, most relevant first. \
+Select at most 5 ids. Do not explain.";
+    let user_prompt = format!(
+        "Current user request:\n{}\n\nCandidate memories:\n{}",
+        user_message, candidate_text
+    );
+    let request = ChatRequest::new(model).with_messages(vec![
+        Message::system(system_prompt),
+        Message::user(&user_prompt),
+    ]);
+
+    let selected_ids = match provider.chat(request).await {
+        Ok(response) => parse_rerank_ids(&response.content, candidates.len()),
+        Err(e) => {
+            debug!("LLM memory rerank failed: {}", e);
+            Vec::new()
+        }
+    };
+
+    if selected_ids.is_empty() {
+        return candidates.iter().take(max_results).cloned().collect();
+    }
+
+    let mut selected = Vec::new();
+    let mut used = HashSet::new();
+    for id in selected_ids {
+        if id < candidates.len() && used.insert(id) {
+            selected.push(candidates[id].clone());
+            if selected.len() >= max_results {
+                return selected;
+            }
+        }
+    }
+    for (idx, candidate) in candidates.iter().enumerate() {
+        if used.insert(idx) {
+            selected.push(candidate.clone());
+            if selected.len() >= max_results {
+                break;
+            }
+        }
+    }
+    selected
+}
+
+fn parse_rerank_ids(content: &str, candidate_count: usize) -> Vec<usize> {
+    let trimmed = content.trim();
+    if let (Some(start), Some(end)) = (trimmed.find('['), trimmed.rfind(']')) {
+        if start <= end {
+            let json = &trimmed[start..=end];
+            if let Ok(ids) = serde_json::from_str::<Vec<usize>>(json) {
+                return ids.into_iter().filter(|id| *id < candidate_count).collect();
+            }
+        }
+    }
+
+    trimmed
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<usize>().ok())
+        .filter(|id| *id < candidate_count)
+        .collect()
+}
+
+#[derive(Debug, Clone, Default)]
+struct FileMaintenanceReport {
+    duplicates_removed: usize,
+    compacted: bool,
+    archived: bool,
+}
+
+fn maintain_memory_file(
+    path: &Path,
+    content: &str,
+    allow_archive: bool,
+    memory_dir: &Path,
+) -> anyhow::Result<FileMaintenanceReport> {
+    let (header, sections) = split_memory_sections(content);
+    if sections.is_empty() {
+        return Ok(FileMaintenanceReport::default());
+    }
+
+    let original_section_count = sections.len();
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for section in sections {
+        let key = normalize_memory_section(&section);
+        if key.is_empty() || seen.insert(key) {
+            deduped.push(section);
+        }
+    }
+
+    let duplicates_removed = original_section_count.saturating_sub(deduped.len());
+    let mut archived = false;
+    let mut active_sections = deduped;
+    let should_archive = allow_archive
+        && (active_sections.len() > ACTIVE_MEMORY_SECTION_LIMIT
+            || content.chars().count() > ACTIVE_MEMORY_CHAR_LIMIT);
+
+    if should_archive && active_sections.len() > ACTIVE_MEMORY_KEEP_SECTIONS {
+        let archive_count = active_sections.len() - ACTIVE_MEMORY_KEEP_SECTIONS;
+        let archived_sections: Vec<String> = active_sections.drain(..archive_count).collect();
+        write_memory_archive(path, memory_dir, &header, &archived_sections)?;
+        archived = true;
+    }
+
+    let new_content = join_memory_sections(&header, &active_sections);
+    let changed = duplicates_removed > 0 || archived;
+    if changed && new_content != content {
+        std::fs::write(path, new_content)?;
+    }
+
+    Ok(FileMaintenanceReport {
+        duplicates_removed,
+        compacted: changed,
+        archived,
+    })
+}
+
+fn split_memory_sections(content: &str) -> (String, Vec<String>) {
+    let mut header = String::new();
+    let mut sections = Vec::new();
+    let mut current = String::new();
+    let mut in_section = false;
+
+    for line in content.lines() {
+        if line.starts_with("## ") {
+            if in_section && !current.trim().is_empty() {
+                sections.push(current.trim_end().to_string());
+            }
+            current.clear();
+            current.push_str(line);
+            current.push('\n');
+            in_section = true;
+        } else if in_section {
+            current.push_str(line);
+            current.push('\n');
+        } else {
+            header.push_str(line);
+            header.push('\n');
+        }
+    }
+
+    if in_section && !current.trim().is_empty() {
+        sections.push(current.trim_end().to_string());
+    }
+
+    (header.trim_end().to_string(), sections)
+}
+
+fn join_memory_sections(header: &str, sections: &[String]) -> String {
+    let mut output = String::new();
+    if !header.trim().is_empty() {
+        output.push_str(header.trim_end());
+        output.push('\n');
+    }
+    for section in sections {
+        output.push('\n');
+        output.push_str(section.trim());
+        output.push('\n');
+    }
+    output
+}
+
+fn normalize_memory_section(section: &str) -> String {
+    section
+        .lines()
+        .filter(|line| !line.starts_with("## "))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase()
+        .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "")
+}
+
+fn write_memory_archive(
+    source_path: &Path,
+    memory_dir: &Path,
+    header: &str,
+    sections: &[String],
+) -> anyhow::Result<()> {
+    let archive_dir = memory_dir.join("archive");
+    std::fs::create_dir_all(&archive_dir)?;
+    let stem = source_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("memory");
+    let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S");
+    let archive_path = archive_dir.join(format!("{}-{}.md", stem, timestamp));
+    let archive_header = if header.trim().is_empty() {
+        format!("# Archived {}", stem)
+    } else {
+        format!(
+            "{}\n\n> Archived from {}",
+            header.trim(),
+            source_path.display()
+        )
+    };
+    std::fs::write(
+        archive_path,
+        join_memory_sections(&archive_header, sections),
+    )?;
+    Ok(())
+}
+
+fn rank_memory_paragraphs(source: &str, content: &str, keywords: &[String]) -> Vec<MemoryMatch> {
+    if keywords.is_empty() || content.trim().is_empty() {
+        return Vec::new();
+    }
+
+    split_memory_paragraphs(content)
+        .into_iter()
+        .filter_map(|paragraph| {
+            let score = semantic_memory_score(&paragraph, keywords, source);
+            if score == 0 {
+                None
+            } else {
+                Some(MemoryMatch {
+                    source: source.to_string(),
+                    score,
+                    snippet: paragraph.trim().chars().take(800).collect(),
+                })
+            }
+        })
+        .collect()
+}
+
+fn rank_memory_files(files: &[MemoryFileSnapshot], keywords: &[String]) -> Vec<MemoryMatch> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let source = format!("memory/{}", file.relative_path);
+            let snippet = best_memory_file_snippet(&file.content, keywords);
+            let score = semantic_memory_score(&file.content, keywords, &source);
+            if score == 0 {
+                None
+            } else {
+                Some(MemoryMatch {
+                    source,
+                    score,
+                    snippet,
+                })
+            }
+        })
+        .collect()
+}
+
+fn semantic_memory_score(content: &str, keywords: &[String], source: &str) -> usize {
+    let lower = content.to_lowercase();
+    let source_lower = source.to_lowercase();
+    let mut score = 0usize;
+
+    for keyword in keywords {
+        if lower.contains(keyword.as_str()) {
+            score += 8;
+        }
+        if source_lower.contains(keyword.as_str()) {
+            score += 6;
+        }
+        for alias in semantic_aliases(keyword) {
+            if lower.contains(alias) {
+                score += 4;
+            }
+            if source_lower.contains(alias) {
+                score += 3;
+            }
+        }
+    }
+
+    if lower.contains("user preference:") || lower.contains("偏好") {
+        score += 2;
+    }
+    if lower.contains("decision") || lower.contains("决策") {
+        score += 2;
+    }
+    if lower.contains("solution:") || lower.contains("fix") || lower.contains("修复") {
+        score += 2;
+    }
+
+    score
+}
+
+fn semantic_aliases(keyword: &str) -> &'static [&'static str] {
+    match keyword {
+        "tui" | "terminal" | "ui" | "界面" | "设计" => &[
+            "tui", "terminal", "ui", "界面", "布局", "claude", "scroll", "滚动",
+        ],
+        "context" | "prompt" | "token" | "上下文" | "提示词" => &[
+            "context",
+            "prompt",
+            "token",
+            "上下文",
+            "提示词",
+            "compression",
+            "memory",
+        ],
+        "memory" | "remember" | "记忆" => &[
+            "memory",
+            "remember",
+            "记忆",
+            "preference",
+            "偏好",
+            "learned",
+        ],
+        "permission" | "permissions" | "权限" => &[
+            "permission",
+            "permissions",
+            "权限",
+            "approval",
+            "allow",
+            "deny",
+        ],
+        "tool" | "tools" | "工具" => &["tool", "tools", "工具", "bash", "mcp"],
+        "rust" | "cargo" => &["rust", "cargo", ".rs", "crate"],
+        "test" | "tests" | "测试" => &["test", "tests", "测试", "cargo test"],
+        _ => &[],
+    }
+}
+
+fn best_memory_file_snippet(content: &str, keywords: &[String]) -> String {
+    let candidates: Vec<&str> = content
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    let best = candidates
+        .iter()
+        .max_by_key(|candidate| {
+            let lower = candidate.to_lowercase();
+            keywords
+                .iter()
+                .filter(|keyword| lower.contains(keyword.as_str()))
+                .count()
+        })
+        .copied()
+        .unwrap_or_else(|| content.trim());
+
+    best.chars().take(800).collect()
+}
+
 /// 归一化学习内容并计算哈希（用于去重）
 fn hash_learning(text: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;
@@ -956,27 +1914,7 @@ fn search_memory(content: &str, keywords: &[String], max_results: usize) -> Vec<
         return Vec::new();
     }
 
-    // 按段落分割（以 ## 开头或空行为界）
-    let mut paragraphs = Vec::new();
-    let mut current = String::new();
-    for line in content.lines() {
-        if line.starts_with("## ") || (line.trim().is_empty() && !current.trim().is_empty()) {
-            if !current.trim().is_empty() {
-                paragraphs.push(current.clone());
-            }
-            current = if line.starts_with("## ") {
-                line.to_string()
-            } else {
-                String::new()
-            };
-        } else {
-            current.push_str(line);
-            current.push('\n');
-        }
-    }
-    if !current.trim().is_empty() {
-        paragraphs.push(current);
-    }
+    let paragraphs = split_memory_paragraphs(content);
 
     // 按关键词匹配度排序
     let mut scored: Vec<(usize, String)> = paragraphs
@@ -998,6 +1936,30 @@ fn search_memory(content: &str, keywords: &[String], max_results: usize) -> Vec<
         .take(max_results)
         .map(|(_, content)| content)
         .collect()
+}
+
+fn split_memory_paragraphs(content: &str) -> Vec<String> {
+    let mut paragraphs = Vec::new();
+    let mut current = String::new();
+    for line in content.lines() {
+        if line.starts_with("## ") || (line.trim().is_empty() && !current.trim().is_empty()) {
+            if !current.trim().is_empty() {
+                paragraphs.push(current.clone());
+            }
+            current = if line.starts_with("## ") {
+                line.to_string()
+            } else {
+                String::new()
+            };
+        } else {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    if !current.trim().is_empty() {
+        paragraphs.push(current);
+    }
+    paragraphs
 }
 
 /// 从单轮对话中提取学习内容
@@ -1108,6 +2070,49 @@ fn extract_session_learnings(messages: &[Message]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_openai::types::ChatCompletionResponseStream;
+    use std::sync::Mutex;
+
+    fn temp_memory_base(name: &str) -> PathBuf {
+        let unique = format!("priority-agent-memory-test-{}-{}", name, std::process::id());
+        let base = std::env::temp_dir().join(unique);
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    struct MockRankProvider {
+        response: Mutex<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockRankProvider {
+        async fn chat(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<crate::services::api::ChatResponse> {
+            Ok(crate::services::api::ChatResponse {
+                content: self.response.lock().unwrap().clone(),
+                tool_calls: None,
+                usage: None,
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("stream not used"))
+        }
+
+        fn base_url(&self) -> &str {
+            "mock://memory-rank"
+        }
+
+        fn default_model(&self) -> &str {
+            "mock-model"
+        }
+    }
 
     #[test]
     fn test_extract_keywords() {
@@ -1138,6 +2143,94 @@ Always check logs first.
     }
 
     #[test]
+    fn test_parse_rerank_ids() {
+        assert_eq!(parse_rerank_ids("[2, 0, 99]", 3), vec![2, 0]);
+        assert_eq!(parse_rerank_ids("choose 1 then 0", 3), vec![1, 0]);
+    }
+
+    #[tokio::test]
+    async fn test_llm_rerank_reorders_candidates() {
+        let provider = MockRankProvider {
+            response: Mutex::new("[1,0]".to_string()),
+        };
+        let candidates = vec![
+            MemoryMatch {
+                source: "memory/tui-design.md".to_string(),
+                score: 20,
+                snippet: "Claude-style scroll anchoring and transcript layout.".to_string(),
+            },
+            MemoryMatch {
+                source: "memory/context-management.md".to_string(),
+                score: 12,
+                snippet: "Prompt token budget and memory snapshot details.".to_string(),
+            },
+        ];
+
+        let reranked = rerank_memory_matches_with_llm(
+            "上下文预算问题",
+            &candidates,
+            &provider,
+            "mock-model",
+            2,
+        )
+        .await;
+
+        assert_eq!(reranked[0].source, "memory/context-management.md");
+        assert_eq!(reranked[1].source, "memory/tui-design.md");
+    }
+
+    #[test]
+    fn test_maintain_memory_removes_duplicate_sections() {
+        let base = temp_memory_base("maintain-dedupe");
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        let topic_path = memory_dir.join("dedupe.md");
+        std::fs::write(
+            &topic_path,
+            "# Priority Agent Topic Memory\n\n## [NOTE] 1\nDuplicate memory section.\n\n## [NOTE] 2\nDuplicate memory section.\n",
+        )
+        .unwrap();
+
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let report = mgr.maintain_memory();
+
+        assert_eq!(report.files_scanned, 1);
+        assert_eq!(report.duplicate_sections_removed, 1);
+        let maintained = std::fs::read_to_string(topic_path).unwrap_or_default();
+        assert_eq!(maintained.matches("Duplicate memory section.").count(), 1);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_maintain_memory_archives_large_topic_file() {
+        let base = temp_memory_base("maintain-archive");
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        let topic_path = memory_dir.join("large.md");
+        let mut content = "# Priority Agent Topic Memory\n".to_string();
+        for idx in 0..45 {
+            content.push_str(&format!(
+                "\n## [NOTE] 2026-04-24 00:{:02}\nentry {}\n",
+                idx, idx
+            ));
+        }
+        std::fs::write(&topic_path, content).unwrap();
+
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let report = mgr.maintain_memory();
+
+        assert_eq!(report.archives_created, 1);
+        let active = std::fs::read_to_string(topic_path).unwrap_or_default();
+        assert!(active.contains("entry 44"));
+        assert!(!active.contains("entry 0\n"));
+        let archives = collect_memory_file_paths(&memory_dir.join("archive"), true);
+        assert_eq!(archives.len(), 1);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn test_extract_learnings() {
         let learnings = extract_learnings_from_turn(
             "I prefer using async/await",
@@ -1148,14 +2241,160 @@ Always check logs first.
 
     #[test]
     fn test_frozen_snapshot() {
-        let mut mgr = MemoryManager::new();
-        // 清除可能由其他测试留下的内容，确保测试独立
-        let _ = std::fs::remove_file(&mgr.memory_path);
-        let _ = std::fs::remove_file(&mgr.user_path);
+        let base = temp_memory_base("frozen-snapshot");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
         mgr.freeze_snapshot();
         let snapshot = mgr.get_snapshot();
         // 无记忆文件时应返回空
         assert!(snapshot.is_empty());
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_memory_file_index_in_snapshot() {
+        let base = temp_memory_base("snapshot-index");
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::write(
+            memory_dir.join("rust.md"),
+            "# Rust Workflow\nUse cargo check before cargo test.",
+        )
+        .unwrap();
+
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        mgr.freeze_snapshot();
+        let snapshot = mgr.get_snapshot();
+
+        assert!(snapshot.contains("## Memory File Index"));
+        assert!(snapshot.contains("rust.md"));
+        assert!(snapshot.contains("Rust Workflow"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_memory_file_prefetch_uses_frozen_files() {
+        let base = temp_memory_base("prefetch-files");
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::write(
+            memory_dir.join("build.md"),
+            "# Build Notes\nRun cargo check after context refactors.",
+        )
+        .unwrap();
+
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        mgr.freeze_snapshot();
+        let prefetch = mgr.prefetch("上下文重构后要运行 cargo check 吗");
+
+        assert!(prefetch.contains("[Relevant Memory]"));
+        assert!(prefetch.contains("memory/build.md"));
+        assert!(prefetch.contains("cargo check"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_memory_preview_reports_scores_and_sources() {
+        let base = temp_memory_base("preview-memory");
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::write(
+            memory_dir.join("tui-design.md"),
+            "# TUI Design\nKeep Claude-style transcript anchoring for scroll behavior.",
+        )
+        .unwrap();
+
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        mgr.freeze_snapshot();
+        let matches = mgr.preview_relevant_memories("界面滚动要像 Claude 一样", 3);
+
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].source, "memory/tui-design.md");
+        assert!(matches[0].score > 0);
+        assert!(matches[0].snippet.contains("transcript anchoring"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_memory_summary_counts_memory_files() {
+        let base = temp_memory_base("summary-files");
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::write(
+            memory_dir.join("design.md"),
+            "# Design\nContext budget notes.",
+        )
+        .unwrap();
+
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let summary = mgr.memory_summary();
+
+        assert_eq!(summary.project_memory_files, 1);
+        assert!(summary.project_memory_file_chars > 0);
+        assert!(summary.format().contains("1 files"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_add_topic_learning_writes_memory_file() {
+        let base = temp_memory_base("topic-learning");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+
+        mgr.add_topic_learning(
+            "Use transcript anchoring for Claude-style TUI scrolling.",
+            "design",
+            "TUI Design",
+        );
+
+        let topic_path = base.join(MEMORY_DIR_NAME).join("tui-design.md");
+        let content = std::fs::read_to_string(topic_path).unwrap_or_default();
+        assert!(content.contains("# Priority Agent Topic Memory"));
+        assert!(content.contains("[DESIGN]"));
+        assert!(content.contains("transcript anchoring"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_add_auto_learning_routes_to_topic_file() {
+        let base = temp_memory_base("auto-learning");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+
+        mgr.add_auto_learning(
+            "Prompt context reports should show memory and token budgets.",
+            "learned",
+        );
+
+        let topic_path = base.join(MEMORY_DIR_NAME).join("context-management.md");
+        let content = std::fs::read_to_string(topic_path).unwrap_or_default();
+        assert!(content.contains("[LEARNED]"));
+        assert!(content.contains("token budgets"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn test_add_topic_learning_async_writes_memory_file() {
+        let base = temp_memory_base("topic-learning-async");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+
+        mgr.add_topic_learning_async(
+            "Context reports should include stable prefix fingerprints.",
+            "context",
+            "Context Management",
+        )
+        .await;
+
+        let topic_path = base.join(MEMORY_DIR_NAME).join("context-management.md");
+        let content = std::fs::read_to_string(topic_path).unwrap_or_default();
+        assert!(content.contains("[CONTEXT]"));
+        assert!(content.contains("stable prefix fingerprints"));
+
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
@@ -1257,26 +2496,39 @@ Always check logs first.
 
     #[test]
     fn test_save_workflow_decision() {
-        let mut mgr = MemoryManager::new();
-        // 清除可能由其他测试留下的内容
-        let _ = std::fs::remove_file(&mgr.memory_path);
+        let base = temp_memory_base("workflow-decision");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
 
         // 1. 写入 workflow 决策
-        mgr.save_workflow_decision("gate", "implement auth", "Workflow", "Complex task with 5+ steps");
+        mgr.save_workflow_decision(
+            "gate",
+            "implement auth",
+            "Workflow",
+            "Complex task with 5+ steps",
+        );
 
         let memory = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
         assert!(
             memory.contains("[gate] Task: implement auth | Outcome: Workflow"),
             "Memory should contain workflow decision"
         );
-        assert!(memory.contains("[WORKFLOW]"), "Should be categorized under WORKFLOW");
+        assert!(
+            memory.contains("[WORKFLOW]"),
+            "Should be categorized under WORKFLOW"
+        );
 
         // 2. 去重：相同内容再次写入不应追加
         let first_len = memory.len();
-        mgr.save_workflow_decision("gate", "implement auth", "Workflow", "Complex task with 5+ steps");
+        mgr.save_workflow_decision(
+            "gate",
+            "implement auth",
+            "Workflow",
+            "Complex task with 5+ steps",
+        );
         let second = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
         assert_eq!(
-            first_len, second.len(),
+            first_len,
+            second.len(),
             "Duplicate workflow decision should not be appended"
         );
 
@@ -1287,12 +2539,14 @@ Always check logs first.
             third.contains("[execution] Task: fix bug | Outcome: Success"),
             "Different decision should be appended"
         );
+
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
     fn test_save_workflow_decision_with_utf8_content_does_not_panic() {
-        let mut mgr = MemoryManager::new();
-        let _ = std::fs::remove_file(&mgr.memory_path);
+        let base = temp_memory_base("workflow-utf8");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
 
         mgr.save_workflow_decision(
             "gate",
@@ -1303,5 +2557,7 @@ Always check logs first.
 
         let memory = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
         assert!(memory.contains("能帮我在桌面新建一个叫gex的文件夹吗"));
+
+        let _ = std::fs::remove_dir_all(base);
     }
 }

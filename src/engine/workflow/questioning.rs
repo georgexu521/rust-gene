@@ -57,7 +57,10 @@ impl ThinkingResult {
             for node in &self.question_chain {
                 output.push_str(&format!(
                     "**Q{}** [{}]: {}\n\n{}",
-                    node.id, node.question_type.label(), node.question, node.answer
+                    node.id,
+                    node.question_type.label(),
+                    node.question,
+                    node.answer
                 ));
                 if !node.evidence_items.is_empty() {
                     output.push_str("\n证据项:\n");
@@ -87,12 +90,13 @@ impl ThinkingResult {
         for line in basis.lines() {
             let trimmed = line.trim();
             let is_numbered = trimmed.len() >= 2
-                && trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+                && trimmed
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
                 && trimmed.chars().nth(1) == Some('.');
-            if is_numbered
-                || trimmed.starts_with("-")
-                || trimmed.starts_with("*")
-            {
+            if is_numbered || trimmed.starts_with("-") || trimmed.starts_with("*") {
                 let cleaned = trimmed
                     .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ')
                     .trim_start_matches(['-', '*', ' ']);
@@ -534,7 +538,10 @@ fn extract_uncertainties(nodes: &[QuestionNode]) -> Vec<String> {
 /// 估算 token 成本（简化为中文字符数 / 2 + 英文单词数）
 fn estimate_token_cost(question: &str, answer: &str) -> usize {
     let text = format!("{} {}", question, answer);
-    let chinese_chars = text.chars().filter(|c| matches!(c, '\u{4e00}'..='\u{9fff}')).count();
+    let chinese_chars = text
+        .chars()
+        .filter(|c| matches!(c, '\u{4e00}'..='\u{9fff}'))
+        .count();
     let english_words = text.split_whitespace().count();
     (chinese_chars / 2 + english_words).max(1)
 }

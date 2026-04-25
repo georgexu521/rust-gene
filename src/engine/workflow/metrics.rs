@@ -189,7 +189,11 @@ impl WorkflowMetrics {
         output.push_str("\n### 北极星指标（近似）\n\n");
         output.push_str(&format!(
             "- Mainline Hit: {}\n",
-            if self.north_star.mainline_hit { "yes" } else { "no" }
+            if self.north_star.mainline_hit {
+                "yes"
+            } else {
+                "no"
+            }
         ));
         output.push_str(&format!(
             "- Drift Interruption Rate: {:.1}%\n",
@@ -221,8 +225,7 @@ impl WorkflowMetrics {
         };
         let first_pass_quality = (self.success_rate() - self.refactor_rate()).clamp(0.0, 100.0);
         let cost_efficiency = cost_efficiency_score(self.avg_duration_ms());
-        (0.4 * mainline_hit + 0.35 * first_pass_quality + 0.25 * cost_efficiency)
-            .clamp(0.0, 100.0)
+        (0.4 * mainline_hit + 0.35 * first_pass_quality + 0.25 * cost_efficiency).clamp(0.0, 100.0)
     }
 }
 
@@ -257,8 +260,7 @@ fn default_metrics_db_path() -> PathBuf {
 
 fn open_metrics_db(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create metrics dir failed: {}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create metrics dir failed: {}", e))?;
     }
     let conn = Connection::open(path).map_err(|e| format!("open metrics db failed: {}", e))?;
     conn.execute_batch(
@@ -317,7 +319,11 @@ CREATE INDEX IF NOT EXISTS idx_workflow_metrics_audits_week ON workflow_metrics_
 }
 
 /// 持久化一次 workflow 指标快照到 SQLite。
-pub fn persist_workflow_metrics(task: &str, goal: &str, metrics: &WorkflowMetrics) -> Result<(), String> {
+pub fn persist_workflow_metrics(
+    task: &str,
+    goal: &str,
+    metrics: &WorkflowMetrics,
+) -> Result<(), String> {
     let path = default_metrics_db_path();
     let conn = open_metrics_db(&path)?;
     let week_key = chrono::Local::now().format("%Y-W%W").to_string();
@@ -342,7 +348,11 @@ INSERT INTO workflow_metrics_runs (
             metrics.total_retries as i64,
             metrics.success_rate(),
             metrics.refactor_rate(),
-            if metrics.north_star.mainline_hit { 1 } else { 0 },
+            if metrics.north_star.mainline_hit {
+                1
+            } else {
+                0
+            },
             metrics.north_star.drift_interruption_rate,
             metrics.north_star.first_plan_coverage,
             metrics.north_star.objective_score,
@@ -433,9 +443,7 @@ LIMIT ?1
 }
 
 /// 记录人工抽样校准结果（自动指标 vs 人工标注）
-pub fn persist_manual_calibration(
-    input: &ManualCalibrationInput,
-) -> Result<(), String> {
+pub fn persist_manual_calibration(input: &ManualCalibrationInput) -> Result<(), String> {
     let path = default_metrics_db_path();
     let conn = open_metrics_db(&path)?;
     let week_key = chrono::Local::now().format("%Y-W%W").to_string();
@@ -569,7 +577,12 @@ mod tests {
         let records = vec![
             make_record(Some("bash"), ExecutionOutcome::Success("ok".into()), 100, 0),
             make_record(Some("bash"), ExecutionOutcome::Success("ok".into()), 200, 0),
-            make_record(Some("file_edit"), ExecutionOutcome::NeedsRefactor("err".into()), 300, 1),
+            make_record(
+                Some("file_edit"),
+                ExecutionOutcome::NeedsRefactor("err".into()),
+                300,
+                1,
+            ),
             make_record(None, ExecutionOutcome::Skipped("skip".into()), 50, 0),
         ];
         let m = WorkflowMetrics::from_records(&records);
@@ -613,7 +626,12 @@ mod tests {
     fn test_summary_contains_key_stats() {
         let records = vec![
             make_record(Some("bash"), ExecutionOutcome::Success("ok".into()), 100, 0),
-            make_record(Some("file_edit"), ExecutionOutcome::NeedsRefactor("err".into()), 200, 1),
+            make_record(
+                Some("file_edit"),
+                ExecutionOutcome::NeedsRefactor("err".into()),
+                200,
+                1,
+            ),
         ];
         let m = WorkflowMetrics::from_records(&records);
         let s = m.summary();
@@ -638,14 +656,21 @@ mod tests {
 
         let records = vec![
             make_record(Some("bash"), ExecutionOutcome::Success("ok".into()), 100, 0),
-            make_record(Some("file_edit"), ExecutionOutcome::NeedsRefactor("err".into()), 200, 1),
+            make_record(
+                Some("file_edit"),
+                ExecutionOutcome::NeedsRefactor("err".into()),
+                200,
+                1,
+            ),
         ];
         let metrics = WorkflowMetrics::from_records(&records);
         persist_workflow_metrics("task-a", "goal-a", &metrics).expect("persist metrics");
 
         let conn = Connection::open(&db_path).expect("open db");
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM workflow_metrics_runs", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM workflow_metrics_runs", [], |r| {
+                r.get(0)
+            })
             .expect("count rows");
         assert!(count >= 1);
     }

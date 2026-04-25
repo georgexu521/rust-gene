@@ -81,7 +81,8 @@ impl AgentConfig {
             self.system_prompt = role.system_prompt_prefix().to_string();
         } else {
             // 否则将角色前缀追加到现有提示词
-            self.system_prompt = format!("{}\n\n{}", role.system_prompt_prefix(), self.system_prompt);
+            self.system_prompt =
+                format!("{}\n\n{}", role.system_prompt_prefix(), self.system_prompt);
         }
         self
     }
@@ -247,7 +248,7 @@ impl Agent {
                     .unwrap_or_else(|| self.task_history.join("\n")),
                 completed_at: std::time::Instant::now(),
                 tools_used: Vec::new(), // 工具历史可在此扩展
-                confidence: 1.0,      // 默认置信度
+                confidence: 1.0,        // 默认置信度
                 has_conflict: false,    // 默认无冲突
             };
             let _ = result_sender.send(result).await;

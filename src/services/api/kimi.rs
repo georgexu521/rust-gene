@@ -10,8 +10,8 @@ use async_openai::{
         ChatCompletionMessageToolCall, ChatCompletionRequestAssistantMessage,
         ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage,
         ChatCompletionRequestSystemMessage, ChatCompletionRequestToolMessage,
-        ChatCompletionRequestUserMessage, ChatCompletionTool, ChatCompletionToolType,
-        CreateChatCompletionRequest, FunctionCall, FunctionObject,
+        ChatCompletionRequestUserMessage, ChatCompletionStreamOptions, ChatCompletionTool,
+        ChatCompletionToolType, CreateChatCompletionRequest, FunctionCall, FunctionObject,
     },
     Client,
 };
@@ -325,6 +325,9 @@ impl LlmProvider for KimiClient {
 
         // 启用流式响应
         req.stream = Some(true);
+        req.stream_options = Some(ChatCompletionStreamOptions {
+            include_usage: true,
+        });
 
         let stream = self
             .client

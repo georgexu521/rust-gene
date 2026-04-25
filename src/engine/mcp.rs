@@ -299,7 +299,10 @@ impl CircuitBreaker {
         if self.consecutive_failures >= self.failure_threshold && !self.is_open {
             self.is_open = true;
             self.opened_at_ms = Some(now_epoch_ms());
-            info!("Circuit breaker opened after {} failures", self.consecutive_failures);
+            info!(
+                "Circuit breaker opened after {} failures",
+                self.consecutive_failures
+            );
         }
     }
 
@@ -382,8 +385,7 @@ impl McpClient {
             if cb.is_fully_open() {
                 format!(
                     "OPEN (failures={}, recovery={}ms remaining)",
-                    cb.consecutive_failures,
-                    cb.recovery_timeout_ms
+                    cb.consecutive_failures, cb.recovery_timeout_ms
                 )
             } else {
                 "HALF-OPEN (testing recovery)".to_string()
@@ -416,10 +418,7 @@ impl McpClient {
         {
             let cb = self.circuit_breaker.lock().unwrap();
             if cb.is_open && cb.is_fully_open() {
-                anyhow::bail!(
-                    "MCP server '{}' circuit breaker is open",
-                    self.config.name
-                );
+                anyhow::bail!("MCP server '{}' circuit breaker is open", self.config.name);
             }
         }
 
@@ -1610,8 +1609,10 @@ impl McpManager {
         self.health_diagnostics()
             .into_iter()
             .filter(|d| {
-                matches!(d.health, McpHealthStatus::Degraded | McpHealthStatus::Unhealthy)
-                    && d.approved
+                matches!(
+                    d.health,
+                    McpHealthStatus::Degraded | McpHealthStatus::Unhealthy
+                ) && d.approved
             })
             .map(|d| d.name)
             .collect()

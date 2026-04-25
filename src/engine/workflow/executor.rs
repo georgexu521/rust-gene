@@ -132,32 +132,22 @@ impl WorkflowExecutor {
         let mut retry_count = 0;
 
         // 首次执行
-        let first_result = step_executor
-            .execute_step(&plan.steps[step_index])
-            .await;
+        let first_result = step_executor.execute_step(&plan.steps[step_index]).await;
 
         let (outcome, final_status) = match first_result {
             Ok(output) => {
                 plan.steps[step_index].status = StepStatus::Completed;
-                (
-                    ExecutionOutcome::Success(output),
-                    StepStatus::Completed,
-                )
+                (ExecutionOutcome::Success(output), StepStatus::Completed)
             }
             Err(err1) => {
                 // 第 1 次失败 → 重试（E-04）
                 retry_count = 1;
-                let retry_result = step_executor
-                    .execute_step(&plan.steps[step_index])
-                    .await;
+                let retry_result = step_executor.execute_step(&plan.steps[step_index]).await;
 
                 match retry_result {
                     Ok(output) => {
                         plan.steps[step_index].status = StepStatus::Completed;
-                        (
-                            ExecutionOutcome::Success(output),
-                            StepStatus::Completed,
-                        )
+                        (ExecutionOutcome::Success(output), StepStatus::Completed)
                     }
                     Err(err2) => {
                         // 第 2 次失败 → 标记 [重构]（E-05）
@@ -233,11 +223,7 @@ impl WorkflowExecutor {
             };
             output.push_str(&format!(
                 "{} Step {}: {} ({}ms, {} retries)\n",
-                icon,
-                record.step_index,
-                record.description,
-                record.duration_ms,
-                record.retry_count
+                icon, record.step_index, record.description, record.duration_ms, record.retry_count
             ));
             match &record.outcome {
                 ExecutionOutcome::Success(msg)
@@ -343,16 +329,16 @@ mod tests {
             ("中权重步骤".into(), 50, vec![]),
         ]);
 
-        let mock = MockStepExecutor::new(vec![
-            Ok("ok1".into()),
-            Ok("ok2".into()),
-            Ok("ok3".into()),
-        ]);
+        let mock =
+            MockStepExecutor::new(vec![Ok("ok1".into()), Ok("ok2".into()), Ok("ok3".into())]);
 
         let records = executor.execute(&mut plan, &mock).await.unwrap();
 
         // 执行顺序应该是：高权重(90) → 中权重(50) → 低权重(10)
-        assert_eq!(records[0].step_index, 1, "Highest weight should execute first");
+        assert_eq!(
+            records[0].step_index, 1,
+            "Highest weight should execute first"
+        );
         assert_eq!(records[1].step_index, 2);
         assert_eq!(records[2].step_index, 0);
     }
@@ -384,14 +370,9 @@ mod tests {
     async fn test_retry_on_first_failure() {
         // E-04: 失败 1 次后重试，成功后状态 Completed
         let executor = WorkflowExecutor::new();
-        let mut plan = make_plan_with_weights(vec![
-            ("可能失败的步骤".into(), 50, vec![]),
-        ]);
+        let mut plan = make_plan_with_weights(vec![("可能失败的步骤".into(), 50, vec![])]);
 
-        let mock = MockStepExecutor::new(vec![
-            Err("第一次失败".into()),
-            Ok("重试成功".into()),
-        ]);
+        let mock = MockStepExecutor::new(vec![Err("第一次失败".into()), Ok("重试成功".into())]);
 
         let records = executor.execute(&mut plan, &mock).await.unwrap();
 
@@ -407,14 +388,9 @@ mod tests {
     async fn test_refactor_on_second_failure() {
         // E-05: 失败 2 次后标记 [重构]
         let executor = WorkflowExecutor::new();
-        let mut plan = make_plan_with_weights(vec![
-            ("连续失败的步骤".into(), 50, vec![]),
-        ]);
+        let mut plan = make_plan_with_weights(vec![("连续失败的步骤".into(), 50, vec![])]);
 
-        let mock = MockStepExecutor::new(vec![
-            Err("第一次失败".into()),
-            Err("第二次失败".into()),
-        ]);
+        let mock = MockStepExecutor::new(vec![Err("第一次失败".into()), Err("第二次失败".into())]);
 
         let records = executor.execute(&mut plan, &mock).await.unwrap();
 
@@ -462,7 +438,10 @@ mod tests {
         let mut plan = make_plan_with_weights(vec![("步骤 0".into(), 100, vec![99])]);
         let mock = MockStepExecutor::new(vec![Ok("ok".into())]);
         let records = executor.execute(&mut plan, &mock).await.unwrap();
-        assert!(records.is_empty(), "invalid dependency should block execution");
+        assert!(
+            records.is_empty(),
+            "invalid dependency should block execution"
+        );
         assert!(WorkflowExecutor::find_invalid_dependency_indices(&plan).contains(&(0, 99)));
         assert_eq!(plan.steps[0].status, StepStatus::Pending);
     }

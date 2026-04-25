@@ -44,27 +44,21 @@ impl std::fmt::Debug for QueryEngine {
 }
 
 impl QueryEngine {
-    fn composed_system_prompt(&self, override_prompt: Option<&str>) -> String {
-        let base = override_prompt.unwrap_or(&self.system_prompt);
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        crate::instructions::compose_system_prompt(base, &cwd)
-    }
-
     fn composed_system_prompt_for_user(
         &self,
         override_prompt: Option<&str>,
         user_message: &str,
         history: Option<&[Message]>,
     ) -> String {
-        let layered = self.composed_system_prompt(override_prompt);
+        let base = override_prompt.unwrap_or(&self.system_prompt);
+        let assembler =
+            crate::engine::prompt_context::PromptContextAssembler::from_current_dir(base);
         if let Some(hist) = history {
-            crate::engine::prompt_builder::compose_task_aware_system_prompt_with_history(
-                &layered,
-                user_message,
-                hist,
-            )
+            assembler.build_for_turn(user_message, hist).system_prompt
         } else {
-            crate::engine::prompt_builder::compose_task_aware_system_prompt(&layered, user_message)
+            assembler
+                .build_for_single_user_message(user_message)
+                .system_prompt
         }
     }
 
@@ -242,7 +236,8 @@ impl QueryEngine {
             self.cost_tracker.clone(),
             &self.model,
         )
-        .with_max_iterations(self.max_iterations);
+        .with_max_iterations(self.max_iterations)
+        .with_compression(128_000);
 
         if let Some(ref manager) = self.agent_manager {
             builder = builder.with_agent_manager(manager.clone());

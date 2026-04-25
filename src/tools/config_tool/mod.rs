@@ -43,15 +43,12 @@ impl Tool for ConfigTool {
     }
 
     async fn execute(&self, params: Value, _context: ToolContext) -> ToolResult {
-        let action = params.get("action")
+        let action = params
+            .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("list");
-        let key = params.get("key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let value = params.get("value")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let key = params.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        let value = params.get("value").and_then(|v| v.as_str()).unwrap_or("");
 
         match action {
             "get" => {

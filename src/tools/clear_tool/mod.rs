@@ -35,7 +35,8 @@ impl Tool for ClearTool {
     }
 
     async fn execute(&self, params: Value, _context: ToolContext) -> ToolResult {
-        let target = params.get("target")
+        let target = params
+            .get("target")
             .and_then(|v| v.as_str())
             .unwrap_or("all");
 
@@ -46,9 +47,7 @@ impl Tool for ClearTool {
             "context" => {
                 ToolResult::success("Context window cleared. Conversation history preserved.")
             }
-            _ => {
-                ToolResult::success("Conversation history and context window cleared.")
-            }
+            _ => ToolResult::success("Conversation history and context window cleared."),
         }
     }
 }

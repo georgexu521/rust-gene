@@ -39,12 +39,11 @@ impl Tool for DesktopTool {
     }
 
     async fn execute(&self, params: Value, _context: ToolContext) -> ToolResult {
-        let action = params.get("action")
+        let action = params
+            .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("open");
-        let target = params.get("target")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let target = params.get("target").and_then(|v| v.as_str()).unwrap_or("");
 
         if target.is_empty() {
             return ToolResult {
@@ -62,9 +61,7 @@ impl Tool for DesktopTool {
             use std::process::Command;
             match action {
                 "open" => {
-                    let result = Command::new("open")
-                        .arg(target)
-                        .spawn();
+                    let result = Command::new("open").arg(target).spawn();
                     if result.is_ok() {
                         return ToolResult::success(format!("Opened: {}", target));
                     }
@@ -87,24 +84,24 @@ impl Tool for DesktopTool {
             match action {
                 "open" => {
                     // Try xdg-open first
-                    let result = Command::new("xdg-open")
-                        .arg(target)
-                        .spawn();
+                    let result = Command::new("xdg-open").arg(target).spawn();
                     if result.is_ok() {
                         return ToolResult::success(format!("Opened: {}", target));
                     }
                 }
                 "reveal" => {
                     // Try nautilus or other file managers
-                    let result = Command::new("nautilus")
-                        .arg(target)
-                        .spawn();
+                    let result = Command::new("nautilus").arg(target).spawn();
                     if result.is_ok() {
                         return ToolResult::success(format!("Revealed: {}", target));
                     }
                     // Fallback to xdg-open
                     let result = Command::new("xdg-open")
-                        .arg(std::path::Path::new(target).parent().unwrap_or(std::path::Path::new(target)))
+                        .arg(
+                            std::path::Path::new(target)
+                                .parent()
+                                .unwrap_or(std::path::Path::new(target)),
+                        )
                         .spawn();
                     if result.is_ok() {
                         return ToolResult::success(format!("Revealed: {}", target));
@@ -127,9 +124,7 @@ impl Tool for DesktopTool {
                     }
                 }
                 "reveal" => {
-                    let result = Command::new("explorer")
-                        .args(["/select,", target])
-                        .spawn();
+                    let result = Command::new("explorer").args(["/select,", target]).spawn();
                     if result.is_ok() {
                         return ToolResult::success(format!("Revealed: {}", target));
                     }
@@ -141,7 +136,10 @@ impl Tool for DesktopTool {
         ToolResult {
             success: false,
             content: String::new(),
-            error: Some(format!("Failed to {} '{}' - platform not supported", action, target)),
+            error: Some(format!(
+                "Failed to {} '{}' - platform not supported",
+                action, target
+            )),
             data: None,
             duration_ms: None,
             ..Default::default()

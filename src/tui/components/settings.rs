@@ -1,6 +1,6 @@
 //! 设置界面组件
 //!
-//! TUI 配置管理界面
+//! 交互式 CLI 配置管理界面
 
 use crate::services::config::AppConfig;
 use ratatui::{
@@ -190,8 +190,8 @@ impl SettingsState {
         vec![
             SettingItem {
                 key: "features.tui_enabled".to_string(),
-                label: "TUI Mode".to_string(),
-                description: "Enable terminal UI".to_string(),
+                label: "Interactive CLI".to_string(),
+                description: "Enable interactive terminal CLI".to_string(),
                 value: SettingValue::Bool(self.config.features.tui_enabled),
                 editable: true,
                 sensitive: false,

@@ -6,10 +6,18 @@
 pub mod agent_tool;
 pub mod ask_tool;
 pub mod bash_tool;
+pub mod brief_tool;
 pub mod browser_tool;
 pub mod cache;
 pub mod calculate_tool;
+pub mod clear_tool;
+pub mod config_tool;
+pub mod context_tool;
+pub mod context_vis_tool;
+pub mod copy_tool;
+pub mod cost_tool;
 pub mod datetime_tool;
+pub mod desktop_tool;
 pub mod diff_tool;
 pub mod encode_tool;
 pub mod file_cache;
@@ -32,21 +40,13 @@ pub mod refactor_tool;
 pub mod remote_dev_tool;
 pub mod remote_trigger_tool;
 pub mod repl_tool;
+pub mod resume_tool;
+pub mod rewind_tool;
 pub mod send_message_tool;
 pub mod share_tool;
 pub mod sleep_tool;
 pub mod symbol_tool;
 pub mod task_tool;
-pub mod brief_tool;
-pub mod clear_tool;
-pub mod config_tool;
-pub mod context_tool;
-pub mod context_vis_tool;
-pub mod copy_tool;
-pub mod cost_tool;
-pub mod desktop_tool;
-pub mod resume_tool;
-pub mod rewind_tool;
 pub mod team_tool;
 pub mod telemetry_tool;
 pub mod todo_tool;
@@ -61,19 +61,17 @@ mod examples;
 
 pub use agent_tool::AgentTool;
 pub use bash_tool::BashTool;
+pub use brief_tool::BriefTool;
 pub use browser_tool::BrowserTool;
 pub use calculate_tool::CalculateTool;
-pub use cost_tool::CostTool;
-pub use brief_tool::BriefTool;
 pub use clear_tool::ClearTool;
 pub use config_tool::ConfigTool;
 pub use context_tool::ContextTool;
 pub use context_vis_tool::ContextVisTool;
 pub use copy_tool::CopyTool;
-pub use desktop_tool::DesktopTool;
-pub use resume_tool::ResumeTool;
-pub use rewind_tool::RewindTool;
+pub use cost_tool::CostTool;
 pub use datetime_tool::DatetimeTool;
+pub use desktop_tool::DesktopTool;
 pub use diff_tool::DiffTool;
 pub use encode_tool::EncodeTool;
 pub use file_tool::{FileEditTool, FileReadTool, FileWriteTool};
@@ -94,6 +92,8 @@ pub use refactor_tool::RefactorTool;
 pub use remote_dev_tool::RemoteDevTool;
 pub use remote_trigger_tool::RemoteTriggerTool;
 pub use repl_tool::REPLTool;
+pub use resume_tool::ResumeTool;
+pub use rewind_tool::RewindTool;
 pub use send_message_tool::SendMessageTool;
 pub use share_tool::ShareTool;
 pub use sleep_tool::SleepTool;
@@ -147,7 +147,10 @@ impl ToolErrorCode {
     /// 从错误信息推断错误码
     pub fn from_error(error: &str) -> Self {
         let e = error.to_ascii_lowercase();
-        if e.contains("invalid param") || e.contains("missing required") || e.contains("must be of type") {
+        if e.contains("invalid param")
+            || e.contains("missing required")
+            || e.contains("must be of type")
+        {
             ToolErrorCode::InvalidParams
         } else if e.contains("permission denied") || e.contains("denied") {
             ToolErrorCode::PermissionDenied
@@ -173,7 +176,10 @@ impl ToolErrorCode {
             ToolErrorCode::NotFound => 404,
             ToolErrorCode::Timeout => 408,
             ToolErrorCode::DangerousBlocked => 451,
-            ToolErrorCode::Unavailable | ToolErrorCode::ExecutionFailed | ToolErrorCode::Cancelled | ToolErrorCode::Unknown => 500,
+            ToolErrorCode::Unavailable
+            | ToolErrorCode::ExecutionFailed
+            | ToolErrorCode::Cancelled
+            | ToolErrorCode::Unknown => 500,
         }
     }
 }
@@ -199,13 +205,26 @@ impl ToolPermissionLevel {
     /// 从操作名称推断权限等级
     pub fn from_operation(op: &str) -> Self {
         let op_lower = op.to_ascii_lowercase();
-        if op_lower.contains("read") || op_lower.contains("get") || op_lower.contains("list") || op_lower.contains("search") {
+        if op_lower.contains("read")
+            || op_lower.contains("get")
+            || op_lower.contains("list")
+            || op_lower.contains("search")
+        {
             ToolPermissionLevel::ReadOnly
-        } else if op_lower.contains("write") || op_lower.contains("edit") || op_lower.contains("create") {
+        } else if op_lower.contains("write")
+            || op_lower.contains("edit")
+            || op_lower.contains("create")
+        {
             ToolPermissionLevel::MediumRisk
-        } else if op_lower.contains("delete") || op_lower.contains("remove") || op_lower.contains("kill") {
+        } else if op_lower.contains("delete")
+            || op_lower.contains("remove")
+            || op_lower.contains("kill")
+        {
             ToolPermissionLevel::HighRisk
-        } else if op_lower.contains("exec") || op_lower.contains("bash") || op_lower.contains("shell") {
+        } else if op_lower.contains("exec")
+            || op_lower.contains("bash")
+            || op_lower.contains("shell")
+        {
             ToolPermissionLevel::Critical
         } else {
             ToolPermissionLevel::LowRisk
@@ -214,7 +233,10 @@ impl ToolPermissionLevel {
 
     /// 是否需要确认提示
     pub fn requires_confirmation(&self) -> bool {
-        matches!(self, ToolPermissionLevel::HighRisk | ToolPermissionLevel::Critical)
+        matches!(
+            self,
+            ToolPermissionLevel::HighRisk | ToolPermissionLevel::Critical
+        )
     }
 }
 
@@ -306,8 +328,7 @@ pub trait Tool: Send + Sync {
             for (key, prop) in obj {
                 // 检查必需字段
                 if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-                    if required.iter().any(|r| r.as_str() == Some(key))
-                        && params.get(key).is_none()
+                    if required.iter().any(|r| r.as_str() == Some(key)) && params.get(key).is_none()
                     {
                         return Some(format!("Missing required parameter: {}", key));
                     }
@@ -455,7 +476,8 @@ pub struct ToolContext {
     /// 诊断跟踪器（用于 diagnostic tracking 功能）
     pub diagnostic_tracker: Option<std::sync::Arc<crate::engine::DiagnosticTracker>>,
     /// Checkpoint 管理器（文件修改快照）
-    pub checkpoint_manager: Option<std::sync::Arc<tokio::sync::Mutex<crate::engine::checkpoint::CheckpointManager>>>,
+    pub checkpoint_manager:
+        Option<std::sync::Arc<tokio::sync::Mutex<crate::engine::checkpoint::CheckpointManager>>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -1038,7 +1060,10 @@ mod tests {
     fn test_validate_params_accepts_integer_type_for_json_number() {
         let tool = IntegerParamTool;
         let err = tool.validate_params(&json!({ "timeout": 60 }));
-        assert!(err.is_none(), "integer JSON number should pass schema validation");
+        assert!(
+            err.is_none(),
+            "integer JSON number should pass schema validation"
+        );
     }
 
     #[test]
