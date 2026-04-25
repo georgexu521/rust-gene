@@ -291,8 +291,11 @@ mod tests {
     fn test_quick_panel_contains_status() {
         let mut app = crate::tui::app::TuiApp::new();
         let msg = super::handle_quick(&mut app);
-        assert!(msg.contains("Quick Panel:"));
-        assert!(msg.contains("messages:"));
+        assert!(msg.contains("Quick Panel"));
+        assert!(msg.contains("Status:"));
+        assert!(msg.contains("Runtime:"));
+        assert!(msg.contains("Workspace:"));
+        assert!(msg.contains("Messages:"));
     }
 
     #[test]

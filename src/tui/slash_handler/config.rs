@@ -2215,15 +2215,69 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     .into_iter()
     .filter(|b| *b)
     .count();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let workspace = cwd
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("workspace");
+    let recent_commands = if app.recent_palette_commands.is_empty() {
+        "none yet".to_string()
+    } else {
+        app.recent_palette_commands
+            .iter()
+            .rev()
+            .take(4)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
 
     format!(
-        "Quick Panel:\n  mode: {:?}\n  querying: {}\n  messages: {}\n  session: {}\n  pending_prompts: {}\n\nNext actions:\n  1. /new          - Start a new session\n  2. /sessions     - List recent sessions\n  3. /doctor       - Run diagnostics\n  4. /permissions  - Check permission rules\n  5. /cost         - Show token/cost usage\n  6. /theme show   - Inspect current theme",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Recent commands: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /doctor       run environment diagnostics\n2. /permissions  inspect or edit permission rules\n3. /sessions     resume recent work\n4. /cost         inspect token and cost usage\n5. /theme show   inspect current theme\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
+        pending,
         app.messages.len(),
         &session[..8.min(session.len())],
-        pending
+        app.current_provider_label(),
+        app.current_model_label(),
+        app.current_permission_label(),
+        recent_commands,
+        workspace,
+        cwd.display(),
+        quick_git_line(&cwd)
     )
+}
+
+fn quick_git_line(cwd: &std::path::Path) -> String {
+    let branch = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|branch| !branch.is_empty());
+
+    let changes = std::process::Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count()
+        });
+
+    match (branch, changes) {
+        (Some(branch), Some(0)) => format!("Git: {} clean", branch),
+        (Some(branch), Some(count)) => format!("Git: {} with {} changed files", branch, count),
+        (Some(branch), None) => format!("Git: {}", branch),
+        _ => "Git: not a repository".to_string(),
+    }
 }
 
 /// /feedback - Send feedback
