@@ -971,10 +971,14 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else {
         let mut last_category = "";
         for (idx, cmd) in items.iter().enumerate() {
-            let display_category = if app.command_palette_query.is_empty()
-                && crate::tui::commands::is_suggested_command(cmd.name)
-            {
-                "Suggested"
+            let display_category = if app.command_palette_query.is_empty() {
+                if app.is_contextual_palette_command(cmd.name) {
+                    "Context"
+                } else if crate::tui::commands::is_suggested_command(cmd.name) {
+                    "Suggested"
+                } else {
+                    cmd.category
+                }
             } else {
                 cmd.category
             };

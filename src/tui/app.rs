@@ -88,6 +88,17 @@ fn parse_memory_save_args(args: &str) -> (MemorySaveTarget, Option<&str>, &str) 
     (MemorySaveTarget::Auto, None, trimmed)
 }
 
+fn dedupe_palette_commands(commands: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for command in commands {
+        if seen.insert(command.clone()) {
+            deduped.push(command);
+        }
+    }
+    deduped
+}
+
 fn build_welcome_content(is_first_run: bool) -> String {
     if is_first_run {
         return "Priority Agent\n\nWelcome. Press Enter to start onboarding, or type /skip to skip.\n\nGetting started:\n- Ctrl+P opens the command palette\n- Ctrl+M changes model; Ctrl+L changes provider\n- Type ? on an empty prompt for shortcuts\n- Use /init <name> to create a project scaffold".to_string();
@@ -773,15 +784,57 @@ impl TuiApp {
     }
 
     pub fn command_palette_items(&self) -> Vec<&crate::tui::commands::CommandDef> {
-        self.command_registry.palette_items(
+        let boosted_commands = self.command_palette_boosted_commands();
+        let mut items = self.command_registry.palette_items(
             &self.command_palette_query,
             18,
-            self.recent_palette_commands
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
+            boosted_commands.as_slice(),
+        );
+        let contextual = self.contextual_palette_commands();
+        if self.command_palette_query.is_empty() && !contextual.is_empty() {
+            items.sort_by_key(|cmd| {
+                contextual
+                    .iter()
+                    .position(|name| name == cmd.name)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        items
+    }
+
+    pub fn contextual_palette_commands(&self) -> Vec<String> {
+        let mut commands = Vec::new();
+        if self.pending_permission_request.is_some() {
+            commands.push("/reject".to_string());
+            commands.push("/permissions".to_string());
+            commands.push("/quick".to_string());
+        }
+        if self.pending_plan.is_some() || self.pending_question.is_some() {
+            commands.push("/quick".to_string());
+            commands.push("/reject".to_string());
+        }
+        if self.messages.len() > 1 {
+            commands.push("/search".to_string());
+            commands.push("/session".to_string());
+            commands.push("/export".to_string());
+        }
+        dedupe_palette_commands(commands)
+    }
+
+    pub fn is_contextual_palette_command(&self, name: &str) -> bool {
+        self.contextual_palette_commands()
+            .iter()
+            .any(|command| command == name)
+    }
+
+    fn command_palette_boosted_commands(&self) -> Vec<String> {
+        let mut commands = self
+            .recent_palette_commands
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        commands.extend(self.contextual_palette_commands().into_iter().rev());
+        dedupe_palette_commands(commands)
     }
 
     pub fn command_palette_next(&mut self) {
@@ -2800,6 +2853,46 @@ mod tests {
         assert!(preview.contains("1 files"));
         assert!(preview.contains("src/"));
         assert!(preview.contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn test_contextual_palette_prioritizes_pending_permission_actions() {
+        let mut app = TuiApp::new();
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tool_1".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({ "command": "ls" }),
+                },
+                prompt: "Allow?".to_string(),
+            });
+
+        let commands = app.contextual_palette_commands();
+        assert_eq!(commands.first().map(String::as_str), Some("/reject"));
+        assert!(commands.iter().any(|command| command == "/permissions"));
+        assert!(app.is_contextual_palette_command("/reject"));
+
+        let items = app.command_palette_items();
+        assert_eq!(items.first().map(|cmd| cmd.name), Some("/reject"));
+    }
+
+    #[test]
+    fn test_contextual_palette_includes_session_actions_after_chat() {
+        let mut app = TuiApp::new();
+        app.messages.push(MessageItem {
+            id: "user_1".to_string(),
+            role: MessageRole::User,
+            content: "hello".to_string(),
+            timestamp: std::time::SystemTime::now(),
+            metadata: Default::default(),
+        });
+
+        let commands = app.contextual_palette_commands();
+
+        assert!(commands.iter().any(|command| command == "/search"));
+        assert!(commands.iter().any(|command| command == "/session"));
+        assert!(commands.iter().any(|command| command == "/export"));
     }
 
     #[test]
