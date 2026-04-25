@@ -1768,6 +1768,13 @@ impl ConversationLoop {
 
             let (result, hook_context) = if let Some(tool) = self.tool_registry.get(&tool_name) {
                 let mut context = self.create_tool_context();
+                let drift_check = active_goal
+                    .as_ref()
+                    .map(|goal| {
+                        crate::engine::goal_drift::GoalDriftDetector::new().check(goal, &tc)
+                    })
+                    .unwrap_or_else(crate::engine::goal_drift::DriftCheck::ok);
+                let drift_requires_approval = drift_check.requires_approval();
                 let pre_decision = if let Some(ref hooks) = self.hook_manager {
                     hooks.run_pre_tool(&tc, &context).await
                 } else {
@@ -1787,10 +1794,21 @@ impl ConversationLoop {
                 } else if context
                     .permission_context
                     .requires_confirmation(&tool_name, &tc.arguments)
+                    || drift_requires_approval
                 {
                     let mut approved = false;
                     if let (Some(ref channel), Some(tx)) = (&self.approval_channel, tx) {
-                        let prompt = if tool_name == "mcp_tool" {
+                        let prompt = if drift_requires_approval {
+                            format!(
+                                "Tool '{}' may drift from the current goal. Reason: {} Suggested action: {} Allow?",
+                                tool_name,
+                                drift_check.reason,
+                                drift_check
+                                    .suggested_action
+                                    .as_deref()
+                                    .unwrap_or("review before executing")
+                            )
+                        } else if tool_name == "mcp_tool" {
                             let server = tc.arguments["server_name"].as_str().unwrap_or("");
                             let t = tc.arguments["tool_name"].as_str().unwrap_or("");
                             format!(

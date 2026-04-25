@@ -36,6 +36,10 @@ impl DriftCheck {
     pub fn should_trace(&self) -> bool {
         matches!(self.level, DriftLevel::Medium | DriftLevel::High)
     }
+
+    pub fn requires_approval(&self) -> bool {
+        self.level == DriftLevel::High
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -182,6 +186,7 @@ mod tests {
             },
         );
         assert_eq!(check.level, DriftLevel::High);
+        assert!(check.requires_approval());
     }
 
     #[test]
