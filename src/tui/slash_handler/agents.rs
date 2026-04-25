@@ -550,7 +550,7 @@ pub fn handle_mcp(app: &TuiApp, args: &str) -> String {
                     "No MCP servers configured.".to_string()
                 } else {
                     format!(
-                        "MCP servers ({}):\n{}\n\nApproved: {}\n\nUsage:\n  /mcp approve <server>\n  /mcp revoke <server>",
+                        "MCP servers ({}):\n{}\n\nApproved: {}\n\nUsage:\n  /mcp status\n  /mcp approve <server>\n  /mcp revoke <server>",
                         servers.len(),
                         servers.join("\n"),
                         if approved.is_empty() {
@@ -560,6 +560,33 @@ pub fn handle_mcp(app: &TuiApp, args: &str) -> String {
                         }
                     )
                 }
+            } else if parts[0] == "status" || parts[0] == "health" {
+                let diagnostics = mgr.health_diagnostics();
+                if diagnostics.is_empty() {
+                    return "MCP Status\n- no servers configured".to_string();
+                }
+
+                let available = mgr.available_servers();
+                let mut lines = vec![
+                    format!("MCP Status ({} servers)", diagnostics.len()),
+                    format!(
+                        "Available: {}",
+                        if available.is_empty() {
+                            "none".to_string()
+                        } else {
+                            available.join(", ")
+                        }
+                    ),
+                    String::new(),
+                    "Servers:".to_string(),
+                ];
+                for diag in diagnostics {
+                    lines.push(format!(
+                        "- {} [{}] health={:?} approved={} circuit={}",
+                        diag.name, diag.transport, diag.health, diag.approved, diag.circuit_breaker
+                    ));
+                }
+                lines.join("\n")
             } else if parts[0] == "approve" && parts.len() >= 2 {
                 let name = parts[1];
                 if mgr.server_names().contains(&name.to_string()) {
@@ -577,7 +604,7 @@ pub fn handle_mcp(app: &TuiApp, args: &str) -> String {
                 mgr.revoke_server(name);
                 format!("MCP server '{}' approval revoked.", name)
             } else {
-                "Usage: /mcp [list|approve <server>|revoke <server>]".to_string()
+                "Usage: /mcp [list|status|approve <server>|revoke <server>]".to_string()
             }
         } else {
             "No MCP manager configured.".to_string()
