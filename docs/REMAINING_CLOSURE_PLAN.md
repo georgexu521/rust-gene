@@ -5,6 +5,8 @@ learning event, recovery plan, MCP status, and goal drift foundations landed.
 
 ## Phase 1: Tool Failure Recovery And Tool Outcome Learning
 
+Status: done in `fd74714`.
+
 Goal: every failed tool call should produce structured recovery metadata and a
 durable learning event.
 
@@ -25,6 +27,8 @@ Acceptance:
 
 ## Phase 2: Learning-Driven Tool Selection
 
+Status: done in `44b4250`.
+
 Goal: `IntentRouter` should use historical tool outcomes, not only failed turns,
 to tune recommended tools.
 
@@ -41,6 +45,8 @@ Acceptance:
 - The change is visible in `IntentRouted.reason`.
 
 ## Phase 3: Goal Drift Visibility
+
+Status: done in this branch.
 
 Goal: make medium/high goal drift easier to notice without reading raw trace data.
 

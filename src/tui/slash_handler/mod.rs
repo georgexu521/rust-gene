@@ -296,6 +296,30 @@ mod tests {
         assert!(msg.contains("Runtime:"));
         assert!(msg.contains("Workspace:"));
         assert!(msg.contains("Messages:"));
+        assert!(msg.contains("Goal drift:"));
+    }
+
+    #[test]
+    fn test_goal_drift_report_summarizes_events() {
+        let mut trace = crate::engine::trace::TurnTrace::new("s1", 1, "inspect workspace");
+        trace
+            .events
+            .push(crate::engine::trace::TraceEvent::GoalDriftDetected {
+                goal_id: "goal-123456".to_string(),
+                tool: "bash".to_string(),
+                call_id: "call-abcdef".to_string(),
+                level: "high".to_string(),
+                reason: "tool request moved away from inspecting the workspace".to_string(),
+                suggested_action: Some("ask_user".to_string()),
+            });
+
+        let label = super::config::goal_drift_count_label(&trace);
+        let report = super::config::format_goal_drift_report(&trace, 8);
+
+        assert_eq!(label, "1 high");
+        assert!(report.contains("Goal Drift from trace"));
+        assert!(report.contains("high drift via bash"));
+        assert!(report.contains("suggested=ask_user"));
     }
 
     #[test]

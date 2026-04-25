@@ -2272,15 +2272,19 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         .and_then(|engine| engine.goal_manager().current())
         .map(|goal| goal.compact_status())
         .unwrap_or_else(|| "none".to_string());
+    let drift_line = latest_trace_for_app(app)
+        .map(|trace| goal_drift_count_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
 
     format!(
-        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Recent commands: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /goal         inspect or pin the active goal\n2. /doctor       run environment diagnostics\n3. /permissions  inspect or edit permission rules\n4. /sessions     resume recent work\n5. /cost         inspect token and cost usage\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Recent commands: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /goal         inspect or pin the active goal\n2. /goal drift   inspect recent goal drift\n3. /doctor       run environment diagnostics\n4. /permissions  inspect or edit permission rules\n5. /sessions     resume recent work\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
         pending,
         app.messages.len(),
         &session[..8.min(session.len())],
         goal_line,
+        drift_line,
         app.current_provider_label(),
         app.current_model_label(),
         app.current_permission_label(),
@@ -2293,11 +2297,25 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
 
 /// /goal - Show or pin the current session goal
 pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
+    let trimmed = args.trim();
+    if trimmed.starts_with("drift") {
+        let limit = trimmed
+            .strip_prefix("drift")
+            .unwrap_or_default()
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(8)
+            .clamp(1, 50);
+        return match latest_trace_for_app(app) {
+            Some(trace) => format_goal_drift_report(&trace, limit),
+            None => "Goal Drift\n- none yet".to_string(),
+        };
+    }
+
     let Some(engine) = app.streaming_engine.as_ref() else {
         return "Current Goal\n- unavailable (no engine connected)".to_string();
     };
     let manager = engine.goal_manager();
-    let trimmed = args.trim();
     if trimmed.is_empty() || trimmed == "status" || trimmed == "show" {
         return manager.format_current();
     }
@@ -2314,7 +2332,91 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
             .unwrap_or_else(|| "Usage: /goal set <text>".to_string());
     }
 
-    "Usage: /goal [set <text>|clear]".to_string()
+    "Usage: /goal [set <text>|clear|drift [limit]]".to_string()
+}
+
+fn latest_trace_for_app(app: &TuiApp) -> Option<crate::engine::trace::TurnTrace> {
+    if let Some(engine) = app.streaming_engine.as_ref() {
+        engine
+            .trace_store()
+            .latest()
+            .or_else(|| app.session_manager.latest_trace().ok().flatten())
+    } else {
+        app.session_manager.latest_trace().ok().flatten()
+    }
+}
+
+pub(crate) fn goal_drift_count_label(trace: &crate::engine::trace::TurnTrace) -> String {
+    let mut medium = 0usize;
+    let mut high = 0usize;
+    for event in &trace.events {
+        if let crate::engine::trace::TraceEvent::GoalDriftDetected { level, .. } = event {
+            if level.eq_ignore_ascii_case("high") {
+                high += 1;
+            } else {
+                medium += 1;
+            }
+        }
+    }
+    match (high, medium) {
+        (0, 0) => "none".to_string(),
+        (0, medium) => format!("{} advisory", medium),
+        (high, 0) => format!("{} high", high),
+        (high, medium) => format!("{} high, {} advisory", high, medium),
+    }
+}
+
+pub(crate) fn format_goal_drift_report(
+    trace: &crate::engine::trace::TurnTrace,
+    limit: usize,
+) -> String {
+    let lines = trace
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            crate::engine::trace::TraceEvent::GoalDriftDetected {
+                goal_id,
+                tool,
+                call_id,
+                level,
+                reason,
+                suggested_action,
+            } => Some(format!(
+                "- {} drift via {} {} goal={} reason={} suggested={}",
+                level,
+                tool,
+                call_id.chars().take(8).collect::<String>(),
+                goal_id.chars().take(8).collect::<String>(),
+                compact_inline(reason, 120),
+                suggested_action.as_deref().unwrap_or("none")
+            )),
+            _ => None,
+        })
+        .take(limit)
+        .collect::<Vec<_>>();
+
+    if lines.is_empty() {
+        format!(
+            "Goal Drift\n- none in latest trace {}\n\nUse /trace last for the full turn timeline.",
+            trace.trace_id.chars().take(8).collect::<String>()
+        )
+    } else {
+        format!(
+            "Goal Drift from trace {} ({})\n{}",
+            trace.trace_id.chars().take(8).collect::<String>(),
+            goal_drift_count_label(trace),
+            lines.join("\n")
+        )
+    }
+}
+
+fn compact_inline(text: &str, max_chars: usize) -> String {
+    let mut value = text.replace('\n', " ");
+    if value.chars().count() > max_chars {
+        value = value.chars().take(max_chars).collect::<String>();
+        value.push_str("...");
+    }
+    value
 }
 
 /// /learn - Show recent runtime learning events
