@@ -2266,14 +2266,21 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let goal_line = app
+        .streaming_engine
+        .as_ref()
+        .and_then(|engine| engine.goal_manager().current())
+        .map(|goal| goal.compact_status())
+        .unwrap_or_else(|| "none".to_string());
 
     format!(
-        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Recent commands: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /doctor       run environment diagnostics\n2. /permissions  inspect or edit permission rules\n3. /sessions     resume recent work\n4. /cost         inspect token and cost usage\n5. /theme show   inspect current theme\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Recent commands: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /goal         inspect or pin the active goal\n2. /doctor       run environment diagnostics\n3. /permissions  inspect or edit permission rules\n4. /sessions     resume recent work\n5. /cost         inspect token and cost usage\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
         pending,
         app.messages.len(),
         &session[..8.min(session.len())],
+        goal_line,
         app.current_provider_label(),
         app.current_model_label(),
         app.current_permission_label(),
@@ -2282,6 +2289,32 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         cwd.display(),
         quick_git_line(&cwd)
     )
+}
+
+/// /goal - Show or pin the current session goal
+pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
+    let Some(engine) = app.streaming_engine.as_ref() else {
+        return "Current Goal\n- unavailable (no engine connected)".to_string();
+    };
+    let manager = engine.goal_manager();
+    let trimmed = args.trim();
+    if trimmed.is_empty() || trimmed == "status" || trimmed == "show" {
+        return manager.format_current();
+    }
+
+    if trimmed == "clear" || trimmed == "reset" {
+        manager.clear();
+        return "Current Goal\n- cleared".to_string();
+    }
+
+    if let Some(title) = trimmed.strip_prefix("set ") {
+        return manager
+            .set_manual(title)
+            .map(|goal| format!("Current Goal\n- pinned: {}", goal.compact_status()))
+            .unwrap_or_else(|| "Usage: /goal set <text>".to_string());
+    }
+
+    "Usage: /goal [set <text>|clear]".to_string()
 }
 
 fn quick_git_line(cwd: &std::path::Path) -> String {

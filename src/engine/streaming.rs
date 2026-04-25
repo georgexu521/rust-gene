@@ -104,6 +104,8 @@ pub struct StreamingQueryEngine {
     session_store: Option<Arc<crate::session_store::SessionStore>>,
     /// Recent runtime traces for `/trace`.
     trace_store: Arc<crate::engine::trace::TraceStore>,
+    /// Current session goal shown in `/goal` and `/quick`.
+    goal_manager: Arc<crate::engine::session_goal::SessionGoalManager>,
     /// 当前会话 ID
     session_id: Option<String>,
     /// 成本追踪器
@@ -147,6 +149,7 @@ impl StreamingQueryEngine {
             )),
             session_store: None,
             trace_store: Arc::new(crate::engine::trace::TraceStore::default()),
+            goal_manager: Arc::new(crate::engine::session_goal::SessionGoalManager::new()),
             session_id: None,
             cost_tracker: Arc::new(tokio::sync::Mutex::new(
                 crate::cost_tracker::CostTracker::new(),
@@ -187,6 +190,10 @@ impl StreamingQueryEngine {
 
     pub fn trace_store(&self) -> Arc<crate::engine::trace::TraceStore> {
         self.trace_store.clone()
+    }
+
+    pub fn goal_manager(&self) -> Arc<crate::engine::session_goal::SessionGoalManager> {
+        self.goal_manager.clone()
     }
 
     /// 设置记忆快照（在 system prompt 中注入冻结的记忆）
@@ -495,6 +502,9 @@ impl StreamingQueryEngine {
         user_message: impl Into<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         let user_msg = user_message.into();
+        let route = crate::engine::intent_router::IntentRouter::new().route(&user_msg);
+        self.goal_manager
+            .update_from_user_message(&user_msg, Some(&route));
         let (tx, rx) = mpsc::channel(100);
 
         // 准备共享资源

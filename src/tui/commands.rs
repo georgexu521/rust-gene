@@ -1285,6 +1285,14 @@ pub const CMD_SHORTCUTS: CommandDef = CommandDef::new(
 pub const CMD_QUICK: CommandDef =
     CommandDef::new("/quick", &[], "General", "/quick", "Quick actions menu");
 
+pub const CMD_GOAL: CommandDef = CommandDef::new(
+    "/goal",
+    &[],
+    "General",
+    "/goal [set <text>|clear]",
+    "Show or pin the current session goal",
+);
+
 pub const CMD_FEEDBACK: CommandDef = CommandDef::new(
     "/feedback",
     &[],
@@ -1427,6 +1435,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_THEME);
     registry.register(&CMD_SHORTCUTS);
     registry.register(&CMD_QUICK);
+    registry.register(&CMD_GOAL);
     registry.register(&CMD_FEEDBACK);
 
     // Placeholder list intentionally empty: all registered slash commands currently have usable implementations.
@@ -1554,6 +1563,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_THEME,
     &CMD_SHORTCUTS,
     &CMD_QUICK,
+    &CMD_GOAL,
     &CMD_FEEDBACK,
 ];
 
