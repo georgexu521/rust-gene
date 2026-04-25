@@ -21,6 +21,7 @@ pub mod error_classifier;
 pub mod evalset;
 pub mod goal_drift;
 pub mod hooks;
+pub mod human_review;
 pub mod intent_router;
 pub mod lsp;
 pub mod mcp;

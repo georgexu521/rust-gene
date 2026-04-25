@@ -10,6 +10,15 @@ pub struct ToolApprovalRequest {
     pub prompt: String,
 }
 
+impl ToolApprovalRequest {
+    pub fn human_review_request(&self) -> crate::engine::human_review::HumanReviewRequest {
+        crate::engine::human_review::HumanReviewRequest::tool_permission(
+            &self.tool_call,
+            &self.prompt,
+        )
+    }
+}
+
 /// 待审批的工具请求 + 响应通道
 type PendingApproval = Option<(ToolApprovalRequest, tokio::sync::oneshot::Sender<bool>)>;
 

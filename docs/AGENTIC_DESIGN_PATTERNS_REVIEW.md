@@ -55,7 +55,7 @@ They are not yet comprehensive for the entire handbook. The remaining work is mo
 | MCP | Mostly covered | MCP manager, stdio/ws/http, OAuth, resource list/read trace, health diagnostics | Not yet a polished standalone MCP server surface |
 | Goal monitoring | Covered | `SessionGoalManager`, `GoalDriftDetector`, `/goal drift`, approval integration | Needs richer goal history and acceptance criteria UI |
 | Recovery | Mostly covered | `RecoveryPlan`, `/recover`, API/tool recovery trace, tool metadata | Workflow-level recovery is not uniform across every failure mode |
-| Human-in-the-loop | Partially covered | permissions, ask-user tool, plan approval, goal-drift approval | Missing unified `HumanReviewRequest` model |
+| Human-in-the-loop | Mostly covered | `HumanReviewRequest` v1, permissions, ask-user tool, plan approval, goal-drift approval | Plan approval and fallback decisions still need full migration into the unified model |
 | RAG/retrieval | Mostly covered | `RetrievalContext` v1, project index, memory prefetch, web tools, MCP resource access | Project/web/MCP still need to migrate fully into the unified context object |
 | A2A/inter-agent communication | Partially covered | team messaging, swarm, child agents | Missing standard `AgentTaskEnvelope` and durable inter-agent transcript schema |
 | Resource-aware optimization | Partially covered | cost tracker, model fallback, context compression, tool budgets | Missing explicit `ResourcePolicy` and user-facing budget controls |
@@ -82,24 +82,24 @@ The latest implementation rounds closed the review's original P0/P2/P3 spine:
 
 These are the main gaps to close before claiming the handbook is fully represented:
 
-1. Unified `HumanReviewRequest` for permissions, plan approval, drift approval, risky edits, and model/tool fallback decisions.
-2. `TaskContextBundle` for non-trivial coding tasks: goal, files, constraints, plan, retrieval evidence, risks, tool budget, and acceptance checks.
-3. Structured `ReflectionPass` after risky edits or multi-step tasks.
-4. A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
-5. Explicit `ResourcePolicy` and visible budget controls for cost, latency, reasoning depth, and parallelism.
-6. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
-7. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
-8. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
+1. `TaskContextBundle` for non-trivial coding tasks: goal, files, constraints, plan, retrieval evidence, risks, tool budget, and acceptance checks.
+2. Structured `ReflectionPass` after risky edits or multi-step tasks.
+3. A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
+4. Explicit `ResourcePolicy` and visible budget controls for cost, latency, reasoning depth, and parallelism.
+5. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
+6. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
+7. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
+8. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
 
 ### Recommended Next Priority
 
 The next best work is not to add another isolated feature. Build the missing contracts in this order:
 
-1. Add `HumanReviewRequest`, then migrate permissions, plan approval, and drift approval to the same model.
-2. Add `TaskContextBundle` and `ReflectionPass` for coding tasks.
-3. Expand EvalSet from deterministic routing/trace checks into full tool-trajectory replay.
-4. Migrate project/web/MCP/session retrieval into `RetrievalContext`.
-5. Add `ResourcePolicy` and expose it in CLI status/config.
+1. Add `TaskContextBundle` and `ReflectionPass` for coding tasks.
+2. Expand EvalSet from deterministic routing/trace checks into full tool-trajectory replay.
+3. Migrate project/web/MCP/session retrieval into `RetrievalContext`.
+4. Add `ResourcePolicy` and expose it in CLI status/config.
+5. Complete `HumanReviewRequest` migration for plan approval, risky edits, and fallback decisions.
 
 ### 2026-04-25 Implementation Update
 
@@ -108,6 +108,7 @@ The next best work is not to add another isolated feature. Build the missing con
 - Added `/eval list` and `/eval run <name|all>` to the CLI.
 - Added `src/engine/retrieval_context.rs` with source, score, provenance, trust, freshness, and token-estimate fields.
 - Migrated memory prefetch prompt injection to `<retrieval-context>` and added `retrieval.context` trace events.
+- Added `src/engine/human_review.rs` with a unified review request contract, and wired tool/goal-drift approvals through it.
 
 ## Pass 0: Handbook Scope
 

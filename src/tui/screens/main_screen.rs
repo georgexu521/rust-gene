@@ -1412,20 +1412,11 @@ pub fn render_permission_approval(
     area: Rect,
 ) {
     let popup_area = centered_rect(76, 64, area);
-    let goal_drift_approval = req
-        .prompt
-        .to_ascii_lowercase()
-        .contains("may drift from the current goal");
-    let risk = if goal_drift_approval {
-        "high"
-    } else {
-        permission_risk_label(&req.tool_call.name, &req.tool_call.arguments)
-    };
-    let risk_reason = if goal_drift_approval {
-        "tool call may be unrelated to the active goal"
-    } else {
-        permission_risk_reason(&req.tool_call.name, &req.tool_call.arguments)
-    };
+    let review = req.human_review_request();
+    let goal_drift_approval =
+        review.kind == crate::engine::human_review::HumanReviewKind::GoalDrift;
+    let risk = review.risk.as_str();
+    let risk_reason = review.reason.as_str();
     let rule_pattern =
         crate::tui::app::permission_rule_pattern(&req.tool_call.name, &req.tool_call.arguments);
     let risk_color = match risk {
@@ -1640,70 +1631,6 @@ fn permission_scope_label(tool_name: &str, args: &serde_json::Value) -> String {
         }
         _ => "tool call".to_string(),
     }
-}
-
-fn permission_risk_label(tool_name: &str, args: &serde_json::Value) -> &'static str {
-    let name = tool_name.to_ascii_lowercase();
-    if name.contains("bash") {
-        let command = args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if command.contains("rm ")
-            || command.contains("sudo")
-            || command.contains("chmod")
-            || command.contains("curl")
-            || command.contains("delete")
-        {
-            return "high";
-        }
-        return "medium";
-    }
-    if name.contains("write") || name.contains("edit") || name.contains("delete") {
-        return "medium";
-    }
-    if name.contains("web") || name.contains("mcp") || name.contains("github") {
-        return "medium";
-    }
-    "low"
-}
-
-fn permission_risk_reason(tool_name: &str, args: &serde_json::Value) -> &'static str {
-    let name = tool_name.to_ascii_lowercase();
-    if name.contains("bash") {
-        let command = args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if command.contains("rm ") {
-            return "shell command can delete files";
-        }
-        if command.contains("sudo") {
-            return "shell command requests elevated privileges";
-        }
-        if command.contains("chmod") {
-            return "shell command changes file permissions";
-        }
-        if command.contains("curl") {
-            return "shell command reaches the network";
-        }
-        return "shell command can change local state";
-    }
-    if name.contains("write") || name.contains("edit") || name.contains("delete") {
-        return "tool can modify files or project state";
-    }
-    if name.contains("web") {
-        return "tool reaches the network";
-    }
-    if name.contains("mcp") {
-        return "external MCP tool invocation";
-    }
-    if name.contains("github") {
-        return "tool can read or modify remote repository state";
-    }
-    "read-only or low-risk tool"
 }
 
 fn permission_preview(tool_name: &str, args: &serde_json::Value) -> Option<(&'static str, String)> {
@@ -2178,26 +2105,11 @@ mod tests {
     }
 
     #[test]
-    fn permission_risk_marks_dangerous_shell_as_high() {
-        let args = serde_json::json!({ "command": "sudo rm -rf target" });
-        assert_eq!(permission_risk_label("bash", &args), "high");
-    }
-
-    #[test]
     fn permission_preview_extracts_bash_command() {
         let args = serde_json::json!({ "command": "ls -la" });
         assert_eq!(
             permission_preview("bash", &args),
             Some(("Command", "$ ls -la".to_string()))
-        );
-    }
-
-    #[test]
-    fn permission_risk_reason_explains_network_shell_command() {
-        let args = serde_json::json!({ "command": "curl https://example.com" });
-        assert_eq!(
-            permission_risk_reason("bash", &args),
-            "shell command reaches the network"
         );
     }
 
