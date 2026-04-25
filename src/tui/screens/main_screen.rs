@@ -1412,8 +1412,20 @@ pub fn render_permission_approval(
     area: Rect,
 ) {
     let popup_area = centered_rect(76, 64, area);
-    let risk = permission_risk_label(&req.tool_call.name, &req.tool_call.arguments);
-    let risk_reason = permission_risk_reason(&req.tool_call.name, &req.tool_call.arguments);
+    let goal_drift_approval = req
+        .prompt
+        .to_ascii_lowercase()
+        .contains("may drift from the current goal");
+    let risk = if goal_drift_approval {
+        "high"
+    } else {
+        permission_risk_label(&req.tool_call.name, &req.tool_call.arguments)
+    };
+    let risk_reason = if goal_drift_approval {
+        "tool call may be unrelated to the active goal"
+    } else {
+        permission_risk_reason(&req.tool_call.name, &req.tool_call.arguments)
+    };
     let rule_pattern =
         crate::tui::app::permission_rule_pattern(&req.tool_call.name, &req.tool_call.arguments);
     let risk_color = match risk {
@@ -1466,6 +1478,19 @@ pub fn render_permission_approval(
         ]),
         Line::from(""),
     ];
+
+    if goal_drift_approval {
+        lines.push(Line::from(vec![
+            Span::styled("Goal    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "drift check requires approval",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
 
     if let Some(summary) = permission_preview(&req.tool_call.name, &req.tool_call.arguments) {
         lines.push(Line::from(vec![
