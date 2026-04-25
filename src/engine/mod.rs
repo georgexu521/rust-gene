@@ -19,6 +19,7 @@ pub use diagnostic_tracker::{
 pub mod diff;
 pub mod error_classifier;
 pub mod hooks;
+pub mod intent_router;
 pub mod lsp;
 pub mod mcp;
 pub mod mcp_server;

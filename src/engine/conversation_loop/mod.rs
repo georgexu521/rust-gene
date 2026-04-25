@@ -18,6 +18,7 @@ pub(crate) use tool_execution::{
     READ_ONLY_TOOLS,
 };
 
+use crate::engine::intent_router::IntentRouter;
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, ToolCall};
@@ -407,6 +408,15 @@ impl ConversationLoop {
             turn_index,
             last_user_preview,
         ));
+        let route = IntentRouter::new().route(last_user_preview);
+        trace.record(TraceEvent::IntentRouted {
+            intent: format!("{:?}", route.intent),
+            workflow: format!("{:?}", route.workflow),
+            retrieval: format!("{:?}", route.retrieval),
+            confidence: route.confidence,
+            risk: format!("{:?}", route.risk),
+            reason: route.reason,
+        });
 
         // ── Workflow 闸门检查 ──────────────────────────
         let already_triggered = self

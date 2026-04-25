@@ -65,6 +65,14 @@ pub enum TraceEvent {
     UserPromptSubmitted {
         chars: usize,
     },
+    IntentRouted {
+        intent: String,
+        workflow: String,
+        retrieval: String,
+        confidence: f32,
+        risk: String,
+        reason: String,
+    },
     WorkflowRouted {
         decision: String,
         reason: String,
@@ -143,6 +151,7 @@ impl TraceEvent {
     pub fn label(&self) -> &'static str {
         match self {
             TraceEvent::UserPromptSubmitted { .. } => "prompt",
+            TraceEvent::IntentRouted { .. } => "intent",
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
@@ -166,6 +175,22 @@ impl TraceEvent {
     pub fn summary(&self) -> String {
         match self {
             TraceEvent::UserPromptSubmitted { chars } => format!("user prompt: {} chars", chars),
+            TraceEvent::IntentRouted {
+                intent,
+                workflow,
+                retrieval,
+                confidence,
+                risk,
+                reason,
+            } => format!(
+                "intent={} workflow={} retrieval={} risk={} confidence={:.2}: {}",
+                intent,
+                workflow,
+                retrieval,
+                risk,
+                confidence,
+                preview(reason)
+            ),
             TraceEvent::WorkflowRouted { decision, reason } => {
                 format!("workflow decision: {} ({})", decision, preview(reason))
             }
