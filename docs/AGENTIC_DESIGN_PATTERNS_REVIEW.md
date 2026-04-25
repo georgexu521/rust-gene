@@ -64,7 +64,7 @@ They are not yet comprehensive for the entire handbook. The remaining work is mo
 | Evaluation/monitoring | Mostly covered | EvalSet v1, 820+ tests, traces, workflow reports, CLI observability | EvalSet currently covers deterministic routing/trace checks; full tool trajectory replay is still pending |
 | Prioritization | Mostly covered | weight engine, priority scheduler, todo priority, learning signals | Learned outcomes do not yet recalibrate weights deeply |
 | Exploration/discovery | Mostly covered | project scanner, fuzzy search, web search/fetch, agents | Needs exploration workflow templates and a discovery dashboard |
-| CLI/coding-agent appendices | Mostly covered | mature CLI shell, command palette, tool views, approvals, status line | Missing prompt library, configurable statusline, and mature workflow dashboard |
+| CLI/coding-agent appendices | Mostly covered | prompt template library v1, mature CLI shell, command palette, tool views, approvals, status line | Workflow dashboard still needs deeper integration with live contracts |
 
 ### What The Recent Work Closed
 
@@ -82,12 +82,12 @@ The latest implementation rounds closed the review's original P0/P2/P3 spine:
 
 These are the main gaps to close before claiming the handbook is fully represented:
 
-1. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
-2. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
-3. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
-4. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
-5. Runtime enforcement of `TaskContextBundle`, `ReflectionPass`, and `ResourcePolicy` for risky coding tasks.
-6. Full migration of agent/swarm/team handoffs into `AgentTaskEnvelope`.
+1. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
+2. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
+3. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
+4. Runtime enforcement of `TaskContextBundle`, `ReflectionPass`, and `ResourcePolicy` for risky coding tasks.
+5. Full migration of agent/swarm/team handoffs into `AgentTaskEnvelope`.
+6. Deeper CLI dashboard backed by live task/retrieval/review/resource state.
 
 ### Recommended Next Priority
 
@@ -95,9 +95,9 @@ The next best work is not to add another isolated feature. Build the missing con
 
 1. Expand EvalSet from deterministic routing/trace checks into full tool-trajectory replay.
 2. Migrate project/web/MCP/session retrieval into `RetrievalContext`.
-3. Expand CLI dashboard and prompt/workflow templates.
-4. Complete runtime enforcement of `TaskContextBundle`, `ReflectionPass`, `ResourcePolicy`, and `HumanReviewRequest`.
-5. Migrate agent/swarm/team handoffs into `AgentTaskEnvelope`.
+3. Complete runtime enforcement of `TaskContextBundle`, `ReflectionPass`, `ResourcePolicy`, and `HumanReviewRequest`.
+4. Migrate agent/swarm/team handoffs into `AgentTaskEnvelope`.
+5. Expand CLI dashboard with live task/retrieval/review/resource state.
 
 ### 2026-04-25 Implementation Update
 
@@ -110,6 +110,7 @@ The next best work is not to add another isolated feature. Build the missing con
 - Added `src/engine/task_context.rs` and `src/engine/reflection_pass.rs` as first-class task and self-review artifacts.
 - Added `src/engine/resource_policy.rs`, trace-visible `resource.policy` events, `/resource`, and evalset assertions for resource policy selection.
 - Added `src/agent/envelope.rs` with an A2A-inspired `AgentTaskEnvelope` for normalized sub-agent handoffs.
+- Added `src/engine/prompt_templates.rs` and `/prompt templates|render` for built-in workflow prompt templates.
 
 ## Pass 0: Handbook Scope
 

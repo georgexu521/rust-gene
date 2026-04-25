@@ -29,6 +29,7 @@ pub mod mcp_server;
 pub mod plan_mode;
 pub mod prompt_builder;
 pub mod prompt_context;
+pub mod prompt_templates;
 pub mod query_engine;
 pub mod recovery_plan;
 pub mod reflection_pass;

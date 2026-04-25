@@ -833,8 +833,8 @@ pub const CMD_PROMPT: CommandDef = CommandDef::new(
     "/prompt",
     &[],
     "Config",
-    "/prompt [show|edit <text>|append <text>|apply|reset]",
-    "Show or edit system prompt",
+    "/prompt [show|templates|render|edit|append|apply|reset]",
+    "Show, render, or edit prompts",
 );
 
 pub const CMD_MIGRATE: CommandDef = CommandDef::new(

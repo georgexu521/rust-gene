@@ -515,6 +515,21 @@ pub fn handle_profiling(app: &TuiApp) -> String {
 /// /prompt - Show/edit system prompt
 pub async fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
     let args = args.trim();
+    if args == "templates" || args == "list" {
+        return crate::engine::prompt_templates::list_templates();
+    }
+    if let Some(rest) = args.strip_prefix("render ").map(str::trim) {
+        let Some((name, goal)) = rest.split_once(' ') else {
+            return "Usage: /prompt render <template> <goal>".to_string();
+        };
+        if goal.trim().is_empty() {
+            return "Usage: /prompt render <template> <goal>".to_string();
+        }
+        return match crate::engine::prompt_templates::render_template(name, goal) {
+            Ok(rendered) => rendered,
+            Err(e) => e,
+        };
+    }
     if args.is_empty() || args == "show" {
         return match read_prompt_file() {
             Ok(Some(v)) => format!("System prompt:\n\n{}", v),
@@ -567,7 +582,8 @@ pub async fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
         }
         return "Custom system prompt applied to current session context.".to_string();
     }
-    "Usage: /prompt [show|edit <text>|append <text>|apply|reset]".to_string()
+    "Usage: /prompt [show|templates|render <template> <goal>|edit <text>|append <text>|apply|reset]"
+        .to_string()
 }
 
 /// /migrate - Migration helper
