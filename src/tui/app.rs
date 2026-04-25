@@ -465,10 +465,14 @@ pub struct TuiApp {
     pub recent_palette_commands: VecDeque<String>,
     /// 模型选择器选中项
     pub model_select_selected: usize,
+    /// 模型选择器搜索词
+    pub model_select_query: String,
     /// 最近一次模型切换提示
     pub model_notice: Option<String>,
     /// Provider 选择器选中项
     pub provider_select_selected: usize,
+    /// Provider 选择器搜索词
+    pub provider_select_query: String,
     /// 最近一次 provider 切换提示
     pub provider_notice: Option<String>,
 }
@@ -602,8 +606,10 @@ impl TuiApp {
             command_palette_selected: 0,
             recent_palette_commands: VecDeque::with_capacity(16),
             model_select_selected: 0,
+            model_select_query: String::new(),
             model_notice: None,
             provider_select_selected: 0,
+            provider_select_query: String::new(),
             provider_notice: None,
         }
     }
@@ -764,6 +770,7 @@ impl TuiApp {
     }
 
     pub fn open_model_select(&mut self) {
+        self.model_select_query.clear();
         self.model_select_selected = self
             .model_choices()
             .iter()
@@ -804,6 +811,17 @@ impl TuiApp {
                 },
                 active: model == current,
             })
+            .filter(|choice| {
+                self.model_select_query.is_empty()
+                    || choice
+                        .model
+                        .to_ascii_lowercase()
+                        .contains(&self.model_select_query.to_ascii_lowercase())
+                    || choice
+                        .provider
+                        .to_ascii_lowercase()
+                        .contains(&self.model_select_query.to_ascii_lowercase())
+            })
             .collect()
     }
 
@@ -816,6 +834,16 @@ impl TuiApp {
 
     pub fn model_select_prev(&mut self) {
         self.model_select_selected = self.model_select_selected.saturating_sub(1);
+    }
+
+    pub fn model_select_push(&mut self, c: char) {
+        self.model_select_query.push(c);
+        self.model_select_selected = 0;
+    }
+
+    pub fn model_select_backspace(&mut self) {
+        self.model_select_query.pop();
+        self.model_select_selected = 0;
     }
 
     pub fn accept_model_selection(&mut self) {
@@ -839,6 +867,7 @@ impl TuiApp {
     }
 
     pub fn open_provider_select(&mut self) {
+        self.provider_select_query.clear();
         self.provider_select_selected = self
             .provider_choices()
             .iter()
@@ -899,6 +928,15 @@ impl TuiApp {
             });
         }
 
+        let query = self.provider_select_query.to_ascii_lowercase();
+        if !query.is_empty() {
+            choices.retain(|choice| {
+                choice.name.to_ascii_lowercase().contains(&query)
+                    || choice.provider_type.to_ascii_lowercase().contains(&query)
+                    || choice.model.to_ascii_lowercase().contains(&query)
+                    || choice.note.to_ascii_lowercase().contains(&query)
+            });
+        }
         choices.sort_by_key(|choice| (!choice.active, !choice.configured, choice.name.clone()));
         choices
     }
@@ -912,6 +950,16 @@ impl TuiApp {
 
     pub fn provider_select_prev(&mut self) {
         self.provider_select_selected = self.provider_select_selected.saturating_sub(1);
+    }
+
+    pub fn provider_select_push(&mut self, c: char) {
+        self.provider_select_query.push(c);
+        self.provider_select_selected = 0;
+    }
+
+    pub fn provider_select_backspace(&mut self) {
+        self.provider_select_query.pop();
+        self.provider_select_selected = 0;
     }
 
     pub fn accept_provider_selection(&mut self) -> String {
@@ -2560,6 +2608,40 @@ mod tests {
             .iter()
             .any(|cmd| cmd == "/status"));
         assert!(app.messages.len() > 1);
+    }
+
+    #[test]
+    fn test_model_select_filters_choices() {
+        let mut app = TuiApp::new();
+        app.streaming_engine = Some(Arc::new(
+            crate::engine::streaming::StreamingQueryEngine::new(
+                Arc::new(MockProvider),
+                Arc::new(crate::tools::ToolRegistry::new()),
+                "gpt-4o",
+            ),
+        ));
+        app.model_select_push('m');
+        app.model_select_push('i');
+        app.model_select_push('n');
+        app.model_select_push('i');
+
+        let choices = app.model_choices();
+        assert!(choices.iter().all(|choice| choice.model.contains("mini")));
+    }
+
+    #[test]
+    fn test_provider_select_filters_missing_providers() {
+        let mut app = TuiApp::new();
+        app.provider_select_push('k');
+        app.provider_select_push('i');
+        app.provider_select_push('m');
+        app.provider_select_push('i');
+
+        let choices = app.provider_choices();
+        assert!(!choices.is_empty());
+        assert!(choices
+            .iter()
+            .all(|choice| choice.name.contains("kimi") || choice.provider_type.contains("Kimi")));
     }
 
     #[test]

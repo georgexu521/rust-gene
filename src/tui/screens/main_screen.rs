@@ -1083,6 +1083,21 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default().fg(app.theme.text_dim),
             ),
         ]),
+        Line::from(vec![
+            Span::styled("Search  ", Style::default().fg(app.theme.text_dim)),
+            Span::styled(
+                if app.model_select_query.is_empty() {
+                    "type to filter models"
+                } else {
+                    app.model_select_query.as_str()
+                },
+                if app.model_select_query.is_empty() {
+                    Style::default().fg(app.theme.text_dim)
+                } else {
+                    Style::default().fg(app.theme.text)
+                },
+            ),
+        ]),
         Line::from(""),
     ];
 
@@ -1125,6 +1140,8 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         ),
         Span::styled("esc", Style::default().fg(app.theme.info)),
         Span::styled(" close  ", Style::default().fg(app.theme.text_dim)),
+        Span::styled("backspace", Style::default().fg(app.theme.info)),
+        Span::styled(" edit search  ", Style::default().fg(app.theme.text_dim)),
         Span::styled("/settings", Style::default().fg(app.theme.info)),
         Span::styled(
             " provider/API keys",
@@ -1162,6 +1179,21 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default()
                     .fg(app.theme.text_highlight)
                     .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Search  ", Style::default().fg(app.theme.text_dim)),
+            Span::styled(
+                if app.provider_select_query.is_empty() {
+                    "type to filter providers"
+                } else {
+                    app.provider_select_query.as_str()
+                },
+                if app.provider_select_query.is_empty() {
+                    Style::default().fg(app.theme.text_dim)
+                } else {
+                    Style::default().fg(app.theme.text)
+                },
             ),
         ]),
         Line::from(""),
@@ -1217,6 +1249,8 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         ),
         Span::styled("esc", Style::default().fg(app.theme.info)),
         Span::styled(" close  ", Style::default().fg(app.theme.text_dim)),
+        Span::styled("backspace", Style::default().fg(app.theme.info)),
+        Span::styled(" edit search  ", Style::default().fg(app.theme.text_dim)),
         Span::styled("/settings", Style::default().fg(app.theme.info)),
         Span::styled(
             " edit keys/base URL",

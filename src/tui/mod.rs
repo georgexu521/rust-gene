@@ -837,8 +837,12 @@ async fn handle_model_select_key_event(key: KeyEvent, app: &mut TuiApp) -> anyho
         KeyCode::Enter => app.accept_model_selection(),
         KeyCode::Up => app.model_select_prev(),
         KeyCode::Down => app.model_select_next(),
+        KeyCode::Backspace => app.model_select_backspace(),
         KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.close_model_select();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            app.model_select_push(c);
         }
         _ => {}
     }
@@ -854,8 +858,12 @@ async fn handle_provider_select_key_event(key: KeyEvent, app: &mut TuiApp) -> an
         }
         KeyCode::Up => app.provider_select_prev(),
         KeyCode::Down => app.provider_select_next(),
+        KeyCode::Backspace => app.provider_select_backspace(),
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.close_provider_select();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            app.provider_select_push(c);
         }
         _ => {}
     }
