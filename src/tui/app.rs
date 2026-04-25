@@ -461,6 +461,8 @@ pub struct TuiApp {
     pub command_palette_query: String,
     /// 命令面板选中项
     pub command_palette_selected: usize,
+    /// 最近从命令面板执行/选择的命令
+    pub recent_palette_commands: VecDeque<String>,
     /// 模型选择器选中项
     pub model_select_selected: usize,
     /// 最近一次模型切换提示
@@ -598,6 +600,7 @@ impl TuiApp {
             pasted_blocks: Vec::new(),
             command_palette_query: String::new(),
             command_palette_selected: 0,
+            recent_palette_commands: VecDeque::with_capacity(16),
             model_select_selected: 0,
             model_notice: None,
             provider_select_selected: 0,
@@ -682,8 +685,15 @@ impl TuiApp {
     }
 
     pub fn command_palette_items(&self) -> Vec<&crate::tui::commands::CommandDef> {
-        self.command_registry
-            .palette_items(&self.command_palette_query, 18)
+        self.command_registry.palette_items(
+            &self.command_palette_query,
+            18,
+            self.recent_palette_commands
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
     }
 
     pub fn command_palette_next(&mut self) {
@@ -707,15 +717,38 @@ impl TuiApp {
         self.command_palette_selected = 0;
     }
 
-    pub fn accept_command_palette_selection(&mut self) {
+    pub async fn accept_command_palette_selection(&mut self) {
         let selected = self
             .command_palette_items()
             .get(self.command_palette_selected)
-            .map(|cmd| cmd.name.to_string());
-        if let Some(name) = selected {
-            self.input.set_value(format!("{} ", name));
+            .map(|cmd| {
+                (
+                    (*cmd).clone(),
+                    crate::tui::commands::command_accept_behavior(cmd),
+                )
+            });
+        if let Some((cmd, behavior)) = selected {
+            self.record_palette_command(cmd.name);
+            match behavior {
+                crate::tui::commands::CommandAcceptBehavior::Execute => {
+                    self.close_command_palette();
+                    self.handle_slash_command(cmd.name).await;
+                    return;
+                }
+                crate::tui::commands::CommandAcceptBehavior::Insert => {
+                    self.input.set_value(format!("{} ", cmd.name));
+                }
+            }
         }
         self.close_command_palette();
+    }
+
+    fn record_palette_command(&mut self, name: &str) {
+        self.recent_palette_commands.retain(|cmd| cmd != name);
+        self.recent_palette_commands.push_back(name.to_string());
+        while self.recent_palette_commands.len() > 8 {
+            self.recent_palette_commands.pop_front();
+        }
     }
 
     pub fn open_shortcut_help(&mut self) {
@@ -2493,17 +2526,40 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_command_palette_accept_inserts_selected_command() {
+    #[tokio::test]
+    async fn test_command_palette_accept_inserts_command_that_needs_args() {
         let mut app = TuiApp::new();
         app.open_command_palette();
-        app.command_palette_push('h');
+        app.command_palette_push('s');
+        app.command_palette_push('a');
+        app.command_palette_push('v');
         app.command_palette_push('e');
-        app.accept_command_palette_selection();
+        app.accept_command_palette_selection().await;
 
         assert_eq!(app.mode, AppMode::Chat);
-        assert!(app.input.value().starts_with('/'));
-        assert!(app.input.value().ends_with(' '));
+        assert_eq!(app.input.value(), "/save ");
+        assert!(app.recent_palette_commands.iter().any(|cmd| cmd == "/save"));
+    }
+
+    #[tokio::test]
+    async fn test_command_palette_accept_executes_no_arg_command() {
+        let mut app = TuiApp::new();
+        app.open_command_palette();
+        app.command_palette_push('s');
+        app.command_palette_push('t');
+        app.command_palette_push('a');
+        app.command_palette_push('t');
+        app.command_palette_push('u');
+        app.command_palette_push('s');
+        app.accept_command_palette_selection().await;
+
+        assert_eq!(app.mode, AppMode::Chat);
+        assert!(app.input.value().is_empty());
+        assert!(app
+            .recent_palette_commands
+            .iter()
+            .any(|cmd| cmd == "/status"));
+        assert!(app.messages.len() > 1);
     }
 
     #[test]

@@ -214,10 +214,21 @@ impl CommandRegistry {
     }
 
     /// 命令面板候选项，使用轻量 fuzzy 排序，并过滤别名重复项。
-    pub fn palette_items(&self, query: &str, limit: usize) -> Vec<&CommandDef> {
+    pub fn palette_items(
+        &self,
+        query: &str,
+        limit: usize,
+        recent_commands: &[String],
+    ) -> Vec<&CommandDef> {
         let query = query.trim().to_ascii_lowercase();
         let mut seen = HashSet::new();
         let mut scored = Vec::new();
+        let recent_rank = recent_commands
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(idx, name)| (name.as_str(), 2_000_i32.saturating_sub(idx as i32 * 100)))
+            .collect::<HashMap<_, _>>();
 
         for cmd in self.commands.values() {
             if !seen.insert(cmd.name) {
@@ -234,6 +245,7 @@ impl CommandRegistry {
             let Some(score) = command_match_score(&query, &haystack, cmd) else {
                 continue;
             };
+            let score = score + recent_rank.get(cmd.name).copied().unwrap_or_default();
             scored.push((score, cmd.category, cmd.name, cmd));
         }
 
@@ -243,7 +255,7 @@ impl CommandRegistry {
                 .then_with(|| a.2.cmp(b.2))
         });
 
-        if query.is_empty() {
+        if query.is_empty() && recent_commands.is_empty() {
             let mut grouped: BTreeMap<&str, Vec<&CommandDef>> = BTreeMap::new();
             for (_, category, _, cmd) in scored {
                 grouped.entry(category).or_default().push(cmd);
@@ -267,6 +279,38 @@ impl CommandRegistry {
             .map(|(_, _, _, cmd)| cmd)
             .collect()
     }
+}
+
+pub fn command_accept_behavior(cmd: &CommandDef) -> CommandAcceptBehavior {
+    if command_requires_arguments(cmd) {
+        CommandAcceptBehavior::Insert
+    } else {
+        CommandAcceptBehavior::Execute
+    }
+}
+
+fn command_requires_arguments(cmd: &CommandDef) -> bool {
+    let usage = cmd.usage;
+    usage.contains('<')
+        || matches!(
+            cmd.name,
+            "/save"
+                | "/btw"
+                | "/copy"
+                | "/write"
+                | "/import"
+                | "/load-session"
+                | "/merge"
+                | "/search"
+                | "/filter"
+                | "/feedback"
+        )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandAcceptBehavior {
+    Execute,
+    Insert,
 }
 
 fn command_match_score(query: &str, haystack: &str, cmd: &CommandDef) -> Option<i32> {
@@ -1496,7 +1540,7 @@ mod tests {
     #[test]
     fn test_palette_items_filters_and_deduplicates_aliases() {
         let registry = default_command_registry();
-        let items = registry.palette_items("help", 20);
+        let items = registry.palette_items("help", 20, &[]);
         assert!(items.iter().any(|cmd| cmd.name == "/help"));
         let help_count = items.iter().filter(|cmd| cmd.name == "/help").count();
         assert_eq!(help_count, 1);
@@ -1505,14 +1549,34 @@ mod tests {
     #[test]
     fn test_palette_items_rank_exact_command_above_description_match() {
         let registry = default_command_registry();
-        let items = registry.palette_items("model", 20);
+        let items = registry.palette_items("model", 20, &[]);
         assert_eq!(items.first().map(|cmd| cmd.name), Some("/model"));
     }
 
     #[test]
     fn test_palette_items_support_subsequence_query() {
         let registry = default_command_registry();
-        let items = registry.palette_items("prv", 20);
+        let items = registry.palette_items("prv", 20, &[]);
         assert!(items.iter().any(|cmd| cmd.name == "/provider"));
+    }
+
+    #[test]
+    fn test_palette_items_rank_recent_commands_when_query_empty() {
+        let registry = default_command_registry();
+        let recent = vec!["/provider".to_string()];
+        let items = registry.palette_items("", 20, &recent);
+        assert_eq!(items.first().map(|cmd| cmd.name), Some("/provider"));
+    }
+
+    #[test]
+    fn test_command_accept_behavior_inserts_required_args() {
+        assert_eq!(
+            command_accept_behavior(&CMD_SAVE),
+            CommandAcceptBehavior::Insert
+        );
+        assert_eq!(
+            command_accept_behavior(&CMD_STATUS),
+            CommandAcceptBehavior::Execute
+        );
     }
 }

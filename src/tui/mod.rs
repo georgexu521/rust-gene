@@ -816,7 +816,7 @@ async fn handle_ask_user_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
 async fn handle_command_palette_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
     match key.code {
         KeyCode::Esc => app.close_command_palette(),
-        KeyCode::Enter => app.accept_command_palette_selection(),
+        KeyCode::Enter => app.accept_command_palette_selection().await,
         KeyCode::Up => app.command_palette_prev(),
         KeyCode::Down => app.command_palette_next(),
         KeyCode::Backspace => app.command_palette_backspace(),

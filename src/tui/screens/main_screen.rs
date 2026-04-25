@@ -968,7 +968,10 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("enter", Style::default().fg(app.theme.info)),
-        Span::styled(" insert command  ", Style::default().fg(app.theme.text_dim)),
+        Span::styled(
+            " execute or insert  ",
+            Style::default().fg(app.theme.text_dim),
+        ),
         Span::styled("esc", Style::default().fg(app.theme.info)),
         Span::styled(" close  ", Style::default().fg(app.theme.text_dim)),
         Span::styled("ctrl+p", Style::default().fg(app.theme.info)),
