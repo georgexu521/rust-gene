@@ -184,6 +184,23 @@ fn persist_turn_learning_event(
     )
 }
 
+fn record_recovery_plan(trace: &TraceCollector, plan: &crate::engine::recovery_plan::RecoveryPlan) {
+    trace.record(TraceEvent::RecoveryPlan {
+        plan_id: plan.id.clone(),
+        source: plan.source.clone(),
+        category: plan.category.clone(),
+        action: plan.action.clone(),
+        retryable: plan.retryable,
+        safe_retry: plan.safe_retry,
+        suggested_command: plan.suggested_command.clone(),
+        status: format!("{:?}", plan.status),
+    });
+    trace.record(TraceEvent::RecoveryApplied {
+        error: plan.primary_error.clone(),
+        action: plan.trace_action(),
+    });
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -760,6 +777,14 @@ impl ConversationLoop {
                             || err_str.contains("too many tokens")
                             || err_str.contains("maximum context length");
                         if needs_compress && compress_retry < 2 {
+                            let classified =
+                                crate::engine::error_classifier::ErrorClassifier::from_anyhow(e);
+                            let plan = crate::engine::recovery_plan::RecoveryPlan::from_classified(
+                                "api_reactive_compress",
+                                &classified,
+                            )
+                            .with_status(crate::engine::recovery_plan::RecoveryStatus::Applied);
+                            record_recovery_plan(&trace, &plan);
                             warn!(
                                 "API error (attempt {}/3): {}. Compressing context and retrying...",
                                 compress_retry + 1,
@@ -1366,6 +1391,11 @@ impl ConversationLoop {
                 // transparently fall back to non-streaming to improve provider compatibility.
                 if let Some(stream_err) = stream_failed {
                     if raw_content.trim().is_empty() && collected_tool_calls.is_empty() {
+                        let plan = crate::engine::recovery_plan::RecoveryPlan::streaming_fallback(
+                            "stream_empty",
+                            &stream_err,
+                        );
+                        warn!("{}", plan.user_note);
                         warn!(
                             "Streaming yielded no content (error: {}), falling back to non-streaming",
                             stream_err
@@ -1413,6 +1443,11 @@ impl ConversationLoop {
                 Ok((full_content, collected_tool_calls, pre_executed))
             }
             Err(e) => {
+                let plan = crate::engine::recovery_plan::RecoveryPlan::streaming_fallback(
+                    "stream_open",
+                    &e.to_string(),
+                );
+                warn!("{}", plan.user_note);
                 warn!("Streaming failed, falling back to non-streaming: {}", e);
                 let base_request = ChatRequest::new(&self.model)
                     .with_messages(fallback_messages.clone())

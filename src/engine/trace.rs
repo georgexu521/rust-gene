@@ -144,6 +144,16 @@ pub enum TraceEvent {
         error: String,
         action: String,
     },
+    RecoveryPlan {
+        plan_id: String,
+        source: String,
+        category: String,
+        action: String,
+        retryable: bool,
+        safe_retry: bool,
+        suggested_command: Option<String>,
+        status: String,
+    },
     AssistantResponded {
         chars: usize,
         iterations: usize,
@@ -174,6 +184,7 @@ impl TraceEvent {
             TraceEvent::ToolCompleted { .. } => "tool.done",
             TraceEvent::VerificationCompleted { .. } => "verify.done",
             TraceEvent::RecoveryApplied { .. } => "recovery",
+            TraceEvent::RecoveryPlan { .. } => "recovery.plan",
             TraceEvent::AssistantResponded { .. } => "assistant",
             TraceEvent::Error { .. } => "error",
         }
@@ -305,6 +316,26 @@ impl TraceEvent {
             TraceEvent::RecoveryApplied { error, action } => {
                 format!("recovery: {} -> {}", preview(error), action)
             }
+            TraceEvent::RecoveryPlan {
+                plan_id,
+                source,
+                category,
+                action,
+                retryable,
+                safe_retry,
+                suggested_command,
+                status,
+            } => format!(
+                "{} {} {} action={} retryable={} safe_retry={} suggested={} status={}",
+                source,
+                short_id(plan_id),
+                category,
+                preview(action),
+                retryable,
+                safe_retry,
+                suggested_command.as_deref().unwrap_or("none"),
+                status
+            ),
             TraceEvent::AssistantResponded { chars, iterations } => {
                 format!(
                     "assistant responded: {} chars, {} iterations",

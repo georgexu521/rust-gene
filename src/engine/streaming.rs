@@ -628,6 +628,25 @@ impl StreamingQueryEngine {
 
                         // Fallback: 重新执行，stream 事件会继续发送到 tx
                         let fb_model = engine.fallback_model.clone().unwrap();
+                        let recovery_plan =
+                            crate::engine::recovery_plan::RecoveryPlan::fallback_model(
+                                "streaming_engine",
+                                &e.to_string(),
+                                &fb_model,
+                            );
+                        if let (Some(ref store), Some(ref sid)) =
+                            (&engine.session_store, &engine.session_id)
+                        {
+                            let _ = store.add_learning_event(
+                                sid,
+                                "recovery_plan",
+                                &recovery_plan.source,
+                                &recovery_plan.summary(),
+                                0.8,
+                                &serde_json::to_value(&recovery_plan)
+                                    .unwrap_or_else(|_| serde_json::json!({})),
+                            );
+                        }
                         let fb_engine = StreamingEngineInner {
                             provider: engine.provider.clone(),
                             tool_registry: engine.tool_registry.clone(),
