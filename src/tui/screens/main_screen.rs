@@ -592,6 +592,63 @@ fn render_tool_runs_message<'a>(runs: &'a [ToolRunView], app: &'a TuiApp) -> Par
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
 }
 
+pub fn render_tool_viewer(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let popup_area = centered_rect(90, 85, area);
+    let block = Block::default()
+        .title(format!(" Tool Output: {} ", app.tool_viewer_title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.border_active))
+        .style(Style::default().bg(app.theme.bg_popup));
+
+    let mut lines = app
+        .tool_viewer_content
+        .lines()
+        .map(|raw| {
+            let style = if raw.starts_with("Tool:")
+                || raw.starts_with("Status:")
+                || raw.starts_with("Elapsed:")
+                || raw.ends_with(':')
+            {
+                Style::default()
+                    .fg(app.theme.text_highlight)
+                    .add_modifier(Modifier::BOLD)
+            } else if raw.starts_with("- ") {
+                Style::default().fg(app.theme.text_dim)
+            } else {
+                Style::default().fg(app.theme.text)
+            };
+            Line::from(Span::styled(raw.to_string(), style))
+        })
+        .collect::<Vec<_>>();
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No tool output.",
+            Style::default().fg(app.theme.text_dim),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("esc/q", Style::default().fg(app.theme.info)),
+        Span::styled(" close  ", Style::default().fg(app.theme.text_dim)),
+        Span::styled("↑/↓", Style::default().fg(app.theme.info)),
+        Span::styled(" scroll  ", Style::default().fg(app.theme.text_dim)),
+        Span::styled("PgUp/PgDn", Style::default().fg(app.theme.info)),
+        Span::styled(" page", Style::default().fg(app.theme.text_dim)),
+    ]));
+
+    let total_lines = lines.len().saturating_sub(1) as u16;
+    let scroll = app.tool_viewer_scroll_offset.min(total_lines);
+    let paragraph = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0))
+        .block(block);
+
+    f.render_widget(Clear, popup_area);
+    f.render_widget(paragraph, popup_area);
+}
+
 /// 渲染会话侧边栏
 pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
     use ratatui::widgets::{Block, Borders, List, ListItem};
@@ -927,6 +984,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from("  ctrl+m       model picker"),
         Line::from("  ctrl+l       provider picker"),
         Line::from("  ctrl+o       expand/collapse tool details"),
+        Line::from("  ctrl+t       open full tool output"),
         Line::from(format!("  {}       quit", kb.global_quit)),
         Line::from(""),
         Line::from(vec![Span::styled(

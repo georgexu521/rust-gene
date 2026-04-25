@@ -417,7 +417,9 @@ impl Keybindings {
                     return AppAction::ScrollBottom;
                 }
             }
-            crate::tui::app::AppMode::Chat | crate::tui::app::AppMode::DiffViewer => {
+            crate::tui::app::AppMode::Chat
+            | crate::tui::app::AppMode::DiffViewer
+            | crate::tui::app::AppMode::ToolViewer => {
                 if self.global_quit.matches(key) || self.global_quit_alt.matches(key) {
                     return AppAction::Quit;
                 }

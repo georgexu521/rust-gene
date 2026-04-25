@@ -305,6 +305,7 @@ pub enum AppMode {
     PermissionApproval,
     AskUser,
     DiffViewer,
+    ToolViewer,
     VimNormal,
     Onboarding,
     MessageSearch,
@@ -409,6 +410,12 @@ pub struct TuiApp {
     pub diff_title: String,
     /// Diff 查看器滚动偏移
     pub diff_scroll_offset: u16,
+    /// 工具输出查看器内容
+    pub tool_viewer_content: String,
+    /// 工具输出查看器标题
+    pub tool_viewer_title: String,
+    /// 工具输出查看器滚动偏移
+    pub tool_viewer_scroll_offset: u16,
     /// 消息搜索状态
     pub message_search_state: crate::tui::components::message_search::MessageSearchState,
     /// 折叠的消息索引（Vim Normal 模式下 Tab 折叠/展开）
@@ -552,6 +559,9 @@ impl TuiApp {
             diff_content: String::new(),
             diff_title: String::new(),
             diff_scroll_offset: 0,
+            tool_viewer_content: String::new(),
+            tool_viewer_title: String::new(),
+            tool_viewer_scroll_offset: 0,
             message_search_state: crate::tui::components::message_search::MessageSearchState::new(),
             collapsed_indices: std::collections::HashSet::new(),
             sidebar_visible: false,
@@ -2216,14 +2226,47 @@ impl TuiApp {
         };
     }
 
-    fn visible_tool_run_ids(&self) -> Vec<String> {
-        let mut ids = Vec::new();
+    pub fn open_tool_viewer(&mut self) -> bool {
+        let selected = self
+            .expanded_tool_run_id
+            .as_deref()
+            .and_then(|id| self.find_visible_tool_run(id))
+            .or_else(|| self.visible_tool_runs().into_iter().next_back());
+
+        let Some(run) = selected else {
+            return false;
+        };
+
+        let title = run.summary();
+        let content = run.full_details();
+        self.tool_viewer_title = title;
+        self.tool_viewer_content = content;
+        self.tool_viewer_scroll_offset = 0;
+        self.mode = AppMode::ToolViewer;
+        true
+    }
+
+    fn find_visible_tool_run(&self, id: &str) -> Option<&ToolRunView> {
+        self.visible_tool_runs()
+            .into_iter()
+            .find(|run| run.id.as_str() == id)
+    }
+
+    fn visible_tool_runs(&self) -> Vec<&ToolRunView> {
+        let mut runs = Vec::new();
         for msg in &self.messages {
-            if let Some(runs) = self.tool_runs_for_message(&msg.id) {
-                ids.extend(runs.iter().map(|run| run.id.clone()));
+            if let Some(group) = self.tool_runs_for_message(&msg.id) {
+                runs.extend(group.iter());
             }
         }
-        ids
+        runs
+    }
+
+    fn visible_tool_run_ids(&self) -> Vec<String> {
+        self.visible_tool_runs()
+            .into_iter()
+            .map(|run| run.id.clone())
+            .collect()
     }
 
     pub fn is_tool_run_expanded(&self, run: &ToolRunView) -> bool {
@@ -2430,6 +2473,34 @@ mod tests {
         assert_eq!(app.expanded_tool_run_id.as_deref(), Some("tool_2"));
         app.cycle_expanded_tool_run();
         assert_eq!(app.expanded_tool_run_id, None);
+    }
+
+    #[test]
+    fn test_open_tool_viewer_uses_expanded_tool_or_latest() {
+        let mut app = TuiApp::new();
+        let user = MessageItem {
+            id: "user_1".to_string(),
+            role: MessageRole::User,
+            content: "run tools".to_string(),
+            timestamp: std::time::SystemTime::now(),
+            metadata: Default::default(),
+        };
+        app.messages.push(user);
+        let mut first = ToolRunView::new("tool_1".to_string(), "bash".to_string());
+        first.mark_complete("Result: OK\nfirst\n".to_string());
+        let mut second = ToolRunView::new("tool_2".to_string(), "grep".to_string());
+        second.mark_complete("Result: OK\nsecond\n".to_string());
+        app.tool_runs_by_message_id
+            .insert("user_1".to_string(), vec![first.clone(), second.clone()]);
+
+        assert!(app.open_tool_viewer());
+        assert_eq!(app.mode, AppMode::ToolViewer);
+        assert!(app.tool_viewer_content.contains("second"));
+
+        app.mode = AppMode::Chat;
+        app.expanded_tool_run_id = Some("tool_1".to_string());
+        assert!(app.open_tool_viewer());
+        assert!(app.tool_viewer_content.contains("first"));
     }
 
     #[test]

@@ -261,6 +261,38 @@ impl ToolRunView {
             ))
         }
     }
+
+    pub fn full_details(&self) -> String {
+        let mut sections = vec![
+            format!("Tool: {}", self.name),
+            format!("Status: {:?}", self.status),
+            format!("Elapsed: {}s", self.elapsed().as_secs()),
+        ];
+
+        if let Some(arguments) = self.arguments.as_ref() {
+            sections.push("".to_string());
+            sections.push("Arguments:".to_string());
+            sections.push(
+                serde_json::to_string_pretty(arguments).unwrap_or_else(|_| arguments.to_string()),
+            );
+        }
+
+        if !self.progress.is_empty() {
+            sections.push("".to_string());
+            sections.push("Progress:".to_string());
+            sections.extend(self.progress.iter().map(|line| format!("- {}", line)));
+        }
+
+        sections.push("".to_string());
+        sections.push("Result:".to_string());
+        sections.push(
+            self.result_body
+                .clone()
+                .unwrap_or_else(|| "(no output yet)".to_string()),
+        );
+
+        sections.join("\n")
+    }
 }
 
 pub fn render_tool_runs(runs: &[ToolRunView], expanded: bool) -> String {

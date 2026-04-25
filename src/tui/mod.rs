@@ -306,6 +306,22 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 &app.theme,
             );
         }
+        app::AppMode::ToolViewer => {
+            let main_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(3),
+                    Constraint::Length(5),
+                    Constraint::Length(1),
+                ])
+                .split(f.area());
+
+            screens::main_screen::render_chat_area(f, app, main_chunks[0]);
+            screens::main_screen::render_input_area(f, app, main_chunks[1]);
+            screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+
+            screens::main_screen::render_tool_viewer(f, app, f.area());
+        }
         app::AppMode::MessageSearch => {
             // 消息搜索模式：先渲染底层聊天界面，再叠加搜索弹窗
             let main_chunks = Layout::default()
@@ -356,6 +372,34 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
 
     if app.mode == app::AppMode::PermissionApproval && key.code == KeyCode::Esc {
         app.respond_to_permission(false);
+        return Ok(false);
+    }
+
+    if app.mode == app::AppMode::ToolViewer {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.mode = if app.vim_mode {
+                    app::AppMode::VimNormal
+                } else {
+                    app::AppMode::Chat
+                };
+            }
+            KeyCode::Up => {
+                app.tool_viewer_scroll_offset = app.tool_viewer_scroll_offset.saturating_sub(1)
+            }
+            KeyCode::Down => {
+                app.tool_viewer_scroll_offset = app.tool_viewer_scroll_offset.saturating_add(1)
+            }
+            KeyCode::PageUp => {
+                app.tool_viewer_scroll_offset = app.tool_viewer_scroll_offset.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                app.tool_viewer_scroll_offset = app.tool_viewer_scroll_offset.saturating_add(10);
+            }
+            KeyCode::Home => app.tool_viewer_scroll_offset = 0,
+            KeyCode::End => app.tool_viewer_scroll_offset = u16::MAX,
+            _ => {}
+        }
         return Ok(false);
     }
 
@@ -461,6 +505,13 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
 
     if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.cycle_expanded_tool_run();
+        return Ok(false);
+    }
+
+    if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if !app.open_tool_viewer() {
+            app.add_system_message("No tool output to view yet.".to_string());
+        }
         return Ok(false);
     }
 
