@@ -91,6 +91,11 @@ Use this to coordinate work, hand off tasks, or request help from specialist age
                 };
                 let priority = parse_priority(params["priority"].as_str());
                 let kind = parse_kind(params["kind"].as_str());
+                let content = if kind == MessageKind::Request {
+                    wrap_team_request_content(&mailbox.self_id, to, content, priority)
+                } else {
+                    content.to_string()
+                };
                 let msg = mailbox.send(to, content, priority, kind, None);
                 ToolResult::success(format!(
                     "Sent message [{}] to {} with priority {:?}",
@@ -193,6 +198,44 @@ fn parse_kind(s: Option<&str>) -> MessageKind {
     }
 }
 
+fn summarize_team_goal(content: &str) -> String {
+    let trimmed = content.trim();
+    let mut summary = trimmed.chars().take(80).collect::<String>();
+    if trimmed.chars().count() > 80 {
+        summary.push_str("...");
+    }
+    if summary.is_empty() {
+        "team request".to_string()
+    } else {
+        summary
+    }
+}
+
+fn wrap_team_request_content(
+    from: &str,
+    to: &str,
+    content: &str,
+    priority: MessagePriority,
+) -> String {
+    let envelope = crate::agent::envelope::AgentTaskEnvelope::new(
+        crate::agent::types::AgentId(from.to_string()),
+        summarize_team_goal(content),
+        content.to_string(),
+    )
+    .assign_to(crate::agent::types::AgentId(to.to_string()))
+    .with_priority(match priority {
+        MessagePriority::High => crate::agent::envelope::AgentTaskPriority::High,
+        MessagePriority::Normal => crate::agent::envelope::AgentTaskPriority::Normal,
+        MessagePriority::Low => crate::agent::envelope::AgentTaskPriority::Low,
+    });
+    let envelope_json =
+        serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "<agent-task-envelope>\n{}\n</agent-task-envelope>\n\n{}",
+        envelope_json, content
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +267,30 @@ mod tests {
         assert_eq!(parse_kind(Some("response")), MessageKind::Response);
         assert_eq!(parse_kind(Some("broadcast")), MessageKind::Broadcast);
         assert_eq!(parse_kind(None), MessageKind::Notify);
+    }
+
+    #[test]
+    fn test_request_messages_include_agent_task_envelope() {
+        let wrapped = wrap_team_request_content(
+            "agent",
+            "reviewer",
+            "Please review src/main.rs before merge",
+            MessagePriority::High,
+        );
+
+        assert!(wrapped.contains("<agent-task-envelope>"));
+        assert!(wrapped.contains("\"from\""));
+        assert!(wrapped.contains("\"to\""));
+        assert!(wrapped.contains("\"high\""));
+        assert!(wrapped.ends_with("Please review src/main.rs before merge"));
+    }
+
+    #[test]
+    fn test_summarize_team_goal_truncates_and_defaults() {
+        assert_eq!(summarize_team_goal("   "), "team request");
+        let long = "a".repeat(90);
+        let summary = summarize_team_goal(&long);
+        assert_eq!(summary.chars().count(), 83);
+        assert!(summary.ends_with("..."));
     }
 }

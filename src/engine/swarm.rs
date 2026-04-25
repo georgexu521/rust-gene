@@ -113,6 +113,8 @@ impl SwarmCoordinator {
     /// Spawn 一个子 Agent 执行任务
     pub async fn spawn_agent(&self, task: AgentTask) -> String {
         let agent_id = format!("agent-{}", &Uuid::new_v4().to_string()[..8]);
+        let mut task = task;
+        task.user_message = wrap_swarm_task_message(&agent_id, &task);
 
         let agent = SwarmAgent {
             id: agent_id.clone(),
@@ -554,6 +556,23 @@ impl crate::tools::Tool for SwarmTool {
     }
 }
 
+fn wrap_swarm_task_message(agent_id: &str, task: &AgentTask) -> String {
+    let mut envelope = crate::agent::envelope::AgentTaskEnvelope::new(
+        crate::agent::types::AgentId("swarm".to_string()),
+        task.description.clone(),
+        task.user_message.clone(),
+    )
+    .assign_to(crate::agent::types::AgentId(agent_id.to_string()));
+    envelope.add_expected_artifact("swarm_result");
+    envelope.add_constraint(format!("max_iterations={}", task.max_iterations));
+    let envelope_json =
+        serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "<agent-task-envelope>\n{}\n</agent-task-envelope>\n\n{}",
+        envelope_json, task.user_message
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,5 +608,25 @@ mod tests {
     fn test_agent_state_transitions() {
         assert_eq!(AgentState::Pending, AgentState::Pending);
         assert_ne!(AgentState::Pending, AgentState::Running);
+    }
+
+    #[test]
+    fn test_swarm_task_message_includes_agent_task_envelope() {
+        let task = AgentTask {
+            id: "task-1".to_string(),
+            description: "Analyze code".to_string(),
+            system_prompt: None,
+            user_message: "Review main.rs".to_string(),
+            max_iterations: 5,
+        };
+
+        let wrapped = wrap_swarm_task_message("agent-12345678", &task);
+
+        assert!(wrapped.contains("<agent-task-envelope>"));
+        assert!(wrapped.contains("\"swarm\""));
+        assert!(wrapped.contains("\"agent-12345678\""));
+        assert!(wrapped.contains("\"swarm_result\""));
+        assert!(wrapped.contains("\"max_iterations=5\""));
+        assert!(wrapped.ends_with("Review main.rs"));
     }
 }

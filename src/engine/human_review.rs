@@ -95,6 +95,9 @@ impl HumanReviewRequest {
             HumanReviewKind::GoalDrift => {
                 "tool call may be unrelated to the active session goal".to_string()
             }
+            HumanReviewKind::ToolPermission if tool_call.name == "reflection_review" => {
+                "reflection found unresolved acceptance gaps before a risky workflow".to_string()
+            }
             HumanReviewKind::ToolPermission => prompt.to_string(),
             _ => prompt.to_string(),
         };
@@ -151,6 +154,9 @@ fn infer_tool_risk(tool_name: &str, args: &serde_json::Value) -> HumanReviewRisk
         return HumanReviewRisk::Medium;
     }
     if name.contains("mcp") || name.contains("write") || name.contains("edit") {
+        return HumanReviewRisk::High;
+    }
+    if name == "reflection_review" {
         return HumanReviewRisk::High;
     }
     if name.contains("web") || name.contains("github") {

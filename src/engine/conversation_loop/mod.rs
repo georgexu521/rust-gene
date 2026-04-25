@@ -700,6 +700,81 @@ impl ConversationLoop {
             findings: reflection_pass.findings.len(),
             unresolved: reflection_pass.unresolved_count(),
         });
+        if reflection_pass.status == crate::engine::reflection_pass::ReflectionStatus::NeedsWork
+            && matches!(
+                route.workflow,
+                crate::engine::intent_router::WorkflowKind::CodeChange
+                    | crate::engine::intent_router::WorkflowKind::BugFix
+            )
+        {
+            let review_prompt = format!(
+                "Reflection pass '{}' found {} unresolved issue(s) before executing a {:?} workflow. Allow the turn to continue?",
+                reflection_pass.pass_id,
+                reflection_pass.unresolved_count(),
+                route.workflow
+            );
+            let review_call = ToolCall {
+                id: format!(
+                    "reflection-{}",
+                    &reflection_pass.pass_id[..8.min(reflection_pass.pass_id.len())]
+                ),
+                name: "reflection_review".to_string(),
+                arguments: serde_json::json!({
+                    "task_id": reflection_pass.task_id.clone(),
+                    "pass_id": reflection_pass.pass_id.clone(),
+                    "status": format!("{:?}", reflection_pass.status),
+                    "unresolved": reflection_pass.unresolved_count(),
+                    "workflow": format!("{:?}", route.workflow),
+                }),
+            };
+            let mut approved = false;
+            if let (Some(channel), Some(tx)) = (&self.approval_channel, tx) {
+                let _ = tx
+                    .send(StreamEvent::PermissionRequest {
+                        id: review_call.id.clone(),
+                        tool_name: review_call.name.clone(),
+                        arguments: review_call.arguments.clone(),
+                        prompt: review_prompt.clone(),
+                    })
+                    .await;
+                trace.record(TraceEvent::PermissionRequested {
+                    tool: review_call.name.clone(),
+                    call_id: review_call.id.clone(),
+                    prompt: review_prompt.clone(),
+                });
+                match channel
+                    .submit(ToolApprovalRequest {
+                        tool_call: review_call.clone(),
+                        prompt: review_prompt,
+                    })
+                    .await
+                {
+                    Ok(is_approved) => approved = is_approved,
+                    Err(e) => warn!("Reflection approval error: {}", e),
+                }
+                trace.record(TraceEvent::PermissionResolved {
+                    tool: review_call.name,
+                    call_id: review_call.id,
+                    approved,
+                });
+            } else {
+                approved = true;
+            }
+            if !approved {
+                let content = "Stopped before code-change execution because reflection found unresolved acceptance gaps.".to_string();
+                trace.record(TraceEvent::AssistantResponded {
+                    chars: content.chars().count(),
+                    iterations: 0,
+                });
+                self.finish_trace(trace.clone(), TurnStatus::Failed);
+                return Ok(LoopResult {
+                    content,
+                    tool_calls: Vec::new(),
+                    iterations: 0,
+                    pre_executed_results: std::collections::HashMap::new(),
+                });
+            }
+        }
         if let Some(manager) = &self.goal_manager {
             if let Some(goal) = manager.update_from_user_message(last_user_preview, Some(&route)) {
                 trace.record(TraceEvent::SessionGoalUpdated {
@@ -1076,7 +1151,13 @@ impl ConversationLoop {
             messages.push(Message::assistant_with_tools(&content, tool_calls.clone()));
 
             let mut results = self
-                .execute_tools_parallel(&tool_calls, tx, pre_executed, Some(trace.clone()))
+                .execute_tools_parallel(
+                    &tool_calls,
+                    tx,
+                    pre_executed,
+                    Some(trace.clone()),
+                    &resource_policy,
+                )
                 .await;
 
             // ── 迭代预算退还 ──────────────────────────────
@@ -1768,6 +1849,7 @@ impl ConversationLoop {
         tx: Option<&mpsc::Sender<StreamEvent>>,
         pre_executed: std::collections::HashMap<usize, ToolResult>,
         trace: Option<TraceCollector>,
+        resource_policy: &crate::engine::resource_policy::ResourcePolicy,
     ) -> Vec<(ToolCall, ToolResult)> {
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
@@ -1780,6 +1862,38 @@ impl ConversationLoop {
 
         for (i, tc) in tool_calls.iter().enumerate() {
             if tc.name.is_empty() {
+                continue;
+            }
+            if results.len() + denied_results.len() + read_only_jobs.len() + read_write_calls.len()
+                >= resource_policy.max_tool_calls
+            {
+                let mut result = ToolResult::error(format!(
+                    "Resource policy blocked tool '{}': max tool calls ({}) reached.",
+                    tc.name, resource_policy.max_tool_calls
+                ));
+                attach_tool_recovery_metadata(&tc.name, &mut result);
+                if let Some(ref trace) = trace {
+                    trace.record(TraceEvent::ToolStarted {
+                        tool: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                        parallel: false,
+                        pre_executed: false,
+                    });
+                    trace.record(TraceEvent::ToolCompleted {
+                        tool: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                        success: false,
+                        duration_ms: Some(0),
+                        output_chars: result.content.chars().count(),
+                    });
+                }
+                persist_tool_outcome_learning_event(
+                    self.session_store.as_ref(),
+                    &self.session_id,
+                    tc,
+                    &result,
+                );
+                denied_results.push((tc.clone(), result));
                 continue;
             }
             record_goal_drift_if_needed(&trace, active_goal.as_ref(), tc);
@@ -1930,7 +2044,8 @@ impl ConversationLoop {
 
         results.append(&mut denied_results);
 
-        let concurrency = read_only_tool_concurrency();
+        let concurrency =
+            read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
         let mut readonly_stream =
             futures::stream::iter(read_only_jobs).buffer_unordered(concurrency);
 
