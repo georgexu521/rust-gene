@@ -169,6 +169,7 @@ pub struct ConversationLoopBuilder {
     memory_manager: Option<std::sync::Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>,
     hook_manager: Option<std::sync::Arc<self::hooks::ToolHookManager>>,
     permission_mode: crate::permissions::PermissionMode,
+    session_permission_rules: crate::permissions::PermissionRules,
     llm_memory_extraction: bool,
     approval_channel: Option<std::sync::Arc<self::conversation_loop::ToolApprovalChannel>>,
     allowed_tools: Option<std::collections::HashSet<String>>,
@@ -197,6 +198,7 @@ impl ConversationLoopBuilder {
             memory_manager: None,
             hook_manager: None,
             permission_mode: crate::permissions::PermissionMode::AutoLowRisk,
+            session_permission_rules: crate::permissions::PermissionRules::new(),
             llm_memory_extraction: false,
             approval_channel: None,
             allowed_tools: None,
@@ -256,6 +258,14 @@ impl ConversationLoopBuilder {
         self
     }
 
+    pub fn with_session_permission_rules(
+        mut self,
+        rules: crate::permissions::PermissionRules,
+    ) -> Self {
+        self.session_permission_rules = rules;
+        self
+    }
+
     pub fn with_llm_memory_extraction(mut self, enabled: bool) -> Self {
         self.llm_memory_extraction = enabled;
         self
@@ -301,6 +311,7 @@ impl ConversationLoopBuilder {
         )
         .with_max_iterations(self.max_iterations)
         .with_permission_mode(self.permission_mode)
+        .with_session_permission_rules(self.session_permission_rules)
         .with_llm_memory_extraction(self.llm_memory_extraction);
 
         if let Some(manager) = self.agent_manager {

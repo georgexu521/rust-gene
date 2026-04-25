@@ -108,6 +108,8 @@ pub struct StreamingQueryEngine {
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     /// 当前权限模式（可在运行时通过 TUI 命令切换）
     permission_mode: Arc<std::sync::RwLock<crate::permissions::PermissionMode>>,
+    /// 当前 CLI 会话内临时权限规则
+    session_permission_rules: Arc<std::sync::RwLock<crate::permissions::PermissionRules>>,
     /// 是否启用 LLM 驱动的记忆提取
     llm_memory_extraction: bool,
     /// 工具授权通道（用于交互式 MCP 授权）
@@ -148,6 +150,9 @@ impl StreamingQueryEngine {
             )),
             permission_mode: Arc::new(std::sync::RwLock::new(
                 crate::permissions::PermissionMode::AutoLowRisk,
+            )),
+            session_permission_rules: Arc::new(std::sync::RwLock::new(
+                crate::permissions::PermissionRules::new(),
             )),
             llm_memory_extraction: false,
             approval_channel: None,
@@ -351,6 +356,31 @@ impl StreamingQueryEngine {
         }
     }
 
+    pub fn add_session_permission_rule(&self, decision: &str, pattern: &str) {
+        let Ok(mut rules) = self.session_permission_rules.write() else {
+            warn!("session_permission_rules RwLock poisoned during write");
+            return;
+        };
+        let rule =
+            crate::permissions::SourcedRule::new(pattern, crate::permissions::RuleSource::User);
+        let target = match decision {
+            "allow" => &mut rules.always_allow,
+            "deny" => &mut rules.always_deny,
+            "ask" => &mut rules.always_ask,
+            _ => return,
+        };
+        if !target.iter().any(|existing| existing.pattern == pattern) {
+            target.push(rule);
+        }
+    }
+
+    pub fn session_permission_rules(&self) -> crate::permissions::PermissionRules {
+        self.session_permission_rules
+            .read()
+            .map(|rules| rules.clone())
+            .unwrap_or_default()
+    }
+
     /// 获取记忆管理器
     pub fn memory_manager(&self) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
         self.memory_manager.clone()
@@ -481,6 +511,7 @@ impl StreamingQueryEngine {
             compressor: self.compressor.clone(),
             cost_tracker: self.cost_tracker.clone(),
             permission_mode: self.permission_mode(),
+            session_permission_rules: self.session_permission_rules.clone(),
             llm_memory_extraction: self.llm_memory_extraction,
             approval_channel: self.approval_channel.clone(),
             fallback_model: self.fallback_model.clone(),
@@ -593,6 +624,7 @@ impl StreamingQueryEngine {
                             compressor: engine.compressor.clone(),
                             cost_tracker: engine.cost_tracker.clone(),
                             permission_mode: engine.permission_mode,
+                            session_permission_rules: engine.session_permission_rules.clone(),
                             llm_memory_extraction: engine.llm_memory_extraction,
                             approval_channel: engine.approval_channel.clone(),
                             fallback_model: None, // 防止无限 fallback
@@ -718,6 +750,7 @@ struct StreamingEngineInner {
     compressor: Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     permission_mode: crate::permissions::PermissionMode,
+    session_permission_rules: Arc<std::sync::RwLock<crate::permissions::PermissionRules>>,
     llm_memory_extraction: bool,
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
     fallback_model: Option<String>,
@@ -835,6 +868,12 @@ impl StreamingEngineInner {
         )
         .with_max_iterations(self.max_iterations)
         .with_permission_mode(self.permission_mode)
+        .with_session_permission_rules(
+            self.session_permission_rules
+                .read()
+                .map(|rules| rules.clone())
+                .unwrap_or_default(),
+        )
         .with_llm_memory_extraction(self.llm_memory_extraction)
         .with_compressor(self.compressor.clone());
 

@@ -217,6 +217,17 @@ fn provider_name_from_base_url(base_url: &str) -> &'static str {
     }
 }
 
+fn permission_rule_pattern(tool_name: &str, args: &serde_json::Value) -> String {
+    if tool_name == "mcp_tool" {
+        let server = args["server_name"].as_str().unwrap_or("");
+        let tool = args["tool_name"].as_str().unwrap_or("");
+        if !server.is_empty() && !tool.is_empty() {
+            return format!("mcp/{}/{}", server, tool);
+        }
+    }
+    tool_name.to_string()
+}
+
 #[derive(serde::Deserialize, Default)]
 struct LegacyPermissionRules {
     #[serde(default)]
@@ -1274,7 +1285,51 @@ impl TuiApp {
 
     /// 响应工具权限审批
     pub fn respond_to_permission(&mut self, approved: bool) {
+        self.respond_to_permission_with_rule(approved, None, None);
+    }
+
+    pub fn respond_to_permission_with_rule(
+        &mut self,
+        approved: bool,
+        decision: Option<&str>,
+        scope: Option<RuleSource>,
+    ) {
+        let mut rule_note = None;
         if let Some(ref req) = self.pending_permission_request {
+            if let (Some(decision), Some(scope)) = (decision, scope) {
+                let pattern =
+                    permission_rule_pattern(&req.tool_call.name, &req.tool_call.arguments);
+                match scope {
+                    RuleSource::User => {
+                        if let Some(engine) = &self.streaming_engine {
+                            engine.add_session_permission_rule(decision, &pattern);
+                            rule_note = Some(format!(
+                                "Session permission rule saved: {} {}",
+                                decision, pattern
+                            ));
+                        }
+                    }
+                    RuleSource::Project | RuleSource::Global => {
+                        let cwd = std::env::current_dir()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        match persist_permission_rule(scope, decision, &pattern, &cwd) {
+                            Ok(path) => {
+                                rule_note = Some(format!(
+                                    "Permission rule saved to {}: {} {}",
+                                    path.display(),
+                                    decision,
+                                    pattern
+                                ));
+                            }
+                            Err(err) => {
+                                rule_note =
+                                    Some(format!("Failed to save permission rule: {}", err));
+                            }
+                        }
+                    }
+                    RuleSource::System => {}
+                }
+            }
             let log_msg = format!(
                 "Permission {} for tool '{}' with arguments: {}",
                 if approved { "approved" } else { "denied" },
@@ -1284,6 +1339,9 @@ impl TuiApp {
             let _ = self
                 .session_manager
                 .add_message(MessageRole::System, &log_msg);
+        }
+        if let Some(note) = rule_note {
+            self.add_system_message(note);
         }
         if let Some(tx) = self.permission_response_tx.take() {
             let _ = tx.send(approved);
@@ -2501,6 +2559,41 @@ mod tests {
         app.expanded_tool_run_id = Some("tool_1".to_string());
         assert!(app.open_tool_viewer());
         assert!(app.tool_viewer_content.contains("first"));
+    }
+
+    #[test]
+    fn test_session_permission_rule_is_added_when_approving_for_session() {
+        let engine = Arc::new(crate::engine::streaming::StreamingQueryEngine::new(
+            Arc::new(MockProvider),
+            Arc::new(crate::tools::ToolRegistry::new()),
+            "gpt-4o",
+        ));
+        let mut app = TuiApp::with_engine(engine.clone(), None, None);
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tc_1".to_string(),
+                    name: "mcp_tool".to_string(),
+                    arguments: serde_json::json!({
+                        "server_name": "filesystem",
+                        "tool_name": "write_file"
+                    }),
+                },
+                prompt: "Approve MCP?".to_string(),
+            });
+        app.permission_response_tx = Some(tx);
+        app.mode = AppMode::PermissionApproval;
+
+        app.respond_to_permission_with_rule(true, Some("allow"), Some(RuleSource::User));
+
+        assert!(rx.try_recv().unwrap());
+        let rules = engine.session_permission_rules();
+        assert!(rules
+            .always_allow
+            .iter()
+            .any(|rule| rule.pattern == "mcp/filesystem/write_file"));
+        assert_eq!(app.mode, AppMode::Chat);
     }
 
     #[test]

@@ -370,9 +370,46 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return handle_provider_select_key_event(key, app).await;
     }
 
-    if app.mode == app::AppMode::PermissionApproval && key.code == KeyCode::Esc {
-        app.respond_to_permission(false);
-        return Ok(false);
+    if app.mode == app::AppMode::PermissionApproval {
+        match key.code {
+            KeyCode::Esc => {
+                app.respond_to_permission(false);
+                return Ok(false);
+            }
+            KeyCode::Char('s') => {
+                app.respond_to_permission_with_rule(
+                    true,
+                    Some("allow"),
+                    Some(crate::permissions::RuleSource::User),
+                );
+                return Ok(false);
+            }
+            KeyCode::Char('p') => {
+                app.respond_to_permission_with_rule(
+                    true,
+                    Some("allow"),
+                    Some(crate::permissions::RuleSource::Project),
+                );
+                return Ok(false);
+            }
+            KeyCode::Char('a') => {
+                app.respond_to_permission_with_rule(
+                    true,
+                    Some("allow"),
+                    Some(crate::permissions::RuleSource::Global),
+                );
+                return Ok(false);
+            }
+            KeyCode::Char('x') => {
+                app.respond_to_permission_with_rule(
+                    false,
+                    Some("deny"),
+                    Some(crate::permissions::RuleSource::Global),
+                );
+                return Ok(false);
+            }
+            _ => {}
+        }
     }
 
     if app.mode == app::AppMode::ToolViewer {

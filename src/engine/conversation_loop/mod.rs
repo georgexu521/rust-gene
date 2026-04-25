@@ -154,6 +154,8 @@ pub struct ConversationLoop {
     memory_manager: Option<Arc<Mutex<crate::memory::MemoryManager>>>,
     /// 工具权限模式（由上层引擎注入）
     permission_mode: crate::permissions::PermissionMode,
+    /// 当前会话内临时权限规则
+    session_permission_rules: crate::permissions::PermissionRules,
     /// 是否启用 LLM 驱动的记忆提取
     llm_memory_extraction: bool,
     /// 工具授权通道（用于 MCP 等工具的交互式授权）
@@ -201,6 +203,7 @@ impl ConversationLoop {
             compressor: None,
             memory_manager: None,
             permission_mode: crate::permissions::PermissionMode::AutoLowRisk,
+            session_permission_rules: crate::permissions::PermissionRules::new(),
             llm_memory_extraction: false,
             approval_channel: None,
             allowed_tools: None,
@@ -273,6 +276,14 @@ impl ConversationLoop {
         self
     }
 
+    pub fn with_session_permission_rules(
+        mut self,
+        rules: crate::permissions::PermissionRules,
+    ) -> Self {
+        self.session_permission_rules = rules;
+        self
+    }
+
     pub fn with_llm_memory_extraction(mut self, enabled: bool) -> Self {
         self.llm_memory_extraction = enabled;
         self
@@ -313,6 +324,18 @@ impl ConversationLoop {
         ctx = ctx.with_file_cache(crate::tools::file_cache::GLOBAL_FILE_CACHE.clone());
         // 权限模式由上层引擎注入（默认 AutoLowRisk）
         ctx.permission_context.mode = self.permission_mode;
+        ctx.permission_context
+            .rules
+            .always_allow
+            .extend(self.session_permission_rules.always_allow.clone());
+        ctx.permission_context
+            .rules
+            .always_deny
+            .extend(self.session_permission_rules.always_deny.clone());
+        ctx.permission_context
+            .rules
+            .always_ask
+            .extend(self.session_permission_rules.always_ask.clone());
         ctx
     }
 

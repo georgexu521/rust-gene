@@ -1316,6 +1316,36 @@ pub fn render_permission_approval(
         ),
         Span::styled(" cancel", Style::default().fg(Color::Gray)),
     ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "s",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" allow session  ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            "p",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" allow project  ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            "a",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" allow always", Style::default().fg(Color::Gray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "x",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" deny always", Style::default().fg(Color::Gray)),
+    ]));
 
     let has_diff_preview = matches!(
         req.tool_call.name.as_str(),
