@@ -1,162 +1,163 @@
-# Priority Agent - 加权优先级桌面 Agent
+# Priority Agent
 
-解决 AI Agent 抓不住重点的问题，通过显式的权重系统让 AI 始终专注于最重要的事项。
+Priority Agent is a Rust-based agentic coding CLI inspired by Claude Code and
+Codex, with an explicit priority/goal layer, observable runtime traces, tool
+recovery, memory, MCP, and multi-provider LLM support.
 
-## 快速开始
+The project started as a weighted-priority desktop agent. It has since evolved
+into an interactive programming agent CLI. Old references to a separate TUI mode
+should be read as the current interactive CLI; `--tui` remains only as a
+compatibility alias for `--cli`.
 
-### 安装
+## Current Status
+
+Current project status is tracked in [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
+
+Latest verified baseline:
+
+- `cargo check --quiet`
+- `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
+- Result: `820 passed; 0 failed`
+
+## Quick Start
 
 ```bash
-# 克隆仓库
-git clone https://github.com/yourusername/priority-agent
-cd priority-agent
+cd ~/Desktop/rust-agent
 
-# 一键安装
+# Development run
+cargo run -- --cli
+
+# Release build
+cargo build --release
+./target/release/priority-agent
+
+# Install to ~/.local/bin
 make install
-
-# 运行
-pa                  # 交互式 CLI（推荐）
-priority-agent      # 交互式 CLI
 ```
 
-### 基本使用
+If `make install` fails with `No rule to make target 'install'`, run it from the
+repository root:
 
 ```bash
-# 交互式 CLI（Claude Code / Codex 风格）
-pa
+cd ~/Desktop/rust-agent
+make install
+```
 
-# 或显式进入 CLI（--tui 仍作为兼容别名）
+## API Keys
+
+Priority Agent chooses providers in this order when configured:
+
+```bash
+export MINIMAX_API_KEY="..."
+export MINIMAX_MODEL="MiniMax-M2.7"   # optional
+
+export OPENAI_API_KEY="..."
+export OPENAI_MODEL="gpt-4o"          # optional
+
+export MOONSHOT_API_KEY="..."
+export MOONSHOT_MODEL="kimi-k2.5"     # optional
+```
+
+## Usage
+
+```bash
+# Interactive coding CLI
+priority-agent
 priority-agent --cli
 
-# API 模式
-priority-agent --api --port 8787
+# Deprecated compatibility alias
+priority-agent --tui
+
+# HTTP API server, when built with the experimental API feature
+cargo run --features experimental-api-server -- --api --port 8787
 ```
 
-## 核心理念
+Common interactive commands:
 
-### 权重分层系统
+| Command | Purpose |
+|---------|---------|
+| `/help` | Show command help |
+| `/quick` | Show compact runtime panel: goal, drift, provider, permission state |
+| `/trace` | Inspect the latest turn timeline |
+| `/goal` | Show or pin the active goal |
+| `/goal drift` | Show recent goal drift events |
+| `/recover` | Show recent recovery plans |
+| `/learn` | Show recent learning events |
+| `/memory` | Show memory namespaces |
+| `/permissions` | Inspect or edit permission rules |
+| `/mcp status` | Show MCP server health and approvals |
+| `/sessions` | List and resume persisted sessions |
+| `/cost` | Inspect token and cost usage |
 
-```
-项目目标
-├── 一级任务 (权重和 = 100%)
-│   ├── 任务 A: 40%
-│   │   ├── 子任务 A1: 60% (占整体 24%)
-│   │   └── 子任务 A2: 40% (占整体 16%)
-│   ├── 任务 B: 35%
-│   └── 任务 C: 25%
-```
+## Architecture
 
-### 优先级计算
-
-1. **绝对权重** - 任务相对于整个项目的重要性
-2. **依赖关系** - 阻塞其他任务的数量
-3. **依赖深度** - 依赖链的长度
-4. **进行状态** - 已经开始的任务优先
-
-## 功能特性
-
-### 已实现 (Phase 1 MVP)
-
-- ✅ 权重计算引擎
-- ✅ 任务管理（添加、完成、进度跟踪）
-- ✅ 持久化存储
-- ✅ 快照功能
-- ✅ 基础CLI命令
-- ✅ 交互模式
-
-### 开发中 (Phase 2)
-
-- 🚧 AI 自动权重分析
-- 🚧 代码结构解析
-- 🚧 依赖关系识别
-
-### 计划中 (Phase 3-4)
-
-- 📋 与 Claude Code 对比测试
-- 📋 用户体验优化
-- 📋 子任务支持
-- 📋 任务模板
-
-## 命令参考
-
-| 命令 | 描述 | 示例 |
-|------|------|------|
-| `pa` | 进入交互式 CLI（推荐） | `pa` |
-| `priority-agent` | 进入交互式 CLI | `priority-agent` |
-| `priority-agent --cli` | 显式进入交互式 CLI | `priority-agent --cli` |
-| `priority-agent --api --port 8787` | 启动 HTTP API | `priority-agent --api --port 8787` |
-
-## 技术栈
-
-- **语言**: Rust
-- **序列化**: serde + JSON
-- **配置**: toml
-- **存储**: 本地 JSON 文件
-
-## 项目结构
-
-```
-rust-agent/
-├── src/
-│   ├── main.rs              # 主入口
-│   ├── tui/                 # 交互式 CLI 实现（ratatui/crossterm）
-│   ├── weight_engine/       # 权重计算核心
-│   │   ├── types.rs         # 核心类型
-│   │   └── calculator.rs    # 权重计算器
-│   ├── task_analyzer/       # 任务分析器
-│   │   ├── parser.rs        # 任务解析
-│   │   ├── dependency_graph.rs
-│   │   └── analyzer.rs
-│   └── context_manager/     # 上下文管理
-│       ├── state.rs         # 会话状态
-│       ├── persistence.rs   # 持久化
-│       └── history.rs       # 历史记录
-├── Cargo.toml
-└── README.md
+```text
+src/
+├── engine/               # Conversation loop, routing, trace, workflow, MCP
+├── tools/                # Local tools, MCP tools, memory, project index, web
+├── memory/               # Snapshot, prefetch, extraction, maintenance
+├── agent/                # Sub-agent lifecycle, role memory, swarm support
+├── tui/                  # Interactive CLI UI and slash commands
+├── session_store/        # SQLite persistence, traces, learning events
+├── permissions/          # Permission rules, sources, decisions
+├── services/api/         # LLM provider adapters
+├── api/                  # HTTP/WebSocket/SSE API
+└── platform/             # Platform adapters such as Telegram
 ```
 
-## 开发计划
+Core runtime flow:
 
-### Phase 1: MVP ✅ (已完成)
-- [x] 权重计算引擎基础
-- [x] 简单的任务解析
-- [x] 命令行界面
+```text
+User prompt
+  -> IntentRouter
+  -> TurnTrace
+  -> SessionGoal / goal drift checks
+  -> Retrieval and memory prefetch
+  -> Tool execution with permissions and recovery metadata
+  -> LearningEvent persistence
+  -> CLI panels backed by trace/state
+```
 
-### Phase 2: 智能分析 (进行中)
-- [ ] AI 自动权重分析
-- [ ] 代码结构解析
-- [ ] 依赖关系识别
+## Implemented Capabilities
 
-### Phase 3: 对比测试
-- [ ] 设计标准测试集
-- [ ] 与 Claude Code 对比
-- [ ] 性能优化
+- Interactive Claude/Codex-style coding CLI.
+- Turn tracing with `/trace`.
+- Intent routing with learning feedback from recent tool outcomes.
+- Session goal tracking and goal drift visibility.
+- Tool failure recovery metadata and `/recover`.
+- Persistent memory across `MEMORY.md`, `USER.md`, topic files, and agent JSON
+  memory with namespace search and conflict hints.
+- MCP client support over stdio, WebSocket, and HTTP, with approval and health
+  diagnostics.
+- MCP resource listing/reading with trace events.
+- SQLite session persistence and learning events.
+- Tool orchestration with read-only parallel execution and mutating serial
+  execution.
+- Permissions with project/global/user rule sources.
+- HTTP API, WebSocket, SSE, and platform adapter framework.
 
-### Phase 4: 产品化
-- [ ] 用户体验优化
-- [ ] 文档完善
-- [ ] 发布准备
+## Development
 
-## 与 Claude Code 的对比
+```bash
+cargo fmt
+cargo check --quiet
+cargo test --quiet
+env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
+```
 
-### 测试场景
-**复杂任务**: "实现一个用户认证系统"
+Some tests mutate process environment variables. Use `--test-threads=1` for the
+full workflow-enabled suite to avoid cross-test environment interference.
 
-| 维度 | Claude Code | Priority Agent |
-|------|-------------|----------------|
-| 执行顺序 | 线性，容易在细节上绕圈 | 按权重优先级，先核心后细节 |
-| 重点把握 | 容易偏离 | 始终聚焦高权重任务 |
-| 完成度感知 | 模糊 | 数学化进度计算 |
+## Documentation Map
 
-## 合作模式
-
-- **Liz (AI 助手)**: 技术讨论、代码审查、文档编写、测试设计
-- **Gex (产品负责人)**: 需求定义、架构决策、最终验收
-
-## 记录
-
-- 2026-04-09: 项目启动，确定核心想法
-- 2026-04-10: Phase 1 MVP 完成，实现核心权重系统和CLI功能
+- [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md): current state and remaining
+  priorities.
+- [docs/CLAUDE_CODE_ALIGNMENT_PLAN.md](docs/CLAUDE_CODE_ALIGNMENT_PLAN.md):
+  Claude Code alignment plan and phase status.
+- [docs/REMAINING_CLOSURE_PLAN.md](docs/REMAINING_CLOSURE_PLAN.md): completed
+  closure plan for recovery, learning, drift, memory, and MCP health.
+- [AGENTS.md](AGENTS.md): detailed development guide and architecture notes.
+- [QUICKSTART.md](QUICKSTART.md): setup-oriented guide.
 
 ## License
 

@@ -1,8 +1,13 @@
 # Claude Code Gap Scorecard
 
-> **Last updated**: 2026-04-22
+> **Last updated**: 2026-04-25
 > **Update frequency**: Weekly (every Monday)
 > **Goal**: Track gap trends towards Claude Code parity
+
+Note: this scorecard is a maturity tracker, not a raw feature checklist. The
+current implementation has closed the latest runtime-observability gaps
+documented in `docs/REMAINING_CLOSURE_PLAN.md`; remaining gaps are mostly depth,
+polish, eval coverage, and productization.
 
 ## Summary
 
@@ -18,7 +23,7 @@
 
 Legend: Complete | Partial | Missing | — N/A
 
-**Quick snapshot**: Run `/doctor gap` in TUI to see live metrics.
+**Quick snapshot**: Run `/doctor gap` in the interactive CLI to see live metrics.
 
 ---
 

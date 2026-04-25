@@ -1,7 +1,11 @@
-# Remaining Closure Plan
+# Completed Closure Plan
 
-This plan tracks the remaining work after the trace, intent routing, session goal,
-learning event, recovery plan, MCP status, and goal drift foundations landed.
+This plan tracked the final closure work after the trace, intent routing,
+session goal, learning event, recovery plan, MCP status, and goal drift
+foundations landed.
+
+Overall status: complete as of 2026-04-25. Current project status is tracked in
+`docs/PROJECT_STATUS.md`.
 
 ## Phase 1: Tool Failure Recovery And Tool Outcome Learning
 
@@ -103,3 +107,5 @@ Acceptance:
 3. Phase 3
 4. Phase 4
 5. Phase 5
+
+All phases above have been implemented and committed.

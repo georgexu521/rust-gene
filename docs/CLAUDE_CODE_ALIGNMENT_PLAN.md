@@ -2,6 +2,10 @@
 
 Date: 2026-04-25
 
+Status: substantially implemented through Phase 8 foundations. This document is
+kept as the architectural alignment record; current project state is summarized
+in `docs/PROJECT_STATUS.md`.
+
 Scope: compare Priority Agent with the local Claude Code source at `/Users/georgexu/Desktop/claude` plus public Claude Code documentation. The goal is not to clone Claude Code, but to borrow mature architecture patterns for observability, routing, context, permissions, memory, and CLI ergonomics.
 
 ## Evidence Reviewed
@@ -75,6 +79,11 @@ User input
 ```
 
 ## Phase 1: TurnTrace And Runtime Event Spine
+
+Status: complete.
+
+Implemented highlights: `src/engine/trace.rs`, persisted turn traces,
+`/trace`, tool/permission/context/memory/recovery/goal/MCP resource events.
 
 ### Problem
 
@@ -160,6 +169,11 @@ Add `TraceCollector`:
 
 ## Phase 2: IntentRouter And Workflow Selection
 
+Status: complete for rule-based routing and learning feedback.
+
+Implemented highlights: `src/engine/intent_router.rs`, trace-visible routing,
+workflow/retrieval/reasoning/risk policies, and recent `tool_outcome` feedback.
+
 ### Problem
 
 Routing is currently implicit: the model decides tools; slash commands route commands; plan mode is separate; memory retrieval is broad; UI suggestions are local. Claude Code's architecture has multiple routing inputs: mode, settings, skills, hooks, permissions, MCP resources, model capability, and query source.
@@ -223,6 +237,11 @@ Start rule-based, then optionally add LLM-assisted routing:
 
 ## Phase 3: SessionGoal And Goal Monitoring
 
+Status: complete for active goal tracking and drift visibility.
+
+Implemented highlights: `src/engine/session_goal.rs`, goal drift detector,
+high-drift approval, `/goal`, `/goal drift`, and `/quick` drift count.
+
 ### Problem
 
 The project has plans, todos, and messages, but lacks a first-class active goal. Claude Code's CLI shows task/background state, supports task notifications, and has session-level state. Priority Agent should make the user's current objective explicit.
@@ -269,6 +288,13 @@ Goal update sources:
 - Completion requires acceptance criteria or verification, not just a model response.
 
 ## Phase 4: TaskContextBundle For Coding Workflows And Subagents
+
+Status: partially complete.
+
+Implemented highlights: task/workflow routing, sub-agent infrastructure, swarm,
+role memory, and trace-backed context handoff pieces. Remaining work is to make a
+single `TaskContextBundle` object the only context handoff format across every
+reflection/recovery/eval path.
 
 ### Problem
 
@@ -326,6 +352,13 @@ Add `src/engine/workflows/`:
 - Coding tasks produce verification commands or explicitly record why not.
 
 ## Phase 5: RetrievalContext, Memory Audit, And LearningEvent
+
+Status: mostly complete.
+
+Implemented highlights: memory snapshots, prefetch, LLM rerank support,
+learning events, tool outcome learning, namespace-aware memory search, and
+conflict hints. Remaining work is a single provenance-bearing
+`RetrievalContext` struct used by all retrieval sources.
 
 ### Problem
 
@@ -390,6 +423,13 @@ pub struct LearningEvent {
 
 ## Phase 6: HumanReviewRequest, Permissions, And RecoveryPlan
 
+Status: partially complete.
+
+Implemented highlights: permission approvals, high-drift approval,
+source-aware permission rules, recovery plans, `/recover`, and trace events.
+Remaining work is a unified `HumanReviewRequest` queue that also covers
+ask-user and plan approvals.
+
 ### Problem
 
 Approvals, user questions, permission prompts, and plan approvals are separate surfaces. Claude Code exposes permission request, pre/post tool hooks, retry after denial, and settings precedence. Priority Agent needs a unified human review queue.
@@ -450,6 +490,12 @@ Use cases:
 
 ## Phase 7: EvalSet Framework
 
+Status: partially complete.
+
+Implemented highlights: workflow replay docs, acceptance checklists, trace-based
+unit/integration coverage, and 820 passing tests. Remaining work is a formal
+`evalsets/` runner with scenario fixtures and trace assertions.
+
 ### Problem
 
 Mature agent behavior cannot be judged only by unit tests. Claude Code's public ecosystem and docs imply many behavior contracts: hook order, permission blocking, status/config visibility, subagent coordination, compaction behavior. Priority Agent needs scenario tests.
@@ -492,6 +538,13 @@ Add:
 - CI can run smoke evals quickly.
 
 ## Phase 8: CLI Experience Built On The Runtime Spine
+
+Status: mostly complete.
+
+Implemented highlights: `/trace`, `/goal`, `/goal drift`, `/quick`, `/learn`,
+`/recover`, `/mcp status`, memory namespace visibility, permission explanations,
+and status panels backed by runtime state. Remaining work is continued UX polish
+and a configurable statusline.
 
 ### Problem
 

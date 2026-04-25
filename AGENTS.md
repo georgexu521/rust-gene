@@ -2,6 +2,18 @@
 
 > 加权优先级桌面 Agent — 让 AI 始终专注于最重要的事项
 
+## 当前文档口径
+
+Last updated: 2026-04-25
+
+- 当前主界面称为 interactive CLI。历史上的 TUI 目录和 `--tui` 参数仍存在，
+  但 `--tui` 只是 `--cli` 的兼容别名。
+- 当前状态以 `docs/PROJECT_STATUS.md` 为准。
+- 最近 5 项闭环计划已完成：tool recovery learning、learning-aware routing、
+  goal drift visibility、memory namespace search、MCP health/resource traces。
+- 最近全量验证：`env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
+  通过，`820 passed; 0 failed`。
+
 ## 核心理念
 
 ### 两层架构：权重 + Socratic
@@ -672,8 +684,8 @@ manager.start_all(handler).await?;
 | Telegram | ✅ | Bot API 集成 |
 | CLI | ✅ | 本地命令行 |
 | API | ✅ | HTTP API 服务器 |
-| Discord | ⏳ | 待实现 |
-| Slack | ⏳ | 待实现 |
+| Discord | 未列入当前优先级 | 平台框架可扩展，尚未产品化 |
+| Slack | 未列入当前优先级 | 平台框架可扩展，尚未产品化 |
 
 **测试**: 新增 3 个测试，全部通过 (209 测试总数)
 

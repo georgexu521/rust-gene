@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Documentation validation script for Phase 0
+# Documentation validation script
 # Checks for doc/implementation conflicts
 
 set -e
@@ -7,12 +7,17 @@ set -e
 echo "=== Documentation Validation ==="
 echo ""
 
-# Check that required Phase 0 files exist
-echo "Checking Phase 0 deliverables..."
+# Check that required status/planning files exist
+echo "Checking required documentation..."
 required_files=(
+    "README.md"
+    "QUICKSTART.md"
     "PLAN.md"
     "CAPABILITY_MATRIX.md"
     "QUALITY_GATES.md"
+    "docs/PROJECT_STATUS.md"
+    "docs/CLAUDE_CODE_ALIGNMENT_PLAN.md"
+    "docs/REMAINING_CLOSURE_PLAN.md"
 )
 
 for file in "${required_files[@]}"; do
@@ -53,10 +58,10 @@ else
     exit 1
 fi
 
-# Run cargo test
+# Run cargo test using the current workflow-enabled baseline.
 echo "Running cargo test..."
 TEST_OUTPUT=$(mktemp)
-if cargo test --quiet > "$TEST_OUTPUT" 2>&1; then
+if env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1 > "$TEST_OUTPUT" 2>&1; then
     test_count=$(grep -E "test result" "$TEST_OUTPUT" | head -1)
     echo "  [OK] Tests pass - $test_count"
     rm -f "$TEST_OUTPUT"
@@ -71,7 +76,7 @@ echo ""
 echo "=== Validation Complete ==="
 echo ""
 echo "Summary:"
-echo "  - Phase 0 deliverables: All present"
+echo "  - Required docs: All present"
 echo "  - Tool registrations: $tool_count"
 echo "  - Command registrations: $cmd_count"
 echo "  - Build: PASS"

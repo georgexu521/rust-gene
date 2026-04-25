@@ -1,7 +1,8 @@
 # Priority Agent 追赶 Claude Code 总计划（24 周）
 
-> 版本：2026-04-21
+> 版本：2026-04-25
 > 目标：从“功能覆盖”升级到“产品级闭环”，在可靠性、权限安全、上下文管理、多 Agent 协作、生态集成五条主线上系统追赶。
+> 当前状态：作为长期产品成熟度计划保留；短期闭环状态见 `docs/PROJECT_STATUS.md`。
 
 ---
 
@@ -10,7 +11,7 @@
 ### 1.1 已有优势
 1. Rust 核心架构完整：engine/tools/tui/api/agent/memory/permissions 等模块齐备。
 2. 工具与命令覆盖高：已有大量 slash 命令与工具注册，支持 MCP、Agent、Cron、Session、TUI 设置等。
-3. 测试基线较好：当前 `cargo test` 通过（498 passed）。
+3. 测试基线较好：当前工作流全量测试通过（820 passed）。
 4. 上下文管理已有基础三层策略（budget -> snip -> compress）。
 
 ### 1.2 当前主要短板
@@ -121,10 +122,12 @@
 | `scripts/validate_docs.sh` | ✅ 完成 | CI 可运行的验真脚本 |
 | 命令/工具统计导出 | ✅ 完成 | 74 工具注册，114 命令注册 |
 
-**验证结果：**
+**当时验证结果（2026-04-21）：**
 - Build: ✅ 通过
 - Tests: ✅ 498 passed
 - Clippy: ⚠️ priority-core workspace 有 3 个 pre-existing warnings（Phase 8 清理）
+
+当前验证基线见 `docs/PROJECT_STATUS.md`。
 
 **下一步：Phase 1（W4-W6）正确性与语义一致性**
 
