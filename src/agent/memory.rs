@@ -47,12 +47,46 @@ pub fn role_memory_dir() -> std::path::PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".priority-agent")
+        .join("memory")
+        .join("agents")
+}
+
+/// 旧版角色记忆路径（兼容读取，不再作为新写入位置）。
+pub fn legacy_role_memory_dir() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".priority-agent")
         .join("agent_memories")
 }
 
 /// 角色记忆文件路径
 pub fn role_memory_path(role_name: &str) -> std::path::PathBuf {
-    role_memory_dir().join(format!("{}.json", role_name))
+    role_memory_dir().join(format!("{}.json", sanitize_role_name(role_name)))
+}
+
+/// 旧版角色记忆文件路径。
+pub fn legacy_role_memory_path(role_name: &str) -> std::path::PathBuf {
+    legacy_role_memory_dir().join(format!("{}.json", role_name))
+}
+
+fn sanitize_role_name(role_name: &str) -> String {
+    let sanitized = role_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+    if sanitized.is_empty() {
+        "default".to_string()
+    } else {
+        sanitized
+    }
 }
 
 impl AgentMemory {
@@ -78,10 +112,16 @@ impl AgentMemory {
     /// 从角色文件加载记忆
     pub async fn load_from_role_file(&self, role_name: &str) -> Result<(), String> {
         let path = role_memory_path(role_name);
-        if !path.exists() {
-            return Ok(()); // 文件不存在视为空记忆
+        if path.exists() {
+            return self.load_from_file(&path).await;
         }
-        self.load_from_file(&path).await
+
+        let legacy_path = legacy_role_memory_path(role_name);
+        if legacy_path.exists() {
+            return self.load_from_file(&legacy_path).await;
+        }
+
+        Ok(()) // 文件不存在视为空记忆
     }
 
     /// 保存记忆
@@ -538,6 +578,16 @@ mod tests {
 
         // 清理
         store2.clear(role_name, true).await.unwrap();
+    }
+
+    #[test]
+    fn test_role_memory_uses_main_memory_namespace() {
+        let path = role_memory_path("plan/agent");
+        let path_text = path.to_string_lossy();
+        assert!(path_text.contains(".priority-agent"));
+        assert!(path_text.contains("memory"));
+        assert!(path_text.contains("agents"));
+        assert!(path_text.ends_with("plan_agent.json"));
     }
 
     #[tokio::test]
