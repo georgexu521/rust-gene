@@ -222,6 +222,101 @@ fn record_goal_drift_if_needed(
     }
 }
 
+fn tool_error_code_label(result: &ToolResult) -> Option<String> {
+    result.error_code.as_ref().and_then(|code| {
+        serde_json::to_value(code)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+    })
+}
+
+fn attach_tool_recovery_metadata(tool_name: &str, result: &mut ToolResult) {
+    if result.success {
+        return;
+    }
+    let error = result
+        .error
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("tool failed");
+    let code = tool_error_code_label(result);
+    let plan =
+        crate::engine::recovery_plan::RecoveryPlan::tool_failure(tool_name, error, code.as_deref());
+    let metadata = serde_json::json!({
+        "recoverable": plan.retryable,
+        "safe_retry": plan.safe_retry,
+        "suggested_command": plan.suggested_command,
+        "user_note": plan.user_note,
+        "recovery_action": plan.action,
+        "recovery_category": plan.category,
+    });
+
+    match result.data.take() {
+        Some(serde_json::Value::Object(mut object)) => {
+            object.insert("recovery".to_string(), metadata);
+            result.data = Some(serde_json::Value::Object(object));
+        }
+        Some(existing) => {
+            result.data = Some(serde_json::json!({
+                "value": existing,
+                "recovery": metadata,
+            }));
+        }
+        None => {
+            result.data = Some(serde_json::json!({
+                "recovery": metadata,
+            }));
+        }
+    }
+}
+
+fn persist_tool_outcome_learning_event(
+    store: Option<&Arc<crate::session_store::SessionStore>>,
+    session_id: &str,
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    let code = tool_error_code_label(result);
+    let recovery = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("recovery"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!(null));
+    let summary = if result.success {
+        format!("Tool {} succeeded", tool_call.name)
+    } else {
+        format!(
+            "Tool {} failed: {}",
+            tool_call.name,
+            result.error.as_deref().unwrap_or("unknown error")
+        )
+    };
+    let payload = serde_json::json!({
+        "tool": tool_call.name,
+        "call_id": tool_call.id,
+        "success": result.success,
+        "error_code": code,
+        "error": result.error,
+        "duration_ms": result.duration_ms,
+        "output_chars": result.content.chars().count(),
+        "recovery": recovery,
+    });
+    if let Err(e) = store.add_learning_event(
+        session_id,
+        "tool_outcome",
+        "conversation_loop",
+        &summary,
+        if result.success { 1.0 } else { 0.75 },
+        &payload,
+    ) {
+        warn!("Failed to persist tool outcome learning event: {}", e);
+    }
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -1583,18 +1678,31 @@ impl ConversationLoop {
             record_goal_drift_if_needed(&trace, active_goal.as_ref(), tc);
             if let Some(ref allowed) = self.allowed_tools {
                 if !allowed.contains(&tc.name) {
-                    denied_results.push((
-                        tc.clone(),
-                        ToolResult::error(format!(
-                            "Tool '{}' is not allowed in this agent context",
-                            tc.name
-                        )),
+                    let mut result = ToolResult::error(format!(
+                        "Tool '{}' is not allowed in this agent context",
+                        tc.name
                     ));
+                    attach_tool_recovery_metadata(&tc.name, &mut result);
+                    persist_tool_outcome_learning_event(
+                        self.session_store.as_ref(),
+                        &self.session_id,
+                        tc,
+                        &result,
+                    );
+                    denied_results.push((tc.clone(), result));
                     continue;
                 }
             }
 
             if let Some(pre_result) = pre_executed.get(&i) {
+                let mut pre_result = pre_result.clone();
+                attach_tool_recovery_metadata(&tc.name, &mut pre_result);
+                persist_tool_outcome_learning_event(
+                    self.session_store.as_ref(),
+                    &self.session_id,
+                    tc,
+                    &pre_result,
+                );
                 if let Some(ref trace) = trace {
                     trace.record(TraceEvent::ToolStarted {
                         tool: tc.name.clone(),
@@ -1685,6 +1793,7 @@ impl ConversationLoop {
                     if let Some(ref hooks) = hook_manager {
                         hooks.run_post_tool(&tc_clone, &result, &context).await;
                     };
+                    attach_tool_recovery_metadata(&tool_name, &mut result);
                     {
                         let mut tracker = cost_tracker.lock().await;
                         tracker.record_tool_execution(
@@ -1717,6 +1826,12 @@ impl ConversationLoop {
             futures::stream::iter(read_only_jobs).buffer_unordered(concurrency);
 
         while let Some((tc, result)) = readonly_stream.next().await {
+            persist_tool_outcome_learning_event(
+                self.session_store.as_ref(),
+                &self.session_id,
+                &tc,
+                &result,
+            );
             if let Some(tx) = tx {
                 let result_content = format!(
                     "Result: {}\n{}",
@@ -1738,13 +1853,18 @@ impl ConversationLoop {
             let tool_name = tc.name.clone();
             if let Some(ref allowed) = self.allowed_tools {
                 if !allowed.contains(&tool_name) {
-                    results.push((
-                        tc,
-                        ToolResult::error(format!(
-                            "Tool '{}' is not allowed in this agent context",
-                            tool_name
-                        )),
+                    let mut result = ToolResult::error(format!(
+                        "Tool '{}' is not allowed in this agent context",
+                        tool_name
                     ));
+                    attach_tool_recovery_metadata(&tool_name, &mut result);
+                    persist_tool_outcome_learning_event(
+                        self.session_store.as_ref(),
+                        &self.session_id,
+                        &tc,
+                        &result,
+                    );
+                    results.push((tc, result));
                     continue;
                 }
             }
@@ -1887,6 +2007,7 @@ impl ConversationLoop {
                 if result.duration_ms.is_none() {
                     result.duration_ms = Some(duration_ms);
                 }
+                attach_tool_recovery_metadata(&tool_name, &mut result);
 
                 // ── Security Audit & Denial Tracking ──────────────────────
                 let params_summary = if let Some(tool) = self.tool_registry.get(&tool_name) {
@@ -1949,10 +2070,9 @@ impl ConversationLoop {
 
                 (result, Some(context))
             } else {
-                (
-                    ToolResult::error(format!("Tool '{}' not found", tool_name)),
-                    None,
-                )
+                let mut result = ToolResult::error(format!("Tool '{}' not found", tool_name));
+                attach_tool_recovery_metadata(&tool_name, &mut result);
+                (result, None)
             };
 
             if let (Some(hooks), Some(context)) = (&self.hook_manager, &hook_context) {
@@ -1981,6 +2101,12 @@ impl ConversationLoop {
                     output_chars: result.content.chars().count(),
                 });
             }
+            persist_tool_outcome_learning_event(
+                self.session_store.as_ref(),
+                &self.session_id,
+                &tc,
+                &result,
+            );
             results.push((tc, result));
         }
 
@@ -2004,6 +2130,20 @@ mod tests {
         let mut result = ToolResult::success("中".repeat(20_000));
         truncate_tool_result(&mut result, "grep", "call_utf8").await;
         assert!(result.content.contains("Output truncated"));
+    }
+
+    #[test]
+    fn test_tool_recovery_metadata_attached_to_failure() {
+        let mut result = ToolResult::error("command timed out");
+        attach_tool_recovery_metadata("bash", &mut result);
+        let recovery = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("recovery"))
+            .expect("recovery metadata");
+        assert_eq!(recovery["recoverable"], true);
+        assert_eq!(recovery["safe_retry"], true);
+        assert_eq!(recovery["suggested_command"], "/retry");
     }
 
     #[test]

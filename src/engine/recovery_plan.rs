@@ -87,6 +87,30 @@ impl RecoveryPlan {
         }
     }
 
+    pub fn tool_failure(tool_name: &str, error: &str, error_code: Option<&str>) -> Self {
+        let recoverable = !matches!(
+            error_code.unwrap_or("unknown"),
+            "permission_denied" | "dangerous_blocked" | "cancelled"
+        );
+        let suggested_command = suggested_tool_command(tool_name, error, error_code);
+        Self {
+            id: format!("recovery_{}", uuid::Uuid::new_v4().simple()),
+            source: "tool_execution".to_string(),
+            category: error_code.unwrap_or("unknown").to_string(),
+            primary_error: truncate(error, 240),
+            action: suggested_tool_action(tool_name, error, error_code),
+            retryable: recoverable,
+            safe_retry: recoverable
+                && !matches!(
+                    error_code.unwrap_or("unknown"),
+                    "execution_failed" | "unknown"
+                ),
+            suggested_command,
+            user_note: tool_user_note(tool_name, error, error_code),
+            status: RecoveryStatus::Planned,
+        }
+    }
+
     pub fn with_status(mut self, status: RecoveryStatus) -> Self {
         self.status = status;
         self
@@ -109,6 +133,64 @@ impl RecoveryPlan {
             truncate(&self.primary_error, 80),
             self.action
         )
+    }
+}
+
+fn suggested_tool_command(
+    tool_name: &str,
+    error: &str,
+    error_code: Option<&str>,
+) -> Option<String> {
+    let lower = error.to_ascii_lowercase();
+    match error_code.unwrap_or("unknown") {
+        "permission_denied" | "dangerous_blocked" => Some("/permissions explain".to_string()),
+        "timeout" => Some("/retry".to_string()),
+        "not_found" => {
+            if tool_name.contains("file") || lower.contains("file") {
+                Some("/project search".to_string())
+            } else {
+                Some("/tools".to_string())
+            }
+        }
+        "invalid_params" => Some("/tools".to_string()),
+        _ => {
+            if lower.contains("permission") {
+                Some("/permissions explain".to_string())
+            } else if lower.contains("timeout") {
+                Some("/retry".to_string())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn suggested_tool_action(tool_name: &str, _error: &str, error_code: Option<&str>) -> String {
+    match error_code.unwrap_or("unknown") {
+        "invalid_params" => format!(
+            "inspect {} arguments and retry with corrected parameters",
+            tool_name
+        ),
+        "permission_denied" => format!("review permission rule before running {}", tool_name),
+        "not_found" => format!("verify target exists before retrying {}", tool_name),
+        "timeout" => format!(
+            "retry {} with a narrower scope or longer timeout",
+            tool_name
+        ),
+        "dangerous_blocked" => format!("ask user before attempting dangerous {}", tool_name),
+        "unavailable" => format!("check tool availability before retrying {}", tool_name),
+        _ => format!("inspect {} failure and decide whether to retry", tool_name),
+    }
+}
+
+fn tool_user_note(tool_name: &str, error: &str, error_code: Option<&str>) -> String {
+    match error_code.unwrap_or("unknown") {
+        "invalid_params" => format!("{} failed because its arguments were invalid.", tool_name),
+        "permission_denied" => format!("{} was blocked by permission policy.", tool_name),
+        "not_found" => format!("{} could not find the requested resource.", tool_name),
+        "timeout" => format!("{} timed out; a narrower retry may recover.", tool_name),
+        "dangerous_blocked" => format!("{} was blocked as a dangerous action.", tool_name),
+        _ => format!("{} failed: {}", tool_name, truncate(error, 120)),
     }
 }
 
@@ -183,5 +265,13 @@ mod tests {
         let plan = RecoveryPlan::from_classified("api", &err);
         assert!(!plan.retryable);
         assert!(!plan.safe_retry);
+    }
+
+    #[test]
+    fn tool_timeout_suggests_retry() {
+        let plan = RecoveryPlan::tool_failure("bash", "command timed out", Some("timeout"));
+        assert_eq!(plan.suggested_command.as_deref(), Some("/retry"));
+        assert!(plan.retryable);
+        assert!(plan.safe_retry);
     }
 }
