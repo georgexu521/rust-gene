@@ -73,6 +73,20 @@ pub struct CommandRegistry {
     categories: HashMap<&'static str, Vec<String>>,
 }
 
+pub const SUGGESTED_COMMANDS: &[&str] = &[
+    "/quick",
+    "/doctor",
+    "/permissions",
+    "/session",
+    "/model",
+    "/provider",
+    "/init",
+];
+
+pub fn is_suggested_command(name: &str) -> bool {
+    SUGGESTED_COMMANDS.contains(&name)
+}
+
 impl CommandRegistry {
     pub fn new() -> Self {
         Self {
@@ -245,7 +259,15 @@ impl CommandRegistry {
             let Some(score) = command_match_score(&query, &haystack, cmd) else {
                 continue;
             };
-            let score = score + recent_rank.get(cmd.name).copied().unwrap_or_default();
+            let mut score = score + recent_rank.get(cmd.name).copied().unwrap_or_default();
+            if query.is_empty() {
+                if let Some(idx) = SUGGESTED_COMMANDS
+                    .iter()
+                    .position(|suggested| *suggested == cmd.name)
+                {
+                    score += 1_500_i32.saturating_sub(idx as i32 * 100);
+                }
+            }
             scored.push((score, cmd.category, cmd.name, cmd));
         }
 
@@ -256,11 +278,23 @@ impl CommandRegistry {
         });
 
         if query.is_empty() && recent_commands.is_empty() {
+            let mut items = Vec::new();
+            for name in SUGGESTED_COMMANDS {
+                if let Some(cmd) = self.commands.get(*name) {
+                    items.push(cmd);
+                    if items.len() >= limit {
+                        return items;
+                    }
+                }
+            }
+
             let mut grouped: BTreeMap<&str, Vec<&CommandDef>> = BTreeMap::new();
             for (_, category, _, cmd) in scored {
+                if is_suggested_command(cmd.name) {
+                    continue;
+                }
                 grouped.entry(category).or_default().push(cmd);
             }
-            let mut items = Vec::new();
             for commands in grouped.values_mut() {
                 commands.sort_by_key(|cmd| cmd.name);
                 for cmd in commands.iter().take(limit.saturating_sub(items.len())) {
@@ -700,7 +734,7 @@ pub const CMD_ORCHESTRATE: CommandDef = CommandDef::new(
 // Phase 10 Batch 1: Session & Control Commands
 pub const CMD_SESSION: CommandDef = CommandDef::new(
     "/session",
-    &[],
+    &["/sessions"],
     "Session",
     "/session [list|new|delete <id>]",
     "Manage sessions (list/create/delete)",
@@ -1576,6 +1610,14 @@ mod tests {
         let recent = vec!["/provider".to_string()];
         let items = registry.palette_items("", 20, &recent);
         assert_eq!(items.first().map(|cmd| cmd.name), Some("/provider"));
+    }
+
+    #[test]
+    fn test_palette_items_show_suggested_commands_first_when_empty() {
+        let registry = default_command_registry();
+        let items = registry.palette_items("", 20, &[]);
+        let names = items.iter().take(4).map(|cmd| cmd.name).collect::<Vec<_>>();
+        assert_eq!(names, vec!["/quick", "/doctor", "/permissions", "/session"]);
     }
 
     #[test]

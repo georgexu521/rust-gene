@@ -971,17 +971,24 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else {
         let mut last_category = "";
         for (idx, cmd) in items.iter().enumerate() {
-            if cmd.category != last_category {
+            let display_category = if app.command_palette_query.is_empty()
+                && crate::tui::commands::is_suggested_command(cmd.name)
+            {
+                "Suggested"
+            } else {
+                cmd.category
+            };
+            if display_category != last_category {
                 if idx > 0 {
                     lines.push(Line::from(""));
                 }
                 lines.push(Line::from(Span::styled(
-                    cmd.category,
+                    display_category,
                     Style::default()
                         .fg(app.theme.text_highlight)
                         .add_modifier(Modifier::BOLD),
                 )));
-                last_category = cmd.category;
+                last_category = display_category;
             }
 
             let selected = idx == app.command_palette_selected;
