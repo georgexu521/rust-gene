@@ -92,14 +92,23 @@ impl Tool for ToolSearchTool {
             .collect();
 
         let mut pending_mcp_servers: Vec<String> = Vec::new();
+        let mut unavailable_mcp_servers: Vec<String> = Vec::new();
+        let mut available_mcp_servers: Vec<String> = Vec::new();
         let mut mcp_matches: Vec<String> = Vec::new();
         if let Some(mcp) = context.mcp_manager {
-            let server_names = mcp.server_names();
-            let approved = mcp.approved_server_names();
-            pending_mcp_servers = server_names
-                .into_iter()
-                .filter(|s| !approved.iter().any(|a| a == s))
-                .collect();
+            for diagnostic in mcp.health_diagnostics() {
+                if !diagnostic.approved {
+                    pending_mcp_servers.push(diagnostic.name);
+                } else if diagnostic.health == crate::engine::mcp::McpHealthStatus::Healthy {
+                    available_mcp_servers.push(diagnostic.name);
+                } else {
+                    unavailable_mcp_servers
+                        .push(format!("{}:{:?}", diagnostic.name, diagnostic.health));
+                }
+            }
+            pending_mcp_servers.sort();
+            available_mcp_servers.sort();
+            unavailable_mcp_servers.sort();
             mcp_matches = search_mcp_tools(&query, max_results, &mcp).await;
             for m in &mcp_matches {
                 if matches.len() >= max_results {
@@ -118,7 +127,9 @@ impl Tool for ToolSearchTool {
                 "query": query,
                 "total_tools": registry.tool_names().len(),
                 "mcp_matches": mcp_matches,
-                "pending_mcp_servers": pending_mcp_servers
+                "pending_mcp_servers": pending_mcp_servers,
+                "available_mcp_servers": available_mcp_servers,
+                "unavailable_mcp_servers": unavailable_mcp_servers
             }),
         )
     }
@@ -133,10 +144,20 @@ async fn search_mcp_tools(
     if terms.is_empty() {
         return Vec::new();
     }
-    let defs = manager.list_tools().await;
+    let available_servers = manager.available_servers();
+    if available_servers.is_empty() {
+        return Vec::new();
+    }
+    let defs = manager.list_available_tools().await;
     let mut scored: Vec<(String, i32)> = Vec::new();
 
     for def in defs {
+        if !available_servers
+            .iter()
+            .any(|name| name == &def.server_name)
+        {
+            continue;
+        }
         let canonical = format!("mcp/{}/{}", def.server_name, def.name).to_lowercase();
         let desc = def.description.to_lowercase();
         let mut score = 0;

@@ -222,6 +222,39 @@ fn record_goal_drift_if_needed(
     }
 }
 
+fn record_mcp_resource_trace(
+    trace: &Option<TraceCollector>,
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) {
+    let Some(trace) = trace else {
+        return;
+    };
+    let action = match tool_call.name.as_str() {
+        "list_mcp_resources" => "list",
+        "read_mcp_resource" => "read",
+        _ => return,
+    };
+    let server = tool_call.arguments["server_name"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("all")
+        .to_string();
+    let uri = tool_call.arguments["uri"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("*")
+        .to_string();
+
+    trace.record(TraceEvent::McpResourceAccessed {
+        server,
+        uri,
+        action: action.to_string(),
+        success: result.success,
+        content_chars: result.content.chars().count(),
+    });
+}
+
 fn tool_error_code_label(result: &ToolResult) -> Option<String> {
     result.error_code.as_ref().and_then(|code| {
         serde_json::to_value(code)
@@ -1717,6 +1750,7 @@ impl ConversationLoop {
                         duration_ms: pre_result.duration_ms,
                         output_chars: pre_result.content.chars().count(),
                     });
+                    record_mcp_resource_trace(&Some(trace.clone()), tc, &pre_result);
                 }
                 debug!(
                     "Skipping pre-executed read-only tool at index {}: {}",
@@ -1811,6 +1845,7 @@ impl ConversationLoop {
                             duration_ms: result.duration_ms,
                             output_chars: result.content.chars().count(),
                         });
+                        record_mcp_resource_trace(&Some(trace.clone()), &tc_clone, &result);
                     }
                     (tc_clone, result)
                 });
@@ -2100,6 +2135,7 @@ impl ConversationLoop {
                     duration_ms: result.duration_ms,
                     output_chars: result.content.chars().count(),
                 });
+                record_mcp_resource_trace(&Some(trace.clone()), &tc, &result);
             }
             persist_tool_outcome_learning_event(
                 self.session_store.as_ref(),

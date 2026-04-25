@@ -151,6 +151,18 @@ impl Tool for ListMcpResourcesTool {
         let server_name = params["server_name"].as_str();
 
         let resources = if let Some(name) = server_name {
+            if !manager.is_server_approved(name) {
+                return ToolResult::error(format!(
+                    "MCP server '{}' is not approved. Use '/mcp approve {}' to approve it.",
+                    name, name
+                ));
+            }
+            if let Err(e) = manager.health_check(name).await {
+                return ToolResult::error(format!(
+                    "MCP server '{}' is not healthy enough to list resources: {}",
+                    name, e
+                ));
+            }
             match manager.get_client(name) {
                 Some(client) => match client.discover_resources().await {
                     Ok(r) => r,

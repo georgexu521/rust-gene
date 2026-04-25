@@ -80,6 +80,8 @@ Acceptance:
 
 ## Phase 5: MCP Health-Aware Routing And Resource Traces
 
+Status: done in this branch.
+
 Goal: MCP health should affect routing/tool visibility and resource reads should
 be traceable.
 

@@ -1438,6 +1438,25 @@ impl McpManager {
         self.discover_all_tools().await
     }
 
+    /// 列出健康且已批准服务器上的 MCP 工具。
+    pub async fn list_available_tools(&self) -> Vec<McpToolDef> {
+        let available = self.available_servers();
+        let mut all_tools = Vec::new();
+        for name in available {
+            let Some(client) = self.clients.get(&name) else {
+                continue;
+            };
+            match client.discover_tools().await {
+                Ok(tools) => all_tools.extend(tools),
+                Err(e) => warn!(
+                    "Failed to discover tools from available server {}: {}",
+                    name, e
+                ),
+            }
+        }
+        all_tools
+    }
+
     /// 发现所有服务器的资源
     pub async fn discover_all_resources(&self) -> Vec<McpResourceDef> {
         let mut all_resources = Vec::new();

@@ -162,6 +162,13 @@ pub enum TraceEvent {
         suggested_command: Option<String>,
         status: String,
     },
+    McpResourceAccessed {
+        server: String,
+        uri: String,
+        action: String,
+        success: bool,
+        content_chars: usize,
+    },
     AssistantResponded {
         chars: usize,
         iterations: usize,
@@ -194,6 +201,7 @@ impl TraceEvent {
             TraceEvent::VerificationCompleted { .. } => "verify.done",
             TraceEvent::RecoveryApplied { .. } => "recovery",
             TraceEvent::RecoveryPlan { .. } => "recovery.plan",
+            TraceEvent::McpResourceAccessed { .. } => "mcp.resource",
             TraceEvent::AssistantResponded { .. } => "assistant",
             TraceEvent::Error { .. } => "error",
         }
@@ -361,6 +369,20 @@ impl TraceEvent {
                 suggested_command.as_deref().unwrap_or("none"),
                 status
             ),
+            TraceEvent::McpResourceAccessed {
+                server,
+                uri,
+                action,
+                success,
+                content_chars,
+            } => format!(
+                "{} resource {} on {} success={} ({} chars)",
+                action,
+                preview(uri),
+                server,
+                success,
+                content_chars
+            ),
             TraceEvent::AssistantResponded { chars, iterations } => {
                 format!(
                     "assistant responded: {} chars, {} iterations",
@@ -527,5 +549,23 @@ mod tests {
         let summary = format_trace_summary(&trace, 10);
         assert!(summary.contains("tool.start"));
         assert!(summary.contains("bash"));
+    }
+
+    #[test]
+    fn trace_summary_includes_mcp_resource_access() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "read mcp resource"));
+        collector.record(TraceEvent::McpResourceAccessed {
+            server: "filesystem".to_string(),
+            uri: "file:///tmp/a.txt".to_string(),
+            action: "read".to_string(),
+            success: true,
+            content_chars: 12,
+        });
+
+        let trace = collector.finish(TurnStatus::Completed);
+        let summary = format_trace_summary(&trace, 10);
+        assert!(summary.contains("mcp.resource"));
+        assert!(summary.contains("filesystem"));
+        assert!(summary.contains("file:///tmp/a.txt"));
     }
 }

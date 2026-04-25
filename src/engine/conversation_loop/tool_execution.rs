@@ -12,6 +12,8 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "skills_list",
     "skill_view",
     "web_search",
+    "list_mcp_resources",
+    "read_mcp_resource",
 ];
 
 pub(crate) const DEFAULT_READ_ONLY_TOOL_CONCURRENCY: usize = 8;
@@ -145,6 +147,7 @@ mod tests {
         assert!(is_read_only("grep"));
         assert!(is_read_only("glob"));
         assert!(is_read_only("file_read"));
+        assert!(is_read_only("read_mcp_resource"));
         assert!(!is_read_only("file_write"));
         assert!(!is_read_only("bash"));
     }
