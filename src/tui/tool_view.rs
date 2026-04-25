@@ -180,10 +180,15 @@ impl ToolRunView {
             ToolRunStatus::Failed => "failed",
         };
 
-        let expand_hint = if expanded {
-            "ctrl+o to collapse"
+        let details_hint = if expanded {
+            "ctrl+o collapse"
         } else {
-            "ctrl+o to expand"
+            "ctrl+o details"
+        };
+        let full_output_hint = if self.result_body.is_some() {
+            " · ctrl+t full output"
+        } else {
+            ""
         };
         let elapsed = if self.elapsed().as_secs() > 0 {
             format!(" · {}s", self.elapsed().as_secs())
@@ -193,9 +198,15 @@ impl ToolRunView {
         let mut title = format!("{} ({}{})", self.summary(), status_hint, elapsed);
         if !expanded {
             title = if self.is_active() {
-                format!("{} ({})", self.summary(), expand_hint)
+                format!("{} ({})", self.summary(), details_hint)
             } else if self.result_body.is_some() {
-                format!("{} ({} · {})", self.summary(), status_hint, expand_hint)
+                format!(
+                    "{} ({} · {}{})",
+                    self.summary(),
+                    status_hint,
+                    details_hint,
+                    full_output_hint
+                )
             } else {
                 title
             };
@@ -231,11 +242,17 @@ impl ToolRunView {
                 lines.push(format!("  ├ {}", compact_line(progress, 140)));
             }
             if let Some(body) = &self.result_body {
-                let result_lines = compact_text_lines(body, 5, 132);
+                const RESULT_PREVIEW_LINES: usize = 5;
+                let result_lines = compact_text_lines(body, RESULT_PREVIEW_LINES, 132);
                 if result_lines.is_empty() {
                     lines.push("  └ result: empty".to_string());
                 } else {
-                    lines.push("  └ result:".to_string());
+                    let result_title = if non_empty_line_count(body) > RESULT_PREVIEW_LINES {
+                        "  └ result: (ctrl+t full output)"
+                    } else {
+                        "  └ result:"
+                    };
+                    lines.push(result_title.to_string());
                     for result_line in result_lines {
                         lines.push(format!("    {}", result_line));
                     }
@@ -703,6 +720,7 @@ mod tests {
 
         assert_eq!(run.summary(), "Found 1 matches");
         assert!(run.render_lines(false)[0].contains("done"));
+        assert!(run.render_lines(false)[0].contains("ctrl+t full output"));
     }
 
     #[test]
@@ -742,5 +760,16 @@ mod tests {
 
         run.mark_complete("Result: OK\nOn branch main\nnothing to commit\n".to_string());
         assert_eq!(run.summary(), "Checked git status");
+    }
+
+    #[test]
+    fn expanded_long_result_points_to_full_output_viewer() {
+        let mut run = ToolRunView::new("tool_6".to_string(), "bash".to_string());
+        run.arguments = Some(json!({ "command": "printf lines" }));
+        run.mark_complete("Result: OK\none\ntwo\nthree\nfour\nfive\nsix\n".to_string());
+
+        let lines = run.render_lines(true);
+
+        assert!(lines.iter().any(|line| line.contains("ctrl+t full output")));
     }
 }
