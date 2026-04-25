@@ -5,6 +5,7 @@
 //! `/trace` without changing existing behavior prematurely.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -261,6 +262,7 @@ struct LearningFeedback {
     recent_failures_for_intent: usize,
     recent_recovery_plans: usize,
     preferred_tools: Vec<String>,
+    discouraged_tools: Vec<String>,
 }
 
 impl LearningFeedback {
@@ -293,9 +295,32 @@ impl LearningFeedback {
                     }
                 }
             }
+            if event.kind == "tool_outcome" {
+                let tool = event
+                    .payload
+                    .get("tool")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let success = event
+                    .payload
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if !tool.is_empty() {
+                    if success {
+                        feedback.preferred_tools.push(tool.to_string());
+                    } else {
+                        feedback.discouraged_tools.push(tool.to_string());
+                    }
+                }
+            }
         }
         feedback.preferred_tools.sort();
         feedback.preferred_tools.dedup();
+        feedback.discouraged_tools = repeated_tools(&feedback.discouraged_tools, 2);
+        feedback
+            .preferred_tools
+            .retain(|tool| !feedback.discouraged_tools.contains(tool));
         feedback
     }
 
@@ -330,7 +355,34 @@ impl LearningFeedback {
                 route.recommended_tools.push(tool.clone());
             }
         }
+        if !self.discouraged_tools.is_empty() {
+            let before = route.recommended_tools.len();
+            route
+                .recommended_tools
+                .retain(|tool| !self.discouraged_tools.contains(tool));
+            let removed = before.saturating_sub(route.recommended_tools.len());
+            if removed > 0 {
+                route.confidence = (route.confidence - 0.05).max(0.1);
+                route.reason.push_str(&format!(
+                    "; learning feedback: avoided recently failing tool(s): {}",
+                    self.discouraged_tools.join(", ")
+                ));
+            }
+        }
     }
+}
+
+fn repeated_tools(tools: &[String], min_count: usize) -> Vec<String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for tool in tools {
+        *counts.entry(tool.clone()).or_default() += 1;
+    }
+    let mut repeated = counts
+        .into_iter()
+        .filter_map(|(tool, count)| (count >= min_count).then_some(tool))
+        .collect::<Vec<_>>();
+    repeated.sort();
+    repeated
 }
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
@@ -398,5 +450,34 @@ mod tests {
         assert_eq!(route.reasoning, ReasoningPolicy::High);
         assert_eq!(route.risk, RiskLevel::Medium);
         assert!(route.reason.contains("learning feedback"));
+    }
+
+    #[test]
+    fn learning_feedback_discourages_repeated_tool_failures() {
+        let events = vec![
+            crate::session_store::LearningEventRecord {
+                id: 1,
+                session_id: "s1".to_string(),
+                kind: "tool_outcome".to_string(),
+                source: "test".to_string(),
+                summary: "grep failed".to_string(),
+                confidence: 1.0,
+                payload: serde_json::json!({"tool": "grep", "success": false}),
+                created_at: "now".to_string(),
+            },
+            crate::session_store::LearningEventRecord {
+                id: 2,
+                session_id: "s1".to_string(),
+                kind: "tool_outcome".to_string(),
+                source: "test".to_string(),
+                summary: "grep failed".to_string(),
+                confidence: 1.0,
+                payload: serde_json::json!({"tool": "grep", "success": false}),
+                created_at: "now".to_string(),
+            },
+        ];
+        let route = IntentRouter::new().route_with_learning("帮我修复 cargo test 报错", &events);
+        assert!(!route.recommended_tools.contains(&"grep".to_string()));
+        assert!(route.reason.contains("avoided recently failing"));
     }
 }
