@@ -1,6 +1,8 @@
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 fn memory_root() -> PathBuf {
@@ -22,12 +24,128 @@ fn memory_dir() -> PathBuf {
     memory_root().join("memory")
 }
 
+fn legacy_agent_memory_dir() -> PathBuf {
+    memory_root().join("agent_memories")
+}
+
+#[derive(Debug, Clone)]
+struct MemoryDocument {
+    namespace: String,
+    path: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AgentMemoryJsonEntry {
+    key: String,
+    value: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MemoryKeyValue {
+    namespace: String,
+    key: String,
+    value: String,
+}
+
 fn load_memory_dir_files() -> Vec<(String, String)> {
     let root = memory_dir();
     let mut files = Vec::new();
     collect_memory_dir_files(&root, &root, &mut files);
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files
+}
+
+fn load_memory_documents() -> Vec<MemoryDocument> {
+    let mut docs = Vec::new();
+    push_text_document(&mut docs, "project", "MEMORY.md", &memory_path());
+    push_text_document(&mut docs, "user", "USER.md", &user_path());
+
+    for (path, content) in load_memory_dir_files() {
+        docs.push(MemoryDocument {
+            namespace: "topic".to_string(),
+            path: format!("memory/{}", path),
+            content,
+        });
+    }
+
+    collect_agent_memory_documents(&memory_dir().join("agents"), "agent", &mut docs);
+    collect_agent_memory_documents(&legacy_agent_memory_dir(), "agent_legacy", &mut docs);
+    docs.sort_by(|a, b| {
+        a.namespace
+            .cmp(&b.namespace)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    docs
+}
+
+fn push_text_document(docs: &mut Vec<MemoryDocument>, namespace: &str, label: &str, path: &Path) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return,
+    };
+    if content.trim().is_empty() {
+        return;
+    }
+    docs.push(MemoryDocument {
+        namespace: namespace.to_string(),
+        path: label.to_string(),
+        content,
+    });
+}
+
+fn collect_agent_memory_documents(dir: &Path, namespace: &str, docs: &mut Vec<MemoryDocument>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        let display_content = format_agent_memory_content(&content);
+        if display_content.trim().is_empty() {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown.json");
+        docs.push(MemoryDocument {
+            namespace: namespace.to_string(),
+            path: format!("memory/agents/{}", file_name),
+            content: display_content,
+        });
+    }
+}
+
+fn format_agent_memory_content(content: &str) -> String {
+    match serde_json::from_str::<Vec<AgentMemoryJsonEntry>>(content) {
+        Ok(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                let tags = if entry.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", entry.tags.join(","))
+                };
+                format!("{}: {}{}", entry.key, entry.value, tags)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(_) => content.to_string(),
+    }
 }
 
 fn collect_memory_dir_files(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) {
@@ -127,6 +245,119 @@ fn infer_topic(content: &str, category: &str) -> Option<&'static str> {
 
 fn contains_any(content: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| content.contains(needle))
+}
+
+fn search_memory_documents(docs: &[MemoryDocument], query: &str) -> Vec<String> {
+    let query_lower = query.to_lowercase();
+    let mut matching = Vec::new();
+
+    for doc in docs {
+        for line in doc.content.lines() {
+            if line.to_lowercase().contains(&query_lower) {
+                matching.push(format!("[{}:{}] {}", doc.namespace, doc.path, line.trim()));
+            }
+        }
+    }
+
+    matching
+}
+
+fn memory_conflicts(docs: &[MemoryDocument], max_conflicts: usize) -> Vec<String> {
+    let mut by_key: HashMap<String, Vec<MemoryKeyValue>> = HashMap::new();
+    for doc in docs {
+        for entry in extract_key_values(doc) {
+            by_key
+                .entry(entry.key.to_lowercase())
+                .or_default()
+                .push(entry);
+        }
+    }
+
+    let mut conflicts = by_key
+        .into_iter()
+        .filter_map(|(key, entries)| {
+            if entries.len() < 2 {
+                return None;
+            }
+            let mut values = entries
+                .iter()
+                .map(|entry| normalize_value(&entry.value))
+                .collect::<Vec<_>>();
+            values.sort();
+            values.dedup();
+            if values.len() < 2 {
+                return None;
+            }
+            let locations = entries
+                .iter()
+                .take(4)
+                .map(|entry| {
+                    format!(
+                        "{}={} ({})",
+                        entry.namespace,
+                        compact_line(&entry.value, 70),
+                        entry.key
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            Some(format!(
+                "- key '{}' has conflicting values: {}",
+                key, locations
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    conflicts.sort();
+    conflicts.truncate(max_conflicts);
+    conflicts
+}
+
+fn extract_key_values(doc: &MemoryDocument) -> Vec<MemoryKeyValue> {
+    doc.content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line
+                .trim()
+                .trim_start_matches("- ")
+                .trim_start_matches("* ");
+            let (key, value) = trimmed.split_once(':')?;
+            let key = key.trim().trim_matches('`');
+            let value = value.trim();
+            if key.is_empty()
+                || value.is_empty()
+                || key.starts_with('#')
+                || key.chars().count() > 80
+                || key.contains("://")
+            {
+                return None;
+            }
+            Some(MemoryKeyValue {
+                namespace: format!("{}:{}", doc.namespace, doc.path),
+                key: key.to_string(),
+                value: value.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn normalize_value(value: &str) -> String {
+    value
+        .trim()
+        .trim_end_matches('.')
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn compact_line(text: &str, max_chars: usize) -> String {
+    let mut value = text.replace('\n', " ");
+    if value.chars().count() > max_chars {
+        value = value.chars().take(max_chars).collect::<String>();
+        value.push_str("...");
+    }
+    value
 }
 
 fn sanitize_topic(topic: &str) -> Option<String> {
@@ -290,58 +521,57 @@ impl Tool for MemoryLoadTool {
                 "query": {
                     "type": "string",
                     "description": "Optional: search query to filter memories. If empty, returns all memories."
+                },
+                "include_conflicts": {
+                    "type": "boolean",
+                    "description": "Whether to include duplicate/conflicting key hints across memory namespaces.",
+                    "default": true
                 }
             }
         })
     }
 
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
-        let path = memory_path();
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        let memory_files = load_memory_dir_files();
+        let docs = load_memory_documents();
+        let include_conflicts = params["include_conflicts"].as_bool().unwrap_or(true);
 
-        if content.trim().is_empty() && memory_files.is_empty() {
+        if docs.is_empty() {
             return ToolResult::success("Memory is empty.");
         }
 
         let query = params["query"].as_str().unwrap_or("");
+        let conflicts = if include_conflicts {
+            memory_conflicts(&docs, 8)
+        } else {
+            Vec::new()
+        };
 
         if query.is_empty() {
             // 返回全部（限制大小）
             let mut output = String::new();
-            if !content.trim().is_empty() {
-                output.push_str("# MEMORY.md\n");
-                output.push_str(content.trim());
+            for doc in &docs {
+                output.push_str(&format!("# [{}] {}\n", doc.namespace, doc.path));
+                output.push_str(doc.content.trim());
                 output.push_str("\n\n");
             }
-            for (path, file_content) in memory_files {
-                output.push_str(&format!("# memory/{}\n", path));
-                output.push_str(file_content.trim());
-                output.push_str("\n\n");
+            if !conflicts.is_empty() {
+                output.push_str("# Conflicts\n");
+                output.push_str(&conflicts.join("\n"));
+                output.push('\n');
             }
             let truncated: String = output.chars().take(5000).collect();
             ToolResult::success(truncated)
         } else {
-            // 简单关键词搜索
-            let query_lower = query.to_lowercase();
-            let mut matching: Vec<String> = content
-                .lines()
-                .filter(|l| l.to_lowercase().contains(&query_lower))
-                .map(|line| format!("[MEMORY.md] {}", line))
-                .collect();
-
-            for (path, file_content) in memory_files {
-                matching.extend(
-                    file_content
-                        .lines()
-                        .filter(|l| l.to_lowercase().contains(&query_lower))
-                        .map(|line| format!("[memory/{}] {}", path, line)),
-                );
-            }
+            let mut matching = search_memory_documents(&docs, query);
 
             if matching.is_empty() {
                 ToolResult::success(format!("No memories matching '{}'", query))
             } else {
+                if !conflicts.is_empty() {
+                    matching.push(String::new());
+                    matching.push("Conflicts:".to_string());
+                    matching.extend(conflicts);
+                }
                 let result = matching.join("\n");
                 let truncated: String = result.chars().take(3000).collect();
                 ToolResult::success(truncated)
@@ -441,5 +671,52 @@ mod tests {
             infer_topic("User preference: respond in Chinese", "preference"),
             None
         );
+    }
+
+    #[test]
+    fn test_memory_document_search_includes_namespaces() {
+        let docs = vec![
+            MemoryDocument {
+                namespace: "user".to_string(),
+                path: "USER.md".to_string(),
+                content: "language: Chinese".to_string(),
+            },
+            MemoryDocument {
+                namespace: "agent".to_string(),
+                path: "memory/agents/reviewer.json".to_string(),
+                content: "review_style: strict".to_string(),
+            },
+        ];
+
+        let results = search_memory_documents(&docs, "strict");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].starts_with("[agent:memory/agents/reviewer.json]"));
+    }
+
+    #[test]
+    fn test_memory_conflicts_detect_duplicate_keys() {
+        let docs = vec![
+            MemoryDocument {
+                namespace: "user".to_string(),
+                path: "USER.md".to_string(),
+                content: "language: Chinese".to_string(),
+            },
+            MemoryDocument {
+                namespace: "topic".to_string(),
+                path: "memory/preferences.md".to_string(),
+                content: "language: English".to_string(),
+            },
+        ];
+
+        let conflicts = memory_conflicts(&docs, 8);
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].contains("key 'language'"));
+    }
+
+    #[test]
+    fn test_agent_memory_json_formats_as_key_values() {
+        let content = r#"[{"key":"review_style","value":"strict","created_at":1,"updated_at":1,"tags":["review"]}]"#;
+        let formatted = format_agent_memory_content(content);
+        assert!(formatted.contains("review_style: strict [review]"));
     }
 }

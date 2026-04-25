@@ -63,6 +63,8 @@ Acceptance:
 
 ## Phase 4: Memory Namespace Search And Conflict Handling
 
+Status: done in this branch.
+
 Goal: unify project/user/agent memory at the search and conflict layer.
 
 Deliverables:

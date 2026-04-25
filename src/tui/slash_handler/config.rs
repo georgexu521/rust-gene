@@ -2057,26 +2057,38 @@ pub fn handle_trace(app: &mut TuiApp, args: &str) -> String {
 
 /// /memory - Memory management (enhanced)
 pub fn handle_memory(_app: &TuiApp) -> String {
-    let mem_path = dirs::home_dir()
+    let root = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".priority-agent")
-        .join("memory");
+        .join(".priority-agent");
+    let mem_path = root.join("memory");
+    let project_exists = root.join("MEMORY.md").exists();
+    let user_exists = root.join("USER.md").exists();
+    let topic_files = count_files_with_ext(&mem_path, "md");
+    let agent_files = count_files_with_ext(&mem_path.join("agents"), "json");
 
-    if !mem_path.exists() {
+    if !project_exists && !user_exists && topic_files == 0 && agent_files == 0 {
         return "No memory entries saved. Start chatting to create memories.".to_string();
     }
 
-    match std::fs::read_dir(&mem_path) {
-        Ok(entries) => {
-            let count = entries.count();
-            format!(
-                "Memory entries: {} (stored in {})",
-                count,
-                mem_path.display()
-            )
-        }
-        Err(_) => "Failed to read memory directory.".to_string(),
-    }
+    format!(
+        "Memory namespaces:\n- project: {}\n- user: {}\n- topic files: {}\n- agent files: {}\n\nUse memory_load with a query to search across namespaces and show conflict hints.\nStored in: {}",
+        if project_exists { "MEMORY.md" } else { "none" },
+        if user_exists { "USER.md" } else { "none" },
+        topic_files,
+        agent_files,
+        root.display()
+    )
+}
+
+fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return 0,
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some(ext))
+        .count()
 }
 
 /// /skills - List available skills
