@@ -2706,6 +2706,21 @@ mod tests {
     }
 
     #[test]
+    fn test_model_select_empty_filter_returns_no_choices() {
+        let mut app = TuiApp::new();
+        app.streaming_engine = Some(Arc::new(
+            crate::engine::streaming::StreamingQueryEngine::new(
+                Arc::new(MockProvider),
+                Arc::new(crate::tools::ToolRegistry::new()),
+                "gpt-4o",
+            ),
+        ));
+        app.model_select_query = "not-a-real-model".to_string();
+
+        assert!(app.model_choices().is_empty());
+    }
+
+    #[test]
     fn test_provider_select_filters_missing_providers() {
         let mut app = TuiApp::new();
         app.provider_select_push('k');
@@ -2718,6 +2733,14 @@ mod tests {
         assert!(choices
             .iter()
             .all(|choice| choice.name.contains("kimi") || choice.provider_type.contains("Kimi")));
+    }
+
+    #[test]
+    fn test_provider_select_empty_filter_returns_no_choices() {
+        let mut app = TuiApp::new();
+        app.provider_select_query = "not-a-real-provider".to_string();
+
+        assert!(app.provider_choices().is_empty());
     }
 
     #[test]

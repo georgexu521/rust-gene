@@ -955,8 +955,17 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let items = app.command_palette_items();
     if items.is_empty() {
+        let empty_message = if app.command_palette_query.is_empty() {
+            "No commands registered.".to_string()
+        } else {
+            format!("No command matched '{}'.", app.command_palette_query)
+        };
         lines.push(Line::from(Span::styled(
-            "No commands matched.",
+            empty_message,
+            Style::default().fg(app.theme.text_dim),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Try a command name, category, alias, or description.",
             Style::default().fg(app.theme.text_dim),
         )));
     } else {
@@ -999,7 +1008,17 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     }
 
     if let Some(selected) = items.get(app.command_palette_selected) {
+        let action = match crate::tui::commands::command_accept_behavior(selected) {
+            crate::tui::commands::CommandAcceptBehavior::Execute => "execute now",
+            crate::tui::commands::CommandAcceptBehavior::Insert => {
+                "insert command; add arguments, then press Enter"
+            }
+        };
         lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Action:", Style::default().fg(app.theme.text_dim)),
+            Span::styled(format!(" {}", action), Style::default().fg(app.theme.info)),
+        ]));
         lines.push(Line::from(vec![
             Span::styled("Usage: ", Style::default().fg(app.theme.text_dim)),
             Span::styled(
@@ -1165,25 +1184,41 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
     ];
 
     let choices = app.model_choices();
-    for (idx, choice) in choices.iter().enumerate() {
-        let selected = idx == app.model_select_selected;
-        let marker = if selected { "› " } else { "  " };
-        let model_style = if choice.active {
-            Style::default()
-                .fg(app.theme.text_highlight)
-                .add_modifier(Modifier::BOLD)
-        } else if selected {
-            Style::default()
-                .fg(app.theme.text)
-                .add_modifier(Modifier::BOLD)
+    if choices.is_empty() {
+        let empty_message = if app.model_select_query.is_empty() {
+            "No models available for the active provider.".to_string()
         } else {
-            Style::default().fg(app.theme.text)
+            format!("No models matched '{}'.", app.model_select_query)
         };
-        lines.push(Line::from(vec![
-            Span::styled(marker, Style::default().fg(app.theme.info)),
-            Span::styled(format!("{:<24}", choice.model), model_style),
-            Span::styled(choice.note.clone(), Style::default().fg(app.theme.text_dim)),
-        ]));
+        lines.push(Line::from(Span::styled(
+            empty_message,
+            Style::default().fg(app.theme.text_dim),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Backspace edits search; /settings changes provider and API configuration.",
+            Style::default().fg(app.theme.text_dim),
+        )));
+    } else {
+        for (idx, choice) in choices.iter().enumerate() {
+            let selected = idx == app.model_select_selected;
+            let marker = if selected { "› " } else { "  " };
+            let model_style = if choice.active {
+                Style::default()
+                    .fg(app.theme.text_highlight)
+                    .add_modifier(Modifier::BOLD)
+            } else if selected {
+                Style::default()
+                    .fg(app.theme.text)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(app.theme.text)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(marker, Style::default().fg(app.theme.info)),
+                Span::styled(format!("{:<24}", choice.model), model_style),
+                Span::styled(choice.note.clone(), Style::default().fg(app.theme.text_dim)),
+            ]));
+        }
     }
 
     if let Some(notice) = &app.model_notice {
@@ -1262,36 +1297,62 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(""),
     ];
 
-    for (idx, choice) in app.provider_choices().iter().enumerate() {
-        let selected = idx == app.provider_select_selected;
-        let marker = if selected { "› " } else { "  " };
-        let style = if choice.active {
-            Style::default()
-                .fg(app.theme.text_highlight)
-                .add_modifier(Modifier::BOLD)
-        } else if choice.configured {
-            Style::default().fg(app.theme.text)
+    let choices = app.provider_choices();
+    if choices.is_empty() {
+        let empty_message = if app.provider_select_query.is_empty() {
+            "No providers are available.".to_string()
         } else {
-            Style::default().fg(app.theme.text_dim)
+            format!("No providers matched '{}'.", app.provider_select_query)
         };
-        lines.push(Line::from(vec![
-            Span::styled(marker, Style::default().fg(app.theme.info)),
-            Span::styled(format!("{:<10}", choice.name), style),
-            Span::styled(
-                format!("{:<12}", choice.provider_type),
-                Style::default().fg(app.theme.text_dim),
-            ),
-            Span::styled(format!("{:<20}", choice.model), style),
-            Span::styled(choice.note.clone(), Style::default().fg(app.theme.text_dim)),
-        ]));
-        if selected && !choice.base_url.is_empty() {
+        lines.push(Line::from(Span::styled(
+            empty_message,
+            Style::default().fg(app.theme.text_dim),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Backspace edits search; /settings opens API key and base URL settings.",
+            Style::default().fg(app.theme.text_dim),
+        )));
+    } else {
+        for (idx, choice) in choices.iter().enumerate() {
+            let selected = idx == app.provider_select_selected;
+            let marker = if selected { "› " } else { "  " };
+            let style = if choice.active {
+                Style::default()
+                    .fg(app.theme.text_highlight)
+                    .add_modifier(Modifier::BOLD)
+            } else if choice.configured {
+                Style::default().fg(app.theme.text)
+            } else {
+                Style::default().fg(app.theme.text_dim)
+            };
             lines.push(Line::from(vec![
-                Span::styled("  └ ", Style::default().fg(app.theme.text_dim)),
+                Span::styled(marker, Style::default().fg(app.theme.info)),
+                Span::styled(format!("{:<10}", choice.name), style),
                 Span::styled(
-                    choice.base_url.clone(),
+                    format!("{:<12}", choice.provider_type),
                     Style::default().fg(app.theme.text_dim),
                 ),
+                Span::styled(format!("{:<20}", choice.model), style),
+                Span::styled(choice.note.clone(), Style::default().fg(app.theme.text_dim)),
             ]));
+            if selected && !choice.base_url.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("  └ ", Style::default().fg(app.theme.text_dim)),
+                    Span::styled(
+                        choice.base_url.clone(),
+                        Style::default().fg(app.theme.text_dim),
+                    ),
+                ]));
+            } else if selected && !choice.configured {
+                lines.push(Line::from(vec![
+                    Span::styled("  └ setup: ", Style::default().fg(app.theme.warning)),
+                    Span::styled(choice.note.clone(), Style::default().fg(app.theme.text_dim)),
+                    Span::styled(
+                        " or open /settings",
+                        Style::default().fg(app.theme.text_dim),
+                    ),
+                ]));
+            }
         }
     }
 
