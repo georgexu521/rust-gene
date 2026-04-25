@@ -502,9 +502,6 @@ impl StreamingQueryEngine {
         user_message: impl Into<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         let user_msg = user_message.into();
-        let route = crate::engine::intent_router::IntentRouter::new().route(&user_msg);
-        self.goal_manager
-            .update_from_user_message(&user_msg, Some(&route));
         let (tx, rx) = mpsc::channel(100);
 
         // 准备共享资源
@@ -530,6 +527,7 @@ impl StreamingQueryEngine {
             session_store: self.session_store.clone(),
             session_id: self.session_id.clone(),
             trace_store: trace_store.clone(),
+            goal_manager: self.goal_manager.clone(),
             cost_tracker: self.cost_tracker.clone(),
             permission_mode: self.permission_mode(),
             session_permission_rules: self.session_permission_rules.clone(),
@@ -646,6 +644,7 @@ impl StreamingQueryEngine {
                             session_store: engine.session_store.clone(),
                             session_id: engine.session_id.clone(),
                             trace_store: engine.trace_store.clone(),
+                            goal_manager: engine.goal_manager.clone(),
                             cost_tracker: engine.cost_tracker.clone(),
                             permission_mode: engine.permission_mode,
                             session_permission_rules: engine.session_permission_rules.clone(),
@@ -775,6 +774,7 @@ struct StreamingEngineInner {
     session_store: Option<Arc<crate::session_store::SessionStore>>,
     session_id: Option<String>,
     trace_store: Arc<crate::engine::trace::TraceStore>,
+    goal_manager: Arc<crate::engine::session_goal::SessionGoalManager>,
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     permission_mode: crate::permissions::PermissionMode,
     session_permission_rules: Arc<std::sync::RwLock<crate::permissions::PermissionRules>>,
@@ -903,7 +903,8 @@ impl StreamingEngineInner {
         )
         .with_llm_memory_extraction(self.llm_memory_extraction)
         .with_compressor(self.compressor.clone())
-        .with_trace_store(self.trace_store.clone());
+        .with_trace_store(self.trace_store.clone())
+        .with_session_goal_manager(self.goal_manager.clone());
 
         if let (Some(ref store), Some(ref session_id)) = (&self.session_store, &self.session_id) {
             builder = builder.with_session_store(store.clone(), session_id.clone());

@@ -177,6 +177,7 @@ pub struct ConversationLoopBuilder {
     approval_channel: Option<std::sync::Arc<self::conversation_loop::ToolApprovalChannel>>,
     allowed_tools: Option<std::collections::HashSet<String>>,
     trace_store: Option<std::sync::Arc<self::trace::TraceStore>>,
+    goal_manager: Option<std::sync::Arc<self::session_goal::SessionGoalManager>>,
     session_store: Option<std::sync::Arc<crate::session_store::SessionStore>>,
     session_id: Option<String>,
     compressor: Option<
@@ -209,6 +210,7 @@ impl ConversationLoopBuilder {
             approval_channel: None,
             allowed_tools: None,
             trace_store: None,
+            goal_manager: None,
             session_store: None,
             session_id: None,
             compressor: None,
@@ -298,6 +300,14 @@ impl ConversationLoopBuilder {
         self
     }
 
+    pub fn with_session_goal_manager(
+        mut self,
+        manager: std::sync::Arc<self::session_goal::SessionGoalManager>,
+    ) -> Self {
+        self.goal_manager = Some(manager);
+        self
+    }
+
     pub fn with_session_store(
         mut self,
         store: std::sync::Arc<crate::session_store::SessionStore>,
@@ -364,6 +374,9 @@ impl ConversationLoopBuilder {
         }
         if let Some(trace_store) = self.trace_store {
             lp = lp.with_trace_store(trace_store);
+        }
+        if let Some(goal_manager) = self.goal_manager {
+            lp = lp.with_session_goal_manager(goal_manager);
         }
         if let (Some(session_store), Some(session_id)) = (self.session_store, self.session_id) {
             lp = lp.with_session_store(session_store, session_id);

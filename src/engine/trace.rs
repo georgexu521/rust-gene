@@ -73,6 +73,12 @@ pub enum TraceEvent {
         risk: String,
         reason: String,
     },
+    SessionGoalUpdated {
+        goal_id: String,
+        title: String,
+        status: String,
+        reason: String,
+    },
     WorkflowRouted {
         decision: String,
         reason: String,
@@ -152,6 +158,7 @@ impl TraceEvent {
         match self {
             TraceEvent::UserPromptSubmitted { .. } => "prompt",
             TraceEvent::IntentRouted { .. } => "intent",
+            TraceEvent::SessionGoalUpdated { .. } => "goal",
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
@@ -189,6 +196,18 @@ impl TraceEvent {
                 retrieval,
                 risk,
                 confidence,
+                preview(reason)
+            ),
+            TraceEvent::SessionGoalUpdated {
+                goal_id,
+                title,
+                status,
+                reason,
+            } => format!(
+                "goal {} {}: {} ({})",
+                short_id(goal_id),
+                status,
+                preview(title),
                 preview(reason)
             ),
             TraceEvent::WorkflowRouted { decision, reason } => {

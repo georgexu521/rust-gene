@@ -388,6 +388,9 @@ fn push_normal_status_parts<'a>(app: &'a TuiApp, parts: &mut Vec<Span<'a>>) {
     if let Some(label) = app.plan_mode_status_label() {
         parts.push(Span::styled(label, Style::default().fg(app.theme.warning)));
     }
+    if let Some(label) = app.current_goal_label() {
+        parts.push(Span::styled(label, Style::default().fg(app.theme.info)));
+    }
     let pasted_blocks = app.pasted_block_count();
     if pasted_blocks > 0 {
         parts.push(Span::styled(

@@ -2457,6 +2457,20 @@ impl TuiApp {
         }
     }
 
+    pub fn current_goal_label(&self) -> Option<String> {
+        self.streaming_engine
+            .as_ref()
+            .and_then(|engine| engine.goal_manager().current())
+            .map(|goal| {
+                let max_chars = 36;
+                let mut title = goal.title.chars().take(max_chars).collect::<String>();
+                if goal.title.chars().count() > max_chars {
+                    title.push_str("...");
+                }
+                format!("goal:{}", title)
+            })
+    }
+
     pub fn cycle_status_bar_density(&mut self) -> StatusBarDensity {
         self.status_bar_density = self.status_bar_density.next();
         self.status_bar_density

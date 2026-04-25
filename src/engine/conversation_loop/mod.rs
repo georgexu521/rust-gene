@@ -174,6 +174,8 @@ pub struct ConversationLoop {
     audit_log: Option<Arc<crate::security::SecurityAuditLog>>,
     /// Runtime trace store for recent turn timelines.
     trace_store: Option<Arc<TraceStore>>,
+    /// Runtime session goal manager.
+    goal_manager: Option<Arc<crate::engine::session_goal::SessionGoalManager>>,
     /// Optional persistent store for completed traces.
     session_store: Option<Arc<crate::session_store::SessionStore>>,
     /// Monotonic turn counter used for trace display.
@@ -221,6 +223,7 @@ impl ConversationLoop {
             denial_tracker: None,
             audit_log: None,
             trace_store: None,
+            goal_manager: None,
             session_store: None,
             turn_counter: std::sync::atomic::AtomicU64::new(0),
         }
@@ -320,6 +323,14 @@ impl ConversationLoop {
         self
     }
 
+    pub fn with_session_goal_manager(
+        mut self,
+        manager: Arc<crate::engine::session_goal::SessionGoalManager>,
+    ) -> Self {
+        self.goal_manager = Some(manager);
+        self
+    }
+
     pub fn with_session_store(
         mut self,
         store: Arc<crate::session_store::SessionStore>,
@@ -415,8 +426,18 @@ impl ConversationLoop {
             retrieval: format!("{:?}", route.retrieval),
             confidence: route.confidence,
             risk: format!("{:?}", route.risk),
-            reason: route.reason,
+            reason: route.reason.clone(),
         });
+        if let Some(manager) = &self.goal_manager {
+            if let Some(goal) = manager.update_from_user_message(last_user_preview, Some(&route)) {
+                trace.record(TraceEvent::SessionGoalUpdated {
+                    goal_id: goal.id,
+                    title: goal.title,
+                    status: format!("{:?}", goal.status),
+                    reason: "user turn routed to trackable workflow".to_string(),
+                });
+            }
+        }
 
         // ── Workflow 闸门检查 ──────────────────────────
         let already_triggered = self
