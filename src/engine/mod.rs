@@ -18,6 +18,7 @@ pub use diagnostic_tracker::{
 };
 pub mod diff;
 pub mod error_classifier;
+pub mod goal_drift;
 pub mod hooks;
 pub mod intent_router;
 pub mod lsp;

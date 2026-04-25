@@ -79,6 +79,14 @@ pub enum TraceEvent {
         status: String,
         reason: String,
     },
+    GoalDriftDetected {
+        goal_id: String,
+        tool: String,
+        call_id: String,
+        level: String,
+        reason: String,
+        suggested_action: Option<String>,
+    },
     WorkflowRouted {
         decision: String,
         reason: String,
@@ -169,6 +177,7 @@ impl TraceEvent {
             TraceEvent::UserPromptSubmitted { .. } => "prompt",
             TraceEvent::IntentRouted { .. } => "intent",
             TraceEvent::SessionGoalUpdated { .. } => "goal",
+            TraceEvent::GoalDriftDetected { .. } => "goal.drift",
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
@@ -220,6 +229,22 @@ impl TraceEvent {
                 status,
                 preview(title),
                 preview(reason)
+            ),
+            TraceEvent::GoalDriftDetected {
+                goal_id,
+                tool,
+                call_id,
+                level,
+                reason,
+                suggested_action,
+            } => format!(
+                "{} {} drift={} goal={} reason={} suggested={}",
+                tool,
+                short_id(call_id),
+                level,
+                short_id(goal_id),
+                preview(reason),
+                suggested_action.as_deref().unwrap_or("none")
             ),
             TraceEvent::WorkflowRouted { decision, reason } => {
                 format!("workflow decision: {} ({})", decision, preview(reason))

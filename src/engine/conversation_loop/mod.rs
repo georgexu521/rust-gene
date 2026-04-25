@@ -201,6 +201,27 @@ fn record_recovery_plan(trace: &TraceCollector, plan: &crate::engine::recovery_p
     });
 }
 
+fn record_goal_drift_if_needed(
+    trace: &Option<TraceCollector>,
+    goal: Option<&crate::engine::session_goal::SessionGoal>,
+    tool_call: &ToolCall,
+) {
+    let (Some(trace), Some(goal)) = (trace, goal) else {
+        return;
+    };
+    let check = crate::engine::goal_drift::GoalDriftDetector::new().check(goal, tool_call);
+    if check.should_trace() {
+        trace.record(TraceEvent::GoalDriftDetected {
+            goal_id: goal.id.clone(),
+            tool: tool_call.name.clone(),
+            call_id: tool_call.id.clone(),
+            level: format!("{:?}", check.level),
+            reason: check.reason,
+            suggested_action: check.suggested_action,
+        });
+    }
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -484,7 +505,12 @@ impl ConversationLoop {
             turn_index,
             last_user_preview,
         ));
-        let route = IntentRouter::new().route(last_user_preview);
+        let learning_events = self
+            .session_store
+            .as_ref()
+            .and_then(|store| store.recent_learning_events(&self.session_id, 20).ok())
+            .unwrap_or_default();
+        let route = IntentRouter::new().route_with_learning(last_user_preview, &learning_events);
         trace.record(TraceEvent::IntentRouted {
             intent: format!("{:?}", route.intent),
             workflow: format!("{:?}", route.workflow),
@@ -1545,11 +1571,16 @@ impl ConversationLoop {
         let mut read_write_calls = Vec::new();
         let mut denied_results = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
+        let active_goal = self
+            .goal_manager
+            .as_ref()
+            .and_then(|manager| manager.current());
 
         for (i, tc) in tool_calls.iter().enumerate() {
             if tc.name.is_empty() {
                 continue;
             }
+            record_goal_drift_if_needed(&trace, active_goal.as_ref(), tc);
             if let Some(ref allowed) = self.allowed_tools {
                 if !allowed.contains(&tc.name) {
                     denied_results.push((

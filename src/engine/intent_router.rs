@@ -231,6 +231,17 @@ impl IntentRouter {
         self.direct("no high-risk or multi-step signals detected", 0.66)
     }
 
+    pub fn route_with_learning(
+        &self,
+        user_message: &str,
+        events: &[crate::session_store::LearningEventRecord],
+    ) -> IntentRoute {
+        let mut route = self.route(user_message);
+        let feedback = LearningFeedback::from_events(events);
+        feedback.apply(&mut route);
+        route
+    }
+
     fn direct(&self, reason: impl Into<String>, confidence: f32) -> IntentRoute {
         IntentRoute {
             intent: IntentKind::DirectAnswer,
@@ -241,6 +252,83 @@ impl IntentRouter {
             risk: RiskLevel::Low,
             recommended_tools: Vec::new(),
             reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct LearningFeedback {
+    recent_failures_for_intent: usize,
+    recent_recovery_plans: usize,
+    preferred_tools: Vec<String>,
+}
+
+impl LearningFeedback {
+    fn from_events(events: &[crate::session_store::LearningEventRecord]) -> Self {
+        let mut feedback = Self::default();
+        for event in events.iter().take(20) {
+            if event.kind == "recovery_plan" {
+                feedback.recent_recovery_plans += 1;
+                if event.summary.contains("compact") {
+                    feedback.preferred_tools.push("compact".to_string());
+                }
+            }
+            if event.kind == "turn_outcome" {
+                let status = event
+                    .payload
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if status != "Completed" {
+                    feedback.recent_failures_for_intent += 1;
+                }
+                if let Some(intent) = event.payload.get("intent").and_then(|v| v.as_str()) {
+                    match intent {
+                        "CodeChange" | "Debugging" => {
+                            feedback.preferred_tools.push("grep".to_string());
+                            feedback.preferred_tools.push("file_read".to_string());
+                        }
+                        "Research" => feedback.preferred_tools.push("web_search".to_string()),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        feedback.preferred_tools.sort();
+        feedback.preferred_tools.dedup();
+        feedback
+    }
+
+    fn apply(&self, route: &mut IntentRoute) {
+        if self.recent_recovery_plans > 0 {
+            route.confidence = (route.confidence - 0.05).max(0.1);
+            route.reason.push_str(&format!(
+                "; learning feedback: {} recent recovery plan(s)",
+                self.recent_recovery_plans
+            ));
+            if route.retrieval == RetrievalPolicy::Light {
+                route.retrieval = RetrievalPolicy::Project;
+            }
+        }
+        if self.recent_failures_for_intent >= 2 {
+            route.confidence = (route.confidence - 0.1).max(0.1);
+            route
+                .reason
+                .push_str("; learning feedback: recent failed turns, use more context");
+            if matches!(
+                route.reasoning,
+                ReasoningPolicy::Low | ReasoningPolicy::Medium
+            ) {
+                route.reasoning = ReasoningPolicy::High;
+            }
+            if matches!(route.risk, RiskLevel::Low) {
+                route.risk = RiskLevel::Medium;
+            }
+        }
+        for tool in &self.preferred_tools {
+            if !route.recommended_tools.contains(tool) {
+                route.recommended_tools.push(tool.clone());
+            }
         }
     }
 }
@@ -280,5 +368,35 @@ mod tests {
         let route = IntentRouter::new().route("你好");
         assert_eq!(route.intent, IntentKind::DirectAnswer);
         assert_eq!(route.workflow, WorkflowKind::Direct);
+    }
+
+    #[test]
+    fn learning_feedback_raises_caution_after_failures() {
+        let events = vec![
+            crate::session_store::LearningEventRecord {
+                id: 1,
+                session_id: "s1".to_string(),
+                kind: "turn_outcome".to_string(),
+                source: "test".to_string(),
+                summary: "failed".to_string(),
+                confidence: 1.0,
+                payload: serde_json::json!({"status": "Failed", "intent": "CodeChange"}),
+                created_at: "now".to_string(),
+            },
+            crate::session_store::LearningEventRecord {
+                id: 2,
+                session_id: "s1".to_string(),
+                kind: "turn_outcome".to_string(),
+                source: "test".to_string(),
+                summary: "failed".to_string(),
+                confidence: 1.0,
+                payload: serde_json::json!({"status": "Failed", "intent": "CodeChange"}),
+                created_at: "now".to_string(),
+            },
+        ];
+        let route = IntentRouter::new().route_with_learning("你好", &events);
+        assert_eq!(route.reasoning, ReasoningPolicy::High);
+        assert_eq!(route.risk, RiskLevel::Medium);
+        assert!(route.reason.contains("learning feedback"));
     }
 }
