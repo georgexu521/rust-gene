@@ -1112,6 +1112,14 @@ pub const CMD_TRACE: CommandDef = CommandDef::new(
     "Show runtime trace or configure log tracing",
 );
 
+pub const CMD_EVAL: CommandDef = CommandDef::new(
+    "/eval",
+    &[],
+    "Info",
+    "/eval [list|run <name|all>]",
+    "Run deterministic behavior evalsets",
+);
+
 pub const CMD_SKILLS: CommandDef =
     CommandDef::new("/skills", &[], "Info", "/skills", "List available skills");
 
@@ -1420,6 +1428,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_TEST);
     // Note: CMD_DEBUG not registered - bundled skill handles /debug
     registry.register(&CMD_TRACE);
+    registry.register(&CMD_EVAL);
     registry.register(&CMD_MEMORY);
     registry.register(&CMD_SKILLS);
     // Phase 10 Extended 2: More commands
@@ -1554,6 +1563,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_BENCHMARK,
     &CMD_TEST,
     &CMD_TRACE,
+    &CMD_EVAL,
     &CMD_SKILLS,
     &CMD_INIT,
     &CMD_LOGIN,

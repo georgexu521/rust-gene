@@ -103,6 +103,12 @@ pub enum TraceEvent {
     MemoryPrefetch {
         chars: usize,
     },
+    RetrievalContextBuilt {
+        policy: String,
+        sources: Vec<String>,
+        items: usize,
+        estimated_tokens: usize,
+    },
     MemorySynced {
         mode: String,
     },
@@ -190,6 +196,7 @@ impl TraceEvent {
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
             TraceEvent::MemorySnapshotInjected { .. } => "memory.snapshot",
             TraceEvent::MemoryPrefetch { .. } => "memory.prefetch",
+            TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
             TraceEvent::MemorySynced { .. } => "memory.sync",
             TraceEvent::ContextCompacted { .. } => "context.compact",
             TraceEvent::ApiRequestStarted { .. } => "api.start",
@@ -267,6 +274,18 @@ impl TraceEvent {
                 format!("memory snapshot injected: {} chars", chars)
             }
             TraceEvent::MemoryPrefetch { chars } => format!("memory prefetch: {} chars", chars),
+            TraceEvent::RetrievalContextBuilt {
+                policy,
+                sources,
+                items,
+                estimated_tokens,
+            } => format!(
+                "retrieval context: policy={} sources={} items={} tokens~{}",
+                policy,
+                sources.join(","),
+                items,
+                estimated_tokens
+            ),
             TraceEvent::MemorySynced { mode } => format!("memory synced: {}", mode),
             TraceEvent::ContextCompacted {
                 before_tokens,

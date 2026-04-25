@@ -883,13 +883,34 @@ impl ConversationLoop {
                             .prefetch_with_llm_rerank(content, self.provider.as_ref(), &self.model)
                             .await;
                         if !prefetch.is_empty() {
+                            let retrieval_context =
+                                crate::engine::retrieval_context::RetrievalContext::from_memory_prefetch(
+                                    content,
+                                    &prefetch,
+                                    route.retrieval,
+                                );
                             trace.record(TraceEvent::MemoryPrefetch {
                                 chars: prefetch.chars().count(),
                             });
-                            let enhanced = format!(
-                                "{}\n<relevant-memory>\n{}\n</relevant-memory>",
-                                content, prefetch
-                            );
+                            if let Some(ref ctx) = retrieval_context {
+                                trace.record(TraceEvent::RetrievalContextBuilt {
+                                    policy: format!("{:?}", ctx.policy),
+                                    sources: ctx
+                                        .items
+                                        .iter()
+                                        .map(|item| format!("{:?}", item.source))
+                                        .collect(),
+                                    items: ctx.items.len(),
+                                    estimated_tokens: ctx.token_estimate,
+                                });
+                            }
+                            let retrieval_block = retrieval_context
+                                .as_ref()
+                                .map(|ctx| ctx.format_for_prompt())
+                                .unwrap_or_else(|| {
+                                    format!("<relevant-memory>\n{}\n</relevant-memory>", prefetch)
+                                });
+                            let enhanced = format!("{}\n{}", content, retrieval_block);
                             request_messages[last_user_idx] = Message::user(&enhanced);
                             debug!("Prefetched memory context injected into user message");
                         }

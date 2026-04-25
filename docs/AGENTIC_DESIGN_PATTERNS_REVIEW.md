@@ -56,12 +56,12 @@ They are not yet comprehensive for the entire handbook. The remaining work is mo
 | Goal monitoring | Covered | `SessionGoalManager`, `GoalDriftDetector`, `/goal drift`, approval integration | Needs richer goal history and acceptance criteria UI |
 | Recovery | Mostly covered | `RecoveryPlan`, `/recover`, API/tool recovery trace, tool metadata | Workflow-level recovery is not uniform across every failure mode |
 | Human-in-the-loop | Partially covered | permissions, ask-user tool, plan approval, goal-drift approval | Missing unified `HumanReviewRequest` model |
-| RAG/retrieval | Partially covered | project index, memory prefetch, web tools, MCP resource access | Missing unified `RetrievalContext` with source, score, freshness, trust, and token cost |
+| RAG/retrieval | Mostly covered | `RetrievalContext` v1, project index, memory prefetch, web tools, MCP resource access | Project/web/MCP still need to migrate fully into the unified context object |
 | A2A/inter-agent communication | Partially covered | team messaging, swarm, child agents | Missing standard `AgentTaskEnvelope` and durable inter-agent transcript schema |
 | Resource-aware optimization | Partially covered | cost tracker, model fallback, context compression, tool budgets | Missing explicit `ResourcePolicy` and user-facing budget controls |
 | Reasoning techniques | Mostly covered | Socratic engine, `ReasoningPolicy`, workflow questioning | Missing explicit strategy selection artifact beyond router policy |
 | Guardrails/safety | Mostly covered | permissions, bash danger checks, path protections, SSRF guards, approvals | Needs eval coverage for guardrail regressions |
-| Evaluation/monitoring | Partially covered | 820 tests, traces, workflow reports, CLI observability | Missing evalset runner for agent behavior regression tests |
+| Evaluation/monitoring | Mostly covered | EvalSet v1, 820+ tests, traces, workflow reports, CLI observability | EvalSet currently covers deterministic routing/trace checks; full tool trajectory replay is still pending |
 | Prioritization | Mostly covered | weight engine, priority scheduler, todo priority, learning signals | Learned outcomes do not yet recalibrate weights deeply |
 | Exploration/discovery | Mostly covered | project scanner, fuzzy search, web search/fetch, agents | Needs exploration workflow templates and a discovery dashboard |
 | CLI/coding-agent appendices | Mostly covered | mature CLI shell, command palette, tool views, approvals, status line | Missing prompt library, configurable statusline, and mature workflow dashboard |
@@ -82,24 +82,32 @@ The latest implementation rounds closed the review's original P0/P2/P3 spine:
 
 These are the main gaps to close before claiming the handbook is fully represented:
 
-1. `EvalSet` runner for task-level regression tests across routing, tools, memory, recovery, and CLI-visible behavior.
-2. Unified `RetrievalContext` object used by memory, project search, web search, MCP resources, and file indexing.
-3. Unified `HumanReviewRequest` for permissions, plan approval, drift approval, risky edits, and model/tool fallback decisions.
-4. `TaskContextBundle` for non-trivial coding tasks: goal, files, constraints, plan, retrieval evidence, risks, tool budget, and acceptance checks.
-5. Structured `ReflectionPass` after risky edits or multi-step tasks.
-6. A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
-7. Explicit `ResourcePolicy` and visible budget controls for cost, latency, reasoning depth, and parallelism.
-8. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
+1. Unified `HumanReviewRequest` for permissions, plan approval, drift approval, risky edits, and model/tool fallback decisions.
+2. `TaskContextBundle` for non-trivial coding tasks: goal, files, constraints, plan, retrieval evidence, risks, tool budget, and acceptance checks.
+3. Structured `ReflectionPass` after risky edits or multi-step tasks.
+4. A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
+5. Explicit `ResourcePolicy` and visible budget controls for cost, latency, reasoning depth, and parallelism.
+6. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
+7. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
+8. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
 
 ### Recommended Next Priority
 
 The next best work is not to add another isolated feature. Build the missing contracts in this order:
 
-1. Add an `EvalSet` runner first, because traces and learning events now provide enough data to evaluate behavior.
-2. Add `RetrievalContext`, then route all retrieval sources through it.
-3. Add `HumanReviewRequest`, then migrate permissions, plan approval, and drift approval to the same model.
-4. Add `TaskContextBundle` and `ReflectionPass` for coding tasks.
+1. Add `HumanReviewRequest`, then migrate permissions, plan approval, and drift approval to the same model.
+2. Add `TaskContextBundle` and `ReflectionPass` for coding tasks.
+3. Expand EvalSet from deterministic routing/trace checks into full tool-trajectory replay.
+4. Migrate project/web/MCP/session retrieval into `RetrievalContext`.
 5. Add `ResourcePolicy` and expose it in CLI status/config.
+
+### 2026-04-25 Implementation Update
+
+- Added `src/engine/evalset.rs` with deterministic EvalSet loading, routing assertions, trace-event assertions, reports, and unit tests.
+- Added `evalsets/smoke.yaml` covering direct answer, debugging, code change, memory, and research routing.
+- Added `/eval list` and `/eval run <name|all>` to the CLI.
+- Added `src/engine/retrieval_context.rs` with source, score, provenance, trust, freshness, and token-estimate fields.
+- Migrated memory prefetch prompt injection to `<retrieval-context>` and added `retrieval.context` trace events.
 
 ## Pass 0: Handbook Scope
 

@@ -150,6 +150,21 @@ impl IntentRouter {
             };
         }
 
+        if contains_any(&lower, &["search", "web", "latest", "compare", "research"])
+            || contains_any(zh, &["搜索", "网上", "最新", "对比", "调研"])
+        {
+            return IntentRoute {
+                intent: IntentKind::Research,
+                confidence: 0.72,
+                workflow: WorkflowKind::Research,
+                retrieval: RetrievalPolicy::Web,
+                reasoning: ReasoningPolicy::High,
+                risk: RiskLevel::Low,
+                recommended_tools: vec!["web_search".into(), "web_fetch".into()],
+                reason: "prompt asks for external research or comparison".into(),
+            };
+        }
+
         if contains_any(
             &lower,
             &["plan", "roadmap", "design", "architecture", "refactor"],
@@ -211,21 +226,6 @@ impl IntentRouter {
                     "file_edit".into(),
                 ],
                 reason: "prompt asks for code or product changes".into(),
-            };
-        }
-
-        if contains_any(&lower, &["search", "web", "latest", "compare", "research"])
-            || contains_any(zh, &["搜索", "网上", "最新", "对比", "调研"])
-        {
-            return IntentRoute {
-                intent: IntentKind::Research,
-                confidence: 0.72,
-                workflow: WorkflowKind::Research,
-                retrieval: RetrievalPolicy::Web,
-                reasoning: ReasoningPolicy::High,
-                risk: RiskLevel::Low,
-                recommended_tools: vec!["web_search".into(), "web_fetch".into()],
-                reason: "prompt asks for external research or comparison".into(),
             };
         }
 

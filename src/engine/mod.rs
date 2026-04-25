@@ -18,6 +18,7 @@ pub use diagnostic_tracker::{
 };
 pub mod diff;
 pub mod error_classifier;
+pub mod evalset;
 pub mod goal_drift;
 pub mod hooks;
 pub mod intent_router;
@@ -29,6 +30,7 @@ pub mod prompt_builder;
 pub mod prompt_context;
 pub mod query_engine;
 pub mod recovery_plan;
+pub mod retrieval_context;
 pub mod session_goal;
 pub mod socratic;
 pub mod socratic_executor;

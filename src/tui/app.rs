@@ -2185,6 +2185,7 @@ impl TuiApp {
             "/benchmark" => slash::handle_benchmark(self, args).await,
             "/test" => slash::handle_test(self, args).await,
             "/trace" => slash::handle_trace(self, args),
+            "/eval" => slash::handle_eval(self, args),
             // Phase 10 Extended 2: More commands
             "/init" => slash::handle_init(self, args),
             "/login" => slash::handle_login(self, args),

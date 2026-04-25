@@ -1,0 +1,69 @@
+name: smoke
+description: Deterministic routing and trace smoke checks for the CLI agent.
+scenarios:
+  - id: debugging-route
+    prompt: "cargo test 报错了，帮我修复"
+    expect:
+      intent: debugging
+      workflow: bug_fix
+      retrieval: project
+      reasoning: high
+      risk: medium
+      min_confidence: 0.75
+      recommended_tools:
+        - grep
+        - file_read
+        - bash
+      trace_events:
+        - prompt
+        - intent
+
+  - id: code-change-route
+    prompt: "继续开发 tui 界面，优化状态栏"
+    expect:
+      intent: code_change
+      workflow: code_change
+      retrieval: project
+      reasoning: high
+      risk: medium
+      recommended_tools:
+        - project_list
+        - grep
+        - file_read
+        - file_edit
+
+  - id: memory-route
+    prompt: "记住我喜欢 compact 状态栏"
+    expect:
+      intent: memory
+      workflow: direct
+      retrieval: memory
+      reasoning: medium
+      risk: low
+      recommended_tools:
+        - memory_load
+        - memory_save
+
+  - id: research-route
+    prompt: "帮我上网搜索最新的 codex cli 设计经验"
+    expect:
+      intent: research
+      workflow: research
+      retrieval: web
+      reasoning: high
+      risk: low
+      recommended_tools:
+        - web_search
+        - web_fetch
+
+  - id: direct-route
+    prompt: "你好"
+    expect:
+      intent: direct_answer
+      workflow: direct
+      retrieval: light
+      reasoning: low
+      risk: low
+      forbidden_tools:
+        - bash
+        - file_edit

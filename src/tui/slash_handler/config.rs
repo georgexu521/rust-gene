@@ -2055,6 +2055,47 @@ pub fn handle_trace(app: &mut TuiApp, args: &str) -> String {
     )
 }
 
+/// /eval - Deterministic behavior evalsets
+pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
+    let eval_dir = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("evalsets");
+    let mut parts = args.split_whitespace();
+    let action = parts.next().unwrap_or("list");
+
+    match action {
+        "list" => match crate::engine::evalset::load_evalsets_from_dir(&eval_dir) {
+            Ok(sets) if sets.is_empty() => {
+                format!("No evalsets found in {}.", eval_dir.display())
+            }
+            Ok(sets) => {
+                let mut lines = vec![format!("Evalsets in {}:", eval_dir.display())];
+                for (path, set) in sets {
+                    lines.push(format!(
+                        "- {} [{} scenarios] {}",
+                        set.name,
+                        set.scenarios.len(),
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("unknown")
+                    ));
+                }
+                lines.push("Run with /eval run <name|all>.".to_string());
+                lines.join("\n")
+            }
+            Err(e) => format!("Failed to list evalsets: {}", e),
+        },
+        "run" => {
+            let target = parts.next().unwrap_or("all");
+            match crate::engine::evalset::run_evalsets_from_dir(&eval_dir, Some(target)) {
+                Ok(reports) => crate::engine::evalset::format_reports(&reports),
+                Err(e) => format!("Eval run failed: {}", e),
+            }
+        }
+        _ => "Usage: /eval [list|run <name|all>]".to_string(),
+    }
+}
+
 /// /memory - Memory management (enhanced)
 pub fn handle_memory(_app: &TuiApp) -> String {
     let root = dirs::home_dir()
