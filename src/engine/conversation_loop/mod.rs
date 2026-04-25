@@ -762,7 +762,7 @@ impl ConversationLoop {
                     tools: tools.len(),
                 });
                 api_result = if let Some(tx) = tx {
-                    self.call_api_streaming(request.clone(), tx).await
+                    self.call_api_streaming(request.clone(), tx, &trace).await
                 } else {
                     self.call_api(request.clone()).await
                 };
@@ -1120,6 +1120,7 @@ impl ConversationLoop {
         &self,
         request: ChatRequest,
         tx: &mpsc::Sender<StreamEvent>,
+        trace: &TraceCollector,
     ) -> Result<(
         String,
         Vec<ToolCall>,
@@ -1395,6 +1396,7 @@ impl ConversationLoop {
                             "stream_empty",
                             &stream_err,
                         );
+                        record_recovery_plan(trace, &plan);
                         warn!("{}", plan.user_note);
                         warn!(
                             "Streaming yielded no content (error: {}), falling back to non-streaming",
@@ -1447,6 +1449,7 @@ impl ConversationLoop {
                     "stream_open",
                     &e.to_string(),
                 );
+                record_recovery_plan(trace, &plan);
                 warn!("{}", plan.user_note);
                 warn!("Streaming failed, falling back to non-streaming: {}", e);
                 let base_request = ChatRequest::new(&self.model)
