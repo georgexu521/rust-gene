@@ -345,6 +345,40 @@ pub struct ProviderChoice {
     pub note: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusBarDensity {
+    Compact,
+    Normal,
+    Debug,
+}
+
+impl StatusBarDensity {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Compact => Self::Normal,
+            Self::Normal => Self::Debug,
+            Self::Debug => Self::Compact,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Normal => "normal",
+            Self::Debug => "debug",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "compact" | "min" | "minimal" => Some(Self::Compact),
+            "normal" | "default" => Some(Self::Normal),
+            "debug" | "verbose" | "full" => Some(Self::Debug),
+            _ => None,
+        }
+    }
+}
+
 /// 交互式 CLI 应用状态
 pub struct TuiApp {
     /// 当前模式
@@ -361,6 +395,8 @@ pub struct TuiApp {
     pub paused: bool,
     /// 是否启用聚焦模式（仅显示 user/assistant）
     pub focus_mode: bool,
+    /// 状态栏信息密度
+    pub status_bar_density: StatusBarDensity,
     /// 命令注册表
     command_registry: CommandRegistry,
     /// 滚动位置
@@ -544,6 +580,7 @@ impl TuiApp {
             is_querying: false,
             paused: false,
             focus_mode: false,
+            status_bar_density: StatusBarDensity::Normal,
             command_registry: default_command_registry(),
             scroll_offset: 0,
             context,
@@ -1887,6 +1924,20 @@ impl TuiApp {
                 }
             }
             "/status" => slash::handle_status(self).await,
+            "/statusbar" => {
+                let args = args.trim();
+                if args.is_empty() {
+                    format!(
+                        "Status bar density: {}\nOptions: compact, normal, debug\nShortcut: Ctrl+Shift+S cycles density.",
+                        self.status_bar_density.name()
+                    )
+                } else if let Some(density) = StatusBarDensity::parse(args) {
+                    self.set_status_bar_density(density);
+                    format!("Status bar density: {}", density.name())
+                } else {
+                    "Usage: /statusbar [compact|normal|debug]".to_string()
+                }
+            }
             "/resume" => slash::handle_resume(self, args).await,
             "/rewind" => slash::handle_rewind(self, args),
             // Phase 10 Batch 1: Session & Control Commands
@@ -2307,6 +2358,15 @@ impl TuiApp {
         }
     }
 
+    pub fn cycle_status_bar_density(&mut self) -> StatusBarDensity {
+        self.status_bar_density = self.status_bar_density.next();
+        self.status_bar_density
+    }
+
+    pub fn set_status_bar_density(&mut self, density: StatusBarDensity) {
+        self.status_bar_density = density;
+    }
+
     pub fn active_tool_count(&self) -> usize {
         self.tool_runs_snapshot
             .iter()
@@ -2542,6 +2602,22 @@ mod tests {
         assert_eq!(
             app.stream_usage_label().as_deref(),
             Some("125 tokens / 12 reasoning / 80 cached")
+        );
+    }
+
+    #[test]
+    fn test_status_bar_density_cycle_and_parse() {
+        let mut app = TuiApp::new();
+        assert_eq!(app.status_bar_density, StatusBarDensity::Normal);
+        assert_eq!(app.cycle_status_bar_density(), StatusBarDensity::Debug);
+        assert_eq!(app.cycle_status_bar_density(), StatusBarDensity::Compact);
+        assert_eq!(
+            StatusBarDensity::parse("verbose"),
+            Some(StatusBarDensity::Debug)
+        );
+        assert_eq!(
+            StatusBarDensity::parse("minimal"),
+            Some(StatusBarDensity::Compact)
         );
     }
 

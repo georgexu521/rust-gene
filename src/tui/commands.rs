@@ -425,6 +425,14 @@ pub const CMD_PROVIDER: CommandDef = CommandDef::new(
 pub const CMD_STATUS: CommandDef =
     CommandDef::new("/status", &[], "Info", "/status", "Show session status");
 
+pub const CMD_STATUSBAR: CommandDef = CommandDef::new(
+    "/statusbar",
+    &[],
+    "Info",
+    "/statusbar [compact|normal|debug]",
+    "Show or set status bar density",
+);
+
 pub const CMD_TOOLS: CommandDef =
     CommandDef::new("/tools", &[], "Info", "/tools", "List available tools");
 
@@ -1263,6 +1271,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_MODEL);
     registry.register(&CMD_PROVIDER);
     registry.register(&CMD_STATUS);
+    registry.register(&CMD_STATUSBAR);
     registry.register(&CMD_TOOLS);
     registry.register(&CMD_TASKS);
     registry.register(&CMD_AGENTS);
@@ -1402,6 +1411,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_MODEL,
     &CMD_PROVIDER,
     &CMD_STATUS,
+    &CMD_STATUSBAR,
     &CMD_TOOLS,
     &CMD_TASKS,
     &CMD_AGENTS,

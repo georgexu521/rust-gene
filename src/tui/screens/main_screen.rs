@@ -5,7 +5,7 @@
 use crate::{
     state::{MessageItem, MessageRole},
     tui::{
-        app::TuiApp,
+        app::{StatusBarDensity, TuiApp},
         components::message,
         tool_view::{ToolRunStatus, ToolRunView},
     },
@@ -299,7 +299,73 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         ));
     }
 
-    // 中间：模式徽章
+    match app.status_bar_density {
+        StatusBarDensity::Compact => {
+            if app.vim_mode {
+                parts.push(Span::styled(
+                    "vim",
+                    Style::default().fg(app.theme.status_vim),
+                ));
+            }
+            parts.push(Span::styled(
+                app.current_permission_label(),
+                Style::default().fg(app.theme.warning),
+            ));
+            parts.push(Span::styled(
+                format!(
+                    "{} / {}",
+                    app.current_provider_label(),
+                    app.current_model_label()
+                ),
+                Style::default().fg(app.theme.text_dim),
+            ));
+        }
+        StatusBarDensity::Normal | StatusBarDensity::Debug => {
+            push_normal_status_parts(app, &mut parts);
+            if app.status_bar_density == StatusBarDensity::Debug {
+                parts.push(Span::styled(
+                    format!("density:{}", app.status_bar_density.name()),
+                    Style::default().fg(app.theme.text_dim),
+                ));
+                parts.push(Span::styled(
+                    format!(
+                        "base:{}",
+                        compact_status_value(&app.current_provider_base_url(), 28)
+                    ),
+                    Style::default().fg(app.theme.text_dim),
+                ));
+                parts.push(Span::styled(
+                    format!("scroll:{}", app.scroll_offset),
+                    Style::default().fg(app.theme.text_dim),
+                ));
+                parts.push(Span::styled(
+                    format!("tools:{}", app.active_tool_count()),
+                    Style::default().fg(app.theme.text_dim),
+                ));
+            }
+        }
+    }
+    parts.push(Span::styled(
+        "? shortcuts",
+        Style::default().fg(app.theme.text_dim),
+    ));
+
+    // 用 " · " 连接所有部分
+    let mut spans = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(app.theme.border)));
+        }
+        spans.push(part.clone());
+    }
+
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
+        area,
+    );
+}
+
+fn push_normal_status_parts<'a>(app: &'a TuiApp, parts: &mut Vec<Span<'a>>) {
     if app.vim_mode {
         parts.push(Span::styled(
             "vim",
@@ -354,24 +420,20 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             ));
         }
     }
-    parts.push(Span::styled(
-        "? shortcuts",
-        Style::default().fg(app.theme.text_dim),
-    ));
+}
 
-    // 用 " · " 连接所有部分
-    let mut spans = Vec::new();
-    for (i, part) in parts.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(app.theme.border)));
-        }
-        spans.push(part.clone());
+fn compact_status_value(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        value.to_string()
+    } else {
+        format!(
+            "{}…",
+            value
+                .chars()
+                .take(max_chars.saturating_sub(1))
+                .collect::<String>()
+        )
     }
-
-    f.render_widget(
-        Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
-        area,
-    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1010,6 +1072,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from("  ctrl+l       provider picker"),
         Line::from("  ctrl+o       expand/collapse tool details"),
         Line::from("  ctrl+t       open full tool output"),
+        Line::from("  ctrl+shift+s cycle status bar density"),
         Line::from(format!("  {}       quit", kb.global_quit)),
         Line::from(""),
         Line::from(vec![Span::styled(

@@ -552,6 +552,15 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return Ok(false);
     }
 
+    if key.code == KeyCode::Char('S')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+    {
+        let density = app.cycle_status_bar_density();
+        app.add_system_message(format!("Status bar density: {}", density.name()));
+        return Ok(false);
+    }
+
     // VimNormal 模式：添加 Ctrl+D/U 半页滚动（直接处理，不经过 action_for）
     if app.mode == app::AppMode::VimNormal {
         use crossterm::event::{KeyCode, KeyModifiers};
