@@ -1397,8 +1397,11 @@ pub fn render_permission_approval(
     req: &crate::engine::conversation_loop::ToolApprovalRequest,
     area: Rect,
 ) {
-    let popup_area = centered_rect(72, 58, area);
+    let popup_area = centered_rect(76, 64, area);
     let risk = permission_risk_label(&req.tool_call.name, &req.tool_call.arguments);
+    let risk_reason = permission_risk_reason(&req.tool_call.name, &req.tool_call.arguments);
+    let rule_pattern =
+        crate::tui::app::permission_rule_pattern(&req.tool_call.name, &req.tool_call.arguments);
     let risk_color = match risk {
         "high" => Color::Red,
         "medium" => Color::Yellow,
@@ -1414,14 +1417,14 @@ pub fn render_permission_approval(
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("Request ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tool    ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 req.tool_call.name.clone(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  risk ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Risk ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 risk,
                 Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
@@ -1433,6 +1436,19 @@ pub fn render_permission_approval(
                 permission_scope_label(&req.tool_call.name, &req.tool_call.arguments),
                 Style::default().fg(Color::Gray),
             ),
+        ]),
+        Line::from(vec![
+            Span::styled("Rule    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                rule_pattern,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Why     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(risk_reason, Style::default().fg(Color::Gray)),
         ]),
         Line::from(""),
     ];
@@ -1478,6 +1494,10 @@ pub fn render_permission_approval(
     }
 
     lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Decision",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
     lines.push(Line::from(vec![
         Span::styled(
             "y",
@@ -1487,26 +1507,19 @@ pub fn render_permission_approval(
         ),
         Span::styled(" allow once  ", Style::default().fg(Color::Gray)),
         Span::styled(
-            "n",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" deny  ", Style::default().fg(Color::Gray)),
-        Span::styled(
-            "esc",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" cancel", Style::default().fg(Color::Gray)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(
             "s",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" allow session  ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            "n",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" deny  ", Style::default().fg(Color::Gray)),
+    ]));
+    lines.push(Line::from(vec![
         Span::styled(
             "p",
             Style::default()
@@ -1520,14 +1533,24 @@ pub fn render_permission_approval(
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" allow always", Style::default().fg(Color::Gray)),
-    ]));
-    lines.push(Line::from(vec![
+        Span::styled(" allow global  ", Style::default().fg(Color::Gray)),
         Span::styled(
             "x",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" deny always", Style::default().fg(Color::Gray)),
+        Span::styled(" deny global", Style::default().fg(Color::Gray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "esc",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " cancel without saving a rule",
+            Style::default().fg(Color::Gray),
+        ),
     ]));
 
     let has_diff_preview = matches!(
@@ -1607,6 +1630,43 @@ fn permission_risk_label(tool_name: &str, args: &serde_json::Value) -> &'static 
     "low"
 }
 
+fn permission_risk_reason(tool_name: &str, args: &serde_json::Value) -> &'static str {
+    let name = tool_name.to_ascii_lowercase();
+    if name.contains("bash") {
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if command.contains("rm ") {
+            return "shell command can delete files";
+        }
+        if command.contains("sudo") {
+            return "shell command requests elevated privileges";
+        }
+        if command.contains("chmod") {
+            return "shell command changes file permissions";
+        }
+        if command.contains("curl") {
+            return "shell command reaches the network";
+        }
+        return "shell command can change local state";
+    }
+    if name.contains("write") || name.contains("edit") || name.contains("delete") {
+        return "tool can modify files or project state";
+    }
+    if name.contains("web") {
+        return "tool reaches the network";
+    }
+    if name.contains("mcp") {
+        return "external MCP tool invocation";
+    }
+    if name.contains("github") {
+        return "tool can read or modify remote repository state";
+    }
+    "read-only or low-risk tool"
+}
+
 fn permission_preview(tool_name: &str, args: &serde_json::Value) -> Option<(&'static str, String)> {
     let name = tool_name.to_ascii_lowercase();
     if name.contains("bash") {
@@ -1636,6 +1696,17 @@ fn permission_preview(tool_name: &str, args: &serde_json::Value) -> Option<(&'st
             .or_else(|| args.get("query"))
             .and_then(|v| v.as_str())
             .map(|target| ("Network", target.to_string()));
+    }
+    if name.contains("mcp") {
+        let server = args
+            .get("server_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("server");
+        let tool = args
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("tool");
+        return Some(("MCP", format!("{} / {}", server, tool)));
     }
     None
 }
@@ -2079,6 +2150,27 @@ mod tests {
         assert_eq!(
             permission_preview("bash", &args),
             Some(("Command", "$ ls -la".to_string()))
+        );
+    }
+
+    #[test]
+    fn permission_risk_reason_explains_network_shell_command() {
+        let args = serde_json::json!({ "command": "curl https://example.com" });
+        assert_eq!(
+            permission_risk_reason("bash", &args),
+            "shell command reaches the network"
+        );
+    }
+
+    #[test]
+    fn permission_preview_extracts_mcp_target() {
+        let args = serde_json::json!({
+            "server_name": "filesystem",
+            "tool_name": "read_file"
+        });
+        assert_eq!(
+            permission_preview("mcp_tool", &args),
+            Some(("MCP", "filesystem / read_file".to_string()))
         );
     }
 }

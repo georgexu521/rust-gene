@@ -217,7 +217,7 @@ fn provider_name_from_base_url(base_url: &str) -> &'static str {
     }
 }
 
-fn permission_rule_pattern(tool_name: &str, args: &serde_json::Value) -> String {
+pub(crate) fn permission_rule_pattern(tool_name: &str, args: &serde_json::Value) -> String {
     if tool_name == "mcp_tool" {
         let server = args["server_name"].as_str().unwrap_or("");
         let tool = args["tool_name"].as_str().unwrap_or("");
