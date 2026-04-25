@@ -6,6 +6,7 @@
 #![allow(clippy::module_inception)]
 
 pub mod agent;
+pub mod envelope;
 pub mod manager;
 pub mod memory;
 pub mod roles;

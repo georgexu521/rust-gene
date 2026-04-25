@@ -57,7 +57,7 @@ They are not yet comprehensive for the entire handbook. The remaining work is mo
 | Recovery | Mostly covered | `RecoveryPlan`, `/recover`, API/tool recovery trace, tool metadata | Workflow-level recovery is not uniform across every failure mode |
 | Human-in-the-loop | Mostly covered | `HumanReviewRequest` v1, permissions, ask-user tool, plan approval, goal-drift approval | Plan approval and fallback decisions still need full migration into the unified model |
 | RAG/retrieval | Mostly covered | `RetrievalContext` v1, project index, memory prefetch, web tools, MCP resource access | Project/web/MCP still need to migrate fully into the unified context object |
-| A2A/inter-agent communication | Partially covered | team messaging, swarm, child agents | Missing standard `AgentTaskEnvelope` and durable inter-agent transcript schema |
+| A2A/inter-agent communication | Mostly covered | `AgentTaskEnvelope` v1, team messaging, swarm, child agents | Existing agent/swarm/team paths still need full migration to the envelope |
 | Resource-aware optimization | Mostly covered | `ResourcePolicy` v1, cost tracker, model fallback, context compression, tool budgets, `/resource` | Policy is visible but not yet enforced across every executor |
 | Reasoning techniques | Mostly covered | Socratic engine, `ReasoningPolicy`, workflow questioning | Missing explicit strategy selection artifact beyond router policy |
 | Guardrails/safety | Mostly covered | permissions, bash danger checks, path protections, SSRF guards, approvals | Needs eval coverage for guardrail regressions |
@@ -82,12 +82,12 @@ The latest implementation rounds closed the review's original P0/P2/P3 spine:
 
 These are the main gaps to close before claiming the handbook is fully represented:
 
-1. A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
-2. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
-3. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
-4. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
-5. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
-6. Runtime enforcement of `TaskContextBundle`, `ReflectionPass`, and `ResourcePolicy` for risky coding tasks.
+1. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
+2. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
+3. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
+4. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
+5. Runtime enforcement of `TaskContextBundle`, `ReflectionPass`, and `ResourcePolicy` for risky coding tasks.
+6. Full migration of agent/swarm/team handoffs into `AgentTaskEnvelope`.
 
 ### Recommended Next Priority
 
@@ -95,9 +95,9 @@ The next best work is not to add another isolated feature. Build the missing con
 
 1. Expand EvalSet from deterministic routing/trace checks into full tool-trajectory replay.
 2. Migrate project/web/MCP/session retrieval into `RetrievalContext`.
-3. Add A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
-4. Expand CLI dashboard and prompt/workflow templates.
-5. Complete runtime enforcement of `TaskContextBundle`, `ReflectionPass`, `ResourcePolicy`, and `HumanReviewRequest`.
+3. Expand CLI dashboard and prompt/workflow templates.
+4. Complete runtime enforcement of `TaskContextBundle`, `ReflectionPass`, `ResourcePolicy`, and `HumanReviewRequest`.
+5. Migrate agent/swarm/team handoffs into `AgentTaskEnvelope`.
 
 ### 2026-04-25 Implementation Update
 
@@ -109,6 +109,7 @@ The next best work is not to add another isolated feature. Build the missing con
 - Added `src/engine/human_review.rs` with a unified review request contract, and wired tool/goal-drift approvals through it.
 - Added `src/engine/task_context.rs` and `src/engine/reflection_pass.rs` as first-class task and self-review artifacts.
 - Added `src/engine/resource_policy.rs`, trace-visible `resource.policy` events, `/resource`, and evalset assertions for resource policy selection.
+- Added `src/agent/envelope.rs` with an A2A-inspired `AgentTaskEnvelope` for normalized sub-agent handoffs.
 
 ## Pass 0: Handbook Scope
 
