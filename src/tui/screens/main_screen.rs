@@ -604,19 +604,7 @@ pub fn render_tool_viewer(f: &mut Frame, app: &TuiApp, area: Rect) {
         .tool_viewer_content
         .lines()
         .map(|raw| {
-            let style = if raw.starts_with("Tool:")
-                || raw.starts_with("Status:")
-                || raw.starts_with("Elapsed:")
-                || raw.ends_with(':')
-            {
-                Style::default()
-                    .fg(app.theme.text_highlight)
-                    .add_modifier(Modifier::BOLD)
-            } else if raw.starts_with("- ") {
-                Style::default().fg(app.theme.text_dim)
-            } else {
-                Style::default().fg(app.theme.text)
-            };
+            let style = tool_viewer_line_style(raw, app);
             Line::from(Span::styled(raw.to_string(), style))
         })
         .collect::<Vec<_>>();
@@ -647,6 +635,40 @@ pub fn render_tool_viewer(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     f.render_widget(Clear, popup_area);
     f.render_widget(paragraph, popup_area);
+}
+
+fn tool_viewer_line_style(raw: &str, app: &TuiApp) -> Style {
+    let trimmed = raw.trim_start();
+    if raw.starts_with("Tool:")
+        || raw.starts_with("Status:")
+        || raw.starts_with("Elapsed:")
+        || raw.ends_with(':')
+    {
+        Style::default()
+            .fg(app.theme.text_highlight)
+            .add_modifier(Modifier::BOLD)
+    } else if trimmed.starts_with("ERROR")
+        || trimmed.starts_with("Error")
+        || trimmed.starts_with("error")
+        || trimmed.contains("panicked")
+        || trimmed.contains("failed")
+    {
+        Style::default().fg(app.theme.error)
+    } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+        Style::default().fg(app.theme.diff_add)
+    } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+        Style::default().fg(app.theme.diff_remove)
+    } else if trimmed.starts_with("@@") || trimmed.starts_with("diff --git") {
+        Style::default()
+            .fg(app.theme.diff_line_number)
+            .add_modifier(Modifier::BOLD)
+    } else if matches!(trimmed.chars().next(), Some('{' | '}' | '[' | ']' | '"')) {
+        Style::default().fg(app.theme.info)
+    } else if raw.starts_with("- ") {
+        Style::default().fg(app.theme.text_dim)
+    } else {
+        Style::default().fg(app.theme.text)
+    }
 }
 
 /// 渲染会话侧边栏
