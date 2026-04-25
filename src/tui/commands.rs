@@ -1293,6 +1293,14 @@ pub const CMD_GOAL: CommandDef = CommandDef::new(
     "Show or pin the current session goal",
 );
 
+pub const CMD_LEARN: CommandDef = CommandDef::new(
+    "/learn",
+    &[],
+    "General",
+    "/learn [limit]",
+    "Show recent runtime learning events",
+);
+
 pub const CMD_FEEDBACK: CommandDef = CommandDef::new(
     "/feedback",
     &[],
@@ -1436,6 +1444,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_SHORTCUTS);
     registry.register(&CMD_QUICK);
     registry.register(&CMD_GOAL);
+    registry.register(&CMD_LEARN);
     registry.register(&CMD_FEEDBACK);
 
     // Placeholder list intentionally empty: all registered slash commands currently have usable implementations.
@@ -1564,6 +1573,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_SHORTCUTS,
     &CMD_QUICK,
     &CMD_GOAL,
+    &CMD_LEARN,
     &CMD_FEEDBACK,
 ];
 

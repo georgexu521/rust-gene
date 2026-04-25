@@ -136,6 +136,54 @@ fn tool_call_fingerprint(tc: &ToolCall) -> String {
     format!("{}|{}", tc.name, args)
 }
 
+fn persist_turn_learning_event(
+    store: &crate::session_store::SessionStore,
+    trace: &crate::engine::trace::TurnTrace,
+) -> rusqlite::Result<i64> {
+    let intent = trace.events.iter().find_map(|event| match event {
+        TraceEvent::IntentRouted { intent, .. } => Some(intent.as_str()),
+        _ => None,
+    });
+    let goal = trace.events.iter().find_map(|event| match event {
+        TraceEvent::SessionGoalUpdated { title, .. } => Some(title.as_str()),
+        _ => None,
+    });
+    let tool_count = trace
+        .events
+        .iter()
+        .filter(|event| matches!(event, TraceEvent::ToolCompleted { .. }))
+        .count();
+    let summary = match (goal, intent) {
+        (Some(goal), Some(intent)) => format!("Turn {:?}: {} ({})", trace.status, goal, intent),
+        (Some(goal), None) => format!("Turn {:?}: {}", trace.status, goal),
+        (None, Some(intent)) => format!("Turn {:?}: intent {}", trace.status, intent),
+        (None, None) => format!("Turn {:?}: no routed intent", trace.status),
+    };
+    let payload = serde_json::json!({
+        "trace_id": trace.trace_id,
+        "turn_index": trace.turn_index,
+        "status": format!("{:?}", trace.status),
+        "intent": intent,
+        "goal": goal,
+        "tool_count": tool_count,
+        "event_count": trace.events.len(),
+        "duration_ms": trace.duration_ms(),
+    });
+    let confidence = if trace.status == TurnStatus::Completed {
+        1.0
+    } else {
+        0.45
+    };
+    store.add_learning_event(
+        &trace.session_id,
+        "turn_outcome",
+        "conversation_loop",
+        &summary,
+        confidence,
+        &payload,
+    )
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -1421,6 +1469,9 @@ impl ConversationLoop {
         if let Some(store) = &self.session_store {
             if let Err(e) = store.add_turn_trace(&trace) {
                 warn!("Failed to persist turn trace: {}", e);
+            }
+            if let Err(e) = persist_turn_learning_event(store, &trace) {
+                warn!("Failed to persist learning event: {}", e);
             }
         }
     }

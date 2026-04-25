@@ -335,6 +335,17 @@ impl TuiSessionManager {
         Ok(self.store.latest_turn_trace(session_id)?)
     }
 
+    /// 获取当前会话的最近学习事件。
+    pub fn recent_learning_events(
+        &self,
+        limit: i64,
+    ) -> anyhow::Result<Vec<crate::session_store::LearningEventRecord>> {
+        let Some(session_id) = self.current_session_id.as_deref() else {
+            return Ok(Vec::new());
+        };
+        Ok(self.store.recent_learning_events(session_id, limit)?)
+    }
+
     /// 获取会话消息数量
     pub fn message_count(&self, session_id: &str) -> anyhow::Result<i64> {
         Ok(self.store.message_count(session_id)?)

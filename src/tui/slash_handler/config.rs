@@ -2317,6 +2317,27 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
     "Usage: /goal [set <text>|clear]".to_string()
 }
 
+/// /learn - Show recent runtime learning events
+pub fn handle_learn(app: &mut TuiApp, args: &str) -> String {
+    let limit = args.trim().parse::<i64>().unwrap_or(8).clamp(1, 50);
+    let events = match app.session_manager.recent_learning_events(limit) {
+        Ok(events) => events,
+        Err(e) => return format!("Learning events unavailable: {}", e),
+    };
+    if events.is_empty() {
+        return "Learning Events\n- none yet".to_string();
+    }
+
+    let mut lines = vec![format!("Learning Events ({} recent)", events.len())];
+    for event in events {
+        lines.push(format!(
+            "- #{} {} [{}] conf={:.2}: {}",
+            event.id, event.kind, event.source, event.confidence, event.summary
+        ));
+    }
+    lines.join("\n")
+}
+
 fn quick_git_line(cwd: &std::path::Path) -> String {
     let branch = std::process::Command::new("git")
         .args(["branch", "--show-current"])

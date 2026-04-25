@@ -6,5 +6,6 @@ pub mod framework;
 pub mod v1_initial;
 pub mod v2_add_tasks;
 pub mod v3_add_traces;
+pub mod v4_add_learning_events;
 
 pub use framework::{Migration, MigrationRunner};

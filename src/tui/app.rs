@@ -2215,6 +2215,7 @@ impl TuiApp {
             "/shortcuts" => slash::handle_shortcuts(self),
             "/quick" => slash::handle_quick(self),
             "/goal" => slash::handle_goal(self, args),
+            "/learn" => slash::handle_learn(self, args),
             "/feedback" => slash::handle_feedback(self, args),
             _ => {
                 format!(

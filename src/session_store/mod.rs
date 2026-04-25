@@ -38,6 +38,19 @@ pub struct SessionRecord {
     pub total_output_tokens: i64,
 }
 
+/// Durable event extracted from completed turns for future routing/tool tuning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearningEventRecord {
+    pub id: i64,
+    pub session_id: String,
+    pub kind: String,
+    pub source: String,
+    pub summary: String,
+    pub confidence: f64,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
 /// 会话存储
 pub struct SessionStore {
     conn: Arc<Mutex<Connection>>,
@@ -74,6 +87,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v3_add_traces::V3AddTraces,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v4_add_learning_events::V4AddLearningEvents,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -99,6 +115,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v3_add_traces::V3AddTraces,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v4_add_learning_events::V4AddLearningEvents,
         ));
         runner.run(&conn)?;
 
@@ -513,6 +532,65 @@ impl SessionStore {
         trace.events = events;
         Ok(Some(trace))
     }
+
+    // ==================== Learning Event 操作 ====================
+
+    /// Persist a durable learning event extracted from runtime behavior.
+    pub fn add_learning_event(
+        &self,
+        session_id: &str,
+        kind: &str,
+        source: &str,
+        summary: &str,
+        confidence: f64,
+        payload: &serde_json::Value,
+    ) -> SqlResult<i64> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO learning_events (session_id, kind, source, summary, confidence, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                session_id,
+                kind,
+                source,
+                summary,
+                confidence.clamp(0.0, 1.0),
+                payload.to_string()
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Load recent learning events for a session.
+    pub fn recent_learning_events(
+        &self,
+        session_id: &str,
+        limit: i64,
+    ) -> SqlResult<Vec<LearningEventRecord>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, kind, source, summary, confidence, payload, created_at
+             FROM learning_events
+             WHERE session_id = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit], |row| {
+            let payload_text: String = row.get(6)?;
+            Ok(LearningEventRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                kind: row.get(2)?,
+                source: row.get(3)?,
+                summary: row.get(4)?,
+                confidence: row.get(5)?,
+                payload: serde_json::from_str(&payload_text)
+                    .unwrap_or_else(|_| serde_json::json!({})),
+                created_at: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
 }
 
 /// 数据库统计
@@ -627,6 +705,30 @@ mod tests {
         assert_eq!(loaded.status, crate::engine::trace::TurnStatus::Completed);
         assert_eq!(loaded.events.len(), trace.events.len());
         assert_eq!(loaded.events[1].label(), "tool.done");
+    }
+
+    #[test]
+    fn test_learning_event_persistence() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+
+        let id = store
+            .add_learning_event(
+                "s1",
+                "turn_outcome",
+                "test",
+                "Turn completed",
+                1.2,
+                &serde_json::json!({"intent": "CodeChange"}),
+            )
+            .unwrap();
+        assert!(id > 0);
+
+        let events = store.recent_learning_events("s1", 10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "turn_outcome");
+        assert_eq!(events[0].confidence, 1.0);
+        assert_eq!(events[0].payload["intent"], "CodeChange");
     }
 
     #[test]
