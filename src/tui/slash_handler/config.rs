@@ -1984,14 +1984,49 @@ pub fn handle_debug_cmd(_app: &mut TuiApp, args: &str) -> String {
     }
 }
 
-/// /trace - Tracing controls
-pub fn handle_trace(_app: &mut TuiApp, args: &str) -> String {
+/// /trace - Runtime trace viewer and tracing controls
+pub fn handle_trace(app: &mut TuiApp, args: &str) -> String {
     let mut prefs = load_runtime_prefs().unwrap_or_default();
     let arg = args.trim();
-    if arg.is_empty() || arg == "status" {
+    if arg.is_empty() || arg == "last" {
+        if let Some(engine) = &app.streaming_engine {
+            if let Some(trace) = engine.trace_store().latest() {
+                return crate::engine::trace::format_trace_summary(&trace, 80);
+            }
+        }
+        return match app.session_manager.latest_trace() {
+            Ok(Some(trace)) => crate::engine::trace::format_trace_summary(&trace, 80),
+            Ok(None) => "No turn trace recorded yet.".to_string(),
+            Err(e) => format!("Failed to load latest trace: {}", e),
+        };
+    } else if arg == "recent" {
+        if let Some(engine) = &app.streaming_engine {
+            let traces = engine.trace_store().recent(10);
+            if !traces.is_empty() {
+                let mut lines = vec!["Recent traces:".to_string()];
+                for trace in traces {
+                    lines.push(format!(
+                        "- {} turn {} {:?} events={} prompt={}",
+                        trace.trace_id.chars().take(8).collect::<String>(),
+                        trace.turn_index,
+                        trace.status,
+                        trace.events.len(),
+                        trace.user_message_preview
+                    ));
+                }
+                return lines.join("\n");
+            }
+        }
+        return "No recent traces in memory. Use /trace last for the persisted latest trace."
+            .to_string();
+    } else if arg == "status" {
         return format!(
-            "Tracing: {}",
-            if prefs.trace { "enabled" } else { "disabled" }
+            "Log tracing: {}\nRuntime traces: {}",
+            if prefs.trace { "enabled" } else { "disabled" },
+            app.streaming_engine
+                .as_ref()
+                .map(|engine| engine.trace_store().len().to_string())
+                .unwrap_or_else(|| "unavailable".to_string())
         );
     }
 
@@ -1999,7 +2034,7 @@ pub fn handle_trace(_app: &mut TuiApp, args: &str) -> String {
         "on" | "enable" => prefs.trace = true,
         "off" | "disable" => prefs.trace = false,
         "toggle" => prefs.trace = !prefs.trace,
-        _ => return "Usage: /trace [on|off|toggle|status]".to_string(),
+        _ => return "Usage: /trace [last|recent|on|off|toggle|status]".to_string(),
     }
     std::env::set_var(
         "RUST_LOG",

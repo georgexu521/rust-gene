@@ -32,6 +32,7 @@ pub mod streaming;
 pub mod swarm;
 pub mod symbol_index;
 pub mod tool_orchestration;
+pub mod trace;
 pub mod turn_state;
 pub mod workflow;
 pub mod worktree;
@@ -173,6 +174,9 @@ pub struct ConversationLoopBuilder {
     llm_memory_extraction: bool,
     approval_channel: Option<std::sync::Arc<self::conversation_loop::ToolApprovalChannel>>,
     allowed_tools: Option<std::collections::HashSet<String>>,
+    trace_store: Option<std::sync::Arc<self::trace::TraceStore>>,
+    session_store: Option<std::sync::Arc<crate::session_store::SessionStore>>,
+    session_id: Option<String>,
     compressor: Option<
         std::sync::Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
     >,
@@ -202,6 +206,9 @@ impl ConversationLoopBuilder {
             llm_memory_extraction: false,
             approval_channel: None,
             allowed_tools: None,
+            trace_store: None,
+            session_store: None,
+            session_id: None,
             compressor: None,
         }
     }
@@ -284,6 +291,21 @@ impl ConversationLoopBuilder {
         self
     }
 
+    pub fn with_trace_store(mut self, store: std::sync::Arc<self::trace::TraceStore>) -> Self {
+        self.trace_store = Some(store);
+        self
+    }
+
+    pub fn with_session_store(
+        mut self,
+        store: std::sync::Arc<crate::session_store::SessionStore>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.session_store = Some(store);
+        self.session_id = Some(session_id.into());
+        self
+    }
+
     pub fn with_compressor(
         mut self,
         compressor: std::sync::Arc<
@@ -337,6 +359,12 @@ impl ConversationLoopBuilder {
         }
         if let Some(allowed_tools) = self.allowed_tools {
             lp = lp.with_allowed_tools(allowed_tools);
+        }
+        if let Some(trace_store) = self.trace_store {
+            lp = lp.with_trace_store(trace_store);
+        }
+        if let (Some(session_store), Some(session_id)) = (self.session_store, self.session_id) {
+            lp = lp.with_session_store(session_store, session_id);
         }
         if let Some(compressor) = self.compressor {
             lp = lp.with_compressor(compressor);

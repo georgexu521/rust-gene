@@ -327,6 +327,14 @@ impl TuiSessionManager {
         Ok(self.store.stats()?)
     }
 
+    /// 获取当前会话的最近一条运行轨迹。
+    pub fn latest_trace(&self) -> anyhow::Result<Option<crate::engine::trace::TurnTrace>> {
+        let Some(session_id) = self.current_session_id.as_deref() else {
+            return Ok(None);
+        };
+        Ok(self.store.latest_turn_trace(session_id)?)
+    }
+
     /// 获取会话消息数量
     pub fn message_count(&self, session_id: &str) -> anyhow::Result<i64> {
         Ok(self.store.message_count(session_id)?)

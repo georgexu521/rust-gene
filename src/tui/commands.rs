@@ -1108,8 +1108,8 @@ pub const CMD_TRACE: CommandDef = CommandDef::new(
     "/trace",
     &[],
     "Config",
-    "/trace [on|off|toggle|status]",
-    "Tracing controls",
+    "/trace [last|recent|on|off|toggle|status]",
+    "Show runtime trace or configure log tracing",
 );
 
 pub const CMD_SKILLS: CommandDef =

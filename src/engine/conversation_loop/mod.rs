@@ -18,6 +18,7 @@ pub(crate) use tool_execution::{
     READ_ONLY_TOOLS,
 };
 
+use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
@@ -170,6 +171,12 @@ pub struct ConversationLoop {
     denial_tracker: Option<Arc<crate::security::DenialTracker>>,
     /// 安全审计日志
     audit_log: Option<Arc<crate::security::SecurityAuditLog>>,
+    /// Runtime trace store for recent turn timelines.
+    trace_store: Option<Arc<TraceStore>>,
+    /// Optional persistent store for completed traces.
+    session_store: Option<Arc<crate::session_store::SessionStore>>,
+    /// Monotonic turn counter used for trace display.
+    turn_counter: std::sync::atomic::AtomicU64,
 }
 
 /// 对话循环结果
@@ -212,6 +219,9 @@ impl ConversationLoop {
             session_id: format!("session-{}", uuid::Uuid::new_v4()),
             denial_tracker: None,
             audit_log: None,
+            trace_store: None,
+            session_store: None,
+            turn_counter: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -304,6 +314,21 @@ impl ConversationLoop {
         self
     }
 
+    pub fn with_trace_store(mut self, store: Arc<TraceStore>) -> Self {
+        self.trace_store = Some(store);
+        self
+    }
+
+    pub fn with_session_store(
+        mut self,
+        store: Arc<crate::session_store::SessionStore>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.session_store = Some(store);
+        self.session_id = session_id.into();
+        self
+    }
+
     /// 创建工具执行上下文
     fn create_tool_context(&self) -> ToolContext {
         let mut ctx = ToolContext::new(".", self.session_id.clone());
@@ -360,6 +385,29 @@ impl ConversationLoop {
         mut messages: Vec<Message>,
         tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<LoopResult> {
+        let last_user_preview = messages
+            .iter()
+            .rposition(|m| matches!(m, Message::User { .. }))
+            .and_then(|i| match &messages[i] {
+                Message::User { content } => Some(content.as_str()),
+                _ => None,
+            })
+            .unwrap_or("");
+        let turn_index = self
+            .trace_store
+            .as_ref()
+            .and_then(|store| store.latest().map(|trace| trace.turn_index + 1))
+            .unwrap_or_else(|| {
+                self.turn_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1
+            });
+        let trace = TraceCollector::new(TurnTrace::new(
+            self.session_id.clone(),
+            turn_index,
+            last_user_preview,
+        ));
+
         // ── Workflow 闸门检查 ──────────────────────────
         let already_triggered = self
             .workflow_triggered_this_turn
@@ -384,6 +432,14 @@ impl ConversationLoop {
                 } else {
                     gate.decide(last_user_msg)
                 };
+                trace.record(TraceEvent::WorkflowRouted {
+                    decision: if decision.is_workflow() {
+                        "workflow".to_string()
+                    } else {
+                        "direct".to_string()
+                    },
+                    reason: decision.reason().to_string(),
+                });
                 if decision.is_workflow() {
                     crate::engine::workflow::metrics::record_workflow_run();
                     if let Some(ref mem_mgr) = self.memory_manager {
@@ -409,6 +465,9 @@ impl ConversationLoop {
                         .await
                     {
                         Ok(result) => {
+                            trace.record(TraceEvent::WorkflowCompleted {
+                                steps: result.plan.steps.len(),
+                            });
                             let workflow_report = strip_think_blocks(&result.final_report);
                             if let Some(ref mem_mgr) = self.memory_manager {
                                 let mut mem = mem_mgr.lock().await;
@@ -430,6 +489,11 @@ impl ConversationLoop {
                                 }
                                 let _ = tx.send(StreamEvent::Complete).await;
                             }
+                            trace.record(TraceEvent::AssistantResponded {
+                                chars: workflow_report.chars().count(),
+                                iterations: 0,
+                            });
+                            self.finish_trace(trace.clone(), TurnStatus::Completed);
                             return Ok(LoopResult {
                                 content: workflow_report,
                                 tool_calls: Vec::new(),
@@ -438,6 +502,7 @@ impl ConversationLoop {
                             });
                         }
                         Err(e) => {
+                            trace.record(TraceEvent::WorkflowFallback { error: e.clone() });
                             if let Some(ref mem_mgr) = self.memory_manager {
                                 let mut mem = mem_mgr.lock().await;
                                 mem.save_workflow_decision(
@@ -471,6 +536,9 @@ impl ConversationLoop {
             if !snapshot.is_empty() && !messages.iter().any(|m| {
                 matches!(m, Message::System { content } if content.contains("<memory-context>"))
             }) {
+                trace.record(TraceEvent::MemorySnapshotInjected {
+                    chars: snapshot.chars().count(),
+                });
                 let insert_pos = messages
                     .iter()
                     .position(|m| !matches!(m, Message::System { .. }))
@@ -506,6 +574,11 @@ impl ConversationLoop {
                     .compress_async(&messages)
                     .await;
                 let after_tokens = estimate_messages_tokens(&messages);
+                trace.record(TraceEvent::ContextCompacted {
+                    before_tokens: before_tokens as usize,
+                    after_tokens: after_tokens as usize,
+                    strategy: "preflight".to_string(),
+                });
                 if after_tokens >= before_tokens {
                     no_gain_passes += 1;
                     if no_gain_passes >= 2 {
@@ -560,6 +633,9 @@ impl ConversationLoop {
                             .prefetch_with_llm_rerank(content, self.provider.as_ref(), &self.model)
                             .await;
                         if !prefetch.is_empty() {
+                            trace.record(TraceEvent::MemoryPrefetch {
+                                chars: prefetch.chars().count(),
+                            });
                             let enhanced = format!(
                                 "{}\n<relevant-memory>\n{}\n</relevant-memory>",
                                 content, prefetch
@@ -584,6 +660,11 @@ impl ConversationLoop {
                 std::collections::HashMap<usize, ToolResult>,
             )> = Err(anyhow::anyhow!("initial"));
             for compress_retry in 0..3 {
+                trace.record(TraceEvent::ApiRequestStarted {
+                    iteration: iteration + 1,
+                    model: self.model.clone(),
+                    tools: tools.len(),
+                });
                 api_result = if let Some(tx) = tx {
                     self.call_api_streaming(request.clone(), tx).await
                 } else {
@@ -614,6 +695,12 @@ impl ConversationLoop {
                                 };
                                 let compressed =
                                     comp.lock().await.compress_async(&msgs_for_comp).await;
+                                trace.record(TraceEvent::ContextCompacted {
+                                    before_tokens: estimate_messages_tokens(&msgs_for_comp)
+                                        as usize,
+                                    after_tokens: estimate_messages_tokens(&compressed) as usize,
+                                    strategy: "reactive".to_string(),
+                                });
                                 request = ChatRequest::new(&self.model)
                                     .with_messages(compressed)
                                     .with_tools(tools.clone())
@@ -627,7 +714,21 @@ impl ConversationLoop {
                 }
             }
 
-            let (content, tool_calls, pre_executed) = api_result?;
+            let (content, tool_calls, pre_executed) = match api_result {
+                Ok(value) => value,
+                Err(e) => {
+                    trace.record(TraceEvent::Error {
+                        message: e.to_string(),
+                    });
+                    self.finish_trace(trace.clone(), TurnStatus::Failed);
+                    return Err(e);
+                }
+            };
+            trace.record(TraceEvent::ApiRequestCompleted {
+                iteration: iteration + 1,
+                tool_calls: tool_calls.len(),
+                content_chars: content.chars().count(),
+            });
 
             if compressed_this_turn {
                 debug!("Context compressed due to size limits");
@@ -643,7 +744,7 @@ impl ConversationLoop {
             messages.push(Message::assistant_with_tools(&content, tool_calls.clone()));
 
             let mut results = self
-                .execute_tools_parallel(&tool_calls, tx, pre_executed)
+                .execute_tools_parallel(&tool_calls, tx, pre_executed, Some(trace.clone()))
                 .await;
 
             // ── 迭代预算退还 ──────────────────────────────
@@ -829,6 +930,10 @@ impl ConversationLoop {
 
                 // ── 编程质量可观测性 ───────────────────────
                 let verify_passed = check_passed && tests_passed && review_result.success;
+                trace.record(TraceEvent::VerificationCompleted {
+                    changed_files: changed_files.len(),
+                    passed: verify_passed,
+                });
                 {
                     let mut tracker = self.cost_tracker.lock().await;
                     tracker.record_coding_round(verify_passed);
@@ -854,10 +959,16 @@ impl ConversationLoop {
                             mem.sync_turn_llm(user_msg, &assistant_text, provider, &self.model)
                                 .await;
                             mem.mark_main_agent_wrote();
+                            trace.record(TraceEvent::MemorySynced {
+                                mode: "llm".to_string(),
+                            });
                         }
                     } else {
                         mem.sync_turn(user_msg, &assistant_text);
                         mem.mark_main_agent_wrote();
+                        trace.record(TraceEvent::MemorySynced {
+                            mode: "heuristic".to_string(),
+                        });
                     }
                 }
                 mem.increment_turn();
@@ -867,6 +978,12 @@ impl ConversationLoop {
         if let Some(tx) = tx {
             let _ = tx.send(StreamEvent::Complete).await;
         }
+
+        trace.record(TraceEvent::AssistantResponded {
+            chars: final_content.chars().count(),
+            iterations: iterations_used,
+        });
+        self.finish_trace(trace, TurnStatus::Completed);
 
         Ok(LoopResult {
             content: final_content,
@@ -1265,6 +1382,18 @@ impl ConversationLoop {
         }
     }
 
+    fn finish_trace(&self, trace: TraceCollector, status: TurnStatus) {
+        let trace = trace.finish(status);
+        if let Some(store) = &self.trace_store {
+            store.push(trace.clone());
+        }
+        if let Some(store) = &self.session_store {
+            if let Err(e) = store.add_turn_trace(&trace) {
+                warn!("Failed to persist turn trace: {}", e);
+            }
+        }
+    }
+
     /// 获取工具定义列表
     fn get_tools(&self) -> Vec<crate::services::api::Tool> {
         self.tool_registry
@@ -1290,6 +1419,7 @@ impl ConversationLoop {
         tool_calls: &[ToolCall],
         tx: Option<&mpsc::Sender<StreamEvent>>,
         pre_executed: std::collections::HashMap<usize, ToolResult>,
+        trace: Option<TraceCollector>,
     ) -> Vec<(ToolCall, ToolResult)> {
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
@@ -1314,6 +1444,21 @@ impl ConversationLoop {
             }
 
             if let Some(pre_result) = pre_executed.get(&i) {
+                if let Some(ref trace) = trace {
+                    trace.record(TraceEvent::ToolStarted {
+                        tool: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                        parallel: true,
+                        pre_executed: true,
+                    });
+                    trace.record(TraceEvent::ToolCompleted {
+                        tool: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                        success: pre_result.success,
+                        duration_ms: pre_result.duration_ms,
+                        output_chars: pre_result.content.chars().count(),
+                    });
+                }
                 debug!(
                     "Skipping pre-executed read-only tool at index {}: {}",
                     i, tc.name
@@ -1350,8 +1495,17 @@ impl ConversationLoop {
                 let tool_name = tc.name.clone();
                 let cost_tracker = self.cost_tracker.clone();
                 let hook_manager = self.hook_manager.clone();
+                let trace = trace.clone();
                 read_only_jobs.push(async move {
                     let started_at = std::time::Instant::now();
+                    if let Some(ref trace) = trace {
+                        trace.record(TraceEvent::ToolStarted {
+                            tool: tool_name.clone(),
+                            call_id: tc_clone.id.clone(),
+                            parallel: true,
+                            pre_executed: false,
+                        });
+                    }
                     let pre_decision = if let Some(ref hooks) = hook_manager {
                         hooks.run_pre_tool(&tc_clone, &context).await
                     } else {
@@ -1388,6 +1542,15 @@ impl ConversationLoop {
                             duration_ms,
                             result.error.as_deref(),
                         );
+                    }
+                    if let Some(ref trace) = trace {
+                        trace.record(TraceEvent::ToolCompleted {
+                            tool: tool_name,
+                            call_id: tc_clone.id.clone(),
+                            success: result.success,
+                            duration_ms: result.duration_ms,
+                            output_chars: result.content.chars().count(),
+                        });
                     }
                     (tc_clone, result)
                 });
@@ -1443,6 +1606,14 @@ impl ConversationLoop {
                     })
                     .await;
             }
+            if let Some(ref trace) = trace {
+                trace.record(TraceEvent::ToolStarted {
+                    tool: tool_name.clone(),
+                    call_id: tool_id.clone(),
+                    parallel: false,
+                    pre_executed: false,
+                });
+            }
 
             let (result, hook_context) = if let Some(tool) = self.tool_registry.get(&tool_name) {
                 let mut context = self.create_tool_context();
@@ -1486,6 +1657,13 @@ impl ConversationLoop {
                                 prompt: prompt.clone(),
                             })
                             .await;
+                        if let Some(ref trace) = trace {
+                            trace.record(TraceEvent::PermissionRequested {
+                                tool: tool_name.clone(),
+                                call_id: tool_id.clone(),
+                                prompt: prompt.clone(),
+                            });
+                        }
                         let request = ToolApprovalRequest {
                             tool_call: tc.clone(),
                             prompt,
@@ -1495,6 +1673,13 @@ impl ConversationLoop {
                             Err(e) => {
                                 warn!("Tool approval error: {}", e);
                             }
+                        }
+                        if let Some(ref trace) = trace {
+                            trace.record(TraceEvent::PermissionResolved {
+                                tool: tool_name.clone(),
+                                call_id: tool_id.clone(),
+                                approved,
+                            });
                         }
                     }
                     if approved {
@@ -1617,6 +1802,15 @@ impl ConversationLoop {
                         result: result_content,
                     })
                     .await;
+            }
+            if let Some(ref trace) = trace {
+                trace.record(TraceEvent::ToolCompleted {
+                    tool: tool_name,
+                    call_id: tool_id,
+                    success: result.success,
+                    duration_ms: result.duration_ms,
+                    output_chars: result.content.chars().count(),
+                });
             }
             results.push((tc, result));
         }
