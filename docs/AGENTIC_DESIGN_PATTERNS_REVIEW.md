@@ -43,22 +43,22 @@ They are not yet comprehensive for the entire handbook. The remaining work is mo
 
 | Handbook Pattern | Current Coverage | Evidence | Remaining Gap |
 | --- | --- | --- | --- |
-| Prompt chaining | Mostly covered | `ConversationLoop`, `WorkflowEngine`, `PlanMode`, `TurnTrace` | No reusable chain-template library for common coding workflows |
+| Prompt chaining | Mostly covered | `ConversationLoop`, `WorkflowEngine`, `PlanMode`, `TurnTrace`, prompt templates | Workflow templates are available but not all routed automatically |
 | Routing | Covered | `src/engine/intent_router.rs`, route events in `TurnTrace`, learning-aware routing | Needs more calibration data from real outcomes |
 | Parallelization | Mostly covered | read-only parallel tool execution, `swarm`, `agent`, `team` tools | No first-class `ParallelGroup` merge contract or branch UI |
-| Reflection | Mostly covered | `ReflectionPass` v1, Socratic analysis, review/debug agent templates, verification trace events | Reflection is not yet mandatory after every risky edit |
+| Reflection | Mostly covered | `ReflectionPass` trace events, Socratic analysis, review/debug agent templates, verification trace events | Reflection is visible for routed turns, but not yet blocking risky edits |
 | Tool use | Mostly covered | tool registry, permissions, structured `ToolResult`, recovery metadata, tool viewer | Tool reliability score is not yet shown in routing/UI |
-| Planning | Mostly covered | `TaskContextBundle` v1, `PlanMode`, workflow gates, approval UI, trace events | Plan dependencies/checkpoints are not fully unified with the task bundle |
-| Multi-agent collaboration | Mostly covered | `agent`, `swarm`, `team`, role memory | Missing A2A-compatible task envelope and protocol boundary |
+| Planning | Mostly covered | `TaskContextBundle` trace events, `PlanMode`, workflow gates, approval UI, trace events | Plan dependencies/checkpoints are not fully unified with the task bundle |
+| Multi-agent collaboration | Mostly covered | `AgentTaskEnvelope` handoff, `agent`, `swarm`, `team`, role memory | Swarm/team paths still need full envelope migration |
 | Memory management | Covered | frozen snapshot, prefetch, topic/project/user/session memory, namespace search, conflict hints | Needs stronger UI for conflicts and memory provenance |
 | Learning/adaptation | Mostly covered | `LearningEventRecord`, turn/tool outcome persistence, `route_with_learning` | Priority weights and workflow choice still need broader outcome feedback |
 | MCP | Mostly covered | MCP manager, stdio/ws/http, OAuth, resource list/read trace, health diagnostics | Not yet a polished standalone MCP server surface |
 | Goal monitoring | Covered | `SessionGoalManager`, `GoalDriftDetector`, `/goal drift`, approval integration | Needs richer goal history and acceptance criteria UI |
 | Recovery | Mostly covered | `RecoveryPlan`, `/recover`, API/tool recovery trace, tool metadata | Workflow-level recovery is not uniform across every failure mode |
-| Human-in-the-loop | Mostly covered | `HumanReviewRequest` v1, permissions, ask-user tool, plan approval, goal-drift approval | Plan approval and fallback decisions still need full migration into the unified model |
-| RAG/retrieval | Mostly covered | `RetrievalContext` v1, project index, memory prefetch, web tools, MCP resource access | Project/web/MCP still need to migrate fully into the unified context object |
-| A2A/inter-agent communication | Mostly covered | `AgentTaskEnvelope` v1, team messaging, swarm, child agents | Existing agent/swarm/team paths still need full migration to the envelope |
-| Resource-aware optimization | Mostly covered | `ResourcePolicy` v1, cost tracker, model fallback, context compression, tool budgets, `/resource` | Policy is visible but not yet enforced across every executor |
+| Human-in-the-loop | Mostly covered | `HumanReviewRequest` for tool, goal-drift, and plan approvals | Fallback decisions still need full migration into the unified model |
+| RAG/retrieval | Mostly covered | `RetrievalContext` events for memory and MCP resources, project index, web tools | Project/web/session retrieval still need to migrate fully into the unified context object |
+| A2A/inter-agent communication | Mostly covered | `AgentTaskEnvelope` in agent handoff, team messaging, swarm, child agents | Swarm/team paths still need full migration to the envelope |
+| Resource-aware optimization | Mostly covered | `ResourcePolicy` trace events, cost tracker, model fallback, context compression, `/resource`, `/quick` | Policy is visible but not yet enforced across every executor |
 | Reasoning techniques | Mostly covered | Socratic engine, `ReasoningPolicy`, workflow questioning | Missing explicit strategy selection artifact beyond router policy |
 | Guardrails/safety | Mostly covered | permissions, bash danger checks, path protections, SSRF guards, approvals | Needs eval coverage for guardrail regressions |
 | Evaluation/monitoring | Mostly covered | EvalSet v1, 820+ tests, traces, workflow reports, CLI observability | EvalSet currently covers deterministic routing/trace checks; full tool trajectory replay is still pending |
@@ -85,8 +85,8 @@ These are the main gaps to close before claiming the handbook is fully represent
 1. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
 2. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
 3. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
-4. Runtime enforcement of `TaskContextBundle`, `ReflectionPass`, and `ResourcePolicy` for risky coding tasks.
-5. Full migration of agent/swarm/team handoffs into `AgentTaskEnvelope`.
+4. Runtime enforcement of `ReflectionPass` and `ResourcePolicy` for risky coding tasks.
+5. Full migration of swarm/team handoffs into `AgentTaskEnvelope`.
 6. Deeper CLI dashboard backed by live task/retrieval/review/resource state.
 
 ### Recommended Next Priority
@@ -111,6 +111,7 @@ The next best work is not to add another isolated feature. Build the missing con
 - Added `src/engine/resource_policy.rs`, trace-visible `resource.policy` events, `/resource`, and evalset assertions for resource policy selection.
 - Added `src/agent/envelope.rs` with an A2A-inspired `AgentTaskEnvelope` for normalized sub-agent handoffs.
 - Added `src/engine/prompt_templates.rs` and `/prompt templates|render` for built-in workflow prompt templates.
+- Wired `TaskContextBundle`, `ReflectionPass`, `ResourcePolicy`, MCP retrieval context, plan review, and agent task envelopes into runtime paths and `/quick`.
 
 ## Pass 0: Handbook Scope
 

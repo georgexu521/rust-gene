@@ -18,6 +18,8 @@ scenarios:
         - prompt
         - intent
         - resource.policy
+        - task.context
+        - reflection.pass
 
   - id: code-change-route
     prompt: "继续开发 tui 界面，优化状态栏"

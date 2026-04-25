@@ -299,6 +299,35 @@ fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRou
         context_budget_tokens: policy.context_budget_tokens,
         reason: policy.reason,
     });
+    let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
+        &scenario.prompt,
+        ".",
+        route.clone(),
+        None,
+    );
+    if matches!(
+        route.workflow,
+        crate::engine::intent_router::WorkflowKind::CodeChange
+            | crate::engine::intent_router::WorkflowKind::BugFix
+    ) {
+        task_bundle.add_risk("code-change tasks require explicit verification");
+    }
+    trace.events.push(TraceEvent::TaskContextBuilt {
+        task_id: task_bundle.task_id.clone(),
+        workflow: format!("{:?}", task_bundle.route.workflow),
+        files: task_bundle.relevant_files.len(),
+        constraints: task_bundle.constraints.len(),
+        risks: task_bundle.risks.len(),
+        acceptance_checks: task_bundle.acceptance_checks.len(),
+    });
+    let reflection = crate::engine::reflection_pass::ReflectionPass::from_task_bundle(&task_bundle);
+    trace.events.push(TraceEvent::ReflectionPassCompleted {
+        pass_id: reflection.pass_id.clone(),
+        task_id: reflection.task_id.clone(),
+        status: format!("{:?}", reflection.status),
+        findings: reflection.findings.len(),
+        unresolved: reflection.unresolved_count(),
+    });
     trace
 }
 

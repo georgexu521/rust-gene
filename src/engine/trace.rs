@@ -83,6 +83,21 @@ pub enum TraceEvent {
         context_budget_tokens: usize,
         reason: String,
     },
+    TaskContextBuilt {
+        task_id: String,
+        workflow: String,
+        files: usize,
+        constraints: usize,
+        risks: usize,
+        acceptance_checks: usize,
+    },
+    ReflectionPassCompleted {
+        pass_id: String,
+        task_id: String,
+        status: String,
+        findings: usize,
+        unresolved: usize,
+    },
     SessionGoalUpdated {
         goal_id: String,
         title: String,
@@ -200,6 +215,8 @@ impl TraceEvent {
             TraceEvent::UserPromptSubmitted { .. } => "prompt",
             TraceEvent::IntentRouted { .. } => "intent",
             TraceEvent::ResourcePolicySelected { .. } => "resource.policy",
+            TraceEvent::TaskContextBuilt { .. } => "task.context",
+            TraceEvent::ReflectionPassCompleted { .. } => "reflection.pass",
             TraceEvent::SessionGoalUpdated { .. } => "goal",
             TraceEvent::GoalDriftDetected { .. } => "goal.drift",
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
@@ -263,6 +280,36 @@ impl TraceEvent {
                 max_tool_calls,
                 context_budget_tokens,
                 preview(reason)
+            ),
+            TraceEvent::TaskContextBuilt {
+                task_id,
+                workflow,
+                files,
+                constraints,
+                risks,
+                acceptance_checks,
+            } => format!(
+                "task context {} workflow={} files={} constraints={} risks={} checks={}",
+                short_id(task_id),
+                workflow,
+                files,
+                constraints,
+                risks,
+                acceptance_checks
+            ),
+            TraceEvent::ReflectionPassCompleted {
+                pass_id,
+                task_id,
+                status,
+                findings,
+                unresolved,
+            } => format!(
+                "reflection {} task={} status={} findings={} unresolved={}",
+                short_id(pass_id),
+                short_id(task_id),
+                status,
+                findings,
+                unresolved
             ),
             TraceEvent::SessionGoalUpdated {
                 goal_id,

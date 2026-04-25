@@ -55,6 +55,26 @@ pub struct HumanReviewRequest {
 }
 
 impl HumanReviewRequest {
+    pub fn plan_approval(title: &str, goal: &str, steps: usize, complexity: &str) -> Self {
+        Self {
+            kind: HumanReviewKind::PlanApproval,
+            title: "Plan approval".to_string(),
+            reason: format!(
+                "execution plan '{}' needs approval before running {} step(s)",
+                title, steps
+            ),
+            risk: if steps > 5 || complexity.eq_ignore_ascii_case("high") {
+                HumanReviewRisk::High
+            } else {
+                HumanReviewRisk::Medium
+            },
+            subject: goal.to_string(),
+            options: approve_deny_options(),
+            persistence_scope: Some("this_plan".to_string()),
+            impact: "Approving allows the agent to execute the proposed plan.".to_string(),
+        }
+    }
+
     pub fn tool_permission(tool_call: &ToolCall, prompt: &str) -> Self {
         let kind = if prompt
             .to_ascii_lowercase()
@@ -197,5 +217,13 @@ mod tests {
         assert_eq!(req.kind, HumanReviewKind::GoalDrift);
         assert_eq!(req.risk, HumanReviewRisk::High);
         assert!(req.reason.contains("active session goal"));
+    }
+
+    #[test]
+    fn plan_review_marks_large_plan_high_risk() {
+        let req = HumanReviewRequest::plan_approval("ship", "ship feature", 8, "high");
+        assert_eq!(req.kind, HumanReviewKind::PlanApproval);
+        assert_eq!(req.risk, HumanReviewRisk::High);
+        assert!(req.subject.contains("ship feature"));
     }
 }

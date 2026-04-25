@@ -146,6 +146,15 @@ impl Plan {
             .unwrap_or(3)
     }
 
+    pub fn human_review_request(&self) -> crate::engine::human_review::HumanReviewRequest {
+        crate::engine::human_review::HumanReviewRequest::plan_approval(
+            &self.title,
+            &self.goal,
+            self.steps.len(),
+            &self.estimated_complexity,
+        )
+    }
+
     /// 格式化为可读文本
     pub fn format(&self) -> String {
         let mut output = String::new();

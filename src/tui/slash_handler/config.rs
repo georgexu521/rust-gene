@@ -2408,9 +2408,12 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let drift_line = latest_trace_for_app(app)
         .map(|trace| goal_drift_count_label(&trace))
         .unwrap_or_else(|| "none".to_string());
+    let resource_line = latest_trace_for_app(app)
+        .and_then(|trace| latest_resource_policy_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
 
     format!(
-        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Recent commands: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /goal         inspect or pin the active goal\n2. /goal drift   inspect recent goal drift\n3. /doctor       run environment diagnostics\n4. /permissions  inspect or edit permission rules\n5. /sessions     resume recent work\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
         pending,
@@ -2421,11 +2424,33 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         app.current_provider_label(),
         app.current_model_label(),
         app.current_permission_label(),
+        resource_line,
         recent_commands,
         workspace,
         cwd.display(),
         quick_git_line(&cwd)
     )
+}
+
+fn latest_resource_policy_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::ResourcePolicySelected {
+            latency,
+            cost_ceiling_usd,
+            reasoning,
+            parallelism_limit,
+            max_tool_calls,
+            ..
+        } = event
+        {
+            Some(format!(
+                "{} ${:.2} {} p{} tools{}",
+                latency, cost_ceiling_usd, reasoning, parallelism_limit, max_tool_calls
+            ))
+        } else {
+            None
+        }
+    })
 }
 
 /// /goal - Show or pin the current session goal

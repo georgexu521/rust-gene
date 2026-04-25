@@ -1694,11 +1694,17 @@ fn compact_permission_line(text: &str, max_chars: usize) -> String {
 /// 渲染计划审批弹窗
 pub fn render_plan_approval(f: &mut Frame, plan: &crate::engine::plan_mode::Plan, area: Rect) {
     let popup_area = centered_rect(70, 70, area);
+    let review = plan.human_review_request();
+    let risk_color = match review.risk {
+        crate::engine::human_review::HumanReviewRisk::High => Color::Red,
+        crate::engine::human_review::HumanReviewRisk::Medium => Color::Yellow,
+        crate::engine::human_review::HumanReviewRisk::Low => Color::Green,
+    };
 
     let block = Block::default()
         .title(format!(" Plan Approval: {} ", plan.title))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(risk_color))
         .style(Style::default().bg(Color::Black));
 
     let mut lines = vec![
@@ -1716,6 +1722,12 @@ pub fn render_plan_approval(f: &mut Frame, plan: &crate::engine::plan_mode::Plan
                 plan.estimated_complexity.clone(),
                 Style::default().fg(Color::Cyan),
             ),
+        ]),
+        Line::from(vec![
+            Span::styled("Review: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(review.risk.as_str(), Style::default().fg(risk_color)),
+            Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+            Span::styled(review.reason, Style::default().fg(Color::Gray)),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(

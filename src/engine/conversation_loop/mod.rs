@@ -247,11 +247,17 @@ fn record_mcp_resource_trace(
         .to_string();
 
     trace.record(TraceEvent::McpResourceAccessed {
-        server,
-        uri,
+        server: server.clone(),
+        uri: uri.clone(),
         action: action.to_string(),
         success: result.success,
         content_chars: result.content.chars().count(),
+    });
+    trace.record(TraceEvent::RetrievalContextBuilt {
+        policy: "Mcp".to_string(),
+        sources: vec!["Mcp".to_string()],
+        items: usize::from(result.success),
+        estimated_tokens: crate::engine::retrieval_context::estimate_tokens(&result.content),
     });
 }
 
@@ -657,6 +663,42 @@ impl ConversationLoop {
             max_tool_calls: resource_policy.max_tool_calls,
             context_budget_tokens: resource_policy.context_budget_tokens,
             reason: resource_policy.reason.clone(),
+        });
+        let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
+            last_user_preview,
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            route.clone(),
+            self.goal_manager
+                .as_ref()
+                .and_then(|manager| manager.current()),
+        );
+        task_bundle.add_constraint(format!(
+            "resource_policy={}",
+            resource_policy.compact_label()
+        ));
+        if matches!(
+            route.workflow,
+            crate::engine::intent_router::WorkflowKind::CodeChange
+                | crate::engine::intent_router::WorkflowKind::BugFix
+        ) {
+            task_bundle.add_risk("code-change tasks require explicit verification");
+        }
+        trace.record(TraceEvent::TaskContextBuilt {
+            task_id: task_bundle.task_id.clone(),
+            workflow: format!("{:?}", task_bundle.route.workflow),
+            files: task_bundle.relevant_files.len(),
+            constraints: task_bundle.constraints.len(),
+            risks: task_bundle.risks.len(),
+            acceptance_checks: task_bundle.acceptance_checks.len(),
+        });
+        let reflection_pass =
+            crate::engine::reflection_pass::ReflectionPass::from_task_bundle(&task_bundle);
+        trace.record(TraceEvent::ReflectionPassCompleted {
+            pass_id: reflection_pass.pass_id.clone(),
+            task_id: reflection_pass.task_id.clone(),
+            status: format!("{:?}", reflection_pass.status),
+            findings: reflection_pass.findings.len(),
+            unresolved: reflection_pass.unresolved_count(),
         });
         if let Some(manager) = &self.goal_manager {
             if let Some(goal) = manager.update_from_user_message(last_user_preview, Some(&route)) {

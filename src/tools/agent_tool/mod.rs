@@ -3,6 +3,7 @@
 //! 用于创建并委派任务给子 Agent
 
 use crate::agent::agent::AgentConfig;
+use crate::agent::envelope::{AgentTaskEnvelope, AgentTaskPriority};
 use crate::agent::manager::AgentResult as ManagerAgentResult;
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
@@ -236,10 +237,30 @@ async fn spawn_single_agent(
     let agent_id = agent_manager.spawn(agent_config, None).await?;
     info!("Sub-agent spawned: {}", agent_id);
 
-    let task_msg = AgentMessage::new(
-        AgentId::new(),
-        agent_id.clone(),
+    let mut envelope = AgentTaskEnvelope::new(
+        AgentId("parent".to_string()),
+        description.to_string(),
         prompt.to_string(),
+    )
+    .assign_to(agent_id.clone())
+    .with_priority(AgentTaskPriority::Normal);
+    for file in files {
+        envelope.add_context_ref(file.clone());
+    }
+    envelope.add_expected_artifact("task_result");
+    envelope.add_constraint(format!("timeout_secs={}", timeout_secs));
+    envelope.add_constraint(format!("max_turns={}", max_turns));
+    let envelope_json = serde_json::to_string_pretty(&envelope)
+        .unwrap_or_else(|_| "{\"error\":\"failed to serialize envelope\"}".to_string());
+    info!("Sub-agent task envelope: {}", envelope.compact_summary());
+
+    let task_msg = AgentMessage::new(
+        AgentId("parent".to_string()),
+        agent_id.clone(),
+        format!(
+            "<agent-task-envelope>\n{}\n</agent-task-envelope>\n\n{}",
+            envelope_json, prompt
+        ),
         AgentMessageType::Task,
     );
 
