@@ -2338,6 +2338,65 @@ pub fn handle_learn(app: &mut TuiApp, args: &str) -> String {
     lines.join("\n")
 }
 
+/// /recover - Show recent recovery plans
+pub fn handle_recover(app: &mut TuiApp, args: &str) -> String {
+    let limit = args.trim().parse::<usize>().unwrap_or(8).clamp(1, 50);
+    let trace = if let Some(engine) = app.streaming_engine.as_ref() {
+        engine
+            .trace_store()
+            .latest()
+            .or_else(|| app.session_manager.latest_trace().ok().flatten())
+    } else {
+        app.session_manager.latest_trace().ok().flatten()
+    };
+
+    let Some(trace) = trace else {
+        return "Recovery Plans\n- none yet".to_string();
+    };
+
+    let plans = trace
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            crate::engine::trace::TraceEvent::RecoveryPlan {
+                plan_id,
+                source,
+                category,
+                action,
+                retryable,
+                safe_retry,
+                suggested_command,
+                status,
+            } => Some(format!(
+                "- {} [{}:{}] status={} retryable={} safe_retry={} suggested={} action={}",
+                &plan_id[..8.min(plan_id.len())],
+                source,
+                category,
+                status,
+                retryable,
+                safe_retry,
+                suggested_command.as_deref().unwrap_or("none"),
+                action
+            )),
+            _ => None,
+        })
+        .take(limit)
+        .collect::<Vec<_>>();
+
+    if plans.is_empty() {
+        format!(
+            "Recovery Plans\n- none in latest trace {}\n\nUse /trace last for the full turn timeline.",
+            &trace.trace_id[..8.min(trace.trace_id.len())]
+        )
+    } else {
+        format!(
+            "Recovery Plans from trace {}\n{}",
+            &trace.trace_id[..8.min(trace.trace_id.len())],
+            plans.join("\n")
+        )
+    }
+}
+
 fn quick_git_line(cwd: &std::path::Path) -> String {
     let branch = std::process::Command::new("git")
         .args(["branch", "--show-current"])
