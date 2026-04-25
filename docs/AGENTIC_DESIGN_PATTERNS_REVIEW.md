@@ -58,7 +58,7 @@ They are not yet comprehensive for the entire handbook. The remaining work is mo
 | Human-in-the-loop | Mostly covered | `HumanReviewRequest` v1, permissions, ask-user tool, plan approval, goal-drift approval | Plan approval and fallback decisions still need full migration into the unified model |
 | RAG/retrieval | Mostly covered | `RetrievalContext` v1, project index, memory prefetch, web tools, MCP resource access | Project/web/MCP still need to migrate fully into the unified context object |
 | A2A/inter-agent communication | Partially covered | team messaging, swarm, child agents | Missing standard `AgentTaskEnvelope` and durable inter-agent transcript schema |
-| Resource-aware optimization | Partially covered | cost tracker, model fallback, context compression, tool budgets | Missing explicit `ResourcePolicy` and user-facing budget controls |
+| Resource-aware optimization | Mostly covered | `ResourcePolicy` v1, cost tracker, model fallback, context compression, tool budgets, `/resource` | Policy is visible but not yet enforced across every executor |
 | Reasoning techniques | Mostly covered | Socratic engine, `ReasoningPolicy`, workflow questioning | Missing explicit strategy selection artifact beyond router policy |
 | Guardrails/safety | Mostly covered | permissions, bash danger checks, path protections, SSRF guards, approvals | Needs eval coverage for guardrail regressions |
 | Evaluation/monitoring | Mostly covered | EvalSet v1, 820+ tests, traces, workflow reports, CLI observability | EvalSet currently covers deterministic routing/trace checks; full tool trajectory replay is still pending |
@@ -83,12 +83,11 @@ The latest implementation rounds closed the review's original P0/P2/P3 spine:
 These are the main gaps to close before claiming the handbook is fully represented:
 
 1. A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
-2. Explicit `ResourcePolicy` and visible budget controls for cost, latency, reasoning depth, and parallelism.
-3. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
-4. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
-5. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
-6. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
-7. Runtime enforcement of `TaskContextBundle` and `ReflectionPass` for risky coding tasks.
+2. Prompt/workflow template library and configurable statusline for mature CLI ergonomics.
+3. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
+4. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
+5. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
+6. Runtime enforcement of `TaskContextBundle`, `ReflectionPass`, and `ResourcePolicy` for risky coding tasks.
 
 ### Recommended Next Priority
 
@@ -96,9 +95,9 @@ The next best work is not to add another isolated feature. Build the missing con
 
 1. Expand EvalSet from deterministic routing/trace checks into full tool-trajectory replay.
 2. Migrate project/web/MCP/session retrieval into `RetrievalContext`.
-3. Add `ResourcePolicy` and expose it in CLI status/config.
-4. Add A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
-5. Complete runtime enforcement of `TaskContextBundle`, `ReflectionPass`, and `HumanReviewRequest`.
+3. Add A2A-style `AgentTaskEnvelope` for sub-agent/swarm/team coordination.
+4. Expand CLI dashboard and prompt/workflow templates.
+5. Complete runtime enforcement of `TaskContextBundle`, `ReflectionPass`, `ResourcePolicy`, and `HumanReviewRequest`.
 
 ### 2026-04-25 Implementation Update
 
@@ -109,6 +108,7 @@ The next best work is not to add another isolated feature. Build the missing con
 - Migrated memory prefetch prompt injection to `<retrieval-context>` and added `retrieval.context` trace events.
 - Added `src/engine/human_review.rs` with a unified review request contract, and wired tool/goal-drift approvals through it.
 - Added `src/engine/task_context.rs` and `src/engine/reflection_pass.rs` as first-class task and self-review artifacts.
+- Added `src/engine/resource_policy.rs`, trace-visible `resource.policy` events, `/resource`, and evalset assertions for resource policy selection.
 
 ## Pass 0: Handbook Scope
 

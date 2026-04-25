@@ -73,6 +73,16 @@ pub enum TraceEvent {
         risk: String,
         reason: String,
     },
+    ResourcePolicySelected {
+        latency: String,
+        target_ms: u64,
+        cost_ceiling_usd: f64,
+        reasoning: String,
+        parallelism_limit: usize,
+        max_tool_calls: usize,
+        context_budget_tokens: usize,
+        reason: String,
+    },
     SessionGoalUpdated {
         goal_id: String,
         title: String,
@@ -189,6 +199,7 @@ impl TraceEvent {
         match self {
             TraceEvent::UserPromptSubmitted { .. } => "prompt",
             TraceEvent::IntentRouted { .. } => "intent",
+            TraceEvent::ResourcePolicySelected { .. } => "resource.policy",
             TraceEvent::SessionGoalUpdated { .. } => "goal",
             TraceEvent::GoalDriftDetected { .. } => "goal.drift",
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
@@ -231,6 +242,26 @@ impl TraceEvent {
                 retrieval,
                 risk,
                 confidence,
+                preview(reason)
+            ),
+            TraceEvent::ResourcePolicySelected {
+                latency,
+                target_ms,
+                cost_ceiling_usd,
+                reasoning,
+                parallelism_limit,
+                max_tool_calls,
+                context_budget_tokens,
+                reason,
+            } => format!(
+                "resource policy: latency={} target={}ms cost<=${:.2} reasoning={} parallel={} tools={} ctx={} ({})",
+                latency,
+                target_ms,
+                cost_ceiling_usd,
+                reasoning,
+                parallelism_limit,
+                max_tool_calls,
+                context_budget_tokens,
                 preview(reason)
             ),
             TraceEvent::SessionGoalUpdated {

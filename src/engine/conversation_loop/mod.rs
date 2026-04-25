@@ -647,6 +647,17 @@ impl ConversationLoop {
             risk: format!("{:?}", route.risk),
             reason: route.reason.clone(),
         });
+        let resource_policy = crate::engine::resource_policy::ResourcePolicy::from_route(&route);
+        trace.record(TraceEvent::ResourcePolicySelected {
+            latency: format!("{:?}", resource_policy.latency),
+            target_ms: resource_policy.latency.target_ms(),
+            cost_ceiling_usd: resource_policy.cost_ceiling_usd,
+            reasoning: format!("{:?}", resource_policy.reasoning),
+            parallelism_limit: resource_policy.parallelism_limit,
+            max_tool_calls: resource_policy.max_tool_calls,
+            context_budget_tokens: resource_policy.context_budget_tokens,
+            reason: resource_policy.reason.clone(),
+        });
         if let Some(manager) = &self.goal_manager {
             if let Some(goal) = manager.update_from_user_message(last_user_preview, Some(&route)) {
                 trace.record(TraceEvent::SessionGoalUpdated {

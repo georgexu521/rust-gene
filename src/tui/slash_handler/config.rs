@@ -2096,6 +2096,70 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
     }
 }
 
+/// /resource - Show the latest selected resource policy
+pub fn handle_resource(app: &mut TuiApp) -> String {
+    let Some(trace) = latest_trace_for_app(app) else {
+        return "No resource policy recorded yet. Send a message, then run /resource or /trace last."
+            .to_string();
+    };
+    let policy = trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::ResourcePolicySelected {
+            latency,
+            target_ms,
+            cost_ceiling_usd,
+            reasoning,
+            parallelism_limit,
+            max_tool_calls,
+            context_budget_tokens,
+            reason,
+        } = event
+        {
+            Some((
+                latency,
+                target_ms,
+                cost_ceiling_usd,
+                reasoning,
+                parallelism_limit,
+                max_tool_calls,
+                context_budget_tokens,
+                reason,
+            ))
+        } else {
+            None
+        }
+    });
+
+    let Some((
+        latency,
+        target_ms,
+        cost_ceiling_usd,
+        reasoning,
+        parallelism_limit,
+        max_tool_calls,
+        context_budget_tokens,
+        reason,
+    )) = policy
+    else {
+        return format!(
+            "No resource policy in latest trace {}. Use /trace last for the full timeline.",
+            &trace.trace_id[..8.min(trace.trace_id.len())]
+        );
+    };
+
+    format!(
+        "Resource Policy\n- trace: {}\n- latency: {} ({} ms)\n- cost ceiling: ${:.2}\n- reasoning: {}\n- parallelism: {}\n- max tool calls: {}\n- context budget: {} tokens\n- reason: {}",
+        &trace.trace_id[..8.min(trace.trace_id.len())],
+        latency,
+        target_ms,
+        cost_ceiling_usd,
+        reasoning,
+        parallelism_limit,
+        max_tool_calls,
+        context_budget_tokens,
+        reason
+    )
+}
+
 /// /memory - Memory management (enhanced)
 pub fn handle_memory(_app: &TuiApp) -> String {
     let root = dirs::home_dir()

@@ -1120,6 +1120,14 @@ pub const CMD_EVAL: CommandDef = CommandDef::new(
     "Run deterministic behavior evalsets",
 );
 
+pub const CMD_RESOURCE: CommandDef = CommandDef::new(
+    "/resource",
+    &[],
+    "Info",
+    "/resource",
+    "Show latest resource policy",
+);
+
 pub const CMD_SKILLS: CommandDef =
     CommandDef::new("/skills", &[], "Info", "/skills", "List available skills");
 
@@ -1429,6 +1437,7 @@ pub fn default_command_registry() -> CommandRegistry {
     // Note: CMD_DEBUG not registered - bundled skill handles /debug
     registry.register(&CMD_TRACE);
     registry.register(&CMD_EVAL);
+    registry.register(&CMD_RESOURCE);
     registry.register(&CMD_MEMORY);
     registry.register(&CMD_SKILLS);
     // Phase 10 Extended 2: More commands
@@ -1564,6 +1573,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_TEST,
     &CMD_TRACE,
     &CMD_EVAL,
+    &CMD_RESOURCE,
     &CMD_SKILLS,
     &CMD_INIT,
     &CMD_LOGIN,

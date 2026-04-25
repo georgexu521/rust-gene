@@ -288,6 +288,17 @@ fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRou
         risk: format!("{:?}", route.risk),
         reason: route.reason.clone(),
     });
+    let policy = crate::engine::resource_policy::ResourcePolicy::from_route(route);
+    trace.events.push(TraceEvent::ResourcePolicySelected {
+        latency: format!("{:?}", policy.latency),
+        target_ms: policy.latency.target_ms(),
+        cost_ceiling_usd: policy.cost_ceiling_usd,
+        reasoning: format!("{:?}", policy.reasoning),
+        parallelism_limit: policy.parallelism_limit,
+        max_tool_calls: policy.max_tool_calls,
+        context_budget_tokens: policy.context_budget_tokens,
+        reason: policy.reason,
+    });
     trace
 }
 

@@ -32,6 +32,7 @@ pub mod prompt_context;
 pub mod query_engine;
 pub mod recovery_plan;
 pub mod reflection_pass;
+pub mod resource_policy;
 pub mod retrieval_context;
 pub mod session_goal;
 pub mod socratic;
