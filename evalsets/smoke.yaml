@@ -70,3 +70,33 @@ scenarios:
       forbidden_tools:
         - bash
         - file_edit
+
+  - id: post-edit-repair-trajectory
+    prompt: "修改代码并修复失败测试"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          success: true
+          output: "edited src/main.rs"
+        - tool: bash
+          success: false
+          output: "cargo test failed"
+      verification_passed: false
+      changed_files:
+        - src/main.rs
+    expect:
+      intent: debugging
+      workflow: bug_fix
+      retrieval: project
+      tool_sequence:
+        - file_edit
+        - bash
+      failed_tool: bash
+      verification_passed: false
+      reflection_status: Blocked
+      repair_required: true
+      trace_events:
+        - tool.start
+        - tool.done
+        - verify.done
+        - reflection.pass

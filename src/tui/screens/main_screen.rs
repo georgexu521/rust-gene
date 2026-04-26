@@ -1415,6 +1415,8 @@ pub fn render_permission_approval(
     let review = req.human_review_request();
     let goal_drift_approval =
         review.kind == crate::engine::human_review::HumanReviewKind::GoalDrift;
+    let reflection_gate =
+        review.kind == crate::engine::human_review::HumanReviewKind::ReflectionGate;
     let risk = review.risk.as_str();
     let risk_reason = review.reason.as_str();
     let rule_pattern =
@@ -1426,7 +1428,7 @@ pub fn render_permission_approval(
     };
 
     let block = Block::default()
-        .title(" Tool Approval ")
+        .title(format!(" {} ", review.title))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(risk_color))
         .style(Style::default().bg(Color::Black));
@@ -1434,9 +1436,9 @@ pub fn render_permission_approval(
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("Tool    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Subject ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                req.tool_call.name.clone(),
+                review.subject.clone(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -1478,6 +1480,17 @@ pub fn render_permission_approval(
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    if reflection_gate {
+        lines.push(Line::from(vec![
+            Span::styled("Gate    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "unresolved reflection findings",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::from(""));

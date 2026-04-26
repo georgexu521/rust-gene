@@ -8,10 +8,14 @@ use tokio::sync::Mutex;
 pub struct ToolApprovalRequest {
     pub tool_call: ToolCall,
     pub prompt: String,
+    pub review: Option<crate::engine::human_review::HumanReviewRequest>,
 }
 
 impl ToolApprovalRequest {
     pub fn human_review_request(&self) -> crate::engine::human_review::HumanReviewRequest {
+        if let Some(review) = &self.review {
+            return review.clone();
+        }
         crate::engine::human_review::HumanReviewRequest::tool_permission(
             &self.tool_call,
             &self.prompt,

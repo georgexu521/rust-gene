@@ -34,6 +34,20 @@ pub struct AgentArtifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskError {
+    pub code: String,
+    pub message: String,
+    pub recoverable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskUpdate {
+    pub status: AgentTaskStatus,
+    pub message: String,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTaskEnvelope {
     pub envelope_id: String,
     pub parent_task_id: Option<String>,
@@ -46,6 +60,8 @@ pub struct AgentTaskEnvelope {
     pub context_refs: Vec<String>,
     pub expected_artifacts: Vec<String>,
     pub produced_artifacts: Vec<AgentArtifact>,
+    pub status_updates: Vec<AgentTaskUpdate>,
+    pub error: Option<AgentTaskError>,
     pub constraints: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -66,6 +82,12 @@ impl AgentTaskEnvelope {
             context_refs: Vec::new(),
             expected_artifacts: Vec::new(),
             produced_artifacts: Vec::new(),
+            status_updates: vec![AgentTaskUpdate {
+                status: AgentTaskStatus::Created,
+                message: "created".to_string(),
+                at: now,
+            }],
+            error: None,
             constraints: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -74,8 +96,7 @@ impl AgentTaskEnvelope {
 
     pub fn assign_to(mut self, to: AgentId) -> Self {
         self.to = Some(to);
-        self.status = AgentTaskStatus::Assigned;
-        self.updated_at = Utc::now();
+        self.set_status(AgentTaskStatus::Assigned, "assigned");
         self
     }
 
@@ -103,6 +124,41 @@ impl AgentTaskEnvelope {
     pub fn add_artifact(&mut self, artifact: AgentArtifact) {
         self.produced_artifacts.push(artifact);
         self.updated_at = Utc::now();
+    }
+
+    pub fn mark_running(&mut self, message: impl Into<String>) {
+        self.set_status(AgentTaskStatus::Running, message);
+    }
+
+    pub fn complete_with_artifact(&mut self, artifact: AgentArtifact) {
+        self.add_artifact(artifact);
+        self.set_status(AgentTaskStatus::Completed, "completed");
+    }
+
+    pub fn fail_with_error(
+        &mut self,
+        code: impl Into<String>,
+        message: impl Into<String>,
+        recoverable: bool,
+    ) {
+        let message = message.into();
+        self.error = Some(AgentTaskError {
+            code: code.into(),
+            message: message.clone(),
+            recoverable,
+        });
+        self.set_status(AgentTaskStatus::Failed, message);
+    }
+
+    pub fn set_status(&mut self, status: AgentTaskStatus, message: impl Into<String>) {
+        self.status = status;
+        let now = Utc::now();
+        self.updated_at = now;
+        self.status_updates.push(AgentTaskUpdate {
+            status,
+            message: message.into(),
+            at: now,
+        });
     }
 
     pub fn validate_for_assignment(&self) -> Result<(), String> {
@@ -162,5 +218,25 @@ mod tests {
         env.add_expected_artifact("report");
         assert_eq!(env.context_refs.len(), 1);
         assert_eq!(env.expected_artifacts.len(), 1);
+    }
+
+    #[test]
+    fn envelope_tracks_status_artifacts_and_errors() {
+        let mut env = AgentTaskEnvelope::new(AgentId::new(), "review code", "check src")
+            .assign_to(AgentId::new());
+        env.mark_running("reading files");
+        env.complete_with_artifact(AgentArtifact {
+            kind: "report".to_string(),
+            title: "Review".to_string(),
+            content: "ok".to_string(),
+        });
+
+        assert_eq!(env.status, AgentTaskStatus::Completed);
+        assert_eq!(env.produced_artifacts.len(), 1);
+        assert!(env.status_updates.len() >= 4);
+
+        env.fail_with_error("tool_failed", "bash failed", true);
+        assert_eq!(env.status, AgentTaskStatus::Failed);
+        assert!(env.error.as_ref().unwrap().recoverable);
     }
 }

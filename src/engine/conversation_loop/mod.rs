@@ -261,6 +261,35 @@ fn record_mcp_resource_trace(
     });
 }
 
+async fn build_project_retrieval_context(
+    query: &str,
+    working_dir: &std::path::Path,
+    policy: crate::engine::intent_router::RetrievalPolicy,
+) -> Option<crate::engine::retrieval_context::RetrievalContext> {
+    if !matches!(
+        policy,
+        crate::engine::intent_router::RetrievalPolicy::Project
+            | crate::engine::intent_router::RetrievalPolicy::Full
+    ) {
+        return None;
+    }
+    let root = working_dir.to_path_buf();
+    let query = query.to_string();
+    tokio::task::spawn_blocking(move || {
+        let mut scanner = crate::tools::project_tool::ProjectScanner::new();
+        scanner.scan(&root);
+        crate::engine::retrieval_context::RetrievalContext::from_project_summary(
+            &query,
+            scanner.tree_summary(),
+            &root,
+            policy,
+        )
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 fn tool_error_code_label(result: &ToolResult) -> Option<String> {
     result.error_code.as_ref().and_then(|code| {
         serde_json::to_value(code)
@@ -664,14 +693,32 @@ impl ConversationLoop {
             context_budget_tokens: resource_policy.context_budget_tokens,
             reason: resource_policy.reason.clone(),
         });
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let turn_retrieval_context =
+            build_project_retrieval_context(last_user_preview, &working_dir, route.retrieval).await;
+        if let Some(ref ctx) = turn_retrieval_context {
+            trace.record(TraceEvent::RetrievalContextBuilt {
+                policy: format!("{:?}", ctx.policy),
+                sources: ctx
+                    .items
+                    .iter()
+                    .map(|item| format!("{:?}", item.source))
+                    .collect(),
+                items: ctx.items.len(),
+                estimated_tokens: ctx.token_estimate,
+            });
+        }
         let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
             last_user_preview,
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            &working_dir,
             route.clone(),
             self.goal_manager
                 .as_ref()
                 .and_then(|manager| manager.current()),
         );
+        if let Some(ref ctx) = turn_retrieval_context {
+            task_bundle = task_bundle.with_retrieval(ctx.clone());
+        }
         task_bundle.add_constraint(format!(
             "resource_policy={}",
             resource_policy.compact_label()
@@ -745,7 +792,14 @@ impl ConversationLoop {
                 match channel
                     .submit(ToolApprovalRequest {
                         tool_call: review_call.clone(),
-                        prompt: review_prompt,
+                        prompt: review_prompt.clone(),
+                        review: Some(
+                            crate::engine::human_review::HumanReviewRequest::reflection_gate(
+                                reflection_pass.pass_id.clone(),
+                                reflection_pass.unresolved_count(),
+                                format!("{:?}", route.workflow),
+                            ),
+                        ),
                     })
                     .await
                 {
@@ -974,6 +1028,17 @@ impl ConversationLoop {
 
         if let Some(tx) = tx {
             let _ = tx.send(StreamEvent::Start).await;
+        }
+
+        if let Some(ref ctx) = turn_retrieval_context {
+            let block = ctx.format_for_prompt();
+            if !block.is_empty()
+                && !messages.iter().any(|m| {
+                    matches!(m, Message::System { content } if content.contains("project.index:"))
+                })
+            {
+                messages.push(Message::system(block));
+            }
         }
 
         // ── 迭代预算 ─────────────────────────────────────
@@ -2214,6 +2279,7 @@ impl ConversationLoop {
                         let request = ToolApprovalRequest {
                             tool_call: tc.clone(),
                             prompt,
+                            review: None,
                         };
                         match channel.submit(request).await {
                             Ok(is_approved) => approved = is_approved,

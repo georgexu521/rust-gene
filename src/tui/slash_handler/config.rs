@@ -2411,9 +2411,18 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let resource_line = latest_trace_for_app(app)
         .and_then(|trace| latest_resource_policy_label(&trace))
         .unwrap_or_else(|| "none".to_string());
+    let contract_line = latest_trace_for_app(app)
+        .map(|trace| latest_contract_state_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
+    let retrieval_line = latest_trace_for_app(app)
+        .and_then(|trace| latest_retrieval_context_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
+    let reflection_line = latest_trace_for_app(app)
+        .and_then(|trace| latest_reflection_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
 
     format!(
-        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Retrieval: {}\n- Reflection: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
         pending,
@@ -2426,6 +2435,9 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         app.current_permission_label(),
         resource_line,
         recent_commands,
+        contract_line,
+        retrieval_line,
+        reflection_line,
         workspace,
         cwd.display(),
         quick_git_line(&cwd)
@@ -2446,6 +2458,81 @@ fn latest_resource_policy_label(trace: &crate::engine::trace::TurnTrace) -> Opti
             Some(format!(
                 "{} ${:.2} {} p{} tools{}",
                 latency, cost_ceiling_usd, reasoning, parallelism_limit, max_tool_calls
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> String {
+    let mut task = false;
+    let mut retrieval = false;
+    let mut reflection = false;
+    let mut verification = false;
+    for event in &trace.events {
+        match event {
+            crate::engine::trace::TraceEvent::TaskContextBuilt { .. } => task = true,
+            crate::engine::trace::TraceEvent::RetrievalContextBuilt { .. } => retrieval = true,
+            crate::engine::trace::TraceEvent::ReflectionPassCompleted { .. } => reflection = true,
+            crate::engine::trace::TraceEvent::VerificationCompleted { .. } => verification = true,
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if task {
+        parts.push("task");
+    }
+    if retrieval {
+        parts.push("retrieval");
+    }
+    if reflection {
+        parts.push("reflection");
+    }
+    if verification {
+        parts.push("verification");
+    }
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn latest_retrieval_context_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::RetrievalContextBuilt {
+            policy,
+            sources,
+            items,
+            estimated_tokens,
+        } = event
+        {
+            Some(format!(
+                "{} {} item(s) from {} tokens~{}",
+                policy,
+                items,
+                sources.join("+"),
+                estimated_tokens
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+fn latest_reflection_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::ReflectionPassCompleted {
+            status,
+            findings,
+            unresolved,
+            ..
+        } = event
+        {
+            Some(format!(
+                "{} findings={} unresolved={}",
+                status, findings, unresolved
             ))
         } else {
             None

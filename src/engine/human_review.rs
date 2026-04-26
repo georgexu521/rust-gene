@@ -12,6 +12,7 @@ pub enum HumanReviewKind {
     ToolPermission,
     GoalDrift,
     PlanApproval,
+    ReflectionGate,
     RiskyEdit,
     ModelFallback,
 }
@@ -114,6 +115,29 @@ impl HumanReviewRequest {
             options: approve_deny_options(),
             persistence_scope: Some("this_call".to_string()),
             impact: prompt.to_string(),
+        }
+    }
+
+    pub fn reflection_gate(
+        subject: impl Into<String>,
+        unresolved: usize,
+        workflow: impl Into<String>,
+    ) -> Self {
+        let workflow = workflow.into();
+        Self {
+            kind: HumanReviewKind::ReflectionGate,
+            title: "Reflection gate approval".to_string(),
+            reason: format!(
+                "reflection found {} unresolved acceptance gap(s) before a {} workflow",
+                unresolved, workflow
+            ),
+            risk: HumanReviewRisk::High,
+            subject: subject.into(),
+            options: approve_deny_options(),
+            persistence_scope: Some("this_reflection_gate".to_string()),
+            impact:
+                "Approving lets the risky workflow continue despite unresolved reflection findings."
+                    .to_string(),
         }
     }
 }
@@ -231,5 +255,13 @@ mod tests {
         assert_eq!(req.kind, HumanReviewKind::PlanApproval);
         assert_eq!(req.risk, HumanReviewRisk::High);
         assert!(req.subject.contains("ship feature"));
+    }
+
+    #[test]
+    fn reflection_gate_review_is_high_risk() {
+        let req = HumanReviewRequest::reflection_gate("pass-1", 2, "BugFix");
+        assert_eq!(req.kind, HumanReviewKind::ReflectionGate);
+        assert_eq!(req.risk, HumanReviewRisk::High);
+        assert!(req.reason.contains("2 unresolved"));
     }
 }

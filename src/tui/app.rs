@@ -2885,6 +2885,7 @@ mod tests {
                     arguments: serde_json::json!({ "command": "ls" }),
                 },
                 prompt: "Allow?".to_string(),
+                review: None,
             });
 
         let commands = app.contextual_palette_commands();
@@ -2989,6 +2990,7 @@ mod tests {
                     }),
                 },
                 prompt: "Approve MCP?".to_string(),
+                review: None,
             });
         app.permission_response_tx = Some(tx);
         app.mode = AppMode::PermissionApproval;
@@ -3124,6 +3126,7 @@ mod tests {
                     arguments: serde_json::json!({"command": "echo hello"}),
                 },
                 prompt: "Approve bash?".to_string(),
+                review: None,
             });
         app.permission_response_tx = Some(tx);
         app.mode = AppMode::PermissionApproval;
@@ -3150,6 +3153,7 @@ mod tests {
                     }),
                 },
                 prompt: "Approve file write?".to_string(),
+                review: None,
             });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
@@ -3175,6 +3179,7 @@ mod tests {
                     }),
                 },
                 prompt: "Approve file edit?".to_string(),
+                review: None,
             });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
@@ -3201,6 +3206,7 @@ mod tests {
                     }),
                 },
                 prompt: "Approve file edit?".to_string(),
+                review: None,
             });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
@@ -3225,6 +3231,7 @@ mod tests {
                     }),
                 },
                 prompt: "Approve bash?".to_string(),
+                review: None,
             });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
@@ -3245,6 +3252,7 @@ mod tests {
                     arguments: serde_json::json!({"pattern": "foo"}),
                 },
                 prompt: "Approve grep?".to_string(),
+                review: None,
             });
 
         assert!(app.compute_permission_diff().is_none());

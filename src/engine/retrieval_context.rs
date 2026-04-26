@@ -115,6 +115,27 @@ impl RetrievalContext {
         Some(ctx)
     }
 
+    pub fn from_project_summary(
+        query: &str,
+        summary: &str,
+        root: impl AsRef<std::path::Path>,
+        policy: RetrievalPolicy,
+    ) -> Option<Self> {
+        if summary.trim().is_empty() {
+            return None;
+        }
+        let mut ctx = Self::new(query, policy);
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Project,
+            "Project index summary",
+            summary,
+            0.75,
+            format!("project.index:{}", root.as_ref().display()),
+            TrustLevel::High,
+        ));
+        Some(ctx)
+    }
+
     pub fn item_count_by_source(&self, source: RetrievalSource) -> usize {
         self.items
             .iter()
@@ -209,5 +230,19 @@ mod tests {
             TrustLevel::High,
         ));
         assert_eq!(ctx.items[0].title, "high");
+    }
+
+    #[test]
+    fn project_summary_builds_context() {
+        let ctx = RetrievalContext::from_project_summary(
+            "修改 tui",
+            "src/tui/mod.rs\nsrc/tui/app.rs",
+            "/repo",
+            RetrievalPolicy::Project,
+        )
+        .expect("project context");
+
+        assert_eq!(ctx.item_count_by_source(RetrievalSource::Project), 1);
+        assert!(ctx.format_for_prompt().contains("project.index:/repo"));
     }
 }

@@ -294,6 +294,7 @@ mod tests {
         assert!(msg.contains("Quick Panel"));
         assert!(msg.contains("Status:"));
         assert!(msg.contains("Runtime:"));
+        assert!(msg.contains("Contracts:"));
         assert!(msg.contains("Workspace:"));
         assert!(msg.contains("Messages:"));
         assert!(msg.contains("Goal drift:"));

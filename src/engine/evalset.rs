@@ -27,6 +27,8 @@ pub struct EvalScenario {
     pub id: String,
     pub prompt: String,
     #[serde(default)]
+    pub replay: EvalReplay,
+    #[serde(default)]
     pub expect: EvalExpect,
 }
 
@@ -44,6 +46,30 @@ pub struct EvalExpect {
     pub forbidden_tools: Vec<String>,
     #[serde(default)]
     pub trace_events: Vec<String>,
+    #[serde(default)]
+    pub tool_sequence: Vec<String>,
+    pub failed_tool: Option<String>,
+    pub verification_passed: Option<bool>,
+    pub reflection_status: Option<String>,
+    pub repair_required: Option<bool>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EvalReplay {
+    #[serde(default)]
+    pub tool_calls: Vec<EvalToolCall>,
+    pub verification_passed: Option<bool>,
+    #[serde(default)]
+    pub changed_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalToolCall {
+    pub tool: String,
+    #[serde(default = "default_true")]
+    pub success: bool,
+    #[serde(default)]
+    pub output: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,7 +128,8 @@ impl EvalRunner {
         let mut failures = Vec::new();
         for scenario in &set.scenarios {
             let route = self.router.route(&scenario.prompt);
-            failures.extend(self.check_scenario(scenario, &route));
+            let trace = trace_from_route("eval", scenario, &route);
+            failures.extend(self.check_scenario(scenario, &route, &trace));
         }
         let total = set.scenarios.len();
         let failed = failures.len();
@@ -115,7 +142,12 @@ impl EvalRunner {
         }
     }
 
-    fn check_scenario(&self, scenario: &EvalScenario, route: &IntentRoute) -> Vec<EvalFailure> {
+    fn check_scenario(
+        &self,
+        scenario: &EvalScenario,
+        route: &IntentRoute,
+        trace: &TurnTrace,
+    ) -> Vec<EvalFailure> {
         let mut failures = Vec::new();
         let expect = &scenario.expect;
 
@@ -180,7 +212,6 @@ impl EvalRunner {
         }
 
         if !expect.trace_events.is_empty() {
-            let trace = trace_from_route("eval", scenario, route);
             let labels = trace
                 .events
                 .iter()
@@ -193,6 +224,55 @@ impl EvalRunner {
                         message: format!("expected trace event '{}'", expected),
                     });
                 }
+            }
+        }
+
+        if !expect.tool_sequence.is_empty() {
+            let actual = trace_tool_sequence(trace);
+            if actual != expect.tool_sequence {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!(
+                        "tool_sequence expected {:?}, got {:?}",
+                        expect.tool_sequence, actual
+                    ),
+                });
+            }
+        }
+
+        if let Some(expected_tool) = &expect.failed_tool {
+            if !trace_has_failed_tool(trace, expected_tool) {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!("expected failed tool '{}'", expected_tool),
+                });
+            }
+        }
+
+        if let Some(expected) = expect.verification_passed {
+            if trace_verification_status(trace) != Some(expected) {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!("verification_passed expected {}", expected),
+                });
+            }
+        }
+
+        if let Some(expected) = &expect.reflection_status {
+            if trace_last_reflection_status(trace).as_deref() != Some(expected.as_str()) {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!("reflection_status expected {}", expected),
+                });
+            }
+        }
+
+        if let Some(expected) = expect.repair_required {
+            if trace_repair_required(trace) != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!("repair_required expected {}", expected),
+                });
             }
         }
 
@@ -328,7 +408,118 @@ fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRou
         findings: reflection.findings.len(),
         unresolved: reflection.unresolved_count(),
     });
+    append_replay_trace(&mut trace, scenario, &task_bundle.task_id);
     trace
+}
+
+fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: &str) {
+    for (idx, call) in scenario.replay.tool_calls.iter().enumerate() {
+        let call_id = format!("eval-tool-{}", idx + 1);
+        trace.events.push(TraceEvent::ToolStarted {
+            tool: call.tool.clone(),
+            call_id: call_id.clone(),
+            parallel: false,
+            pre_executed: false,
+        });
+        trace.events.push(TraceEvent::ToolCompleted {
+            tool: call.tool.clone(),
+            call_id,
+            success: call.success,
+            duration_ms: Some(0),
+            output_chars: call.output.chars().count(),
+        });
+    }
+
+    if let Some(passed) = scenario.replay.verification_passed {
+        trace.events.push(TraceEvent::VerificationCompleted {
+            changed_files: scenario.replay.changed_files.len(),
+            passed,
+        });
+        let changed_files = scenario
+            .replay
+            .changed_files
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        let evidence = scenario
+            .replay
+            .tool_calls
+            .iter()
+            .filter(|call| !call.success || !passed)
+            .map(|call| {
+                if call.output.is_empty() {
+                    format!("{} reported failure", call.tool)
+                } else {
+                    call.output.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        let reflection = crate::engine::reflection_pass::ReflectionPass::from_post_edit(
+            task_id.to_string(),
+            &changed_files,
+            passed,
+            &evidence,
+        );
+        trace.events.push(TraceEvent::ReflectionPassCompleted {
+            pass_id: reflection.pass_id.clone(),
+            task_id: reflection.task_id.clone(),
+            status: format!("{:?}", reflection.status),
+            findings: reflection.findings.len(),
+            unresolved: reflection.unresolved_count(),
+        });
+    }
+}
+
+fn trace_tool_sequence(trace: &TurnTrace) -> Vec<String> {
+    trace
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            TraceEvent::ToolStarted { tool, .. } => Some(tool.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn trace_has_failed_tool(trace: &TurnTrace, expected_tool: &str) -> bool {
+    trace.events.iter().any(|event| {
+        matches!(
+            event,
+            TraceEvent::ToolCompleted { tool, success, .. }
+                if tool == expected_tool && !success
+        )
+    })
+}
+
+fn trace_verification_status(trace: &TurnTrace) -> Option<bool> {
+    trace.events.iter().rev().find_map(|event| match event {
+        TraceEvent::VerificationCompleted { passed, .. } => Some(*passed),
+        _ => None,
+    })
+}
+
+fn trace_last_reflection_status(trace: &TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| match event {
+        TraceEvent::ReflectionPassCompleted { status, .. } => Some(status.clone()),
+        _ => None,
+    })
+}
+
+fn trace_repair_required(trace: &TurnTrace) -> bool {
+    trace.events.iter().any(|event| {
+        matches!(
+            event,
+            TraceEvent::ReflectionPassCompleted {
+                status,
+                unresolved,
+                ..
+            } if status != "Passed" && *unresolved > 0
+        )
+    })
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn is_evalset_file(path: &Path) -> bool {
@@ -350,6 +541,7 @@ mod tests {
             scenarios: vec![EvalScenario {
                 id: "debug-route".to_string(),
                 prompt: "cargo test 报错了，帮我修复".to_string(),
+                replay: EvalReplay::default(),
                 expect: EvalExpect {
                     intent: Some(IntentKind::Debugging),
                     workflow: Some(WorkflowKind::BugFix),
@@ -373,6 +565,7 @@ mod tests {
             scenarios: vec![EvalScenario {
                 id: "bad-route".to_string(),
                 prompt: "你好".to_string(),
+                replay: EvalReplay::default(),
                 expect: EvalExpect {
                     intent: Some(IntentKind::Debugging),
                     ..Default::default()
@@ -399,6 +592,51 @@ scenarios:
       recommended_tools: ["memory_save"]
 "#;
         let set: EvalSet = serde_yaml::from_str(yaml).unwrap();
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_runner_replays_tool_trajectory_and_reflection_gate() {
+        let set = EvalSet {
+            name: "trajectory".to_string(),
+            description: String::new(),
+            scenarios: vec![EvalScenario {
+                id: "failed-edit".to_string(),
+                prompt: "修改代码并修复测试".to_string(),
+                replay: EvalReplay {
+                    tool_calls: vec![
+                        EvalToolCall {
+                            tool: "file_edit".to_string(),
+                            success: true,
+                            output: "edited src/main.rs".to_string(),
+                        },
+                        EvalToolCall {
+                            tool: "bash".to_string(),
+                            success: false,
+                            output: "cargo test failed".to_string(),
+                        },
+                    ],
+                    verification_passed: Some(false),
+                    changed_files: vec!["src/main.rs".to_string()],
+                },
+                expect: EvalExpect {
+                    tool_sequence: vec!["file_edit".to_string(), "bash".to_string()],
+                    failed_tool: Some("bash".to_string()),
+                    verification_passed: Some(false),
+                    reflection_status: Some("Blocked".to_string()),
+                    repair_required: Some(true),
+                    trace_events: vec![
+                        "tool.start".to_string(),
+                        "tool.done".to_string(),
+                        "verify.done".to_string(),
+                        "reflection.pass".to_string(),
+                    ],
+                    ..Default::default()
+                },
+            }],
+        };
+
         let report = EvalRunner::new().run_set(&set);
         assert!(report.ok(), "{}", report.summary());
     }
