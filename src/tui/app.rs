@@ -592,17 +592,40 @@ impl TuiApp {
 
         let context = AppContext::new();
 
-        // 初始化会话管理器
-        let mut session_manager = crate::tui::session_manager::TuiSessionManager::new()
+        // 初始化会话管理器。优先复用引擎会话，这样 UI 历史、
+        // trace 与 learning events 会写入同一条 conversation。
+        let model = engine
+            .as_ref()
+            .map(|engine| engine.model_name())
+            .unwrap_or_else(|| "unknown".to_string());
+        let mut session_manager = if let Some((store, session_id)) =
+            engine.as_ref().and_then(|engine| engine.session_binding())
+        {
+            crate::tui::session_manager::TuiSessionManager::from_store(
+                store,
+                session_id,
+                "New Session",
+                &model,
+            )
             .unwrap_or_else(|e| {
+                warn!("Failed to bind TUI session to engine session: {}", e);
+                crate::tui::session_manager::TuiSessionManager::new().unwrap_or_else(|e| {
+                    warn!("Failed to initialize session manager: {}", e);
+                    crate::tui::session_manager::TuiSessionManager::in_memory()
+                        .expect("Failed to create in-memory session manager")
+                })
+            })
+        } else {
+            crate::tui::session_manager::TuiSessionManager::new().unwrap_or_else(|e| {
                 warn!("Failed to initialize session manager: {}", e);
                 crate::tui::session_manager::TuiSessionManager::in_memory()
                     .expect("Failed to create in-memory session manager")
-            });
+            })
+        };
 
-        // 开始新会话
-        let model = engine.as_ref().map(|_| "kimi-k2.5").unwrap_or("unknown");
-        let _ = session_manager.start_session("New Session", model);
+        if session_manager.current_session_id().is_none() {
+            let _ = session_manager.start_session("New Session", &model);
+        }
 
         // 检测首次启动
         let onboarding_manager = crate::onboarding::OnboardingManager::new();
@@ -1175,12 +1198,15 @@ impl TuiApp {
         };
         self.messages.push(user_msg);
 
-        // 保存用户消息到数据库
-        if let Err(e) = self
-            .session_manager
-            .add_message(MessageRole::User, &content)
-        {
-            warn!("Failed to save user message: {}", e);
+        // 如果流式引擎已经绑定同一条持久化会话，消息由引擎统一写入，
+        // 避免 UI 和引擎重复插入 user/assistant 历史。
+        if self.should_persist_messages_from_tui() {
+            if let Err(e) = self
+                .session_manager
+                .add_message(MessageRole::User, &content)
+            {
+                warn!("Failed to save user message: {}", e);
+            }
         }
 
         // 更新会话标题（基于第一条用户消息）
@@ -1317,6 +1343,16 @@ impl TuiApp {
         }
     }
 
+    fn should_persist_messages_from_tui(&self) -> bool {
+        let Some(engine) = &self.streaming_engine else {
+            return true;
+        };
+        let Some((_store, session_id)) = engine.session_binding() else {
+            return true;
+        };
+        !self.session_manager.is_current_session(&session_id)
+    }
+
     /// 刷新当前响应（从缓冲区读取最新的流式内容，带打字机效果）
     pub async fn refresh_response(&mut self) {
         if !self.is_querying {
@@ -1373,6 +1409,7 @@ impl TuiApp {
             // 使用 AtomicBool 检测流是否完成（由后台任务设置）
             if self.stream_done.load(Ordering::SeqCst) {
                 // 确保显示完整内容（跳过打字机效果的剩余部分）
+                let mut final_response_to_persist = None;
                 if let Some(last_msg) = self.messages.last_mut() {
                     if last_msg.role == MessageRole::Assistant {
                         let response = self.current_response.lock().await.clone();
@@ -1387,6 +1424,17 @@ impl TuiApp {
                         }
                         self.stream_usage_snapshot = *self.stream_usage.lock().await;
                         last_msg.content = response;
+                        final_response_to_persist = Some(last_msg.content.clone());
+                    }
+                }
+                if self.should_persist_messages_from_tui() {
+                    if let Some(response) = final_response_to_persist {
+                        if let Err(e) = self
+                            .session_manager
+                            .add_message(MessageRole::Assistant, &response)
+                        {
+                            warn!("Failed to save assistant message: {}", e);
+                        }
                     }
                 }
                 self.typewriter_position = 0;
@@ -2329,12 +2377,14 @@ impl TuiApp {
     pub async fn add_assistant_response(&mut self, content: String) {
         self.is_querying = false;
 
-        // 保存助手消息到数据库
-        if let Err(e) = self
-            .session_manager
-            .add_message(MessageRole::Assistant, &content)
-        {
-            warn!("Failed to save assistant message: {}", e);
+        // 保存助手消息到数据库。流式引擎绑定同一会话时由引擎负责持久化。
+        if self.should_persist_messages_from_tui() {
+            if let Err(e) = self
+                .session_manager
+                .add_message(MessageRole::Assistant, &content)
+            {
+                warn!("Failed to save assistant message: {}", e);
+            }
         }
 
         let assistant_msg = MessageItem {
@@ -2677,6 +2727,79 @@ mod tests {
         assert!(!app.is_querying);
         assert!(!app.paused);
         assert!(!app.focus_mode);
+    }
+
+    #[test]
+    fn test_tui_reuses_engine_session_binding() {
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store
+            .create_session("engine-session", "Engine Session", "mock-model")
+            .unwrap();
+        let engine = Arc::new(
+            crate::engine::streaming::StreamingQueryEngine::new(
+                Arc::new(MockProvider),
+                Arc::new(crate::tools::ToolRegistry::new()),
+                "mock-model",
+            )
+            .with_session_store(store, "engine-session".to_string()),
+        );
+
+        let app = TuiApp::with_engine(engine, None, None);
+
+        assert_eq!(
+            app.session_manager.current_session_id(),
+            Some("engine-session")
+        );
+        assert!(!app.should_persist_messages_from_tui());
+    }
+
+    #[test]
+    fn test_tui_persists_when_engine_has_no_session_binding() {
+        let engine = Arc::new(crate::engine::streaming::StreamingQueryEngine::new(
+            Arc::new(MockProvider),
+            Arc::new(crate::tools::ToolRegistry::new()),
+            "mock-model",
+        ));
+
+        let app = TuiApp::with_engine(engine, None, None);
+
+        assert!(app.should_persist_messages_from_tui());
+    }
+
+    #[tokio::test]
+    async fn test_tui_persists_streaming_assistant_when_engine_has_no_session_binding() {
+        let engine = Arc::new(crate::engine::streaming::StreamingQueryEngine::new(
+            Arc::new(MockProvider),
+            Arc::new(crate::tools::ToolRegistry::new()),
+            "mock-model",
+        ));
+        let mut app = TuiApp::with_engine(engine, None, None);
+        let session_id = app
+            .session_manager
+            .current_session_id()
+            .unwrap()
+            .to_string();
+        app.messages.push(MessageItem {
+            id: "assistant-placeholder".to_string(),
+            role: MessageRole::Assistant,
+            content: String::new(),
+            timestamp: std::time::SystemTime::now(),
+            metadata: Default::default(),
+        });
+        {
+            let mut response = app.current_response.lock().await;
+            *response = "final answer".to_string();
+        }
+        app.is_querying = true;
+        app.stream_done.store(true, Ordering::SeqCst);
+
+        app.on_tick().await;
+
+        let messages = app.session_manager.load_messages(&session_id).unwrap();
+        assert!(messages
+            .iter()
+            .any(|message| message.role == MessageRole::Assistant
+                && message.content == "final answer"));
     }
 
     #[test]

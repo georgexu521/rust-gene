@@ -52,6 +52,7 @@ pub struct LearningEventRecord {
 }
 
 /// 会话存储
+#[derive(Clone)]
 pub struct SessionStore {
     conn: Arc<Mutex<Connection>>,
 }
@@ -61,6 +62,17 @@ impl SessionStore {
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// 默认会话数据库路径。
+    ///
+    /// CLI、引擎和会话面板必须使用同一个路径，否则 `/sessions`、
+    /// trace/learning events 与实际对话历史会被拆到不同数据库。
+    pub fn default_path() -> std::path::PathBuf {
+        dirs::data_dir()
+            .map(|d| d.join("priority-agent").join("sessions.db"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".priority-agent/sessions.db"))
+    }
+
     /// 打开或创建数据库
     pub fn open(path: impl AsRef<Path>) -> SqlResult<Self> {
         let path = path.as_ref();

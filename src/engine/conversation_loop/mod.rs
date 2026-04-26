@@ -1747,6 +1747,21 @@ impl ConversationLoop {
                                                 && !read_only_tasks.contains_key(&idx)
                                                 && read_only_tasks.len() < read_only_concurrency
                                             {
+                                                let Some(tool) = tool_registry.get(&tool_name)
+                                                else {
+                                                    continue;
+                                                };
+                                                let Ok(parsed_args) =
+                                                    serde_json::from_str::<serde_json::Value>(
+                                                        &current_args,
+                                                    )
+                                                else {
+                                                    continue;
+                                                };
+                                                if tool.validate_params(&parsed_args).is_some() {
+                                                    continue;
+                                                }
+
                                                 let registry = tool_registry.clone();
                                                 let context = tool_context.clone();
                                                 let ct = cost_tracker.clone();
@@ -1766,11 +1781,7 @@ impl ConversationLoop {
                                                             let t = ToolCall {
                                                                 id: tid.clone(),
                                                                 name: tool_n.clone(),
-                                                                arguments:
-                                                                    serde_json::from_str(
-                                                                        &current_args,
-                                                                    )
-                                                                    .unwrap_or(serde_json::Value::Null),
+                                                                arguments: parsed_args.clone(),
                                                             };
                                                             h.run_pre_tool(&t, &context).await
                                                         } else {
@@ -1793,12 +1804,7 @@ impl ConversationLoop {
                                                         } else if let Some(tool) =
                                                             registry.get(&tool_n)
                                                         {
-                                                            let parsed_args =
-                                                                serde_json::from_str(
-                                                                    &current_args,
-                                                                )
-                                                                .unwrap_or(serde_json::Value::Null);
-                                                            tool.execute(parsed_args, context)
+                                                            tool.execute(parsed_args.clone(), context)
                                                                 .await
                                                         } else {
                                                             ToolResult::error(format!(
@@ -1818,11 +1824,7 @@ impl ConversationLoop {
                                                             let tc_for_hook = ToolCall {
                                                                 id: tid2.clone(),
                                                                 name: tool_n2.clone(),
-                                                                arguments:
-                                                                    serde_json::from_str(
-                                                                        &current_args,
-                                                                    )
-                                                                    .unwrap_or(serde_json::Value::Null),
+                                                                arguments: parsed_args.clone(),
                                                             };
                                                             h.run_post_tool(&tc_for_hook, &result, &ctx_clone)
                                                                 .await;
@@ -2026,13 +2028,15 @@ impl ConversationLoop {
 
     /// 获取工具定义列表
     fn get_tools(&self) -> Vec<crate::services::api::Tool> {
+        let context = self.create_tool_context();
         self.tool_registry
             .iter_tools()
             .filter(|t| {
                 if let Some(ref allowed) = self.allowed_tools {
                     allowed.contains(t.name())
+                        && context.permission_context.should_expose_tool(t.name())
                 } else {
-                    true
+                    context.permission_context.should_expose_tool(t.name())
                 }
             })
             .map(|t| crate::services::api::Tool {
@@ -2343,6 +2347,7 @@ impl ConversationLoop {
                 } else if context
                     .permission_context
                     .requires_confirmation(&tool_name, &tc.arguments)
+                    || tool.requires_confirmation(&tc.arguments)
                     || drift_requires_approval
                 {
                     let mut approved = false;
@@ -2364,6 +2369,8 @@ impl ConversationLoop {
                                 "MCP tool '{}' on server '{}' requires approval. Allow?",
                                 t, server
                             )
+                        } else if let Some(prompt) = tool.confirmation_prompt(&tc.arguments) {
+                            prompt
                         } else {
                             format!("Tool '{}' requires approval. Allow?", tool_name)
                         };
@@ -2552,7 +2559,7 @@ mod tests {
     use super::*;
     use crate::services::api::{ChatResponse, ToolCall, Usage};
     use crate::test_utils::env_guard::EnvVarGuard;
-    use crate::tools::{FileReadTool, FileWriteTool};
+    use crate::tools::{BashTool, FileReadTool, FileWriteTool, GitTool};
     use async_openai::types::ChatCompletionResponseStream;
     use std::collections::VecDeque;
     use std::sync::Mutex as StdMutex;
@@ -2702,6 +2709,97 @@ mod tests {
         )
         .expect_err("non-object params should be rejected");
         assert!(err.contains("JSON object"));
+    }
+
+    #[test]
+    fn test_get_tools_filters_denied_tools_before_model_request() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileReadTool);
+        registry.register(BashTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        )
+        .with_session_permission_rules(crate::permissions::PermissionRules::new().deny("bash"));
+
+        let names = loop_instance
+            .get_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"file_read".to_string()));
+        assert!(!names.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn test_get_tools_hides_write_tools_in_read_only_mode() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileReadTool);
+        registry.register(FileWriteTool);
+        registry.register(BashTool);
+        registry.register(GitTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        )
+        .with_permission_mode(crate::permissions::PermissionMode::ReadOnly);
+
+        let names = loop_instance
+            .get_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"file_read".to_string()));
+        assert!(!names.contains(&"file_write".to_string()));
+        assert!(!names.contains(&"bash".to_string()));
+        assert!(!names.contains(&"git".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_tool_specific_confirmation_blocks_git_push_without_approval() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(GitTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let route = crate::engine::intent_router::IntentRouter::new().route("push the branch");
+        let policy = crate::engine::resource_policy::ResourcePolicy::from_route(&route);
+        let tool_calls = vec![ToolCall {
+            id: "git_push".to_string(),
+            name: "git".to_string(),
+            arguments: serde_json::json!({"action": "push"}),
+        }];
+
+        let results = loop_instance
+            .execute_tools_parallel(&tool_calls, None, Default::default(), None, &policy)
+            .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].1.success);
+        assert!(results[0]
+            .1
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("requires user confirmation"));
     }
 
     struct MockLlmProvider {

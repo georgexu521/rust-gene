@@ -196,6 +196,17 @@ impl StreamingQueryEngine {
         self.goal_manager.clone()
     }
 
+    /// 返回当前持久化会话绑定。
+    ///
+    /// UI 层用这个绑定复用同一个 SessionStore/session_id，避免一轮对话
+    /// 同时写入 CLI 会话和引擎会话两套历史。
+    pub fn session_binding(&self) -> Option<(Arc<crate::session_store::SessionStore>, String)> {
+        self.session_store
+            .as_ref()
+            .zip(self.session_id.as_ref())
+            .map(|(store, session_id)| (store.clone(), session_id.clone()))
+    }
+
     /// 设置记忆快照（在 system prompt 中注入冻结的记忆）
     pub fn with_memory_snapshot(mut self, snapshot: String) -> Self {
         if !snapshot.is_empty() {

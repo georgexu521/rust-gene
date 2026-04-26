@@ -17,7 +17,7 @@ Latest verified baseline:
 
 - `cargo check --quiet`
 - `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
-- Result: `853 passed; 0 failed`
+- Result: `862 passed; 0 failed`
 
 ## Quick Start
 

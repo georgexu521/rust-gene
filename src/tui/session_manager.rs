@@ -5,6 +5,7 @@
 use crate::session_store::{SessionRecord, SessionStore};
 use crate::state::{MessageItem, MessageRole};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -27,7 +28,7 @@ impl EditRecord {
 
 /// 会话管理器
 pub struct TuiSessionManager {
-    store: SessionStore,
+    store: Arc<SessionStore>,
     current_session_id: Option<String>,
     current_session_title: String,
 }
@@ -36,7 +37,7 @@ impl TuiSessionManager {
     /// 创建新的会话管理器
     pub fn new() -> anyhow::Result<Self> {
         let db_path = Self::db_path()?;
-        let store = SessionStore::open(&db_path)?;
+        let store = Arc::new(SessionStore::open(&db_path)?);
 
         info!("SessionManager initialized at {:?}", db_path);
 
@@ -49,7 +50,7 @@ impl TuiSessionManager {
 
     /// 内存模式（用于测试）
     pub fn in_memory() -> anyhow::Result<Self> {
-        let store = SessionStore::in_memory()?;
+        let store = Arc::new(SessionStore::in_memory()?);
         Ok(Self {
             store,
             current_session_id: None,
@@ -57,14 +58,36 @@ impl TuiSessionManager {
         })
     }
 
+    /// 使用已有 SessionStore 和会话 ID 创建管理器。
+    ///
+    /// 这用于 interactive CLI 复用 StreamingQueryEngine 的持久化会话，
+    /// 避免 UI 历史、trace、learning events 写入不同会话。
+    pub fn from_store(
+        store: Arc<SessionStore>,
+        session_id: impl Into<String>,
+        title: impl Into<String>,
+        model: &str,
+    ) -> anyhow::Result<Self> {
+        let session_id = session_id.into();
+        let title = title.into();
+        if store.get_session(&session_id)?.is_none() {
+            store.create_session(&session_id, &title, model)?;
+        }
+        Ok(Self {
+            store,
+            current_session_id: Some(session_id),
+            current_session_title: title,
+        })
+    }
+
+    /// 当前管理器是否绑定到给定会话。
+    pub fn is_current_session(&self, session_id: &str) -> bool {
+        self.current_session_id.as_deref() == Some(session_id)
+    }
+
     /// 获取数据库路径
     fn db_path() -> anyhow::Result<PathBuf> {
-        let data_dir = dirs::data_dir()
-            .or_else(dirs::home_dir)
-            .map(|p| p.join(".priority-agent"))
-            .ok_or_else(|| anyhow::anyhow!("Could not find data directory"))?;
-
-        Ok(data_dir.join("sessions.db"))
+        Ok(SessionStore::default_path())
     }
 
     /// 开始新会话
@@ -906,5 +929,22 @@ mod tests {
             .redo_last_edit(&session_id)
             .expect_err("redo without undo should fail");
         assert!(err.to_string().contains("No edits to redo"));
+    }
+
+    #[test]
+    fn test_from_store_reuses_existing_session() {
+        let store = Arc::new(SessionStore::in_memory().unwrap());
+        store
+            .create_session("shared-session", "Shared", "mock-model")
+            .unwrap();
+
+        let manager =
+            TuiSessionManager::from_store(store.clone(), "shared-session", "Shared", "mock-model")
+                .unwrap();
+
+        assert_eq!(manager.current_session_id(), Some("shared-session"));
+        assert!(manager.is_current_session("shared-session"));
+        manager.add_message(MessageRole::User, "hello").unwrap();
+        assert_eq!(store.get_messages("shared-session").unwrap().len(), 1);
     }
 }

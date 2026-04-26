@@ -179,9 +179,7 @@ pub async fn init_components(
     let engine_config = app_config.engine.clone();
 
     // SessionStore
-    let db_path = dirs::data_dir()
-        .map(|d| d.join("priority-agent").join("sessions.db"))
-        .unwrap_or_else(|| PathBuf::from(".priority-agent/sessions.db"));
+    let db_path = crate::session_store::SessionStore::default_path();
     let session_store = match crate::session_store::SessionStore::open(&db_path) {
         Ok(store) => {
             info!("SessionStore opened at {:?}", db_path);

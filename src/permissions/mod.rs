@@ -411,6 +411,40 @@ impl PermissionContext {
         }
     }
 
+    /// 是否应该把工具暴露给模型。
+    ///
+    /// 执行层仍会做最终授权；这个方法只用于请求前收窄工具池，减少
+    /// 被明确拒绝或只读模式下不可用的工具被模型反复调用。
+    pub fn should_expose_tool(&self, tool_name: &str) -> bool {
+        if matches!(self.rules.check(tool_name), PermissionDecision::Deny) {
+            return false;
+        }
+
+        if self.mode == PermissionMode::ReadOnly {
+            return matches!(
+                tool_name,
+                "file_read"
+                    | "glob"
+                    | "grep"
+                    | "project_list"
+                    | "memory_load"
+                    | "skills_list"
+                    | "skill_view"
+                    | "web_search"
+                    | "list_mcp_resources"
+                    | "read_mcp_resource"
+                    | "cost"
+                    | "context"
+                    | "context_vis"
+                    | "diff"
+                    | "lsp"
+                    | "symbol_query"
+            );
+        }
+
+        true
+    }
+
     /// 获取工具的权限决策详情
     pub fn check_with_details(&self, tool_name: &str) -> (PermissionDecision, Vec<String>) {
         let decision = self.rules.check(tool_name);
@@ -1140,6 +1174,27 @@ mod tests {
         // Sudo without confirmation
         let cmd = "sudo rm -rf /";
         assert!(crate::security::is_dangerous_command(cmd));
+    }
+
+    #[test]
+    fn test_should_expose_tool_respects_deny_rules() {
+        let mut ctx = PermissionContext::new(".");
+        ctx.rules = PermissionRules::new().deny("bash");
+
+        assert!(!ctx.should_expose_tool("bash"));
+        assert!(ctx.should_expose_tool("file_read"));
+    }
+
+    #[test]
+    fn test_should_expose_tool_hides_write_tools_in_read_only_mode() {
+        let mut ctx = PermissionContext::new(".");
+        ctx.mode = PermissionMode::ReadOnly;
+
+        assert!(ctx.should_expose_tool("file_read"));
+        assert!(ctx.should_expose_tool("grep"));
+        assert!(!ctx.should_expose_tool("file_write"));
+        assert!(!ctx.should_expose_tool("bash"));
+        assert!(!ctx.should_expose_tool("git"));
     }
 
     #[test]
