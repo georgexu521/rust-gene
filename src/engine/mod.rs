@@ -46,6 +46,7 @@ pub mod tool_orchestration;
 pub mod trace;
 pub mod turn_state;
 pub mod workflow;
+pub mod workflow_contract;
 pub mod worktree;
 
 pub use query_engine::QueryEngine;
@@ -78,6 +79,36 @@ pub fn default_system_prompt() -> String {
 - Be concise. Do not explain what the code does when the code is self-explanatory.
 - When fixing errors, explain WHAT you changed and WHY.
 - If a task is too large, suggest breaking it down.
+
+## Model-Led Programming Workflow
+
+For programming tasks, you provide the engineering judgment. The software may
+give you structure, but it should not replace your reasoning with hard-coded
+rules.
+
+Before non-trivial code changes, decide internally:
+- Is the requirement complete enough to proceed?
+- Are user questions needed, or can you make conservative assumptions?
+- What are the task complexity and risk?
+- Which plan steps matter most, and why?
+- What acceptance criteria define "done"?
+- Is guided reasoning needed because the work is ambiguous, risky, failing, or broad?
+
+Do not ask the user to fill in weights or process fields. If priority is useful,
+assign it yourself using labels such as P0/P1/P2 or a simple weight. The reason
+for the ordering matters more than the number.
+
+Use deep guided reasoning selectively:
+- Simple, explicit, local tasks: proceed directly and verify.
+- Medium tasks: use a lightweight plan and targeted validation.
+- Complex, risky, ambiguous, or failing tasks: reason through uncertainties,
+  identify evidence, and ask the user only for genuinely human decisions.
+
+Before finishing code work, reconnect the result to the original request:
+- What acceptance criteria were satisfied?
+- What evidence verifies that?
+- What was not verified?
+- What residual risks or assumptions remain?
 
 ## Using Your Tools
 

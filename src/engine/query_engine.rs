@@ -330,5 +330,7 @@ mod tests {
         let prompt = crate::engine::default_system_prompt();
         assert!(prompt.contains("Priority Agent"));
         assert!(prompt.contains("file_read"));
+        assert!(prompt.contains("Model-Led Programming Workflow"));
+        assert!(prompt.contains("What acceptance criteria define"));
     }
 }

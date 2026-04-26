@@ -379,6 +379,19 @@ fn fts_phrase_query(query: &str) -> String {
     }
 }
 
+fn workflow_contract_enabled(provider: &dyn LlmProvider) -> bool {
+    if provider.base_url().starts_with("mock://") {
+        return false;
+    }
+
+    std::env::var("PRIORITY_AGENT_WORKFLOW_CONTRACT")
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !matches!(value.as_str(), "0" | "false" | "off" | "no")
+        })
+        .unwrap_or(true)
+}
+
 fn tool_error_code_label(result: &ToolResult) -> Option<String> {
     result.error_code.as_ref().and_then(|code| {
         serde_json::to_value(code)
@@ -742,7 +755,8 @@ impl ConversationLoop {
                 Message::User { content } => Some(content.as_str()),
                 _ => None,
             })
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
         let turn_index = self
             .trace_store
             .as_ref()
@@ -755,14 +769,14 @@ impl ConversationLoop {
         let trace = TraceCollector::new(TurnTrace::new(
             self.session_id.clone(),
             turn_index,
-            last_user_preview,
+            &last_user_preview,
         ));
         let learning_events = self
             .session_store
             .as_ref()
             .and_then(|store| store.recent_learning_events(&self.session_id, 20).ok())
             .unwrap_or_default();
-        let route = IntentRouter::new().route_with_learning(last_user_preview, &learning_events);
+        let route = IntentRouter::new().route_with_learning(&last_user_preview, &learning_events);
         trace.record(TraceEvent::IntentRouted {
             intent: format!("{:?}", route.intent),
             workflow: format!("{:?}", route.workflow),
@@ -784,9 +798,10 @@ impl ConversationLoop {
         });
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let mut turn_retrieval_context =
-            build_project_retrieval_context(last_user_preview, &working_dir, route.retrieval).await;
+            build_project_retrieval_context(&last_user_preview, &working_dir, route.retrieval)
+                .await;
         if let Some(session_ctx) = build_session_retrieval_context(
-            last_user_preview,
+            &last_user_preview,
             self.session_store.clone(),
             route.retrieval,
         )
@@ -811,7 +826,7 @@ impl ConversationLoop {
             });
         }
         let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
-            last_user_preview,
+            &last_user_preview,
             &working_dir,
             route.clone(),
             self.goal_manager
@@ -831,6 +846,46 @@ impl ConversationLoop {
                 | crate::engine::intent_router::WorkflowKind::BugFix
         ) {
             task_bundle.add_risk("code-change tasks require explicit verification");
+        }
+        let workflow_contract_prompt =
+            crate::engine::workflow_contract::WorkflowContractPrompt::new(
+                last_user_preview.as_str(),
+                route.clone(),
+                working_dir.display().to_string(),
+            );
+        if workflow_contract_prompt.should_ask_model()
+            && workflow_contract_enabled(self.provider.as_ref())
+        {
+            let analyzer = crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
+                self.provider.as_ref(),
+                self.model.clone(),
+            );
+            match analyzer.analyze(workflow_contract_prompt).await {
+                Ok(judgment) => {
+                    let context_note = judgment.to_turn_context();
+                    trace.record(TraceEvent::WorkflowJudgmentCompleted {
+                        task_type: judgment.task_type.clone(),
+                        complexity: format!("{:?}", judgment.complexity),
+                        risk: format!("{:?}", judgment.risk),
+                        plan_steps: judgment.plan.len(),
+                        acceptance_checks: judgment.acceptance.criteria.len(),
+                        questions: judgment.questions.len(),
+                        guided_reasoning: judgment.guided_reasoning_required,
+                    });
+                    task_bundle.apply_workflow_judgment(judgment);
+                    let insert_at = messages
+                        .iter()
+                        .take_while(|message| matches!(message, Message::System { .. }))
+                        .count();
+                    messages.insert(insert_at, Message::system(context_note));
+                }
+                Err(err) => {
+                    warn!("Workflow judgment analysis failed: {}", err);
+                    trace.record(TraceEvent::WorkflowFallback {
+                        error: format!("workflow judgment analysis failed: {}", err),
+                    });
+                }
+            }
         }
         trace.record(TraceEvent::TaskContextBuilt {
             task_id: task_bundle.task_id.clone(),
@@ -932,7 +987,7 @@ impl ConversationLoop {
             }
         }
         if let Some(manager) = &self.goal_manager {
-            if let Some(goal) = manager.update_from_user_message(last_user_preview, Some(&route)) {
+            if let Some(goal) = manager.update_from_user_message(&last_user_preview, Some(&route)) {
                 trace.record(TraceEvent::SessionGoalUpdated {
                     goal_id: goal.id,
                     title: goal.title,

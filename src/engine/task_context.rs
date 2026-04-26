@@ -6,6 +6,7 @@
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::session_goal::SessionGoal;
+use crate::engine::workflow_contract::ProgrammingWorkflowJudgment;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -23,6 +24,7 @@ pub struct TaskContextBundle {
     pub risks: Vec<String>,
     pub tool_budget: TaskToolBudget,
     pub acceptance_checks: Vec<String>,
+    pub workflow_judgment: Option<ProgrammingWorkflowJudgment>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -62,6 +64,7 @@ impl TaskContextBundle {
             risks: Vec::new(),
             tool_budget: TaskToolBudget::default(),
             acceptance_checks: Vec::new(),
+            workflow_judgment: None,
             created_at: Utc::now(),
         }
     }
@@ -88,6 +91,19 @@ impl TaskContextBundle {
 
     pub fn add_acceptance_check(&mut self, check: impl Into<String>) {
         push_unique(&mut self.acceptance_checks, check.into());
+    }
+
+    pub fn apply_workflow_judgment(&mut self, judgment: ProgrammingWorkflowJudgment) {
+        for assumption in &judgment.assumptions {
+            self.add_constraint(format!("assumption: {}", assumption));
+        }
+        for risk in judgment.risk_notes() {
+            self.add_risk(risk);
+        }
+        for check in judgment.acceptance_checks() {
+            self.add_acceptance_check(check);
+        }
+        self.workflow_judgment = Some(judgment);
     }
 
     pub fn needs_stronger_acceptance(&self) -> bool {
@@ -135,5 +151,42 @@ mod tests {
         bundle.add_file("src/main.rs");
         assert_eq!(bundle.constraints.len(), 1);
         assert_eq!(bundle.relevant_files.len(), 1);
+    }
+
+    #[test]
+    fn bundle_applies_model_workflow_judgment() {
+        let route = IntentRouter::new().route("实现一个网站");
+        let mut bundle = TaskContextBundle::new("实现一个网站", ".", route, None);
+        let judgment = crate::engine::workflow_contract::ProgrammingWorkflowJudgment {
+            task_type: "website".into(),
+            complexity: crate::engine::workflow_contract::TaskComplexity::Medium,
+            risk: crate::engine::intent_router::RiskLevel::Medium,
+            requirement_complete_enough: true,
+            needs_user_questions: false,
+            question_reason: None,
+            questions: Vec::new(),
+            assumptions: vec!["Use local storage".into()],
+            guided_reasoning_required: false,
+            guided_reasoning_triggers: Vec::new(),
+            plan: Vec::new(),
+            acceptance: crate::engine::workflow_contract::AcceptanceContract::pending(
+                "实现一个网站",
+                vec!["Main page renders".into()],
+                Vec::new(),
+            ),
+        };
+
+        bundle.apply_workflow_judgment(judgment);
+
+        assert!(bundle.workflow_judgment.is_some());
+        assert!(bundle
+            .constraints
+            .iter()
+            .any(|item| item.contains("Use local storage")));
+        assert!(bundle
+            .acceptance_checks
+            .iter()
+            .any(|item| item == "Main page renders"));
+        assert!(!bundle.needs_stronger_acceptance());
     }
 }

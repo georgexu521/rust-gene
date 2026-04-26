@@ -91,6 +91,15 @@ pub enum TraceEvent {
         risks: usize,
         acceptance_checks: usize,
     },
+    WorkflowJudgmentCompleted {
+        task_type: String,
+        complexity: String,
+        risk: String,
+        plan_steps: usize,
+        acceptance_checks: usize,
+        questions: usize,
+        guided_reasoning: bool,
+    },
     ReflectionPassCompleted {
         pass_id: String,
         task_id: String,
@@ -216,6 +225,7 @@ impl TraceEvent {
             TraceEvent::IntentRouted { .. } => "intent",
             TraceEvent::ResourcePolicySelected { .. } => "resource.policy",
             TraceEvent::TaskContextBuilt { .. } => "task.context",
+            TraceEvent::WorkflowJudgmentCompleted { .. } => "workflow.judgment",
             TraceEvent::ReflectionPassCompleted { .. } => "reflection.pass",
             TraceEvent::SessionGoalUpdated { .. } => "goal",
             TraceEvent::GoalDriftDetected { .. } => "goal.drift",
@@ -296,6 +306,24 @@ impl TraceEvent {
                 constraints,
                 risks,
                 acceptance_checks
+            ),
+            TraceEvent::WorkflowJudgmentCompleted {
+                task_type,
+                complexity,
+                risk,
+                plan_steps,
+                acceptance_checks,
+                questions,
+                guided_reasoning,
+            } => format!(
+                "workflow judgment type={} complexity={} risk={} steps={} checks={} questions={} guided={}",
+                preview(task_type),
+                complexity,
+                risk,
+                plan_steps,
+                acceptance_checks,
+                questions,
+                guided_reasoning
             ),
             TraceEvent::ReflectionPassCompleted {
                 pass_id,
