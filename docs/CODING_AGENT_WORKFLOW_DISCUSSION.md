@@ -829,9 +829,18 @@ Completed:
 
 Still to implement:
 
-- Make plan step completion and reweighting visible in the CLI/dashboard.
-- Persist workflow judgment itself into session history/learning events.
-- Add EvalSet cases that verify the workflow is actually triggered and affects behavior.
+- None in the current implementation slice.
+
+Completed after the initial slice:
+
+- Made plan progress visible through trace events and `/quick`.
+  - `workflow.plan` records total steps, completed steps, active step, top priority, and whether the plan was reweighted.
+  - `/quick` surfaces the latest plan progress under Contracts.
+- Persisted workflow judgment into learning events.
+  - This complements the existing acceptance review and guided debugging learning events.
+- Added EvalSet coverage for workflow contract behavior.
+  - Eval replay can now include workflow judgment, plan progress, acceptance review, and guided debugging events.
+  - Tests verify these events are present and can affect expected repair/verification outcomes.
 
 ## Design Conclusion
 

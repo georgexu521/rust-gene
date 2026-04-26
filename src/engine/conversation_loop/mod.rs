@@ -905,6 +905,16 @@ impl ConversationLoop {
                         questions: judgment.questions.len(),
                         guided_reasoning: judgment.guided_reasoning_required,
                     });
+                    let sorted_plan = judgment.sorted_plan();
+                    trace.record(TraceEvent::WorkflowPlanProgress {
+                        total_steps: sorted_plan.len(),
+                        completed_steps: 0,
+                        active_step: sorted_plan.first().map(|step| step.description.clone()),
+                        top_priority: sorted_plan.first().map(|step| {
+                            format!("{:?} {:.2}", step.priority, step.normalized_weight())
+                        }),
+                        reweighted: false,
+                    });
                     persist_workflow_learning_event(
                         self.session_store.as_ref(),
                         &self.session_id,
@@ -1748,6 +1758,15 @@ impl ConversationLoop {
                                     unresolved: review_unresolved,
                                     next_action: format!("{:?}", review.next_action),
                                 });
+                                if review_accepted {
+                                    trace.record(TraceEvent::WorkflowPlanProgress {
+                                        total_steps: judgment.plan.len(),
+                                        completed_steps: judgment.plan.len(),
+                                        active_step: None,
+                                        top_priority: None,
+                                        reweighted: true,
+                                    });
+                                }
                                 persist_workflow_learning_event(
                                     self.session_store.as_ref(),
                                     &self.session_id,

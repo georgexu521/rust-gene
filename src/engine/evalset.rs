@@ -70,6 +70,11 @@ pub struct EvalExpect {
 pub struct EvalReplay {
     #[serde(default)]
     pub tool_calls: Vec<EvalToolCall>,
+    #[serde(default)]
+    pub workflow_judgment: bool,
+    pub acceptance_review_accepted: Option<bool>,
+    #[serde(default)]
+    pub guided_debugging: bool,
     pub verification_passed: Option<bool>,
     #[serde(default)]
     pub changed_files: Vec<String>,
@@ -508,6 +513,24 @@ fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRou
         context_budget_tokens: policy.context_budget_tokens,
         reason: policy.reason,
     });
+    if scenario.replay.workflow_judgment {
+        trace.events.push(TraceEvent::WorkflowJudgmentCompleted {
+            task_type: format!("{:?}", route.workflow),
+            complexity: format!("{:?}", route.reasoning),
+            risk: format!("{:?}", route.risk),
+            plan_steps: 2,
+            acceptance_checks: 2,
+            questions: 0,
+            guided_reasoning: matches!(route.reasoning, ReasoningPolicy::High),
+        });
+        trace.events.push(TraceEvent::WorkflowPlanProgress {
+            total_steps: 2,
+            completed_steps: 0,
+            active_step: Some("Inspect relevant code and define acceptance checks".to_string()),
+            top_priority: Some("P0 1.00".to_string()),
+            reweighted: false,
+        });
+    }
     let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
         &scenario.prompt,
         ".",
@@ -520,6 +543,9 @@ fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRou
             | crate::engine::intent_router::WorkflowKind::BugFix
     ) {
         task_bundle.add_risk("code-change tasks require explicit verification");
+    }
+    if scenario.replay.workflow_judgment {
+        task_bundle.add_acceptance_check("Model workflow contract defined acceptance criteria");
     }
     trace.events.push(TraceEvent::TaskContextBuilt {
         task_id: task_bundle.task_id.clone(),
@@ -595,6 +621,35 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
             status: format!("{:?}", reflection.status),
             findings: reflection.findings.len(),
             unresolved: reflection.unresolved_count(),
+        });
+    }
+
+    if let Some(accepted) = scenario.replay.acceptance_review_accepted {
+        trace.events.push(TraceEvent::AcceptanceReviewCompleted {
+            accepted,
+            confidence: if accepted { "High" } else { "Medium" }.to_string(),
+            criteria: 2,
+            unresolved: if accepted { 0 } else { 1 },
+            next_action: if accepted { "Finish" } else { "ContinueRepair" }.to_string(),
+        });
+        if accepted {
+            trace.events.push(TraceEvent::WorkflowPlanProgress {
+                total_steps: 2,
+                completed_steps: 2,
+                active_step: None,
+                top_priority: None,
+                reweighted: true,
+            });
+        }
+    }
+
+    if scenario.replay.guided_debugging {
+        trace.events.push(TraceEvent::GuidedDebuggingCompleted {
+            blocker: true,
+            next_action: "Repair".to_string(),
+            causes: 1,
+            evidence_items: 1,
+            ask_user: false,
         });
     }
 }
@@ -748,6 +803,7 @@ scenarios:
                     ],
                     verification_passed: Some(false),
                     changed_files: vec!["src/main.rs".to_string()],
+                    ..Default::default()
                 },
                 expect: EvalExpect {
                     tool_sequence: vec!["file_edit".to_string(), "bash".to_string()],
@@ -761,6 +817,70 @@ scenarios:
                         "verify.done".to_string(),
                         "reflection.pass".to_string(),
                     ],
+                    ..Default::default()
+                },
+            }],
+        };
+
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_runner_replays_workflow_contract_events() {
+        let set = EvalSet {
+            name: "workflow_contract".to_string(),
+            description: String::new(),
+            scenarios: vec![EvalScenario {
+                id: "contract-visible".to_string(),
+                prompt: "帮我修改代码，新增标签过滤页面".to_string(),
+                replay: EvalReplay {
+                    workflow_judgment: true,
+                    acceptance_review_accepted: Some(true),
+                    verification_passed: Some(true),
+                    changed_files: vec!["src/app.rs".to_string()],
+                    ..Default::default()
+                },
+                expect: EvalExpect {
+                    workflow: Some(WorkflowKind::CodeChange),
+                    trace_events: vec![
+                        "workflow.judgment".to_string(),
+                        "workflow.plan".to_string(),
+                        "acceptance.review".to_string(),
+                    ],
+                    verification_passed: Some(true),
+                    repair_required: Some(false),
+                    ..Default::default()
+                },
+            }],
+        };
+
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_runner_replays_guided_debugging_event() {
+        let set = EvalSet {
+            name: "guided_debugging".to_string(),
+            description: String::new(),
+            scenarios: vec![EvalScenario {
+                id: "tool-failure-debugging".to_string(),
+                prompt: "cargo test 报错了，帮我修复".to_string(),
+                replay: EvalReplay {
+                    tool_calls: vec![EvalToolCall {
+                        tool: "bash".to_string(),
+                        success: false,
+                        output: "cargo test failed".to_string(),
+                    }],
+                    guided_debugging: true,
+                    ..Default::default()
+                },
+                expect: EvalExpect {
+                    workflow: Some(WorkflowKind::BugFix),
+                    failed_tool: Some("bash".to_string()),
+                    trace_events: vec!["tool.done".to_string(), "guided.debug".to_string()],
+                    repair_required: Some(true),
                     ..Default::default()
                 },
             }],

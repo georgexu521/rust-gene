@@ -2467,10 +2467,13 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let debugging_line = latest_trace_for_app(app)
         .and_then(|trace| latest_guided_debugging_label(&trace))
         .unwrap_or_else(|| "none".to_string());
+    let plan_line = latest_trace_for_app(app)
+        .and_then(|trace| latest_workflow_plan_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
     let a2a_line = latest_a2a_transcript_label();
 
     format!(
-        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
         pending,
@@ -2484,6 +2487,7 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         resource_line,
         recent_commands,
         contract_line,
+        plan_line,
         retrieval_line,
         reflection_line,
         acceptance_line,
@@ -2519,6 +2523,7 @@ fn latest_resource_policy_label(trace: &crate::engine::trace::TurnTrace) -> Opti
 fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> String {
     let mut task = false;
     let mut judgment = false;
+    let mut plan = false;
     let mut retrieval = false;
     let mut reflection = false;
     let mut verification = false;
@@ -2528,6 +2533,7 @@ fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> Strin
         match event {
             crate::engine::trace::TraceEvent::TaskContextBuilt { .. } => task = true,
             crate::engine::trace::TraceEvent::WorkflowJudgmentCompleted { .. } => judgment = true,
+            crate::engine::trace::TraceEvent::WorkflowPlanProgress { .. } => plan = true,
             crate::engine::trace::TraceEvent::RetrievalContextBuilt { .. } => retrieval = true,
             crate::engine::trace::TraceEvent::ReflectionPassCompleted { .. } => reflection = true,
             crate::engine::trace::TraceEvent::VerificationCompleted { .. } => verification = true,
@@ -2542,6 +2548,9 @@ fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> Strin
     }
     if judgment {
         parts.push("judgment");
+    }
+    if plan {
+        parts.push("plan");
     }
     if retrieval {
         parts.push("retrieval");
@@ -2599,6 +2608,33 @@ fn latest_reflection_label(trace: &crate::engine::trace::TurnTrace) -> Option<St
             Some(format!(
                 "{} findings={} unresolved={}",
                 status, findings, unresolved
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+fn latest_workflow_plan_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::WorkflowPlanProgress {
+            total_steps,
+            completed_steps,
+            active_step,
+            top_priority,
+            reweighted,
+        } = event
+        {
+            Some(format!(
+                "{}/{} active={} priority={} reweighted={}",
+                completed_steps,
+                total_steps,
+                active_step
+                    .as_deref()
+                    .map(|step| compact_inline(step, 60))
+                    .unwrap_or_else(|| "none".to_string()),
+                top_priority.as_deref().unwrap_or("none"),
+                reweighted
             ))
         } else {
             None

@@ -100,6 +100,13 @@ pub enum TraceEvent {
         questions: usize,
         guided_reasoning: bool,
     },
+    WorkflowPlanProgress {
+        total_steps: usize,
+        completed_steps: usize,
+        active_step: Option<String>,
+        top_priority: Option<String>,
+        reweighted: bool,
+    },
     ReflectionPassCompleted {
         pass_id: String,
         task_id: String,
@@ -240,6 +247,7 @@ impl TraceEvent {
             TraceEvent::ResourcePolicySelected { .. } => "resource.policy",
             TraceEvent::TaskContextBuilt { .. } => "task.context",
             TraceEvent::WorkflowJudgmentCompleted { .. } => "workflow.judgment",
+            TraceEvent::WorkflowPlanProgress { .. } => "workflow.plan",
             TraceEvent::ReflectionPassCompleted { .. } => "reflection.pass",
             TraceEvent::SessionGoalUpdated { .. } => "goal",
             TraceEvent::GoalDriftDetected { .. } => "goal.drift",
@@ -340,6 +348,23 @@ impl TraceEvent {
                 acceptance_checks,
                 questions,
                 guided_reasoning
+            ),
+            TraceEvent::WorkflowPlanProgress {
+                total_steps,
+                completed_steps,
+                active_step,
+                top_priority,
+                reweighted,
+            } => format!(
+                "workflow plan {}/{} active={} priority={} reweighted={}",
+                completed_steps,
+                total_steps,
+                active_step
+                    .as_deref()
+                    .map(preview)
+                    .unwrap_or_else(|| "none".to_string()),
+                top_priority.as_deref().unwrap_or("none"),
+                reweighted
             ),
             TraceEvent::ReflectionPassCompleted {
                 pass_id,
