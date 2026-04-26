@@ -62,6 +62,23 @@ pub enum AcceptanceStatus {
     NotVerified,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcceptanceConfidence {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcceptanceNextAction {
+    Finish,
+    ContinueRepair,
+    AskUser,
+    Stop,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowPlanStep {
     pub description: String,
@@ -153,6 +170,65 @@ pub struct ProgrammingWorkflowJudgment {
     #[serde(default)]
     pub plan: Vec<WorkflowPlanStep>,
     pub acceptance: AcceptanceContract,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptanceReview {
+    pub accepted: bool,
+    pub confidence: AcceptanceConfidence,
+    #[serde(default)]
+    pub criteria: Vec<AcceptanceCriterion>,
+    #[serde(default)]
+    pub unresolved_items: Vec<String>,
+    #[serde(default)]
+    pub residual_risks: Vec<String>,
+    pub next_action: AcceptanceNextAction,
+}
+
+impl AcceptanceReview {
+    pub fn unresolved_count(&self) -> usize {
+        self.criteria
+            .iter()
+            .filter(|criterion| !matches!(criterion.status, AcceptanceStatus::Passed))
+            .count()
+            + self.unresolved_items.len()
+    }
+
+    pub fn format_for_prompt(&self) -> String {
+        let mut out = format!(
+            "Acceptance review: accepted={} confidence={:?} next_action={:?}\n",
+            self.accepted, self.confidence, self.next_action
+        );
+        if !self.criteria.is_empty() {
+            out.push_str("Criteria:\n");
+            for criterion in &self.criteria {
+                out.push_str(&format!(
+                    "- [{:?}] {}{}{}\n",
+                    criterion.status,
+                    criterion.criterion,
+                    if criterion.evidence.is_some() {
+                        " -- "
+                    } else {
+                        ""
+                    },
+                    criterion.evidence.as_deref().unwrap_or("")
+                ));
+            }
+        }
+        if !self.unresolved_items.is_empty() {
+            out.push_str("Unresolved items:\n");
+            for item in &self.unresolved_items {
+                out.push_str(&format!("- {}\n", item));
+            }
+        }
+        if !self.residual_risks.is_empty() {
+            out.push_str("Residual risks:\n");
+            for risk in &self.residual_risks {
+                out.push_str(&format!("- {}\n", risk));
+            }
+        }
+        out
+    }
 }
 
 impl ProgrammingWorkflowJudgment {
@@ -353,6 +429,89 @@ Guidance:
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AcceptanceReviewPrompt {
+    pub contract: AcceptanceContract,
+    pub changed_files: Vec<String>,
+    pub verification_passed: bool,
+    pub evidence: Vec<String>,
+}
+
+impl AcceptanceReviewPrompt {
+    pub fn new(
+        contract: AcceptanceContract,
+        changed_files: Vec<String>,
+        verification_passed: bool,
+        evidence: Vec<String>,
+    ) -> Self {
+        Self {
+            contract,
+            changed_files,
+            verification_passed,
+            evidence,
+        }
+    }
+
+    pub fn render(&self) -> String {
+        format!(
+            r#"You are performing a model-led acceptance review for a programming task.
+
+Judge whether the implementation satisfies the original user goal and acceptance criteria.
+Do not pass criteria just because the intent was good. Use the evidence.
+If evidence is missing, mark that criterion as not_verified.
+If the task should continue, choose continue_repair. If a human choice is needed, choose ask_user.
+
+Original goal:
+{goal}
+
+Assumptions:
+{assumptions}
+
+Original acceptance criteria:
+{criteria}
+
+Changed files:
+{changed_files}
+
+Verification passed:
+{verification_passed}
+
+Evidence:
+{evidence}
+
+Return only valid JSON with this shape:
+{{
+  "accepted": true,
+  "confidence": "low | medium | high",
+  "criteria": [
+    {{
+      "criterion": "criterion text",
+      "status": "passed | failed | not_verified | pending",
+      "evidence": "short evidence or null"
+    }}
+  ],
+  "unresolved_items": [],
+  "residual_risks": [],
+  "next_action": "finish | continue_repair | ask_user | stop"
+}}
+"#,
+            goal = self.contract.original_user_goal,
+            assumptions = bullet_list(&self.contract.assumptions),
+            criteria = bullet_list(
+                &self
+                    .contract
+                    .criteria
+                    .iter()
+                    .map(|criterion| criterion.criterion.clone())
+                    .collect::<Vec<_>>()
+            ),
+            changed_files = bullet_list(&self.changed_files),
+            verification_passed = self.verification_passed,
+            evidence = bullet_list(&self.evidence),
+        )
+    }
+}
+
 pub struct WorkflowContractAnalyzer<'a> {
     provider: &'a dyn LlmProvider,
     model: String,
@@ -379,6 +538,20 @@ impl<'a> WorkflowContractAnalyzer<'a> {
         let response = self.provider.chat(request).await?;
         parse_workflow_judgment(&response.content)
     }
+
+    pub async fn review_acceptance(
+        &self,
+        prompt: AcceptanceReviewPrompt,
+    ) -> anyhow::Result<AcceptanceReview> {
+        let request = ChatRequest::new(self.model.clone())
+            .with_temperature(0.1)
+            .with_messages(vec![
+                Message::system("Return only valid JSON. Do not include markdown fences."),
+                Message::user(prompt.render()),
+            ]);
+        let response = self.provider.chat(request).await?;
+        parse_acceptance_review(&response.content)
+    }
 }
 
 pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkflowJudgment> {
@@ -387,6 +560,12 @@ pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkf
     let mut judgment: ProgrammingWorkflowJudgment = serde_json::from_str(json)?;
     normalize_judgment(&mut judgment);
     Ok(judgment)
+}
+
+pub fn parse_acceptance_review(content: &str) -> anyhow::Result<AcceptanceReview> {
+    let json = extract_json_object(content)
+        .ok_or_else(|| anyhow::anyhow!("acceptance review response did not contain JSON"))?;
+    Ok(serde_json::from_str(json)?)
 }
 
 fn normalize_judgment(judgment: &mut ProgrammingWorkflowJudgment) {
@@ -422,6 +601,17 @@ fn extract_json_object(content: &str) -> Option<&str> {
     let start = content.find('{')?;
     let end = content.rfind('}')?;
     (end > start).then_some(&content[start..=end])
+}
+
+fn bullet_list(items: &[String]) -> String {
+    if items.is_empty() {
+        return "- none".to_string();
+    }
+    items
+        .iter()
+        .map(|item| format!("- {}", item))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -504,5 +694,31 @@ mod tests {
         );
 
         assert_eq!(contract.incomplete_count(), 1);
+    }
+
+    #[test]
+    fn parse_acceptance_review_from_fenced_text() {
+        let content = r#"```json
+{
+  "accepted": false,
+  "confidence": "medium",
+  "criteria": [
+    {
+      "criterion": "Tests pass",
+      "status": "not_verified",
+      "evidence": "No test command was run"
+    }
+  ],
+  "unresolved_items": ["Run focused tests"],
+  "residual_risks": ["Manual browser flow not checked"],
+  "next_action": "continue_repair"
+}
+```"#;
+
+        let review = parse_acceptance_review(content).unwrap();
+
+        assert!(!review.accepted);
+        assert_eq!(review.unresolved_count(), 2);
+        assert_eq!(review.next_action, AcceptanceNextAction::ContinueRepair);
     }
 }

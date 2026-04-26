@@ -188,6 +188,13 @@ pub enum TraceEvent {
         changed_files: usize,
         passed: bool,
     },
+    AcceptanceReviewCompleted {
+        accepted: bool,
+        confidence: String,
+        criteria: usize,
+        unresolved: usize,
+        next_action: String,
+    },
     RecoveryApplied {
         error: String,
         action: String,
@@ -244,6 +251,7 @@ impl TraceEvent {
             TraceEvent::PermissionResolved { .. } => "permission.resolve",
             TraceEvent::ToolCompleted { .. } => "tool.done",
             TraceEvent::VerificationCompleted { .. } => "verify.done",
+            TraceEvent::AcceptanceReviewCompleted { .. } => "acceptance.review",
             TraceEvent::RecoveryApplied { .. } => "recovery",
             TraceEvent::RecoveryPlan { .. } => "recovery.plan",
             TraceEvent::McpResourceAccessed { .. } => "mcp.resource",
@@ -470,6 +478,16 @@ impl TraceEvent {
                 "verification {} for {} changed files",
                 if *passed { "passed" } else { "failed" },
                 changed_files
+            ),
+            TraceEvent::AcceptanceReviewCompleted {
+                accepted,
+                confidence,
+                criteria,
+                unresolved,
+                next_action,
+            } => format!(
+                "acceptance accepted={} confidence={} criteria={} unresolved={} next={}",
+                accepted, confidence, criteria, unresolved, next_action
             ),
             TraceEvent::RecoveryApplied { error, action } => {
                 format!("recovery: {} -> {}", preview(error), action)

@@ -1487,11 +1487,13 @@ impl ConversationLoop {
                 let working_dir =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let mut post_edit_evidence = Vec::new();
+                let mut acceptance_evidence = Vec::new();
                 let verify_results =
                     super::auto_verify::verify_file_changes(&working_dir, &changed_files).await;
                 let check_passed = verify_results.iter().all(|r| r.success);
                 for result in verify_results {
                     let verify_text = result.to_dialog_text();
+                    acceptance_evidence.push(verify_text.clone());
                     if !result.success {
                         post_edit_evidence.push(verify_text.clone());
                         tool_results_text.push('\n');
@@ -1547,6 +1549,7 @@ impl ConversationLoop {
                 let tests_passed = test_results.iter().all(|r| r.success);
                 for result in test_results {
                     let test_text = result.to_dialog_text();
+                    acceptance_evidence.push(test_text.clone());
                     if !result.success {
                         post_edit_evidence.push(test_text.clone());
                         tool_results_text.push('\n');
@@ -1560,6 +1563,7 @@ impl ConversationLoop {
                 // ── 代码自审查 ────────────────────────────────
                 let review_result =
                     super::code_review::review_changed_files(&working_dir, &changed_files);
+                acceptance_evidence.push(review_result.to_dialog_text());
                 if !review_result.success {
                     let review_text = review_result.to_dialog_text();
                     post_edit_evidence.push(review_text.clone());
@@ -1588,6 +1592,56 @@ impl ConversationLoop {
                     findings: post_edit_reflection.findings.len(),
                     unresolved: post_edit_reflection.unresolved_count(),
                 });
+                if let Some(judgment) = task_bundle.workflow_judgment.as_ref() {
+                    if workflow_contract_enabled(self.provider.as_ref()) {
+                        let analyzer =
+                            crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
+                                self.provider.as_ref(),
+                                self.model.clone(),
+                            );
+                        let prompt = crate::engine::workflow_contract::AcceptanceReviewPrompt::new(
+                            judgment.acceptance.clone(),
+                            changed_files
+                                .iter()
+                                .map(|path| path.display().to_string())
+                                .collect(),
+                            verify_passed,
+                            acceptance_evidence.clone(),
+                        );
+                        match analyzer.review_acceptance(prompt).await {
+                            Ok(review) => {
+                                trace.record(TraceEvent::AcceptanceReviewCompleted {
+                                    accepted: review.accepted,
+                                    confidence: format!("{:?}", review.confidence),
+                                    criteria: review.criteria.len(),
+                                    unresolved: review.unresolved_count(),
+                                    next_action: format!("{:?}", review.next_action),
+                                });
+                                let review_text = review.format_for_prompt();
+                                tool_results_text.push('\n');
+                                tool_results_text.push_str(&review_text);
+                                messages.push(Message::system(review_text.clone()));
+                                if matches!(
+                                    review.next_action,
+                                    crate::engine::workflow_contract::AcceptanceNextAction::ContinueRepair
+                                        | crate::engine::workflow_contract::AcceptanceNextAction::Stop
+                                ) && !review.accepted
+                                {
+                                    messages.push(Message::system(
+                                        "Acceptance review did not pass. Continue repair if possible; otherwise report the unresolved items clearly."
+                                            .to_string(),
+                                    ));
+                                }
+                            }
+                            Err(err) => {
+                                warn!("Acceptance review failed: {}", err);
+                                trace.record(TraceEvent::WorkflowFallback {
+                                    error: format!("acceptance review failed: {}", err),
+                                });
+                            }
+                        }
+                    }
+                }
                 {
                     let mut tracker = self.cost_tracker.lock().await;
                     tracker.record_coding_round(verify_passed);
