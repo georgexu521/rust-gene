@@ -905,6 +905,33 @@ impl ConversationLoop {
                         questions: judgment.questions.len(),
                         guided_reasoning: judgment.guided_reasoning_required,
                     });
+                    persist_workflow_learning_event(
+                        self.session_store.as_ref(),
+                        &self.session_id,
+                        "workflow_judgment",
+                        format!(
+                            "Workflow judgment task_type={} risk={:?} questions={} guided={}",
+                            judgment.task_type,
+                            judgment.risk,
+                            judgment.questions.len(),
+                            judgment.guided_reasoning_required
+                        ),
+                        0.8,
+                        serde_json::json!({
+                            "task_type": judgment.task_type.clone(),
+                            "complexity": format!("{:?}", judgment.complexity),
+                            "risk": format!("{:?}", judgment.risk),
+                            "requirement_complete_enough": judgment.requirement_complete_enough,
+                            "needs_user_questions": judgment.needs_user_questions,
+                            "question_reason": judgment.question_reason.clone(),
+                            "questions": judgment.questions.clone(),
+                            "assumptions": judgment.assumptions.clone(),
+                            "guided_reasoning_required": judgment.guided_reasoning_required,
+                            "guided_reasoning_triggers": judgment.guided_reasoning_triggers.iter().map(|trigger| format!("{:?}", trigger)).collect::<Vec<_>>(),
+                            "plan_steps": judgment.plan.len(),
+                            "acceptance_checks": judgment.acceptance.criteria.len(),
+                        }),
+                    );
                     task_bundle.apply_workflow_judgment(judgment);
                     let insert_at = messages
                         .iter()
