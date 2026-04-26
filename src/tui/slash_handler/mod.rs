@@ -355,6 +355,24 @@ mod tests {
     }
 
     #[test]
+    fn test_skills_panel_lists_karpathy_guidelines() {
+        let app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_skills(&app);
+
+        assert!(msg.contains("karpathy-guidelines"));
+        assert!(msg.contains("/karpathy"));
+    }
+
+    #[tokio::test]
+    async fn test_karpathy_no_args_shows_usage() {
+        let mut app = crate::tui::app::TuiApp::new();
+        let msg = super::handle_karpathy(&mut app, "").await;
+
+        assert!(msg.contains("Karpathy Guidelines"));
+        assert!(msg.contains("/karpathy <coding task>"));
+    }
+
+    #[test]
     fn test_is_valid_webhook_url_validation() {
         assert!(is_valid_webhook_url("https://example.com/hook"));
         assert!(is_valid_webhook_url("http://127.0.0.1:8080/webhook"));

@@ -12,7 +12,7 @@ Last updated: 2026-04-25
 - 最近 5 项闭环计划已完成：tool recovery learning、learning-aware routing、
   goal drift visibility、memory namespace search、MCP health/resource traces。
 - 最近全量验证：`env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
-  通过，`820 passed; 0 failed`。
+  通过，`853 passed; 0 failed`。
 
 ## 核心理念
 

@@ -71,6 +71,17 @@ impl ReflectionPass {
             });
         }
 
+        if matches!(
+            bundle.route.workflow,
+            crate::engine::intent_router::WorkflowKind::CodeChange
+                | crate::engine::intent_router::WorkflowKind::BugFix
+        ) {
+            pass.checks.push(
+                "karpathy-guidelines: assumptions, simplicity, surgical diff, verification"
+                    .to_string(),
+            );
+        }
+
         if bundle.retrieval.is_none()
             && matches!(
                 bundle.route.retrieval,
@@ -218,6 +229,10 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.issue == "missing acceptance checks"));
+        assert!(pass
+            .checks
+            .iter()
+            .any(|check| check.contains("karpathy-guidelines")));
     }
 
     #[test]

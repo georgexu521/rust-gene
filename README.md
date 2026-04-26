@@ -17,7 +17,7 @@ Latest verified baseline:
 
 - `cargo check --quiet`
 - `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
-- Result: `820 passed; 0 failed`
+- Result: `853 passed; 0 failed`
 
 ## Quick Start
 
@@ -84,6 +84,8 @@ Common interactive commands:
 | `/recover` | Show recent recovery plans |
 | `/learn` | Show recent learning events |
 | `/memory` | Show memory namespaces |
+| `/skills` | List bundled coding skills |
+| `/karpathy <task>` | Apply careful coding guidelines to a task |
 | `/permissions` | Inspect or edit permission rules |
 | `/mcp status` | Show MCP server health and approvals |
 | `/sessions` | List and resume persisted sessions |

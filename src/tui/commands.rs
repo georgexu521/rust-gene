@@ -609,6 +609,14 @@ pub const CMD_FIX: CommandDef = CommandDef::new(
     "Suggest fixes for current changes",
 );
 
+pub const CMD_KARPATHY: CommandDef = CommandDef::new(
+    "/karpathy",
+    &[],
+    "Skills",
+    "/karpathy [task]",
+    "Apply careful coding guidelines to a task",
+);
+
 pub const CMD_MCP: CommandDef = CommandDef::new(
     "/mcp",
     &[],
@@ -1365,6 +1373,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_SECURITY_REVIEW);
     registry.register(&CMD_EXPLAIN);
     registry.register(&CMD_FIX);
+    registry.register(&CMD_KARPATHY);
     registry.register(&CMD_MCP);
     registry.register(&CMD_VIM);
     // Phase 9 Task 3: Register new commands
@@ -1509,6 +1518,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_SECURITY_REVIEW,
     &CMD_EXPLAIN,
     &CMD_FIX,
+    &CMD_KARPATHY,
     &CMD_MCP,
     &CMD_VIM,
     &CMD_BTW,

@@ -21,7 +21,7 @@ The recent closure plan is complete:
 Latest verified baseline:
 
 ```text
-820 passed; 0 failed
+853 passed; 0 failed
 ```
 
 Verified with:
@@ -45,6 +45,8 @@ env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
   conflict detection.
 - MCP status and tool/resource visibility are health-aware and approval-aware.
 - CLI panels are increasingly backed by actual runtime state, not decoration.
+- `karpathy-guidelines` is bundled as a coding behavior skill and exposed
+  through `/skills`, `/karpathy <task>`, and code-change reflection checks.
 
 ## Product Surface
 
@@ -103,4 +105,3 @@ maturity, not missing foundations:
 4. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
    Discord/Slack adapters if they become product priorities.
 5. Keep docs synchronized with tests and current behavior.
-

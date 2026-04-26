@@ -2213,9 +2213,14 @@ fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
 }
 
 /// /skills - List available skills
-pub fn handle_skills(_app: &TuiApp) -> String {
-    "Skills: use /help to see all skill-based commands (commit, review, explain, fix, etc.)"
-        .to_string()
+pub fn handle_skills(app: &TuiApp) -> String {
+    let mut names = app.bundled_skills.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    format!(
+        "Skills ({} bundled):\n{}\n\nUse /karpathy <task> to apply careful coding guidelines, or skill_view for full skill content.",
+        names.len(),
+        names.join(", ")
+    )
 }
 
 // ═══════════════════════════════════════

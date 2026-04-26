@@ -18,6 +18,10 @@ const BUNDLED_SKILLS: &[(&str, &str)] = &[
     ("explain", include_str!("bundled/explain.md")),
     ("fix", include_str!("bundled/fix.md")),
     ("simplify", include_str!("bundled/simplify.md")),
+    (
+        "karpathy-guidelines",
+        include_str!("bundled/karpathy_guidelines.md"),
+    ),
     ("verify", include_str!("bundled/verify.md")),
     ("debug", include_str!("bundled/debug.md")),
     ("stuck", include_str!("bundled/stuck.md")),
@@ -219,6 +223,7 @@ mod tests {
         assert!(names.contains(&"security_review".to_string()));
         assert!(names.contains(&"explain".to_string()));
         assert!(names.contains(&"fix".to_string()));
+        assert!(names.contains(&"karpathy-guidelines".to_string()));
     }
 
     #[test]

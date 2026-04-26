@@ -2115,6 +2115,7 @@ impl TuiApp {
             "/explain" => slash::handle_explain(self, args).await,
             "/fix" => slash::handle_fix(self).await,
             "/simplify" => slash::handle_simplify(self, args).await,
+            "/karpathy" => slash::handle_karpathy(self, args).await,
             "/verify" => slash::handle_verify(self).await,
             "/debug" => slash::handle_debug(self).await,
             "/stuck" => slash::handle_stuck(self).await,
