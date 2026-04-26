@@ -143,33 +143,179 @@ fn print_command_help() {
 
 async fn print_status(engine: &StreamingQueryEngine) {
     let usage = engine.context_usage_report().await;
+    let session_rules = engine.session_permission_rules();
     let usage_pct = if usage.max_context_tokens > 0 {
         usage.total_estimated_tokens.saturating_mul(100) / usage.max_context_tokens
     } else {
         0
     };
+    let context_bar = percent_bar(usage_pct.min(100), 16);
+    let memory_label = if usage.relevant_memories.is_empty() {
+        "none".to_string()
+    } else {
+        format!("{} relevant", usage.relevant_memories.len())
+    };
+    let rule_count = session_rules.always_allow.len()
+        + session_rules.always_deny.len()
+        + session_rules.always_ask.len();
+    let recent_memory = usage
+        .relevant_memories
+        .first()
+        .map(|m| compact_line(&m.snippet, 72));
 
-    println!("{BOLD}Status{RESET}");
-    println!("{DIM}  model     {RESET}{}", engine.model_name());
-    println!("{DIM}  provider  {RESET}{}", engine.provider_base_url());
+    println!("{BOLD}Priority Agent{RESET}");
     println!(
-        "{DIM}  context   {RESET}{} / {} tokens ({}%)",
-        usage.total_estimated_tokens, usage.max_context_tokens, usage_pct
+        "{DIM}  model      {RESET}{:<24} {DIM}provider{RESET} {}",
+        compact_line(&engine.model_name(), 24),
+        compact_line(&engine.provider_base_url(), 48)
     );
     println!(
-        "{DIM}  history   {RESET}{} messages · {} tokens",
-        usage.history_messages, usage.history_tokens
+        "{DIM}  context    {RESET}{} {:>3}%  {}/{} tokens",
+        context_bar, usage_pct, usage.total_estimated_tokens, usage.max_context_tokens
     );
     println!(
-        "{DIM}  tools     {RESET}{} tools · {} schema tokens",
-        usage.tool_count, usage.tool_schema_tokens
+        "{DIM}  request    {RESET}history {} msgs / {} tokens · tools {} / {} tokens",
+        usage.history_messages, usage.history_tokens, usage.tool_count, usage.tool_schema_tokens
     );
-    if !usage.relevant_memories.is_empty() {
+    println!(
+        "{DIM}  policy     {RESET}{} · {} session rules · {} tools registered",
+        permission_mode_label(engine.permission_mode()),
+        rule_count,
+        usage.tool_count
+    );
+    println!("{DIM}  memory     {RESET}{memory_label}");
+    if let Some(memory) = recent_memory {
+        println!("{DIM}  recall     {RESET}{memory}");
+    }
+    println!(
+        "{DIM}  prefix     {RESET}{}",
+        usage.stable_prefix_fingerprint
+    );
+}
+
+fn permission_mode_label(mode: crate::permissions::PermissionMode) -> &'static str {
+    match mode {
+        crate::permissions::PermissionMode::Default => "default",
+        crate::permissions::PermissionMode::AutoLowRisk => "auto-low-risk",
+        crate::permissions::PermissionMode::AutoAll => "auto-all",
+        crate::permissions::PermissionMode::ReadOnly => "read-only",
+        crate::permissions::PermissionMode::Once => "once",
+    }
+}
+
+fn percent_bar(percent: u64, width: usize) -> String {
+    let filled = ((percent as usize) * width).div_ceil(100).min(width);
+    let empty = width.saturating_sub(filled);
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+}
+
+fn compact_line(text: &str, max_chars: usize) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+
+    let mut out: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionChoice {
+    AllowOnce,
+    DenyOnce,
+    AllowSession,
+    DenySession,
+}
+
+impl PermissionChoice {
+    fn approved(self) -> bool {
+        matches!(self, Self::AllowOnce | Self::AllowSession)
+    }
+}
+
+fn prompt_for_permission(
+    engine: &StreamingQueryEngine,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    prompt: &str,
+) -> anyhow::Result<bool> {
+    println!("{YELLOW}?{RESET} Permission required");
+    if !tool_name.is_empty() {
         println!(
-            "{DIM}  memory    {RESET}{} relevant memories",
-            usage.relevant_memories.len()
+            "{DIM}  tool      {RESET}{}",
+            permission_scope_summary(tool_name, arguments)
         );
     }
+    for line in prompt.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            println!("{DIM}  {trimmed}{RESET}");
+        }
+    }
+    let pattern = if tool_name.is_empty() {
+        None
+    } else {
+        Some(crate::tui::app::permission_rule_pattern(
+            tool_name, arguments,
+        ))
+    };
+    if let Some(pattern) = pattern.as_ref() {
+        println!("{DIM}  scope     {RESET}{pattern}");
+    }
+    println!("{DIM}  choices   {RESET}y allow once · n deny · a allow session · d deny session");
+    print!("{DIM}  Choice [y/N/a/d] {RESET}");
+    io::stdout().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let choice = match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => PermissionChoice::AllowOnce,
+        "a" | "always" | "allow" => PermissionChoice::AllowSession,
+        "d" | "deny-session" => PermissionChoice::DenySession,
+        _ => PermissionChoice::DenyOnce,
+    };
+
+    if let Some(pattern) = pattern.as_ref() {
+        match choice {
+            PermissionChoice::AllowSession => {
+                engine.add_session_permission_rule("allow", pattern);
+                println!("{DIM}  saved     allow {pattern} for this session{RESET}");
+            }
+            PermissionChoice::DenySession => {
+                engine.add_session_permission_rule("deny", pattern);
+                println!("{DIM}  saved     deny {pattern} for this session{RESET}");
+            }
+            PermissionChoice::AllowOnce | PermissionChoice::DenyOnce => {}
+        }
+    }
+
+    Ok(choice.approved())
+}
+
+fn permission_scope_summary(tool_name: &str, arguments: &serde_json::Value) -> String {
+    if tool_name == "bash" {
+        let cmd = arguments["command"]
+            .as_str()
+            .or_else(|| arguments["cmd"].as_str())
+            .unwrap_or("");
+        if !cmd.is_empty() {
+            return format!("bash · {}", compact_line(cmd, 80));
+        }
+    }
+    if tool_name == "mcp_tool" {
+        let server = arguments["server_name"].as_str().unwrap_or("");
+        let tool = arguments["tool_name"].as_str().unwrap_or("");
+        if !server.is_empty() || !tool.is_empty() {
+            return format!("mcp · {server}/{tool}");
+        }
+    }
+    if matches!(tool_name, "file_write" | "file_edit" | "file_read") {
+        if let Some(path) = arguments["path"].as_str() {
+            return format!("{tool_name} · {}", compact_line(path, 80));
+        }
+    }
+    tool_name.to_string()
 }
 
 fn build_line_editor() -> anyhow::Result<Editor<ShellHelper, DefaultHistory>> {
@@ -247,10 +393,15 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                     println_tool_line(marker, color, &run.render_lines(false).join("\n  "), true);
                 }
             }
-            StreamEvent::PermissionRequest { prompt, .. } => {
+            StreamEvent::PermissionRequest {
+                tool_name,
+                arguments,
+                prompt,
+                ..
+            } => {
                 clear_status_if_visible(&mut status_visible)?;
                 assistant_printer.finish_line_if_needed()?;
-                let approved = prompt_for_permission(&prompt)?;
+                let approved = prompt_for_permission(&engine, &tool_name, &arguments, &prompt)?;
                 if let Some(channel) = engine.approval_channel() {
                     if let Some((_request, tx)) = channel.take_pending().await {
                         let _ = tx.send(approved);
@@ -306,25 +457,6 @@ fn println_tool_line(marker: &str, color: &str, text: &str, first_line_normal: b
             println!("{DIM}  {line}{RESET}");
         }
     }
-}
-
-fn prompt_for_permission(prompt: &str) -> anyhow::Result<bool> {
-    println!("{YELLOW}?{RESET} Permission required");
-    for line in prompt.lines() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            println!("{DIM}  {trimmed}{RESET}");
-        }
-    }
-    print!("{DIM}  Allow? [y/N] {RESET}");
-    io::stdout().flush()?;
-
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
 }
 
 #[derive(Clone, Copy)]
@@ -551,6 +683,21 @@ mod tests {
             render_assistant_line("**文件：** `a.md`", &mut in_code),
             "文件： a.md"
         );
+    }
+
+    #[test]
+    fn percent_bar_renders_fixed_width() {
+        assert_eq!(percent_bar(0, 4), "[░░░░]");
+        assert_eq!(percent_bar(50, 4), "[██░░]");
+        assert_eq!(percent_bar(100, 4), "[████]");
+    }
+
+    #[test]
+    fn permission_choice_approval_semantics() {
+        assert!(PermissionChoice::AllowOnce.approved());
+        assert!(PermissionChoice::AllowSession.approved());
+        assert!(!PermissionChoice::DenyOnce.approved());
+        assert!(!PermissionChoice::DenySession.approved());
     }
 
     #[test]
