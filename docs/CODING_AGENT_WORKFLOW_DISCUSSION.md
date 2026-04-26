@@ -800,6 +800,35 @@ Potential future implementation areas:
 8. Emit a structured validation report before final response.
 9. Store workflow outcomes as learning events for future routing.
 
+## Implementation Progress
+
+### 2026-04-26
+
+The first implementation slice has started.
+
+Completed:
+
+- Added a model-led workflow contract module.
+  - The runtime can ask the model to judge task type, complexity, risk, missing information, whether user questions are needed, assumptions, plan priority/weight, guided reasoning triggers, and acceptance criteria.
+  - The result is stored in `TaskContextBundle` and surfaced in trace events.
+- Injected workflow judgment into real conversation turns for programming workflows.
+  - The extra preflight model call is enabled by default for non-mock providers.
+  - It can be disabled with `PRIORITY_AGENT_WORKFLOW_CONTRACT=0`.
+  - If parsing fails, the turn continues and records a workflow fallback event.
+- Added a model-led acceptance review contract after code edits.
+  - The model reviews acceptance criteria using verification evidence, changed files, and the original acceptance contract.
+  - The result records accepted/not accepted, confidence, unresolved items, residual risks, and the next action.
+- Added a guided debugging contract for failed tool rounds.
+  - When a tool round fails, the model can identify the symptom, likely causes, evidence to collect, smallest safe action, whether to ask the user, and whether to inspect, repair, ask, or stop.
+
+Still to implement:
+
+- Use acceptance review results to more strictly gate final closeout for high-risk changes.
+- Connect guided debugging with bounded repair counters and learning events.
+- Make plan step completion and reweighting visible in the CLI/dashboard.
+- Persist workflow judgment, acceptance review, and debugging analysis into session history/learning events.
+- Add EvalSet cases that verify the workflow is actually triggered and affects behavior.
+
 ## Design Conclusion
 
 The preferred design is a model-led engineering workflow:
