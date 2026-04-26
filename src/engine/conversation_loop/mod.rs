@@ -1264,12 +1264,14 @@ impl ConversationLoop {
             if !changed_files.is_empty() {
                 let working_dir =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let mut post_edit_evidence = Vec::new();
                 let verify_results =
                     super::auto_verify::verify_file_changes(&working_dir, &changed_files).await;
                 let check_passed = verify_results.iter().all(|r| r.success);
                 for result in verify_results {
                     let verify_text = result.to_dialog_text();
                     if !result.success {
+                        post_edit_evidence.push(verify_text.clone());
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&verify_text);
                         messages.push(Message::system(verify_text));
@@ -1310,6 +1312,7 @@ impl ConversationLoop {
                             "[LSP diagnostics for modified files]:\n{}",
                             lsp_issues.join("\n")
                         );
+                        post_edit_evidence.push(lsp_text.clone());
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&lsp_text);
                         messages.push(Message::system(lsp_text));
@@ -1323,6 +1326,7 @@ impl ConversationLoop {
                 for result in test_results {
                     let test_text = result.to_dialog_text();
                     if !result.success {
+                        post_edit_evidence.push(test_text.clone());
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&test_text);
                         messages.push(Message::system(test_text));
@@ -1336,6 +1340,7 @@ impl ConversationLoop {
                     super::code_review::review_changed_files(&working_dir, &changed_files);
                 if !review_result.success {
                     let review_text = review_result.to_dialog_text();
+                    post_edit_evidence.push(review_text.clone());
                     tool_results_text.push('\n');
                     tool_results_text.push_str(&review_text);
                     messages.push(Message::system(review_text));
@@ -1347,9 +1352,38 @@ impl ConversationLoop {
                     changed_files: changed_files.len(),
                     passed: verify_passed,
                 });
+                let post_edit_reflection =
+                    crate::engine::reflection_pass::ReflectionPass::from_post_edit(
+                        task_bundle.task_id.clone(),
+                        &changed_files,
+                        verify_passed,
+                        &post_edit_evidence,
+                    );
+                trace.record(TraceEvent::ReflectionPassCompleted {
+                    pass_id: post_edit_reflection.pass_id.clone(),
+                    task_id: post_edit_reflection.task_id.clone(),
+                    status: format!("{:?}", post_edit_reflection.status),
+                    findings: post_edit_reflection.findings.len(),
+                    unresolved: post_edit_reflection.unresolved_count(),
+                });
                 {
                     let mut tracker = self.cost_tracker.lock().await;
                     tracker.record_coding_round(verify_passed);
+                }
+                if post_edit_reflection.status
+                    != crate::engine::reflection_pass::ReflectionStatus::Passed
+                {
+                    let repair_instruction = format!(
+                        "{}\nPost-edit reflection found unresolved quality gaps. Fix the changed files before giving a final answer.",
+                        post_edit_reflection.format_for_prompt()
+                    );
+                    tool_results_text.push('\n');
+                    tool_results_text.push_str(&repair_instruction);
+                    messages.push(Message::system(repair_instruction));
+                    if effective_iterations >= self.max_iterations {
+                        final_content = "Stopped after file changes because post-edit reflection found unresolved verification gaps.".to_string();
+                        break;
+                    }
                 }
             }
 

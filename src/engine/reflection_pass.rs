@@ -6,6 +6,7 @@
 use crate::engine::task_context::TaskContextBundle;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -93,6 +94,40 @@ impl ReflectionPass {
         pass
     }
 
+    pub fn from_post_edit(
+        task_id: impl Into<String>,
+        changed_files: &[PathBuf],
+        verification_passed: bool,
+        evidence: &[String],
+    ) -> Self {
+        let mut pass = Self::new(task_id);
+        pass.checks.push("post-edit changes reviewed".to_string());
+        pass.checks
+            .push(format!("changed files: {}", changed_files.len()));
+
+        if changed_files.is_empty() {
+            return pass;
+        }
+
+        if verification_passed {
+            pass.checks
+                .push("verification, tests, diagnostics, and code review passed".to_string());
+            return pass;
+        }
+
+        pass.add_finding(ReflectionFinding {
+            severity: ReflectionSeverity::Error,
+            issue: "post-edit verification failed".to_string(),
+            evidence: summarize_evidence(evidence),
+            proposed_fix: Some(
+                "inspect the failed verification output, update the changed files, and rerun the relevant checks"
+                    .to_string(),
+            ),
+            fixed: false,
+        });
+        pass
+    }
+
     pub fn add_finding(&mut self, finding: ReflectionFinding) {
         if matches!(finding.severity, ReflectionSeverity::Error) {
             self.status = ReflectionStatus::Blocked;
@@ -109,6 +144,61 @@ impl ReflectionPass {
             .iter()
             .filter(|finding| !finding.fixed)
             .count()
+    }
+
+    pub fn format_for_prompt(&self) -> String {
+        let findings = if self.findings.is_empty() {
+            "none".to_string()
+        } else {
+            self.findings
+                .iter()
+                .map(|finding| {
+                    format!(
+                        "- {:?}: {} | evidence: {}{}",
+                        finding.severity,
+                        finding.issue,
+                        finding.evidence,
+                        finding
+                            .proposed_fix
+                            .as_ref()
+                            .map(|fix| format!(" | proposed fix: {}", fix))
+                            .unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        format!(
+            "<reflection-pass id=\"{}\" status=\"{:?}\" unresolved=\"{}\">\nchecks:\n{}\nfindings:\n{}\n</reflection-pass>",
+            self.pass_id,
+            self.status,
+            self.unresolved_count(),
+            self.checks
+                .iter()
+                .map(|check| format!("- {}", check))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            findings
+        )
+    }
+}
+
+fn summarize_evidence(evidence: &[String]) -> String {
+    let joined = evidence
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    if joined.is_empty() {
+        "verification reported failure without detailed output".to_string()
+    } else {
+        let mut out = joined.chars().take(1200).collect::<String>();
+        if joined.chars().count() > 1200 {
+            out.push_str("...");
+        }
+        out
     }
 }
 
@@ -136,6 +226,29 @@ mod tests {
         let mut bundle = TaskContextBundle::new("你好", ".", route, None);
         bundle.add_acceptance_check("answer directly");
         let pass = ReflectionPass::from_task_bundle(&bundle);
+        assert_eq!(pass.status, ReflectionStatus::Passed);
+        assert_eq!(pass.unresolved_count(), 0);
+    }
+
+    #[test]
+    fn post_edit_reflection_blocks_failed_verification() {
+        let pass = ReflectionPass::from_post_edit(
+            "task-1",
+            &[PathBuf::from("src/main.rs")],
+            false,
+            &["cargo test failed".to_string()],
+        );
+        assert_eq!(pass.status, ReflectionStatus::Blocked);
+        assert_eq!(pass.unresolved_count(), 1);
+        assert!(pass
+            .format_for_prompt()
+            .contains("post-edit verification failed"));
+    }
+
+    #[test]
+    fn post_edit_reflection_passes_successful_verification() {
+        let pass =
+            ReflectionPass::from_post_edit("task-1", &[PathBuf::from("src/main.rs")], true, &[]);
         assert_eq!(pass.status, ReflectionStatus::Passed);
         assert_eq!(pass.unresolved_count(), 0);
     }

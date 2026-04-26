@@ -46,7 +46,7 @@ They are not yet comprehensive for the entire handbook. The remaining work is mo
 | Prompt chaining | Mostly covered | `ConversationLoop`, `WorkflowEngine`, `PlanMode`, `TurnTrace`, prompt templates | Workflow templates are available but not all routed automatically |
 | Routing | Covered | `src/engine/intent_router.rs`, route events in `TurnTrace`, learning-aware routing | Needs more calibration data from real outcomes |
 | Parallelization | Mostly covered | read-only parallel tool execution, `swarm`, `agent`, `team` tools | No first-class `ParallelGroup` merge contract or branch UI |
-| Reflection | Mostly covered | approval-gated `ReflectionPass`, trace events, Socratic analysis, review/debug agent templates, verification trace events | Reflection blocks risky routed turns, but post-edit artifact review is still not mandatory everywhere |
+| Reflection | Mostly covered | approval-gated preflight `ReflectionPass`, post-edit `ReflectionPass`, trace events, Socratic analysis, review/debug agent templates, verification trace events | Reflection now gates core code-change paths; CLI still needs richer finding visualization |
 | Tool use | Mostly covered | tool registry, permissions, structured `ToolResult`, recovery metadata, tool viewer | Tool reliability score is not yet shown in routing/UI |
 | Planning | Mostly covered | `TaskContextBundle` trace events, `PlanMode`, workflow gates, approval UI, trace events | Plan dependencies/checkpoints are not fully unified with the task bundle |
 | Multi-agent collaboration | Mostly covered | `AgentTaskEnvelope` handoff, `agent`, `swarm`, `team`, role memory | Envelope handoff exists; status streaming and artifact return schema still need consolidation |
@@ -78,6 +78,7 @@ The latest implementation rounds closed the review's original P0/P2/P3 spine:
 - Memory selection now supports project/user/session/topic search and semantic prefetch.
 - MCP has health-aware status, resource access tracing, and approval-aware tool execution.
 - Risky code-change/debug turns now stop for human approval when `ReflectionPass` finds unresolved acceptance gaps.
+- Real file changes now run a post-edit `ReflectionPass` over verify/test/LSP/code-review output before finalization.
 - `ResourcePolicy` now enforces max tool calls and caps read-only tool concurrency in the conversation loop.
 - `AgentTaskEnvelope` now wraps agent, swarm, and team request handoffs.
 
@@ -88,7 +89,7 @@ These are the main gaps to close before claiming the handbook is fully represent
 1. EvalSet full replay support for tool trajectories, artifacts, and final answer criteria.
 2. Full migration of project/web/MCP/session retrieval into `RetrievalContext`.
 3. Full migration of plan approval and fallback decisions into `HumanReviewRequest`.
-4. Post-edit artifact review that reuses `ReflectionPass` after real file changes.
+4. CLI visualization for `ReflectionPass` findings and repair status.
 5. Durable A2A status, artifact, and error protocol on top of `AgentTaskEnvelope`.
 6. Deeper CLI dashboard backed by live task/retrieval/review/resource state.
 
@@ -98,7 +99,7 @@ The next best work is not to add another isolated feature. Build the missing con
 
 1. Expand EvalSet from deterministic routing/trace checks into full tool-trajectory replay.
 2. Migrate project/web/MCP/session retrieval into `RetrievalContext`.
-3. Expand post-edit reflection and plan approval into more code-change paths.
+3. Expand plan approval and reflection findings into richer CLI dashboard views.
 4. Add durable A2A status/artifact/error records for agent/swarm/team handoffs.
 5. Expand CLI dashboard with live task/retrieval/review/resource state.
 
@@ -238,18 +239,19 @@ Current coverage:
 - Socratic analysis asks deeper questions before execution.
 - Agent templates include review/debug roles.
 - Tests and tool output viewer provide manual verification support.
+- `ReflectionPass` is a structured artifact recorded in `TurnTrace`.
+- Preflight reflection gates risky code-change/debug turns through approval.
+- Post-edit reflection summarizes verify/test/LSP/code-review failures and pushes repair instructions back into the conversation loop.
 
 Gaps:
 
-- Reflection is not systematically attached to risky actions. For example, after editing code, there is no mandatory self-review checklist before final response.
-- There is no structured “critique result” artifact with severity, confidence, and proposed fix.
-- Reflection and evaluation are not clearly separated: critique, tests, and user-facing summary currently blend together.
+- Reflection findings are structured, but the CLI dashboard does not yet show repair status as a first-class panel.
+- Reflection and evaluation are separated in code, but EvalSet replay does not yet assert full post-edit repair trajectories.
 
 Recommended improvements:
 
-- Add `ReflectionPass` after code edits and before final answers for high-risk or multi-file changes.
-- Represent reflection output as findings: `issue`, `evidence`, `severity`, `fix_status`.
 - Connect reflection findings to CLI UI and final summaries.
+- Add EvalSet scenarios that replay failed post-edit verification and assert the repair loop.
 
 ### Chapter 5: Tool Use
 
