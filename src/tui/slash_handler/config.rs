@@ -2461,10 +2461,16 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let reflection_line = latest_trace_for_app(app)
         .and_then(|trace| latest_reflection_label(&trace))
         .unwrap_or_else(|| "none".to_string());
+    let acceptance_line = latest_trace_for_app(app)
+        .and_then(|trace| latest_acceptance_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
+    let debugging_line = latest_trace_for_app(app)
+        .and_then(|trace| latest_guided_debugging_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
     let a2a_line = latest_a2a_transcript_label();
 
     format!(
-        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Retrieval: {}\n- Reflection: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
         pending,
@@ -2480,6 +2486,8 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         contract_line,
         retrieval_line,
         reflection_line,
+        acceptance_line,
+        debugging_line,
         a2a_line,
         workspace,
         cwd.display(),
@@ -2510,21 +2518,30 @@ fn latest_resource_policy_label(trace: &crate::engine::trace::TurnTrace) -> Opti
 
 fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> String {
     let mut task = false;
+    let mut judgment = false;
     let mut retrieval = false;
     let mut reflection = false;
     let mut verification = false;
+    let mut acceptance = false;
+    let mut debugging = false;
     for event in &trace.events {
         match event {
             crate::engine::trace::TraceEvent::TaskContextBuilt { .. } => task = true,
+            crate::engine::trace::TraceEvent::WorkflowJudgmentCompleted { .. } => judgment = true,
             crate::engine::trace::TraceEvent::RetrievalContextBuilt { .. } => retrieval = true,
             crate::engine::trace::TraceEvent::ReflectionPassCompleted { .. } => reflection = true,
             crate::engine::trace::TraceEvent::VerificationCompleted { .. } => verification = true,
+            crate::engine::trace::TraceEvent::AcceptanceReviewCompleted { .. } => acceptance = true,
+            crate::engine::trace::TraceEvent::GuidedDebuggingCompleted { .. } => debugging = true,
             _ => {}
         }
     }
     let mut parts = Vec::new();
     if task {
         parts.push("task");
+    }
+    if judgment {
+        parts.push("judgment");
     }
     if retrieval {
         parts.push("retrieval");
@@ -2534,6 +2551,12 @@ fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> Strin
     }
     if verification {
         parts.push("verification");
+    }
+    if acceptance {
+        parts.push("acceptance");
+    }
+    if debugging {
+        parts.push("debug");
     }
     if parts.is_empty() {
         "none".to_string()
@@ -2576,6 +2599,54 @@ fn latest_reflection_label(trace: &crate::engine::trace::TurnTrace) -> Option<St
             Some(format!(
                 "{} findings={} unresolved={}",
                 status, findings, unresolved
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+fn latest_acceptance_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::AcceptanceReviewCompleted {
+            accepted,
+            confidence,
+            criteria,
+            unresolved,
+            next_action,
+        } = event
+        {
+            Some(format!(
+                "{} confidence={} criteria={} unresolved={} next={}",
+                if *accepted {
+                    "accepted"
+                } else {
+                    "not accepted"
+                },
+                confidence,
+                criteria,
+                unresolved,
+                next_action
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+fn latest_guided_debugging_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::GuidedDebuggingCompleted {
+            blocker,
+            next_action,
+            causes,
+            evidence_items,
+            ask_user,
+        } = event
+        {
+            Some(format!(
+                "blocker={} next={} causes={} evidence={} ask_user={}",
+                blocker, next_action, causes, evidence_items, ask_user
             ))
         } else {
             None
