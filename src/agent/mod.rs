@@ -5,6 +5,7 @@
 // 允许 module inception，因为 agent 模块下的 agent.rs 是核心实体文件
 #![allow(clippy::module_inception)]
 
+pub mod a2a_transcript;
 pub mod agent;
 pub mod envelope;
 pub mod manager;

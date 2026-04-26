@@ -261,6 +261,51 @@ fn record_mcp_resource_trace(
     });
 }
 
+fn record_web_retrieval_trace(
+    trace: &Option<TraceCollector>,
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) {
+    let Some(trace) = trace else {
+        return;
+    };
+    let (title, provenance) = match tool_call.name.as_str() {
+        "web_search" => (
+            "Web search results",
+            tool_call.arguments["query"]
+                .as_str()
+                .map(|query| format!("web.search:{}", query))
+                .unwrap_or_else(|| "web.search".to_string()),
+        ),
+        "web_fetch" => (
+            "Web fetched content",
+            tool_call.arguments["url"]
+                .as_str()
+                .map(|url| format!("web.fetch:{}", url))
+                .unwrap_or_else(|| "web.fetch".to_string()),
+        ),
+        _ => return,
+    };
+    if let Some(ctx) = crate::engine::retrieval_context::RetrievalContext::from_web_result(
+        &provenance,
+        title,
+        &result.content,
+        provenance.clone(),
+        crate::engine::intent_router::RetrievalPolicy::Web,
+    ) {
+        trace.record(TraceEvent::RetrievalContextBuilt {
+            policy: format!("{:?}", ctx.policy),
+            sources: ctx
+                .items
+                .iter()
+                .map(|item| format!("{:?}", item.source))
+                .collect(),
+            items: ctx.items.len(),
+            estimated_tokens: ctx.token_estimate,
+        });
+    }
+}
+
 async fn build_project_retrieval_context(
     query: &str,
     working_dir: &std::path::Path,
@@ -288,6 +333,50 @@ async fn build_project_retrieval_context(
     .await
     .ok()
     .flatten()
+}
+
+async fn build_session_retrieval_context(
+    query: &str,
+    store: Option<Arc<crate::session_store::SessionStore>>,
+    policy: crate::engine::intent_router::RetrievalPolicy,
+) -> Option<crate::engine::retrieval_context::RetrievalContext> {
+    if !matches!(
+        policy,
+        crate::engine::intent_router::RetrievalPolicy::Memory
+            | crate::engine::intent_router::RetrievalPolicy::Project
+            | crate::engine::intent_router::RetrievalPolicy::Full
+    ) {
+        return None;
+    }
+    let store = store?;
+    let query = fts_phrase_query(query);
+    if query.trim().is_empty() {
+        return None;
+    }
+    tokio::task::spawn_blocking(move || {
+        store.search_messages(&query, 4).ok().and_then(|messages| {
+            crate::engine::retrieval_context::RetrievalContext::from_session_messages(
+                &query, &messages, policy,
+            )
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+fn fts_phrase_query(query: &str) -> String {
+    let compact = query
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(160)
+        .collect::<String>()
+        .replace('"', "\"\"");
+    if compact.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\"{}\"", compact)
+    }
 }
 
 fn tool_error_code_label(result: &ToolResult) -> Option<String> {
@@ -694,8 +783,21 @@ impl ConversationLoop {
             reason: resource_policy.reason.clone(),
         });
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let turn_retrieval_context =
+        let mut turn_retrieval_context =
             build_project_retrieval_context(last_user_preview, &working_dir, route.retrieval).await;
+        if let Some(session_ctx) = build_session_retrieval_context(
+            last_user_preview,
+            self.session_store.clone(),
+            route.retrieval,
+        )
+        .await
+        {
+            if let Some(ref mut ctx) = turn_retrieval_context {
+                ctx.extend(session_ctx);
+            } else {
+                turn_retrieval_context = Some(session_ctx);
+            }
+        }
         if let Some(ref ctx) = turn_retrieval_context {
             trace.record(TraceEvent::RetrievalContextBuilt {
                 policy: format!("{:?}", ctx.policy),
@@ -2037,7 +2139,9 @@ impl ConversationLoop {
                         duration_ms: pre_result.duration_ms,
                         output_chars: pre_result.content.chars().count(),
                     });
-                    record_mcp_resource_trace(&Some(trace.clone()), tc, &pre_result);
+                    let trace_ref = Some(trace.clone());
+                    record_mcp_resource_trace(&trace_ref, tc, &pre_result);
+                    record_web_retrieval_trace(&trace_ref, tc, &pre_result);
                 }
                 debug!(
                     "Skipping pre-executed read-only tool at index {}: {}",
@@ -2132,7 +2236,9 @@ impl ConversationLoop {
                             duration_ms: result.duration_ms,
                             output_chars: result.content.chars().count(),
                         });
-                        record_mcp_resource_trace(&Some(trace.clone()), &tc_clone, &result);
+                        let trace_ref = Some(trace.clone());
+                        record_mcp_resource_trace(&trace_ref, &tc_clone, &result);
+                        record_web_retrieval_trace(&trace_ref, &tc_clone, &result);
                     }
                     (tc_clone, result)
                 });
@@ -2424,7 +2530,9 @@ impl ConversationLoop {
                     duration_ms: result.duration_ms,
                     output_chars: result.content.chars().count(),
                 });
-                record_mcp_resource_trace(&Some(trace.clone()), &tc, &result);
+                let trace_ref = Some(trace.clone());
+                record_mcp_resource_trace(&trace_ref, &tc, &result);
+                record_web_retrieval_trace(&trace_ref, &tc, &result);
             }
             persist_tool_outcome_learning_event(
                 self.session_store.as_ref(),

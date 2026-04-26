@@ -2420,9 +2420,10 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let reflection_line = latest_trace_for_app(app)
         .and_then(|trace| latest_reflection_label(&trace))
         .unwrap_or_else(|| "none".to_string());
+    let a2a_line = latest_a2a_transcript_label();
 
     format!(
-        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Retrieval: {}\n- Reflection: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Retrieval: {}\n- Reflection: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
         pending,
@@ -2438,6 +2439,7 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         contract_line,
         retrieval_line,
         reflection_line,
+        a2a_line,
         workspace,
         cwd.display(),
         quick_git_line(&cwd)
@@ -2538,6 +2540,23 @@ fn latest_reflection_label(trace: &crate::engine::trace::TurnTrace) -> Option<St
             None
         }
     })
+}
+
+fn latest_a2a_transcript_label() -> String {
+    match crate::agent::a2a_transcript::read_recent(1) {
+        Ok(records) if !records.is_empty() => {
+            let record = records.last().expect("checked non-empty");
+            format!(
+                "{:?} {} -> {} artifacts={} goal={}",
+                record.status,
+                record.from,
+                record.to.as_deref().unwrap_or("unassigned"),
+                record.artifacts,
+                compact_inline(&record.goal, 60)
+            )
+        }
+        _ => "none".to_string(),
+    }
 }
 
 /// /goal - Show or pin the current session goal

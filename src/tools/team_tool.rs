@@ -92,7 +92,10 @@ Use this to coordinate work, hand off tasks, or request help from specialist age
                 let priority = parse_priority(params["priority"].as_str());
                 let kind = parse_kind(params["kind"].as_str());
                 let content = if kind == MessageKind::Request {
-                    wrap_team_request_content(&mailbox.self_id, to, content, priority)
+                    let (wrapped, envelope) =
+                        wrap_team_request_content(&mailbox.self_id, to, content, priority);
+                    let _ = crate::agent::a2a_transcript::append_envelope(&envelope);
+                    wrapped
                 } else {
                     content.to_string()
                 };
@@ -216,7 +219,7 @@ fn wrap_team_request_content(
     to: &str,
     content: &str,
     priority: MessagePriority,
-) -> String {
+) -> (String, crate::agent::envelope::AgentTaskEnvelope) {
     let envelope = crate::agent::envelope::AgentTaskEnvelope::new(
         crate::agent::types::AgentId(from.to_string()),
         summarize_team_goal(content),
@@ -230,9 +233,12 @@ fn wrap_team_request_content(
     });
     let envelope_json =
         serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| "{}".to_string());
-    format!(
-        "<agent-task-envelope>\n{}\n</agent-task-envelope>\n\n{}",
-        envelope_json, content
+    (
+        format!(
+            "<agent-task-envelope>\n{}\n</agent-task-envelope>\n\n{}",
+            envelope_json, content
+        ),
+        envelope,
     )
 }
 
@@ -271,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_request_messages_include_agent_task_envelope() {
-        let wrapped = wrap_team_request_content(
+        let (wrapped, envelope) = wrap_team_request_content(
             "agent",
             "reviewer",
             "Please review src/main.rs before merge",
@@ -283,6 +289,10 @@ mod tests {
         assert!(wrapped.contains("\"to\""));
         assert!(wrapped.contains("\"high\""));
         assert!(wrapped.ends_with("Please review src/main.rs before merge"));
+        assert_eq!(
+            envelope.status,
+            crate::agent::envelope::AgentTaskStatus::Assigned
+        );
     }
 
     #[test]

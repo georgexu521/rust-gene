@@ -95,6 +95,12 @@ impl RetrievalContext {
         });
     }
 
+    pub fn extend(&mut self, other: RetrievalContext) {
+        for item in other.items {
+            self.add_item(item);
+        }
+    }
+
     pub fn from_memory_prefetch(
         query: &str,
         content: &str,
@@ -133,6 +139,53 @@ impl RetrievalContext {
             format!("project.index:{}", root.as_ref().display()),
             TrustLevel::High,
         ));
+        Some(ctx)
+    }
+
+    pub fn from_web_result(
+        query: &str,
+        title: &str,
+        content: &str,
+        provenance: impl Into<String>,
+        policy: RetrievalPolicy,
+    ) -> Option<Self> {
+        if content.trim().is_empty() {
+            return None;
+        }
+        let mut ctx = Self::new(query, policy);
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Web,
+            title,
+            content,
+            0.7,
+            provenance,
+            TrustLevel::Medium,
+        ));
+        Some(ctx)
+    }
+
+    pub fn from_session_messages(
+        query: &str,
+        messages: &[crate::session_store::MessageRecord],
+        policy: RetrievalPolicy,
+    ) -> Option<Self> {
+        if messages.is_empty() {
+            return None;
+        }
+        let mut ctx = Self::new(query, policy);
+        for (idx, message) in messages.iter().enumerate() {
+            ctx.add_item(RetrievalItem::new(
+                RetrievalSource::Session,
+                format!("Session {} {}", message.session_id, message.role),
+                &message.content,
+                (0.72 - (idx as f32 * 0.03)).max(0.35),
+                format!(
+                    "session.message:{}:{}:{}",
+                    message.session_id, message.id, message.created_at
+                ),
+                TrustLevel::Medium,
+            ));
+        }
         Some(ctx)
     }
 
@@ -244,5 +297,36 @@ mod tests {
 
         assert_eq!(ctx.item_count_by_source(RetrievalSource::Project), 1);
         assert!(ctx.format_for_prompt().contains("project.index:/repo"));
+    }
+
+    #[test]
+    fn web_and_session_contexts_build() {
+        let web = RetrievalContext::from_web_result(
+            "codex cli",
+            "Search results",
+            "result one",
+            "web.search",
+            RetrievalPolicy::Web,
+        )
+        .expect("web context");
+        assert_eq!(web.item_count_by_source(RetrievalSource::Web), 1);
+
+        let messages = vec![crate::session_store::MessageRecord {
+            id: 1,
+            session_id: "s1".to_string(),
+            role: "assistant".to_string(),
+            content: "Use compact status bars.".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning: None,
+            created_at: "2026-04-26T00:00:00Z".to_string(),
+        }];
+        let session = RetrievalContext::from_session_messages(
+            "status bars",
+            &messages,
+            RetrievalPolicy::Memory,
+        )
+        .expect("session context");
+        assert_eq!(session.item_count_by_source(RetrievalSource::Session), 1);
     }
 }

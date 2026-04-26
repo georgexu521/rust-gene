@@ -51,7 +51,15 @@ First implementation pass completed:
 
 Next pass should deepen these foundations rather than add new parallel abstractions:
 
+Second implementation pass completed:
+
+- Web tool results now emit unified `RetrievalContextBuilt` trace events.
+- Session history search can build and inject `RetrievalContext` alongside project retrieval.
+- Swarm/team handoffs append durable A2A transcript records to JSONL.
+- `/quick` now shows the latest A2A transcript summary in the contract section.
+
+Remaining depth work:
+
 1. Add EvalSet replay for multi-turn tool repair trajectories.
-2. Migrate web and session search into `RetrievalContext`.
-3. Persist A2A status updates for swarm/team handoffs.
-4. Add a dedicated CLI contract dashboard beyond the compact `/quick` panel.
+2. Persist full A2A status transitions and returned artifacts, not just handoff summaries.
+3. Add a dedicated CLI contract dashboard beyond the compact `/quick` panel.

@@ -114,7 +114,9 @@ impl SwarmCoordinator {
     pub async fn spawn_agent(&self, task: AgentTask) -> String {
         let agent_id = format!("agent-{}", &Uuid::new_v4().to_string()[..8]);
         let mut task = task;
-        task.user_message = wrap_swarm_task_message(&agent_id, &task);
+        let (wrapped, envelope) = wrap_swarm_task_message(&agent_id, &task);
+        let _ = crate::agent::a2a_transcript::append_envelope(&envelope);
+        task.user_message = wrapped;
 
         let agent = SwarmAgent {
             id: agent_id.clone(),
@@ -556,7 +558,10 @@ impl crate::tools::Tool for SwarmTool {
     }
 }
 
-fn wrap_swarm_task_message(agent_id: &str, task: &AgentTask) -> String {
+fn wrap_swarm_task_message(
+    agent_id: &str,
+    task: &AgentTask,
+) -> (String, crate::agent::envelope::AgentTaskEnvelope) {
     let mut envelope = crate::agent::envelope::AgentTaskEnvelope::new(
         crate::agent::types::AgentId("swarm".to_string()),
         task.description.clone(),
@@ -567,9 +572,12 @@ fn wrap_swarm_task_message(agent_id: &str, task: &AgentTask) -> String {
     envelope.add_constraint(format!("max_iterations={}", task.max_iterations));
     let envelope_json =
         serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| "{}".to_string());
-    format!(
-        "<agent-task-envelope>\n{}\n</agent-task-envelope>\n\n{}",
-        envelope_json, task.user_message
+    (
+        format!(
+            "<agent-task-envelope>\n{}\n</agent-task-envelope>\n\n{}",
+            envelope_json, task.user_message
+        ),
+        envelope,
     )
 }
 
@@ -620,7 +628,7 @@ mod tests {
             max_iterations: 5,
         };
 
-        let wrapped = wrap_swarm_task_message("agent-12345678", &task);
+        let (wrapped, envelope) = wrap_swarm_task_message("agent-12345678", &task);
 
         assert!(wrapped.contains("<agent-task-envelope>"));
         assert!(wrapped.contains("\"swarm\""));
@@ -628,5 +636,9 @@ mod tests {
         assert!(wrapped.contains("\"swarm_result\""));
         assert!(wrapped.contains("\"max_iterations=5\""));
         assert!(wrapped.ends_with("Review main.rs"));
+        assert_eq!(
+            envelope.status,
+            crate::agent::envelope::AgentTaskStatus::Assigned
+        );
     }
 }
