@@ -10,6 +10,7 @@ pub mod agent;
 pub mod envelope;
 pub mod manager;
 pub mod memory;
+pub mod profiles;
 pub mod roles;
 pub mod types;
 pub mod verification_agent;

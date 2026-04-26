@@ -874,24 +874,24 @@ pub async fn handle_simplify(app: &mut TuiApp, _args: &str) -> String {
 
 /// /karpathy - Apply Karpathy-style coding guidelines to a task
 pub async fn handle_karpathy(app: &mut TuiApp, args: &str) -> String {
-    match app.bundled_skills.get("karpathy-guidelines") {
-        Some(skill) => {
-            let task = args.trim();
-            if task.is_empty() {
+    let task = args.trim();
+    if task.is_empty() {
+        match app.skill_runtime.get("karpathy-guidelines") {
+            Some(skill) => {
                 return format!(
                     "Karpathy Guidelines\n\n{}\n\nUsage:\n  /karpathy <coding task>\n\nThis applies the bundled skill to a concrete coding, review, refactor, or debugging task.",
                     skill.meta.description
                 );
             }
-            let prompt = format!(
-                "{}\n\n## Task\n\nApply these guidelines to this task:\n\n{}",
-                skill.to_injection(),
-                task
-            );
-            app.send_message(prompt).await;
+            None => return "Skill 'karpathy-guidelines' not found.".to_string(),
+        }
+    }
+    match app.skill_runtime.invocation("karpathy-guidelines", task) {
+        Some(invocation) => {
+            app.send_message(invocation.prompt).await;
             String::new()
         }
-        None => "Skill 'karpathy-guidelines' not found.".to_string(),
+        None => "Skill 'karpathy-guidelines' not found or not user-invocable.".to_string(),
     }
 }
 

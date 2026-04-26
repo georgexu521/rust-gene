@@ -39,19 +39,37 @@ pub async fn handle_status(app: &TuiApp) -> String {
 
         // MCP 状态
         if let Some(mcp) = engine.mcp_manager() {
-            let available = mcp.available_servers();
-            let degraded = mcp.degraded_servers();
-            if available.is_empty() && degraded.is_empty() {
+            let diagnostics = mcp.health_diagnostics();
+            let available = diagnostics
+                .iter()
+                .filter(|diag| {
+                    diag.approved && diag.health == crate::engine::mcp::McpHealthStatus::Healthy
+                })
+                .count();
+            let needs_repair = diagnostics
+                .iter()
+                .filter(|diag| diag.repair_hint != "none")
+                .map(|diag| format!("{}=>{}", diag.name, diag.repair_hint))
+                .collect::<Vec<_>>();
+            if diagnostics.is_empty() {
                 lines.push("MCP: no servers configured".to_string());
             } else {
-                if !available.is_empty() {
-                    lines.push(format!("MCP: {} available", available.len()));
-                }
-                if !degraded.is_empty() {
-                    lines.push(format!("MCP: {} degraded", degraded.join(", ")));
+                lines.push(format!(
+                    "MCP: {} servers, {} available",
+                    diagnostics.len(),
+                    available
+                ));
+                if !needs_repair.is_empty() {
+                    lines.push(format!("MCP repair: {}", needs_repair.join(", ")));
                 }
             }
         }
+
+        let profiles = crate::agent::profiles::load_profiles(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        );
+        lines.push(format!("Agent profiles: {}", profiles.len()));
+        lines.push(format!("Skills: {}", app.skill_runtime.len()));
 
         // 权限模式
         let mode = engine.permission_mode();
@@ -121,6 +139,21 @@ pub async fn handle_tasks(app: &TuiApp) -> String {
     }
 }
 pub async fn handle_agents(app: &TuiApp) -> String {
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let profiles = crate::agent::profiles::load_profiles(&working_dir);
+    let profile_line = if profiles.is_empty() {
+        "Profiles: none".to_string()
+    } else {
+        format!(
+            "Profiles ({}): {}",
+            profiles.len(),
+            profiles
+                .iter()
+                .map(|profile| profile.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     if let Some(manager) = app
         .streaming_engine
         .as_ref()
@@ -128,7 +161,7 @@ pub async fn handle_agents(app: &TuiApp) -> String {
     {
         let agents = manager.list_agents().await;
         if agents.is_empty() {
-            "No agents found.".to_string()
+            format!("No agents found.\n{}", profile_line)
         } else {
             let mut lines = vec![format!("Agents ({}):", agents.len())];
             for handle in agents.iter().take(30) {
@@ -141,10 +174,15 @@ pub async fn handle_agents(app: &TuiApp) -> String {
                     handle.config.name
                 ));
             }
+            lines.push(String::new());
+            lines.push(profile_line);
             lines.join("\n")
         }
     } else {
-        "Agent manager unavailable (no engine connected).".to_string()
+        format!(
+            "Agent manager unavailable (no engine connected).\n{}",
+            profile_line
+        )
     }
 }
 pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
@@ -550,7 +588,7 @@ pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
                     "No MCP servers configured.".to_string()
                 } else {
                     format!(
-                        "MCP servers ({}):\n{}\n\nApproved: {}\n\nUsage:\n  /mcp status\n  /mcp prompts\n  /mcp approve <server>\n  /mcp revoke <server>",
+                        "MCP servers ({}):\n{}\n\nApproved: {}\n\nUsage:\n  /mcp status\n  /mcp prompts\n  /mcp auth <server>\n  /mcp repair <server>\n  /mcp approve <server>\n  /mcp revoke <server>",
                         servers.len(),
                         servers.join("\n"),
                         if approved.is_empty() {
@@ -582,8 +620,23 @@ pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
                 ];
                 for diag in diagnostics {
                     lines.push(format!(
-                        "- {} [{}] health={:?} approved={} circuit={}",
-                        diag.name, diag.transport, diag.health, diag.approved, diag.circuit_breaker
+                        "- {} [{}] health={:?} approved={} oauth={} token={} circuit={} repair={}",
+                        diag.name,
+                        diag.transport,
+                        diag.health,
+                        diag.approved,
+                        if diag.oauth_configured {
+                            "configured"
+                        } else {
+                            "none"
+                        },
+                        if diag.oauth_token_present {
+                            "present"
+                        } else {
+                            "missing"
+                        },
+                        diag.circuit_breaker,
+                        diag.repair_hint
                     ));
                 }
                 lines.join("\n")
@@ -621,8 +674,23 @@ pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
                 let name = parts[1];
                 mgr.revoke_server(name);
                 format!("MCP server '{}' approval revoked.", name)
+            } else if parts[0] == "auth" && parts.len() >= 2 {
+                let name = parts[1];
+                match mgr.authenticate_server(name).await {
+                    Ok(()) => format!("MCP server '{}' authenticated.", name),
+                    Err(e) => format!(
+                        "MCP auth failed for '{}': {}\nCheck OAuth config, then retry with /mcp auth {}.",
+                        name, e, name
+                    ),
+                }
+            } else if parts[0] == "repair" && parts.len() >= 2 {
+                let name = parts[1];
+                match mgr.repair_server(name) {
+                    Ok(msg) => msg,
+                    Err(e) => format!("MCP repair failed for '{}': {}", name, e),
+                }
             } else {
-                "Usage: /mcp [list|status|prompts|approve <server>|revoke <server>]".to_string()
+                "Usage: /mcp [list|status|prompts|auth <server>|repair <server>|approve <server>|revoke <server>]".to_string()
             }
         } else {
             "No MCP manager configured.".to_string()

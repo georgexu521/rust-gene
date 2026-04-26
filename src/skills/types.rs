@@ -26,6 +26,9 @@ pub struct SkillMeta {
     /// Tool allow-list scoped to this skill, Claude-style `allowed-tools`.
     #[serde(default, alias = "allowed-tools")]
     pub allowed_tools: Vec<String>,
+    /// Tool deny-list scoped to this skill.
+    #[serde(default, alias = "disallowed-tools")]
+    pub disallowed_tools: Vec<String>,
     /// Preferred model for this skill, if any.
     #[serde(default)]
     pub model: Option<String>,
@@ -58,6 +61,7 @@ impl Default for SkillMeta {
             triggers: Vec::new(),
             required_env: Vec::new(),
             allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
             model: None,
             effort: None,
             context: None,

@@ -11,6 +11,17 @@ pub struct SkillRuntime {
     project_root: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct SkillInvocation {
+    pub name: String,
+    pub prompt: String,
+    pub allowed_tools: Vec<String>,
+    pub disallowed_tools: Vec<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub context: Option<String>,
+}
+
 impl SkillRuntime {
     pub fn load(project_root: impl Into<PathBuf>) -> Self {
         let project_root = project_root.into();
@@ -68,12 +79,25 @@ impl SkillRuntime {
         matches
     }
 
-    pub fn invocation_prompt(&self, name: &str, task: &str) -> Option<String> {
+    pub fn invocation(&self, name: &str, task: &str) -> Option<SkillInvocation> {
         let skill = self.get(name)?;
         if !skill.meta.user_invocable {
             return None;
         }
-        Some(render_skill_invocation(skill, task))
+        Some(SkillInvocation {
+            name: skill.meta.name.clone(),
+            prompt: render_skill_invocation(skill, task),
+            allowed_tools: skill.meta.allowed_tools.clone(),
+            disallowed_tools: skill.meta.disallowed_tools.clone(),
+            model: skill.meta.model.clone(),
+            effort: skill.meta.effort.clone(),
+            context: skill.meta.context.clone(),
+        })
+    }
+
+    pub fn invocation_prompt(&self, name: &str, task: &str) -> Option<String> {
+        self.invocation(name, task)
+            .map(|invocation| invocation.prompt)
     }
 }
 
@@ -101,6 +125,11 @@ fn render_skill_invocation(skill: &Skill, task: &str) -> String {
     if !skill.meta.allowed_tools.is_empty() {
         out.push_str("\nAllowed tools for this skill: ");
         out.push_str(&skill.meta.allowed_tools.join(", "));
+        out.push('\n');
+    }
+    if !skill.meta.disallowed_tools.is_empty() {
+        out.push_str("Disallowed tools for this skill: ");
+        out.push_str(&skill.meta.disallowed_tools.join(", "));
         out.push('\n');
     }
     if let Some(model) = &skill.meta.model {

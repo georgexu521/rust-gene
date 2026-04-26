@@ -34,3 +34,41 @@ scenarios:
         - /desktop
         - /reset
 
+  - id: skill-runtime-loads-direct-invocation-skills
+    prompt: "使用 /karpathy 检查代码"
+    expect:
+      skills:
+        - karpathy-guidelines
+        - review
+        - verify
+      available_commands:
+        - /skills
+        - /karpathy
+
+  - id: agent-profiles-are-discoverable
+    prompt: "派一个 verifier 子 agent 做验证"
+    expect:
+      agent_profiles:
+        - explorer
+        - verifier
+        - implementer
+      unavailable_tools:
+        - agent
+
+  - id: mcp-command-surface-is-realistic-without-manager
+    prompt: "列出 MCP prompts 和 resources"
+    expect:
+      available_commands:
+        - /mcp
+      unavailable_tools:
+        - mcp
+        - mcp_tool
+        - read_mcp_resource
+
+  - id: dashboard-commands-remain-production-ready
+    prompt: "查看当前 dashboard 状态"
+    expect:
+      available_commands:
+        - /status
+        - /resource
+        - /eval

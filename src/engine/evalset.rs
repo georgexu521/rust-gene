@@ -60,6 +60,10 @@ pub struct EvalExpect {
     pub available_commands: Vec<String>,
     #[serde(default)]
     pub placeholder_commands: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
+    #[serde(default)]
+    pub agent_profiles: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -372,6 +376,33 @@ impl EvalRunner {
                         scenario_id: scenario.id.clone(),
                         message: format!("command '{}' expected registered placeholder", command),
                     }),
+                }
+            }
+        }
+
+        if !expect.skills.is_empty() {
+            let runtime = crate::skills::SkillRuntime::load(".");
+            for skill in &expect.skills {
+                if runtime.get(skill).is_none() {
+                    failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!("skill '{}' expected loadable", skill),
+                    });
+                }
+            }
+        }
+
+        if !expect.agent_profiles.is_empty() {
+            let profiles = crate::agent::profiles::load_profiles(".");
+            for profile_name in &expect.agent_profiles {
+                if !profiles
+                    .iter()
+                    .any(|profile| profile.name.eq_ignore_ascii_case(profile_name))
+                {
+                    failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!("agent profile '{}' expected loadable", profile_name),
+                    });
                 }
             }
         }

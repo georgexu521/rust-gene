@@ -330,6 +330,7 @@ impl crate::tools::Tool for SkillViewTool {
                     "name": skill.meta.name,
                     "description": skill.meta.description,
                     "allowed_tools": skill.meta.allowed_tools,
+                    "disallowed_tools": skill.meta.disallowed_tools,
                     "model": skill.meta.model,
                     "effort": skill.meta.effort,
                     "context": skill.meta.context,

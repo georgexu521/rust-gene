@@ -215,10 +215,16 @@ async fn spawn_single_agent(
     allowed_tools: &[String],
     role: AgentRole,
     template: Option<AgentTemplate>,
+    profile: Option<&crate::agent::profiles::AgentProfile>,
     working_dir: &Path,
 ) -> anyhow::Result<ManagerAgentResult> {
     let file_context = load_file_context(files, working_dir).await;
-    let system_prompt = build_system_prompt(template, role, description, prompt, &file_context);
+    let mut system_prompt = build_system_prompt(template, role, description, prompt, &file_context);
+    if let Some(profile) = profile {
+        if !profile.system_prompt.trim().is_empty() {
+            system_prompt = format!("{}\n\n{}", profile.system_prompt.trim(), system_prompt);
+        }
+    }
 
     let agent_config = AgentConfig::new(format!("sub-agent: {}", description))
         .with_description(description)
@@ -250,6 +256,15 @@ async fn spawn_single_agent(
     envelope.add_expected_artifact("task_result");
     envelope.add_constraint(format!("timeout_secs={}", timeout_secs));
     envelope.add_constraint(format!("max_turns={}", max_turns));
+    if !allowed_tools.is_empty() {
+        envelope.add_constraint(format!("allowed_tools={}", allowed_tools.join(",")));
+    }
+    if let Some(profile) = profile {
+        envelope.add_constraint(format!("profile={}", profile.name));
+        if let Some(context_mode) = &profile.context {
+            envelope.add_constraint(format!("context={}", context_mode));
+        }
+    }
     let envelope_json = serde_json::to_string_pretty(&envelope)
         .unwrap_or_else(|_| "{\"error\":\"failed to serialize envelope\"}".to_string());
     info!("Sub-agent task envelope: {}", envelope.compact_summary());
@@ -349,6 +364,7 @@ struct ExecuteParams<'a> {
     allowed_tools: Vec<String>,
     role: AgentRole,
     template: Option<AgentTemplate>,
+    profile: Option<crate::agent::profiles::AgentProfile>,
 }
 
 /// 处理恢复已有代理
@@ -434,6 +450,7 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
             &ctx.allowed_tools,
             ctx.role,
             ctx.template,
+            ctx.profile.as_ref(),
             &ctx.context.working_dir,
         )
         .await
@@ -553,6 +570,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     &ctx.allowed_tools,
                     ctx.role,
                     ctx.template,
+                    ctx.profile.as_ref(),
                     &ctx.context.working_dir,
                 )
             })
@@ -573,6 +591,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             &ctx.allowed_tools,
             ctx.role,
             ctx.template,
+            ctx.profile.as_ref(),
             &ctx.context.working_dir,
         )
         .await
@@ -627,6 +646,7 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
         &ctx.allowed_tools,
         ctx.role,
         ctx.template,
+        ctx.profile.as_ref(),
         &ctx.context.working_dir,
     )
     .await
@@ -739,10 +759,14 @@ impl Tool for AgentTool {
                     "items": { "type": "string" },
                     "description": "Optional tool whitelist for isolation. If set, sub-agent can only call these tools."
                 },
+                "profile": {
+                    "type": "string",
+                    "description": "Named agent profile such as explorer, verifier, or implementer. Project profiles can be defined in .priority-agent/agents/*.toml."
+                },
                 "role": {
                     "type": "string",
-                    "enum": ["default", "teammate", "specialist", "dream_task"],
-                    "description": "Agent role: default (general), teammate (collaborative), specialist (deep expert), dream_task (exploratory)",
+                    "enum": ["default", "plan", "verification", "guide", "advisor", "fast", "teammate", "specialist", "dream_task"],
+                    "description": "Agent role. Profiles may set this automatically.",
                     "default": "default"
                 },
                 "template": {
@@ -839,7 +863,10 @@ impl Tool for AgentTool {
         let timeout_secs = params["timeout_secs"].as_u64().unwrap_or(300);
         let max_turns = params["max_turns"].as_u64().unwrap_or(10) as usize;
         let max_cost_usd = params["max_cost_usd"].as_f64();
-        let allowed_tools: Vec<String> = params["allowed_tools"]
+        let profile = params["profile"]
+            .as_str()
+            .and_then(|name| crate::agent::profiles::find_profile(&context.working_dir, name));
+        let mut allowed_tools: Vec<String> = params["allowed_tools"]
             .as_array()
             .map(|arr| {
                 arr.iter()
@@ -847,13 +874,24 @@ impl Tool for AgentTool {
                     .collect()
             })
             .unwrap_or_default();
+        if allowed_tools.is_empty() {
+            if let Some(profile) = &profile {
+                allowed_tools = profile.allowed_tools.clone();
+            }
+        }
         let role = params["role"]
             .as_str()
             .and_then(AgentRole::parse)
+            .or_else(|| profile.as_ref().map(|profile| profile.role))
             .unwrap_or_default();
         let template = params["template"]
             .as_str()
             .and_then(AgentTemplate::from_str);
+        let max_turns = profile
+            .as_ref()
+            .and_then(|profile| profile.max_turns)
+            .unwrap_or(max_turns);
+        let max_cost_usd = max_cost_usd.or_else(|| profile.as_ref().and_then(|p| p.max_cost_usd));
 
         let ctx = ExecuteParams {
             agent_manager: &agent_manager,
@@ -865,6 +903,7 @@ impl Tool for AgentTool {
             allowed_tools,
             role,
             template,
+            profile,
         };
 
         // 2. Fork branches with memory inheritance

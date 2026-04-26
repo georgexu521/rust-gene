@@ -559,6 +559,8 @@ pub struct TuiApp {
     pub command_palette_selected: usize,
     /// 最近从命令面板执行/选择的命令
     pub recent_palette_commands: VecDeque<String>,
+    /// User-scoped temporary permission rules installed by the active skill.
+    active_skill_permission_rules: Vec<(String, String)>,
     /// 模型选择器选中项
     pub model_select_selected: usize,
     /// 模型选择器搜索词
@@ -729,6 +731,7 @@ impl TuiApp {
             command_palette_query: String::new(),
             command_palette_selected: 0,
             recent_palette_commands: VecDeque::with_capacity(16),
+            active_skill_permission_rules: Vec::new(),
             model_select_selected: 0,
             model_select_query: String::new(),
             model_notice: None,
@@ -1168,6 +1171,33 @@ impl TuiApp {
             config.default_model,
             config.base_url.unwrap_or_default()
         )
+    }
+
+    fn clear_active_skill_rules(&mut self) {
+        let Some(engine) = &self.streaming_engine else {
+            self.active_skill_permission_rules.clear();
+            return;
+        };
+        for (decision, pattern) in self.active_skill_permission_rules.drain(..) {
+            engine.remove_session_permission_rule(&decision, &pattern);
+        }
+    }
+
+    fn apply_skill_invocation_policy(&mut self, invocation: &crate::skills::SkillInvocation) {
+        self.clear_active_skill_rules();
+        let Some(engine) = &self.streaming_engine else {
+            return;
+        };
+        for pattern in &invocation.allowed_tools {
+            engine.add_session_permission_rule("allow", pattern);
+            self.active_skill_permission_rules
+                .push(("allow".to_string(), pattern.to_string()));
+        }
+        for pattern in &invocation.disallowed_tools {
+            engine.add_session_permission_rule("deny", pattern);
+            self.active_skill_permission_rules
+                .push(("deny".to_string(), pattern.to_string()));
+        }
     }
 
     /// 发送消息到 LLM（核心逻辑，可被 skill 调用复用）
@@ -2316,8 +2346,32 @@ impl TuiApp {
             "/recover" => slash::handle_recover(self, args),
             "/feedback" => slash::handle_feedback(self, args),
             _ => {
-                if let Some(prompt) = self.skill_runtime.invocation_prompt(&cmd, args) {
-                    self.send_message(prompt).await;
+                if let Some(invocation) = self.skill_runtime.invocation(&cmd, args) {
+                    self.apply_skill_invocation_policy(&invocation);
+                    let mut notice = format!("Skill /{} applied", invocation.name);
+                    if !invocation.allowed_tools.is_empty() {
+                        notice.push_str(&format!(
+                            " · allowed tools: {}",
+                            invocation.allowed_tools.join(", ")
+                        ));
+                    }
+                    if !invocation.disallowed_tools.is_empty() {
+                        notice.push_str(&format!(
+                            " · denied tools: {}",
+                            invocation.disallowed_tools.join(", ")
+                        ));
+                    }
+                    if let Some(model) = &invocation.model {
+                        notice.push_str(&format!(" · preferred model: {}", model));
+                    }
+                    if let Some(effort) = &invocation.effort {
+                        notice.push_str(&format!(" · effort: {}", effort));
+                    }
+                    if let Some(context) = &invocation.context {
+                        notice.push_str(&format!(" · context: {}", context));
+                    }
+                    self.add_system_message(notice);
+                    self.send_message(invocation.prompt).await;
                     String::new()
                 } else {
                     format!(

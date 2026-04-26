@@ -2178,7 +2178,7 @@ pub fn handle_resource(app: &mut TuiApp) -> String {
     };
 
     format!(
-        "Resource Policy\n- trace: {}\n- latency: {} ({} ms)\n- cost ceiling: ${:.2}\n- reasoning: {}\n- parallelism: {}\n- max tool calls: {}\n- context budget: {} tokens\n- reason: {}",
+        "Resource Policy\n- trace: {}\n- latency: {} ({} ms)\n- cost ceiling: ${:.2}\n- reasoning: {}\n- parallelism: {}\n- max tool calls: {}\n- context budget: {} tokens\n- reason: {}\n\nRuntime Inventory\n- skills: {}\n- agent profiles: {}\n- mcp servers: {}\n- evalsets: {}",
         &trace.trace_id[..8.min(trace.trace_id.len())],
         latency,
         target_ms,
@@ -2187,7 +2187,24 @@ pub fn handle_resource(app: &mut TuiApp) -> String {
         parallelism_limit,
         max_tool_calls,
         context_budget_tokens,
-        reason
+        reason,
+        app.skill_runtime.len(),
+        crate::agent::profiles::load_profiles(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        )
+        .len(),
+        app.streaming_engine
+            .as_ref()
+            .and_then(|engine| engine.mcp_manager())
+            .map(|mcp| mcp.health_diagnostics().len())
+            .unwrap_or(0),
+        crate::engine::evalset::load_evalsets_from_dir(
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("evalsets")
+        )
+        .map(|sets| sets.len())
+        .unwrap_or(0)
     )
 }
 

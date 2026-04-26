@@ -399,6 +399,24 @@ impl StreamingQueryEngine {
         }
     }
 
+    /// Remove a user-scoped session permission rule.
+    pub fn remove_session_permission_rule(&self, decision: &str, pattern: &str) {
+        let Ok(mut rules) = self.session_permission_rules.write() else {
+            warn!("session_permission_rules RwLock poisoned during write");
+            return;
+        };
+        let target = match decision {
+            "allow" => &mut rules.always_allow,
+            "deny" => &mut rules.always_deny,
+            "ask" => &mut rules.always_ask,
+            _ => return,
+        };
+        target.retain(|existing| {
+            !(existing.pattern == pattern
+                && existing.source == crate::permissions::RuleSource::User)
+        });
+    }
+
     pub fn session_permission_rules(&self) -> crate::permissions::PermissionRules {
         self.session_permission_rules
             .read()

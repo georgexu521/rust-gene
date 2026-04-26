@@ -13,7 +13,7 @@ mod runtime;
 mod tools;
 mod types;
 
-pub use runtime::SkillRuntime;
+pub use runtime::{SkillInvocation, SkillRuntime};
 pub use tools::{SkillListTool, SkillManageTool, SkillViewTool};
 pub use types::Skill;
 

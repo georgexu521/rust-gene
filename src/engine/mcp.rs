@@ -410,6 +410,25 @@ impl McpClient {
         }
     }
 
+    pub fn oauth_configured(&self) -> bool {
+        self.config.oauth.is_some()
+    }
+
+    pub fn oauth_token_present(&self) -> bool {
+        self.oauth_token
+            .try_lock()
+            .map(|token| token.is_some())
+            .unwrap_or(false)
+    }
+
+    pub fn reset_circuit_breaker(&self) {
+        if let Ok(mut cb) = self.circuit_breaker.lock() {
+            cb.consecutive_failures = 0;
+            cb.is_open = false;
+            cb.opened_at_ms = None;
+        }
+    }
+
     /// 启动心跳检测（后台任务）
     pub fn start_heartbeat(self: &Arc<Self>, interval_secs: u64) -> tokio::task::JoinHandle<()> {
         let client = self.clone();
@@ -1610,6 +1629,18 @@ impl McpManager {
         }
     }
 
+    /// Reset a server's circuit breaker so the next call can retry immediately.
+    pub fn repair_server(&self, server_name: &str) -> anyhow::Result<String> {
+        let Some(client) = self.clients.get(server_name) else {
+            anyhow::bail!("MCP server '{}' not found", server_name);
+        };
+        client.reset_circuit_breaker();
+        Ok(format!(
+            "MCP server '{}' repair applied: circuit breaker reset. Run /mcp status or retry the MCP action.",
+            server_name
+        ))
+    }
+
     /// 关闭所有 MCP 客户端并清理子进程
     pub async fn shutdown(&self) {
         for (name, client) in &self.clients {
@@ -1626,6 +1657,8 @@ impl McpManager {
             .map(|(name, client)| {
                 let circuit_status = client.circuit_breaker_status();
                 let is_approved = self.is_server_approved(name);
+                let oauth_configured = client.oauth_configured();
+                let oauth_token_present = client.oauth_token_present();
                 let transport = match client.transport() {
                     McpTransport::Stdio => "stdio",
                     McpTransport::WebSocket => "websocket",
@@ -1642,6 +1675,18 @@ impl McpManager {
                 } else {
                     McpHealthStatus::Healthy
                 };
+                let repair_hint = if !is_approved {
+                    format!("/mcp approve {}", name)
+                } else if oauth_configured && !oauth_token_present {
+                    format!("/mcp auth {}", name)
+                } else if matches!(
+                    health,
+                    McpHealthStatus::Unhealthy | McpHealthStatus::Degraded
+                ) {
+                    format!("/mcp repair {}", name)
+                } else {
+                    "none".to_string()
+                };
 
                 McpServerHealth {
                     name: name.clone(),
@@ -1649,6 +1694,9 @@ impl McpManager {
                     health,
                     circuit_breaker: circuit_status,
                     approved: is_approved,
+                    oauth_configured,
+                    oauth_token_present,
+                    repair_hint,
                 }
             })
             .collect()
@@ -1728,6 +1776,12 @@ pub struct McpServerHealth {
     pub circuit_breaker: String,
     /// 是否已批准
     pub approved: bool,
+    /// Whether OAuth is configured for this server.
+    pub oauth_configured: bool,
+    /// Whether an OAuth token is currently stored.
+    pub oauth_token_present: bool,
+    /// Human-readable repair command or next action.
+    pub repair_hint: String,
 }
 
 impl Default for McpManager {
