@@ -1,0 +1,36 @@
+name: feature_reality
+description: Guards that advertised CLI/tools are backed by real runtime availability.
+scenarios:
+  - id: core-tools-available-without-optional-managers
+    prompt: "检查当前项目文件"
+    expect:
+      available_tools:
+        - file_read
+        - grep
+        - project_list
+        - tool_search
+
+  - id: optional-manager-tools-hidden-when-unwired
+    prompt: "列出当前 session 可用工具"
+    expect:
+      unavailable_tools:
+        - agent
+        - send_message
+        - mcp
+        - mcp_tool
+        - list_mcp_resources
+        - read_mcp_resource
+        - lsp
+        - worktree
+
+  - id: command-readiness-markers
+    prompt: "打开命令面板"
+    expect:
+      available_commands:
+        - /skills
+        - /tools
+        - /uptime
+      placeholder_commands:
+        - /desktop
+        - /reset
+

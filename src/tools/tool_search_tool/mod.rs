@@ -65,6 +65,9 @@ impl Tool for ToolSearchTool {
 
         let mut scored: Vec<(String, i32)> = Vec::new();
         for tool in registry.iter_tools() {
+            if !tool.is_available(&context) {
+                continue;
+            }
             let name = tool.name().to_lowercase();
             let desc = tool.description().to_lowercase();
             let mut score = 0;

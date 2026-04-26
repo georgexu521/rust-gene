@@ -164,6 +164,28 @@ impl RetrievalContext {
         Some(ctx)
     }
 
+    pub fn from_mcp_resource(
+        query: &str,
+        server_name: &str,
+        uri: &str,
+        content: &str,
+        policy: RetrievalPolicy,
+    ) -> Option<Self> {
+        if content.trim().is_empty() {
+            return None;
+        }
+        let mut ctx = Self::new(query, policy);
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Mcp,
+            format!("MCP resource {}", uri),
+            content,
+            0.78,
+            format!("mcp.resource:{}:{}", server_name, uri),
+            TrustLevel::Medium,
+        ));
+        Some(ctx)
+    }
+
     pub fn from_session_messages(
         query: &str,
         messages: &[crate::session_store::MessageRecord],

@@ -587,6 +587,14 @@ impl crate::tools::Tool for SocraticTool {
             serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null),
         )
     }
+
+    fn is_available(&self, context: &crate::tools::ToolContext) -> bool {
+        context.llm_provider.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &crate::tools::ToolContext) -> Option<String> {
+        Some("LLM provider not configured".to_string())
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

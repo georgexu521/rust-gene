@@ -52,6 +52,14 @@ pub struct EvalExpect {
     pub verification_passed: Option<bool>,
     pub reflection_status: Option<String>,
     pub repair_required: Option<bool>,
+    #[serde(default)]
+    pub available_tools: Vec<String>,
+    #[serde(default)]
+    pub unavailable_tools: Vec<String>,
+    #[serde(default)]
+    pub available_commands: Vec<String>,
+    #[serde(default)]
+    pub placeholder_commands: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -276,7 +284,97 @@ impl EvalRunner {
             }
         }
 
+        self.check_feature_reality(scenario, &mut failures);
+
         failures
+    }
+
+    fn check_feature_reality(&self, scenario: &EvalScenario, failures: &mut Vec<EvalFailure>) {
+        let expect = &scenario.expect;
+        if !expect.available_tools.is_empty() || !expect.unavailable_tools.is_empty() {
+            let registry = crate::tools::ToolRegistry::default_registry();
+            let context = crate::tools::ToolContext::new(".", "eval");
+
+            for tool_name in &expect.available_tools {
+                match registry.get(tool_name) {
+                    Some(tool) if tool.is_available(&context) => {}
+                    Some(tool) => failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!(
+                            "tool '{}' expected available but was unavailable: {}",
+                            tool_name,
+                            tool.unavailable_reason(&context)
+                                .unwrap_or_else(|| "unavailable".to_string())
+                        ),
+                    }),
+                    None => failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!(
+                            "tool '{}' expected available but is not registered",
+                            tool_name
+                        ),
+                    }),
+                }
+            }
+
+            for tool_name in &expect.unavailable_tools {
+                match registry.get(tool_name) {
+                    Some(tool) if !tool.is_available(&context) => {}
+                    Some(_) => failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!(
+                            "tool '{}' expected unavailable but was available",
+                            tool_name
+                        ),
+                    }),
+                    None => failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!(
+                            "tool '{}' expected unavailable but is not registered",
+                            tool_name
+                        ),
+                    }),
+                }
+            }
+        }
+
+        if !expect.available_commands.is_empty() || !expect.placeholder_commands.is_empty() {
+            let registry = crate::tui::commands::default_command_registry();
+
+            for command in &expect.available_commands {
+                match registry.get(command) {
+                    Some(cmd) if !cmd.placeholder => {}
+                    Some(_) => failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!(
+                            "command '{}' expected production-ready but is placeholder",
+                            command
+                        ),
+                    }),
+                    None => failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!("command '{}' expected registered", command),
+                    }),
+                }
+            }
+
+            for command in &expect.placeholder_commands {
+                match registry.get(command) {
+                    Some(cmd) if cmd.placeholder => {}
+                    Some(_) => failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!(
+                            "command '{}' expected placeholder but was not marked",
+                            command
+                        ),
+                    }),
+                    None => failures.push(EvalFailure {
+                        scenario_id: scenario.id.clone(),
+                        message: format!("command '{}' expected registered placeholder", command),
+                    }),
+                }
+            }
+        }
     }
 }
 
@@ -644,6 +742,17 @@ scenarios:
     #[test]
     fn bundled_smoke_evalset_passes() {
         let path = std::path::Path::new("evalsets/smoke.yaml");
+        if !path.exists() {
+            return;
+        }
+        let set = load_evalset(path).unwrap();
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn bundled_feature_reality_evalset_passes() {
+        let path = std::path::Path::new("evalsets/feature_reality.yaml");
         if !path.exists() {
             return;
         }

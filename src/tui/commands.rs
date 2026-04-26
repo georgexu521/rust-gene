@@ -1483,7 +1483,10 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_RECOVER);
     registry.register(&CMD_FEEDBACK);
 
-    // Placeholder list intentionally empty: all registered slash commands currently have usable implementations.
+    // Keep partially implemented commands visible but honest. Mature CLIs should
+    // not make unavailable integrations look production-ready in help/palette UI.
+    registry.mark_placeholder("/desktop");
+    registry.mark_placeholder("/reset");
 
     registry
 }

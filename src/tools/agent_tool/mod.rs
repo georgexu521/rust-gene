@@ -253,6 +253,7 @@ async fn spawn_single_agent(
     let envelope_json = serde_json::to_string_pretty(&envelope)
         .unwrap_or_else(|_| "{\"error\":\"failed to serialize envelope\"}".to_string());
     info!("Sub-agent task envelope: {}", envelope.compact_summary());
+    let _ = crate::agent::a2a_transcript::append_envelope(&envelope);
 
     let task_msg = AgentMessage::new(
         AgentId("parent".to_string()),
@@ -906,6 +907,14 @@ impl Tool for AgentTool {
             "This will create a '{}' sub-agent to handle:\n{}\n\nContinue?",
             role, desc
         ))
+    }
+
+    fn is_available(&self, context: &ToolContext) -> bool {
+        context.agent_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        Some("Agent manager not configured".to_string())
     }
 }
 

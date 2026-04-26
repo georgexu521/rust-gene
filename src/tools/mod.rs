@@ -298,6 +298,20 @@ pub trait Tool: Send + Sync {
     /// 执行工具
     async fn execute(&self, params: Value, context: ToolContext) -> ToolResult;
 
+    /// Whether this tool is currently usable with the provided runtime context.
+    ///
+    /// Tools that depend on optional managers should return false here so they
+    /// are not advertised to the model or command UI when the backing subsystem
+    /// is not wired for the current session.
+    fn is_available(&self, _context: &ToolContext) -> bool {
+        true
+    }
+
+    /// Human-readable reason for an unavailable tool.
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        None
+    }
+
     /// 是否需要用户确认
     fn requires_confirmation(&self, _params: &Value) -> bool {
         false

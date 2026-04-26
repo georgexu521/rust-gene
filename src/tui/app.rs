@@ -533,8 +533,12 @@ pub struct TuiApp {
     pub lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     /// Worktree 管理器
     pub worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
+    /// CLI app start time for uptime and diagnostics.
+    pub app_started_at: std::time::Instant,
     /// Bundled skills
     pub bundled_skills: std::collections::HashMap<String, crate::skills::Skill>,
+    /// Unified skill runtime for bundled, project, and user skills.
+    pub skill_runtime: crate::skills::SkillRuntime,
     /// 是否启用 Vim 模式
     pub vim_mode: bool,
     /// 键位映射
@@ -703,6 +707,7 @@ impl TuiApp {
             tick_count: 0,
             lsp_manager,
             worktree_manager,
+            app_started_at: std::time::Instant::now(),
             bundled_skills: {
                 let mut map = std::collections::HashMap::new();
                 for skill in crate::skills::loader::load_bundled_skills() {
@@ -710,6 +715,9 @@ impl TuiApp {
                 }
                 map
             },
+            skill_runtime: crate::skills::SkillRuntime::load(
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            ),
             vim_mode: false,
             keybindings: crate::tui::keybindings::Keybindings::load(),
             theme: {
@@ -1774,6 +1782,15 @@ impl TuiApp {
         context = context.with_file_cache(crate::tools::file_cache::GLOBAL_FILE_CACHE.clone());
         if let Some(ref engine) = self.streaming_engine {
             context = context.with_cost_tracker(engine.cost_tracker().clone());
+            context = context
+                .with_llm_provider(engine.provider())
+                .with_model(engine.model_name());
+            if let Some(agent_manager) = engine.agent_manager() {
+                context = context.with_agent_manager(agent_manager);
+            }
+            if let Some(mcp_manager) = engine.mcp_manager() {
+                context = context.with_mcp_manager(mcp_manager);
+            }
         }
         context
     }
@@ -2146,9 +2163,38 @@ impl TuiApp {
             }
             "/tools" => {
                 let registry = crate::tools::ToolRegistry::default_registry();
-                let mut names = registry.tool_names();
-                names.sort();
-                format!("Available tools ({}):\n{}", names.len(), names.join(", "))
+                let context = self.build_tool_context().await;
+                let mut available = Vec::new();
+                let mut unavailable = Vec::new();
+                for tool in registry.iter_tools() {
+                    if tool.is_available(&context) {
+                        available.push(tool.name().to_string());
+                    } else {
+                        unavailable.push(format!(
+                            "{} ({})",
+                            tool.name(),
+                            tool.unavailable_reason(&context)
+                                .unwrap_or_else(|| "unavailable".to_string())
+                        ));
+                    }
+                }
+                available.sort();
+                unavailable.sort();
+                let unavailable_line = if unavailable.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "\n\nUnavailable in this session ({}):\n{}",
+                        unavailable.len(),
+                        unavailable.join(", ")
+                    )
+                };
+                format!(
+                    "Available tools ({}):\n{}{}",
+                    available.len(),
+                    available.join(", "),
+                    unavailable_line
+                )
             }
             "/tasks" => slash::handle_tasks(self).await,
             "/agents" => slash::handle_agents(self).await,
@@ -2169,7 +2215,7 @@ impl TuiApp {
             "/stuck" => slash::handle_stuck(self).await,
             "/remember" => slash::handle_remember(self, args).await,
             "/keybindings" => slash::handle_keybindings(self, args),
-            "/mcp" => slash::handle_mcp(self, args),
+            "/mcp" => slash::handle_mcp(self, args).await,
             "/voice" => slash::handle_voice(),
             "/telemetry" => slash::handle_telemetry(),
             "/lsp" => slash::handle_lsp(self, args),
@@ -2270,10 +2316,15 @@ impl TuiApp {
             "/recover" => slash::handle_recover(self, args),
             "/feedback" => slash::handle_feedback(self, args),
             _ => {
-                format!(
-                    "Unknown command: {}. Type /help for available commands.",
-                    cmd
-                )
+                if let Some(prompt) = self.skill_runtime.invocation_prompt(&cmd, args) {
+                    self.send_message(prompt).await;
+                    String::new()
+                } else {
+                    format!(
+                        "Unknown command: {}. Type /help for available commands.",
+                        cmd
+                    )
+                }
             }
         };
 

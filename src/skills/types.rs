@@ -23,10 +23,47 @@ pub struct SkillMeta {
     /// 需要的环境变量
     #[serde(default)]
     pub required_env: Vec<String>,
+    /// Tool allow-list scoped to this skill, Claude-style `allowed-tools`.
+    #[serde(default, alias = "allowed-tools")]
+    pub allowed_tools: Vec<String>,
+    /// Preferred model for this skill, if any.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Preferred reasoning effort for this skill, if any.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Context behavior hint, e.g. inherit or fork.
+    #[serde(default)]
+    pub context: Option<String>,
+    /// Whether users can invoke this skill directly as `/skill-name`.
+    #[serde(default = "default_user_invocable", alias = "user-invocable")]
+    pub user_invocable: bool,
 }
 
 fn default_version() -> String {
     "1.0.0".to_string()
+}
+
+fn default_user_invocable() -> bool {
+    true
+}
+
+impl Default for SkillMeta {
+    fn default() -> Self {
+        Self {
+            name: "unnamed".to_string(),
+            description: String::new(),
+            version: default_version(),
+            author: String::new(),
+            triggers: Vec::new(),
+            required_env: Vec::new(),
+            allowed_tools: Vec::new(),
+            model: None,
+            effort: None,
+            context: None,
+            user_invocable: true,
+        }
+    }
 }
 
 /// 加载后的 Skill

@@ -2032,6 +2032,9 @@ impl ConversationLoop {
         self.tool_registry
             .iter_tools()
             .filter(|t| {
+                if !t.is_available(&context) {
+                    return false;
+                }
                 if let Some(ref allowed) = self.allowed_tools {
                     allowed.contains(t.name())
                         && context.permission_context.should_expose_tool(t.name())

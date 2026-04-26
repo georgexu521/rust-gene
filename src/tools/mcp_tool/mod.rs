@@ -63,6 +63,14 @@ impl Tool for MCPTool {
             Err(e) => ToolResult::error(format!("MCP tool call failed: {}", e)),
         }
     }
+
+    fn is_available(&self, context: &ToolContext) -> bool {
+        context.mcp_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        Some("MCP manager not configured".to_string())
+    }
 }
 
 /// MCP 认证工具（简化版占位）
@@ -113,6 +121,14 @@ impl Tool for McpAuthTool {
                 server_name, e
             )),
         }
+    }
+
+    fn is_available(&self, context: &ToolContext) -> bool {
+        context.mcp_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        Some("MCP manager not configured".to_string())
     }
 }
 
@@ -208,6 +224,14 @@ impl Tool for ListMcpResourcesTool {
             }),
         )
     }
+
+    fn is_available(&self, context: &ToolContext) -> bool {
+        context.mcp_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        Some("MCP manager not configured".to_string())
+    }
 }
 
 /// 读取 MCP 资源
@@ -254,12 +278,36 @@ impl Tool for ReadMcpResourceTool {
         };
 
         match manager.read_resource(server_name, uri).await {
-            Ok(result) => ToolResult::success_with_data(
-                serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()),
-                result,
-            ),
+            Ok(result) => {
+                let content =
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
+                let retrieval_context =
+                    crate::engine::retrieval_context::RetrievalContext::from_mcp_resource(
+                        uri,
+                        server_name,
+                        uri,
+                        &content,
+                        crate::engine::intent_router::RetrievalPolicy::Full,
+                    )
+                    .map(|ctx| ctx.format_for_prompt());
+                ToolResult::success_with_data(
+                    content,
+                    serde_json::json!({
+                        "resource": result,
+                        "retrieval_context": retrieval_context,
+                    }),
+                )
+            }
             Err(e) => ToolResult::error(format!("Failed to read MCP resource: {}", e)),
         }
+    }
+
+    fn is_available(&self, context: &ToolContext) -> bool {
+        context.mcp_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        Some("MCP manager not configured".to_string())
     }
 }
 

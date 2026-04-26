@@ -1,5 +1,6 @@
 //! Agent 实现
 
+use crate::agent::envelope::{AgentArtifact, AgentTaskEnvelope};
 use crate::agent::manager::AgentResult;
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType, AgentStatus};
@@ -287,8 +288,14 @@ impl Agent {
 
     /// 执行任务
     async fn execute_task(&mut self, task: &str) -> anyhow::Result<()> {
-        info!("Agent {} executing task: {}", self.id, task);
-        self.task_history.push(task.to_string());
+        let (mut envelope, executable_task) = extract_task_envelope(task);
+        if let Some(env) = envelope.as_mut() {
+            env.mark_running("agent accepted task");
+            let _ = crate::agent::a2a_transcript::append_envelope(env);
+        }
+
+        info!("Agent {} executing task: {}", self.id, executable_task);
+        self.task_history.push(executable_task.clone());
         self.set_status(AgentStatus::Running);
 
         // 使用 QueryEngine 的 query_with_tools 执行任务（子 Agent 也能使用工具）
@@ -302,7 +309,11 @@ impl Agent {
 
         let result = self
             .query_engine
-            .query_with_tools_with_system_prompt(task, options, Some(&agent_system_prompt))
+            .query_with_tools_with_system_prompt(
+                &executable_task,
+                options,
+                Some(&agent_system_prompt),
+            )
             .await;
         let cost_after = self.query_engine.estimated_cost_usd().await;
         let cost_delta = (cost_after - cost_before).max(0.0);
@@ -318,17 +329,41 @@ impl Agent {
                             cost_delta, limit, query_result.content
                         );
                         self.last_result = Some(content.clone());
+                        if let Some(env) = envelope.as_mut() {
+                            env.fail_with_error(
+                                "agent_cost_budget_exceeded",
+                                format!("used ${:.4}, limit ${:.4}", cost_delta, limit),
+                                false,
+                            );
+                            let _ = crate::agent::a2a_transcript::append_envelope(env);
+                        }
                         content
                     } else {
                         self.set_status(AgentStatus::Completed);
                         let content = format!("Task completed:\n{}", query_result.content);
                         self.last_result = Some(query_result.content);
+                        if let Some(env) = envelope.as_mut() {
+                            env.complete_with_artifact(AgentArtifact {
+                                kind: "result".to_string(),
+                                title: "Agent result".to_string(),
+                                content: content.clone(),
+                            });
+                            let _ = crate::agent::a2a_transcript::append_envelope(env);
+                        }
                         content
                     }
                 } else {
                     self.set_status(AgentStatus::Completed);
                     let content = format!("Task completed:\n{}", query_result.content);
                     self.last_result = Some(query_result.content);
+                    if let Some(env) = envelope.as_mut() {
+                        env.complete_with_artifact(AgentArtifact {
+                            kind: "result".to_string(),
+                            title: "Agent result".to_string(),
+                            content: content.clone(),
+                        });
+                        let _ = crate::agent::a2a_transcript::append_envelope(env);
+                    }
                     content
                 }
             }
@@ -336,6 +371,10 @@ impl Agent {
                 self.set_status(AgentStatus::Failed);
                 let content = format!("Task failed: {}", e);
                 self.last_result = Some(content.clone());
+                if let Some(env) = envelope.as_mut() {
+                    env.fail_with_error("agent_task_failed", e.to_string(), true);
+                    let _ = crate::agent::a2a_transcript::append_envelope(env);
+                }
                 content
             }
         };
@@ -367,5 +406,69 @@ impl Agent {
             sender.send(reply).await?;
         }
         Ok(())
+    }
+}
+
+fn extract_task_envelope(task: &str) -> (Option<AgentTaskEnvelope>, String) {
+    const OPEN: &str = "<agent-task-envelope>";
+    const CLOSE: &str = "</agent-task-envelope>";
+
+    let Some(start) = task.find(OPEN) else {
+        return (None, task.to_string());
+    };
+    let after_open = start + OPEN.len();
+    let Some(relative_end) = task[after_open..].find(CLOSE) else {
+        return (None, task.to_string());
+    };
+    let end = after_open + relative_end;
+    let envelope_json = task[after_open..end].trim();
+    let remainder = task[end + CLOSE.len()..].trim().to_string();
+    match serde_json::from_str::<AgentTaskEnvelope>(envelope_json) {
+        Ok(envelope) => {
+            let executable = if remainder.is_empty() {
+                envelope.prompt.clone()
+            } else {
+                remainder
+            };
+            (Some(envelope), executable)
+        }
+        Err(err) => {
+            warn!("Failed to parse agent task envelope: {}", err);
+            (None, task.to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_agent_task_envelope_and_remainder() {
+        let envelope =
+            AgentTaskEnvelope::new(AgentId("parent".to_string()), "review", "fallback prompt")
+                .assign_to(AgentId("child".to_string()));
+        let json = serde_json::to_string(&envelope).unwrap();
+        let wrapped = format!(
+            "<agent-task-envelope>\n{}\n</agent-task-envelope>\n\nreal prompt",
+            json
+        );
+
+        let (parsed, executable) = extract_task_envelope(&wrapped);
+        assert!(parsed.is_some());
+        assert_eq!(executable, "real prompt");
+    }
+
+    #[test]
+    fn envelope_prompt_is_used_when_no_remainder_exists() {
+        let envelope =
+            AgentTaskEnvelope::new(AgentId("parent".to_string()), "review", "fallback prompt")
+                .assign_to(AgentId("child".to_string()));
+        let json = serde_json::to_string(&envelope).unwrap();
+        let wrapped = format!("<agent-task-envelope>\n{}\n</agent-task-envelope>", json);
+
+        let (parsed, executable) = extract_task_envelope(&wrapped);
+        assert!(parsed.is_some());
+        assert_eq!(executable, "fallback prompt");
     }
 }

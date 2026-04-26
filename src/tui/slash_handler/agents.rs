@@ -539,7 +539,7 @@ pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
         "Audit unavailable (no engine connected).".to_string()
     }
 }
-pub fn handle_mcp(app: &TuiApp, args: &str) -> String {
+pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
     if let Some(ref engine) = app.streaming_engine {
         if let Some(mgr) = engine.mcp_manager() {
             let parts: Vec<&str> = args.split_whitespace().collect();
@@ -550,7 +550,7 @@ pub fn handle_mcp(app: &TuiApp, args: &str) -> String {
                     "No MCP servers configured.".to_string()
                 } else {
                     format!(
-                        "MCP servers ({}):\n{}\n\nApproved: {}\n\nUsage:\n  /mcp status\n  /mcp approve <server>\n  /mcp revoke <server>",
+                        "MCP servers ({}):\n{}\n\nApproved: {}\n\nUsage:\n  /mcp status\n  /mcp prompts\n  /mcp approve <server>\n  /mcp revoke <server>",
                         servers.len(),
                         servers.join("\n"),
                         if approved.is_empty() {
@@ -587,6 +587,24 @@ pub fn handle_mcp(app: &TuiApp, args: &str) -> String {
                     ));
                 }
                 lines.join("\n")
+            } else if parts[0] == "prompts" {
+                let prompts = mgr.discover_all_prompts().await;
+                if prompts.is_empty() {
+                    "No MCP prompts available from approved servers.".to_string()
+                } else {
+                    let lines = prompts
+                        .iter()
+                        .map(|prompt| {
+                            let desc = if prompt.description.is_empty() {
+                                "(no description)"
+                            } else {
+                                &prompt.description
+                            };
+                            format!("- /mcp__{}__{}: {}", prompt.server_name, prompt.name, desc)
+                        })
+                        .collect::<Vec<_>>();
+                    format!("MCP prompts ({}):\n{}", lines.len(), lines.join("\n"))
+                }
             } else if parts[0] == "approve" && parts.len() >= 2 {
                 let name = parts[1];
                 if mgr.server_names().contains(&name.to_string()) {
@@ -604,7 +622,7 @@ pub fn handle_mcp(app: &TuiApp, args: &str) -> String {
                 mgr.revoke_server(name);
                 format!("MCP server '{}' approval revoked.", name)
             } else {
-                "Usage: /mcp [list|status|approve <server>|revoke <server>]".to_string()
+                "Usage: /mcp [list|status|prompts|approve <server>|revoke <server>]".to_string()
             }
         } else {
             "No MCP manager configured.".to_string()
@@ -1619,8 +1637,22 @@ pub fn handle_ping(app: &mut TuiApp) -> String {
     )
 }
 /// /uptime - Show uptime
-pub fn handle_uptime(_app: &TuiApp) -> String {
-    "Uptime: since boot (detailed tracking not implemented)".to_string()
+pub fn handle_uptime(app: &TuiApp) -> String {
+    let uptime = app.app_started_at.elapsed();
+    let total_secs = uptime.as_secs();
+    let hours = total_secs / 3_600;
+    let minutes = (total_secs % 3_600) / 60;
+    let seconds = total_secs % 60;
+
+    format!(
+        "Uptime: {:02}:{:02}:{:02}\nSession: {}\nMessages: {}\nTools: {}",
+        hours,
+        minutes,
+        seconds,
+        app.session_manager.current_session_id().unwrap_or("none"),
+        app.messages.len(),
+        app.tool_runs_snapshot.len()
+    )
 }
 /// /version - Show version
 pub fn handle_version(_app: &TuiApp) -> String {

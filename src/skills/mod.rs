@@ -9,9 +9,11 @@
 pub mod loader;
 mod parser;
 mod registry;
+mod runtime;
 mod tools;
 mod types;
 
+pub use runtime::SkillRuntime;
 pub use tools::{SkillListTool, SkillManageTool, SkillViewTool};
 pub use types::Skill;
 

@@ -421,12 +421,11 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
             crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
         format!("Plugins reloaded. {} plugin tools injected.", injected)
     } else if args == "skills" {
-        // Reload skills
-        if let Some(ref _engine) = app.streaming_engine {
-            "Skills registry: use /skills list to view".to_string()
-        } else {
-            "Skills not available.".to_string()
-        }
+        let count = app.skill_runtime.reload();
+        format!(
+            "Skills reloaded. {} skill(s) available. Use /skills or /<skill-name> <task>.",
+            count
+        )
     } else {
         "Usage: /reload [config|plugins|skills]".to_string()
     }
@@ -440,8 +439,17 @@ pub fn handle_hooks(_app: &TuiApp) -> String {
 
     let pre_hook = env::var("PRIORITY_AGENT_PRE_TOOL_HOOK").ok();
     let post_hook = env::var("PRIORITY_AGENT_POST_TOOL_HOOK").ok();
-    let tool_before = env::var("PRIORITY_AGENT_TOOL_HOOK_BEFORE").ok();
-    let tool_after = env::var("PRIORITY_AGENT_TOOL_HOOK_AFTER").ok();
+    let mut tool_before = Vec::new();
+    let mut tool_after = Vec::new();
+    for (key, value) in env::vars() {
+        if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_") && !value.trim().is_empty() {
+            tool_before.push(format!("{}={}", key, value));
+        } else if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_AFTER_") && !value.trim().is_empty() {
+            tool_after.push(format!("{}={}", key, value));
+        }
+    }
+    tool_before.sort();
+    tool_after.sort();
     let timeout = env::var("PRIORITY_AGENT_HOOK_TIMEOUT_MS").ok();
     let fail_closed = env::var("PRIORITY_AGENT_HOOK_FAIL_CLOSED").ok();
 
@@ -457,13 +465,19 @@ pub fn handle_hooks(_app: &TuiApp) -> String {
     } else {
         lines.push("  POST_TOOL_HOOK: not set".to_string());
     }
-    if let Some(ref h) = tool_before {
-        lines.push(format!("  TOOL_HOOK_BEFORE: {}", h));
+    if !tool_before.is_empty() {
+        lines.push("  TOOL_HOOK_BEFORE:".to_string());
+        for hook in &tool_before {
+            lines.push(format!("    {}", hook));
+        }
     } else {
         lines.push("  TOOL_HOOK_BEFORE: not set".to_string());
     }
-    if let Some(ref h) = tool_after {
-        lines.push(format!("  TOOL_HOOK_AFTER: {}", h));
+    if !tool_after.is_empty() {
+        lines.push("  TOOL_HOOK_AFTER:".to_string());
+        for hook in &tool_after {
+            lines.push(format!("    {}", hook));
+        }
     } else {
         lines.push("  TOOL_HOOK_AFTER: not set".to_string());
     }
@@ -476,7 +490,8 @@ pub fn handle_hooks(_app: &TuiApp) -> String {
         fail_closed.unwrap_or_else(|| "false".to_string())
     ));
 
-    if pre_hook.is_none() && post_hook.is_none() && tool_before.is_none() && tool_after.is_none() {
+    if pre_hook.is_none() && post_hook.is_none() && tool_before.is_empty() && tool_after.is_empty()
+    {
         lines.push(
             "\nNo hooks configured. Set PRIORITY_AGENT_*_HOOK environment variables.".to_string(),
         );
@@ -2214,11 +2229,15 @@ fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
 
 /// /skills - List available skills
 pub fn handle_skills(app: &TuiApp) -> String {
-    let mut names = app.bundled_skills.keys().cloned().collect::<Vec<_>>();
-    names.sort();
+    let names = app
+        .skill_runtime
+        .names()
+        .into_iter()
+        .map(|name| format!("/{}", name))
+        .collect::<Vec<_>>();
     format!(
-        "Skills ({} bundled):\n{}\n\nUse /karpathy <task> to apply careful coding guidelines, or skill_view for full skill content.",
-        names.len(),
+        "Skills ({} available):\n{}\n\nInvoke directly with /<skill-name> <task>, or use skill_view for full skill content.",
+        app.skill_runtime.len(),
         names.join(", ")
     )
 }

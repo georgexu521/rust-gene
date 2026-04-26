@@ -71,6 +71,14 @@ impl Tool for SendMessageTool {
             Err(e) => ToolResult::error(format!("Failed to send message: {}", e)),
         }
     }
+
+    fn is_available(&self, context: &ToolContext) -> bool {
+        context.agent_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        Some("Agent manager not configured".to_string())
+    }
 }
 
 #[cfg(test)]

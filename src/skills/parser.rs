@@ -19,11 +19,7 @@ pub fn parse_skill_md(raw: &str) -> anyhow::Result<(SkillMeta, String)> {
         return Ok((
             SkillMeta {
                 name,
-                description: String::new(),
-                version: "1.0.0".to_string(),
-                author: String::new(),
-                triggers: Vec::new(),
-                required_env: Vec::new(),
+                ..SkillMeta::default()
             },
             trimmed.to_string(),
         ));
@@ -35,17 +31,7 @@ pub fn parse_skill_md(raw: &str) -> anyhow::Result<(SkillMeta, String)> {
         Some(idx) => idx,
         None => {
             // 没有 closing ---，当作无 frontmatter 处理
-            return Ok((
-                SkillMeta {
-                    name: "unnamed".to_string(),
-                    description: String::new(),
-                    version: "1.0.0".to_string(),
-                    author: String::new(),
-                    triggers: Vec::new(),
-                    required_env: Vec::new(),
-                },
-                trimmed.to_string(),
-            ));
+            return Ok((SkillMeta::default(), trimmed.to_string()));
         }
     };
 
@@ -57,14 +43,7 @@ pub fn parse_skill_md(raw: &str) -> anyhow::Result<(SkillMeta, String)> {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!("SKILL.md frontmatter parse error: {}, using defaults", e);
-            SkillMeta {
-                name: "unnamed".to_string(),
-                description: String::new(),
-                version: "1.0.0".to_string(),
-                author: String::new(),
-                triggers: Vec::new(),
-                required_env: Vec::new(),
-            }
+            SkillMeta::default()
         }
     };
 

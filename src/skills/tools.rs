@@ -2,7 +2,7 @@
 //!
 //! SkillManageTool, SkillListTool, SkillViewTool
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Skill 管理工具 - 让 agent 管理 skills
 pub struct SkillManageTool {
@@ -256,11 +256,32 @@ impl crate::tools::Tool for SkillListTool {
 
     async fn execute(
         &self,
-        _params: serde_json::Value,
-        _context: crate::tools::ToolContext,
+        params: serde_json::Value,
+        context: crate::tools::ToolContext,
     ) -> crate::tools::ToolResult {
-        crate::tools::ToolResult::success(
-            "Skills list requires a loaded SkillRegistry. Use skill_manage(action='list') to see skills on disk.".to_string(),
+        let runtime = crate::skills::SkillRuntime::load(&context.working_dir);
+        let query = params["query"].as_str().unwrap_or("").trim();
+        let skills = runtime.search(query);
+        if skills.is_empty() {
+            return crate::tools::ToolResult::success("No matching skills found.".to_string());
+        }
+        let lines = skills
+            .iter()
+            .map(|skill| {
+                let desc = if skill.meta.description.is_empty() {
+                    "(no description)"
+                } else {
+                    &skill.meta.description
+                };
+                format!("- {}: {}", skill.meta.name, desc)
+            })
+            .collect::<Vec<_>>();
+        crate::tools::ToolResult::success_with_data(
+            format!("Skills ({}):\n{}", lines.len(), lines.join("\n")),
+            serde_json::json!({
+                "skills": skills.iter().map(|s| &s.meta.name).collect::<Vec<_>>(),
+                "query": query
+            }),
         )
     }
 }
@@ -301,19 +322,21 @@ impl crate::tools::Tool for SkillViewTool {
             return crate::tools::ToolResult::error("Skill name required");
         }
 
-        // 从 metadata 获取 skills_dir
-        let skills_dir = context
-            .metadata
-            .get("skills_dir")
-            .map(|s| s.as_str())
-            .unwrap_or("skills");
-
-        let skill_md = Path::new(skills_dir).join(name).join("SKILL.md");
-        match std::fs::read_to_string(&skill_md) {
-            Ok(content) => crate::tools::ToolResult::success(content),
-            Err(e) => {
-                crate::tools::ToolResult::error(format!("Cannot read skill '{}': {}", name, e))
-            }
+        let runtime = crate::skills::SkillRuntime::load(&context.working_dir);
+        match runtime.get(name) {
+            Some(skill) => crate::tools::ToolResult::success_with_data(
+                skill.to_injection(),
+                serde_json::json!({
+                    "name": skill.meta.name,
+                    "description": skill.meta.description,
+                    "allowed_tools": skill.meta.allowed_tools,
+                    "model": skill.meta.model,
+                    "effort": skill.meta.effort,
+                    "context": skill.meta.context,
+                    "user_invocable": skill.meta.user_invocable,
+                }),
+            ),
+            None => crate::tools::ToolResult::error(format!("Skill '{}' not found", name)),
         }
     }
 }

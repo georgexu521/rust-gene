@@ -185,6 +185,14 @@ impl Tool for WorktreeTool {
             path
         ))
     }
+
+    fn is_available(&self, context: &ToolContext) -> bool {
+        context.worktree_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        Some("Worktree manager not configured".to_string())
+    }
 }
 
 #[cfg(test)]

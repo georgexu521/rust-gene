@@ -490,6 +490,14 @@ impl Tool for LSPTool {
             _ => ToolResult::error(format!("Unknown LSP action: {}", action)),
         }
     }
+
+    fn is_available(&self, context: &ToolContext) -> bool {
+        context.lsp_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &ToolContext) -> Option<String> {
+        Some("LSP manager not configured".to_string())
+    }
 }
 
 /// 从 MarkedString / MarkupContent 提取纯文本

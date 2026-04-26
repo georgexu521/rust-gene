@@ -128,6 +128,21 @@ pub struct McpResourceDef {
     pub server_name: String,
 }
 
+/// MCP prompt definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptDef {
+    /// Prompt name
+    pub name: String,
+    /// Prompt description
+    #[serde(default)]
+    pub description: String,
+    /// Prompt argument schema/metadata from the MCP server.
+    #[serde(default)]
+    pub arguments: Vec<Value>,
+    /// 所属服务器
+    pub server_name: String,
+}
+
 /// MCP 请求
 #[derive(Debug, Serialize)]
 struct McpRequest {
@@ -1193,6 +1208,37 @@ impl McpClient {
         Ok(resources)
     }
 
+    /// 发现服务器提供的 prompts
+    pub async fn discover_prompts(&self) -> anyhow::Result<Vec<McpPromptDef>> {
+        info!("Discovering prompts from MCP server: {}", self.config.name);
+
+        let result = self.send_request("prompts/list", json!({})).await?;
+        let prompts_array = result["prompts"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("prompts/list did not return prompts array"))?;
+
+        let mut prompts = Vec::new();
+        for prompt_value in prompts_array {
+            prompts.push(McpPromptDef {
+                name: prompt_value["name"]
+                    .as_str()
+                    .unwrap_or("unnamed")
+                    .to_string(),
+                description: prompt_value["description"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                arguments: prompt_value["arguments"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default(),
+                server_name: self.config.name.clone(),
+            });
+        }
+
+        Ok(prompts)
+    }
+
     /// 读取资源内容
     pub async fn read_resource(&self, uri: &str) -> anyhow::Result<Value> {
         debug!("Reading MCP resource {} on {}", uri, self.config.name);
@@ -1474,6 +1520,23 @@ impl McpManager {
         all_resources
     }
 
+    /// 发现所有已批准服务器的 prompts。
+    pub async fn discover_all_prompts(&self) -> Vec<McpPromptDef> {
+        let mut all_prompts = Vec::new();
+
+        for (name, client) in &self.clients {
+            if !self.is_server_approved(name) {
+                continue;
+            }
+            match client.discover_prompts().await {
+                Ok(prompts) => all_prompts.extend(prompts),
+                Err(e) => warn!("Failed to discover prompts from {}: {}", name, e),
+            }
+        }
+
+        all_prompts
+    }
+
     /// 读取指定服务器上的资源
     pub async fn read_resource(&self, server_name: &str, uri: &str) -> anyhow::Result<Value> {
         if !self.is_server_approved(server_name) {
@@ -1736,9 +1799,10 @@ impl crate::tools::Tool for McpManageTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list_servers", "list_tools", "call_tool", "auth_server"],
+                    "enum": ["list_servers", "list_tools", "list_prompts", "call_tool", "auth_server"],
                     "description": "list_servers: show connected servers. \
                                    list_tools: show all available MCP tools. \
+                                   list_prompts: show MCP prompts that can become commands. \
                                    call_tool: invoke an MCP tool. \
                                    auth_server: authenticate a server with OAuth."
                 },
@@ -1806,6 +1870,34 @@ impl crate::tools::Tool for McpManageTool {
                     ))
                 }
             }
+            "list_prompts" => {
+                let prompts = mcp_manager.discover_all_prompts().await;
+                if prompts.is_empty() {
+                    crate::tools::ToolResult::success(
+                        "No prompts available from approved MCP servers.".to_string(),
+                    )
+                } else {
+                    let prompt_list = prompts
+                        .iter()
+                        .map(|p| {
+                            let desc = if p.description.is_empty() {
+                                "(no description)"
+                            } else {
+                                &p.description
+                            };
+                            format!("- /mcp__{}__{}: {}", p.server_name, p.name, desc)
+                        })
+                        .collect::<Vec<_>>();
+                    crate::tools::ToolResult::success_with_data(
+                        format!(
+                            "Available MCP prompts ({}):\n{}",
+                            prompts.len(),
+                            prompt_list.join("\n")
+                        ),
+                        json!({ "prompts": prompts }),
+                    )
+                }
+            }
             "call_tool" => {
                 let tool_name = params["tool_name"].as_str().unwrap_or("");
                 if tool_name.is_empty() {
@@ -1844,6 +1936,14 @@ impl crate::tools::Tool for McpManageTool {
             }
             _ => crate::tools::ToolResult::error(format!("Unknown action: {}", action)),
         }
+    }
+
+    fn is_available(&self, context: &crate::tools::ToolContext) -> bool {
+        context.mcp_manager.is_some()
+    }
+
+    fn unavailable_reason(&self, _context: &crate::tools::ToolContext) -> Option<String> {
+        Some("MCP manager not configured".to_string())
     }
 }
 
