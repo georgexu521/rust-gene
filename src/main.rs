@@ -30,6 +30,7 @@ pub mod remote;
 pub mod security;
 pub mod services;
 pub mod session_store;
+pub mod shell;
 pub mod skills;
 pub mod slo;
 pub mod state;
@@ -52,6 +53,7 @@ enum StartupMode {
     Help,
     Api,
     Cli,
+    Tui,
 }
 
 fn detect_startup_mode(args: &[String]) -> StartupMode {
@@ -59,7 +61,8 @@ fn detect_startup_mode(args: &[String]) -> StartupMode {
     match mode {
         Some("--help") | Some("-h") | Some("help") => StartupMode::Help,
         Some("--api") => StartupMode::Api,
-        Some("--cli") | Some("--tui") => StartupMode::Cli,
+        Some("--cli") => StartupMode::Cli,
+        Some("--tui") => StartupMode::Tui,
         _ => StartupMode::Cli,
     }
 }
@@ -74,18 +77,19 @@ fn print_help() {
     println!("Priority Agent");
     println!();
     println!("Usage:");
-    println!("  {bin} [--api [--port <PORT>]] [--cli] [--help]");
+    println!("  {bin} [--api [--port <PORT>]] [--cli] [--tui] [--help]");
     println!();
     println!("Modes:");
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
-    println!("  --cli    Start interactive terminal CLI");
-    println!("  --tui    Alias for --cli (deprecated)");
-    println!("  (none)   Default: interactive terminal CLI");
+    println!("  --cli    Start scrollback-first interactive CLI");
+    println!("  --tui    Start legacy full-screen Ratatui interface");
+    println!("  (none)   Default: scrollback-first interactive CLI");
     println!();
     println!("Examples:");
     println!("  {bin}                  # Default mode");
     println!("  {bin} --api --port 8787 # HTTP API server");
     println!("  {bin} --cli            # Interactive terminal CLI");
+    println!("  {bin} --tui            # Legacy full-screen interface");
 }
 
 #[tokio::main]
@@ -97,7 +101,7 @@ async fn main() {
     // 初始化日志（交互模式默认降噪，仍可通过 RUST_LOG 覆盖）
     let default_level = match startup_mode {
         StartupMode::Api => "info",
-        StartupMode::Help | StartupMode::Cli => "warn",
+        StartupMode::Help | StartupMode::Cli | StartupMode::Tui => "warn",
     };
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -170,8 +174,7 @@ async fn main() {
             }
         }
         StartupMode::Cli => {
-            // 默认: 交互式终端 CLI（由 ratatui/crossterm 实现）
-            // 检测是否在交互式终端中运行
+            // 默认: scrollback-first interactive CLI.
             if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
                 eprintln!("Error: CLI mode requires an interactive terminal.");
                 eprintln!("       Use --api to start the HTTP API server.");
@@ -194,6 +197,39 @@ async fn main() {
             let tool_registry = bootstrap::init_tool_registry(&working_dir);
             match bootstrap::init_components(provider, model, tool_registry, &working_dir).await {
                 Ok(components) => {
+                    if let Err(e) = shell::run_shell(components.streaming_engine).await {
+                        error!("Interactive CLI failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    error!("Bootstrap failed: {}", e);
+                    eprintln!("Failed to initialize components: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        StartupMode::Tui => {
+            if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                eprintln!("Error: TUI mode requires an interactive terminal.");
+                eprintln!("       Use --api to start the HTTP API server.");
+                std::process::exit(1);
+            }
+            info!("Starting legacy full-screen TUI...");
+            let working_dir =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let (provider, model) = match bootstrap::init_provider() {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("Provider init failed: {}", e);
+                    eprintln!("Failed to initialize LLM provider: {}", e);
+                    eprintln!("Hint: set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.");
+                    std::process::exit(1);
+                }
+            };
+            let tool_registry = bootstrap::init_tool_registry(&working_dir);
+            match bootstrap::init_components(provider, model, tool_registry, &working_dir).await {
+                Ok(components) => {
                     if let Err(e) = tui::run_tui(
                         components.streaming_engine,
                         Some(components.lsp_manager),
@@ -201,7 +237,7 @@ async fn main() {
                     )
                     .await
                     {
-                        error!("Interactive CLI failed: {}", e);
+                        error!("Legacy TUI failed: {}", e);
                         std::process::exit(1);
                     }
                 }
@@ -249,7 +285,7 @@ mod tests {
         );
         assert_eq!(
             detect_startup_mode(&["priority-agent".into(), "--tui".into()]),
-            StartupMode::Cli
+            StartupMode::Tui
         );
         assert_eq!(
             detect_startup_mode(&["priority-agent".into()]),

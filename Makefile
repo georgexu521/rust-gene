@@ -14,7 +14,7 @@ release:
 	cargo build --release --quiet
 
 install:
-	./scripts/install.sh --release --prefix $(PREFIX)
+	FEATURES="$(FEATURES)" ./scripts/install.sh --release --prefix $(PREFIX)
 
 install-cli: install
 
@@ -32,7 +32,7 @@ help:
 	@echo "Priority Agent - Makefile targets"
 	@echo ""
 	@echo "  make              Build release binary"
-	@echo "  make install      Build release + install to ~/.local/bin (chat CLI enabled)"
+	@echo "  make install      Build release + install to ~/.local/bin (interactive CLI)"
 	@echo "  make install-cli  Alias of make install"
 	@echo "  make test         Run all tests"
 	@echo "  make clean        Clean build artifacts"

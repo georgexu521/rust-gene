@@ -75,18 +75,10 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         app,
     );
 
-    let mut current_y = if window.bottom_anchored {
-        max_y.saturating_sub(window.message_height as u16)
-    } else {
-        inner_area.y + u16::from(window.more_above)
-    };
+    let mut current_y = inner_area.y + u16::from(window.more_above);
 
     if window.more_above {
-        let indicator_y = if window.bottom_anchored {
-            current_y.saturating_sub(1).max(inner_area.y)
-        } else {
-            inner_area.y
-        };
+        let indicator_y = inner_area.y;
         let indicator = Paragraph::new("↑ more above").style(
             Style::default()
                 .fg(app.theme.text_dim)
@@ -522,21 +514,16 @@ fn transcript_window(
     let mut used_height = active_height;
 
     if active_height > viewport {
-        start = items.len().saturating_sub(1);
-        used_height = 0;
-        for idx in (0..items.len()).rev() {
-            let candidate_height = heights[idx];
-            let more_above = idx > 0;
-            let next_height = used_height + candidate_height + usize::from(more_above);
-            if used_height > 0 && next_height > viewport {
-                break;
-            }
-            start = idx;
-            used_height += candidate_height;
-            if used_height + usize::from(more_above) >= viewport {
-                break;
-            }
-        }
+        // Keep the active turn anchored at the user's prompt. When the assistant
+        // answer becomes taller than the viewport, reverse-filling from the last
+        // item hides the prompt/tool context and makes the screen look like it
+        // jumped to the top of the answer. Claude/Codex-style CLIs preserve the
+        // turn start and let the lower part of a long answer scroll out instead.
+        start =
+            previous_turn_start_that_fits(&heights, active_start, viewport).unwrap_or(active_start);
+        let more_above = start > 0;
+        let max_height = viewport.saturating_sub(usize::from(more_above));
+        used_height = visible_items_height(items, start, width, app, max_height);
     } else {
         while start > 0 {
             let candidate_start = start - 1;
@@ -564,6 +551,29 @@ fn active_turn_start(items: &[TranscriptItem<'_>]) -> Option<usize> {
     items.iter().rposition(
         |item| matches!(item, TranscriptItem::Message { msg, .. } if msg.role == MessageRole::User),
     )
+}
+
+fn previous_turn_start_that_fits(
+    heights: &[usize],
+    active_start: usize,
+    viewport: usize,
+) -> Option<usize> {
+    if active_start == 0 || viewport < 8 {
+        return None;
+    }
+
+    let context_budget = (viewport / 3).clamp(4, 8);
+    let previous_start = active_start.saturating_sub(2);
+    if previous_start == active_start {
+        return None;
+    }
+
+    let previous_height = sum_heights(heights, previous_start, active_start);
+    if previous_height <= context_budget {
+        Some(previous_start)
+    } else {
+        None
+    }
 }
 
 fn item_heights(items: &[TranscriptItem<'_>], width: usize, app: &TuiApp) -> Vec<usize> {
@@ -2042,6 +2052,47 @@ mod tests {
         assert_eq!(window.start, 1);
         assert!(window.more_above);
         assert_eq!(window.message_height, 6);
+    }
+
+    #[test]
+    fn transcript_window_keeps_recent_turn_context_when_answer_overflows() {
+        let app = TuiApp::new();
+        let long_answer = "answer line\n".repeat(20);
+        let items = [
+            msg(MessageRole::User, "old question"),
+            msg(MessageRole::Assistant, "old answer"),
+            msg(MessageRole::User, "current question"),
+            msg(MessageRole::Assistant, &long_answer),
+        ];
+        let refs: Vec<_> = items.iter().collect();
+        let transcript = transcript_items(&refs, &app);
+
+        let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
+
+        assert_eq!(window.start, 0);
+        assert!(!window.more_above);
+        assert_eq!(window.message_height, 8);
+    }
+
+    #[test]
+    fn transcript_window_keeps_active_prompt_when_previous_turn_is_too_tall() {
+        let app = TuiApp::new();
+        let old_answer = "old answer line\n".repeat(10);
+        let long_answer = "answer line\n".repeat(20);
+        let items = [
+            msg(MessageRole::User, "old question"),
+            msg(MessageRole::Assistant, &old_answer),
+            msg(MessageRole::User, "current question"),
+            msg(MessageRole::Assistant, &long_answer),
+        ];
+        let refs: Vec<_> = items.iter().collect();
+        let transcript = transcript_items(&refs, &app);
+
+        let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
+
+        assert_eq!(window.start, 2);
+        assert!(window.more_above);
+        assert_eq!(window.message_height, 7);
     }
 
     #[test]

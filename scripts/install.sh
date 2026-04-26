@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 BUILD_TYPE="debug"
-FEATURES="${FEATURES:-legacy-cli}"
+FEATURES="${FEATURES:-}"
 SKIP_BUILD=0
 SKIP_VERIFY=0
 INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local}"
@@ -21,8 +21,8 @@ Usage: scripts/install.sh [options]
 
 Options:
   --release          Build in release mode (default: debug)
-  --features F       Comma-separated cargo features (default: legacy-cli)
-  --no-cli           Build without legacy-cli feature
+  --features F       Comma-separated cargo features (default: none)
+  --no-cli           Deprecated compatibility flag; ignored
   --skip-build       Skip cargo build and install existing binary from target/
   --skip-verify      Skip final binary smoke-check
   --prefix PATH      Install prefix directory (default: ~/.local)
@@ -30,8 +30,8 @@ Options:
   -h, --help         Show this help
 
 Examples:
-  scripts/install.sh --release --features legacy-cli
-  scripts/install.sh --release --no-cli
+  scripts/install.sh --release
+  scripts/install.sh --release --features experimental-api-server
   scripts/install.sh --release --skip-build
   scripts/install.sh --release --system
 EOF
@@ -106,10 +106,9 @@ fi
 
 echo "[2/4] Installing binary to $BIN_DIR..."
 mkdir -p "$BIN_DIR"
-cp "$SRC_BIN" "$BIN_DIR/priority-agent"
-chmod +x "$BIN_DIR/priority-agent"
+/usr/bin/install -m 0755 "$SRC_BIN" "$BIN_DIR/priority-agent"
 
-# 创建 pa symlink（快捷命令，默认进入 chat CLI 模式）
+# 创建 pa symlink（快捷命令，默认进入 interactive CLI）
 ln -sf "$BIN_DIR/priority-agent" "$BIN_DIR/pa"
 echo "       Created shortcut: $BIN_DIR/pa -> priority-agent"
 
@@ -157,7 +156,7 @@ echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "Binary:     $BIN_DIR/priority-agent"
-echo "Shortcut:   $BIN_DIR/pa  (default: chat CLI mode)"
+echo "Shortcut:   $BIN_DIR/pa  (interactive CLI)"
 echo "Config:     $CONFIG_DIR/"
 echo ""
 # Warn if prefix bin is not in PATH
@@ -171,6 +170,6 @@ echo "Next steps:"
 echo "  1. Set your LLM API key:"
 echo "     export MOONSHOT_API_KEY='your-key-here'"
 echo "  2. Or edit: $CONFIG_DIR/.env"
-echo "  3. Run: pa                  # CLI mode (shortcut)"
-echo "     Run: priority-agent      # TUI mode (full name)"
+echo "  3. Run: pa                  # interactive CLI shortcut"
+echo "     Run: priority-agent      # full command name"
 echo ""

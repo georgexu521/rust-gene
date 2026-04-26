@@ -185,27 +185,21 @@ impl ToolRunView {
         } else {
             "ctrl+o details"
         };
-        let full_output_hint = if self.result_body.is_some() {
-            " · ctrl+t full output"
-        } else {
-            ""
-        };
         let elapsed = if self.elapsed().as_secs() > 0 {
             format!(" · {}s", self.elapsed().as_secs())
         } else {
             String::new()
         };
-        let mut title = format!("{} ({}{})", self.summary(), status_hint, elapsed);
+        let mut title = format!("{} · {}{}", self.summary(), status_hint, elapsed);
         if !expanded {
             title = if self.is_active() {
-                format!("{} ({})", self.summary(), details_hint)
+                format!("{} · {}", self.summary(), details_hint)
             } else if self.result_body.is_some() {
                 format!(
-                    "{} ({} · {}{})",
+                    "{} · {} · {} · ctrl+t output",
                     self.summary(),
                     status_hint,
-                    details_hint,
-                    full_output_hint
+                    details_hint
                 )
             } else {
                 title
@@ -720,7 +714,7 @@ mod tests {
 
         assert_eq!(run.summary(), "Found 1 matches");
         assert!(run.render_lines(false)[0].contains("done"));
-        assert!(run.render_lines(false)[0].contains("ctrl+t full output"));
+        assert!(run.render_lines(false)[0].contains("ctrl+t output"));
     }
 
     #[test]

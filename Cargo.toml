@@ -90,6 +90,7 @@ tree-sitter-python = "0.23"
 unicode-width = "0.2"
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
 arboard = "3.4"
+rustyline = "14"
 
 [package]
 name = "priority-agent"
@@ -167,6 +168,7 @@ diffy = "0.4"
 unicode-width = { workspace = true }
 syntect = { workspace = true }
 arboard = { workspace = true }
+rustyline = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
