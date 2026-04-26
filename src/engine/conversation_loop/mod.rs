@@ -487,6 +487,39 @@ fn persist_tool_outcome_learning_event(
     }
 }
 
+fn persist_workflow_learning_event(
+    store: Option<&Arc<crate::session_store::SessionStore>>,
+    session_id: &str,
+    kind: &str,
+    summary: String,
+    confidence: f64,
+    payload: serde_json::Value,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    if let Err(e) = store.add_learning_event(
+        session_id,
+        kind,
+        "conversation_loop",
+        &summary,
+        confidence,
+        &payload,
+    ) {
+        warn!("Failed to persist workflow learning event: {}", e);
+    }
+}
+
+fn is_high_risk_workflow(
+    route: &crate::engine::intent_router::IntentRoute,
+    judgment: Option<&crate::engine::workflow_contract::ProgrammingWorkflowJudgment>,
+) -> bool {
+    matches!(route.risk, crate::engine::intent_router::RiskLevel::High)
+        || judgment
+            .map(|judgment| matches!(judgment.risk, crate::engine::intent_router::RiskLevel::High))
+            .unwrap_or(false)
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -1200,6 +1233,7 @@ impl ConversationLoop {
 
         // ── 迭代预算 ─────────────────────────────────────
         let mut effective_iterations: usize = 0;
+        let mut acceptance_repair_attempts: usize = 0;
 
         for iteration in 0..self.max_iterations {
             debug!(
@@ -1461,6 +1495,27 @@ impl ConversationLoop {
                             evidence_items: debugging.evidence_to_collect.len(),
                             ask_user: debugging.ask_user,
                         });
+                        persist_workflow_learning_event(
+                            self.session_store.as_ref(),
+                            &self.session_id,
+                            "guided_debugging",
+                            format!(
+                                "Guided debugging selected {:?}: {}",
+                                debugging.next_action, debugging.symptom
+                            ),
+                            if debugging.blocker { 0.85 } else { 0.7 },
+                            serde_json::json!({
+                                "blocker": debugging.blocker,
+                                "symptom": debugging.symptom.clone(),
+                                "likely_causes": debugging.likely_causes.clone(),
+                                "evidence_to_collect": debugging.evidence_to_collect.clone(),
+                                "smallest_safe_action": debugging.smallest_safe_action.clone(),
+                                "ask_user": debugging.ask_user,
+                                "questions": debugging.questions.clone(),
+                                "next_action": format!("{:?}", debugging.next_action),
+                                "failed_tools": failed_tool_names_this_round.clone(),
+                            }),
+                        );
                         let debugging_text = debugging.format_for_prompt();
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&debugging_text);
@@ -1655,27 +1710,66 @@ impl ConversationLoop {
                         );
                         match analyzer.review_acceptance(prompt).await {
                             Ok(review) => {
+                                let high_risk = is_high_risk_workflow(&route, Some(judgment));
+                                let review_next_action = review.next_action;
+                                let review_accepted = review.accepted;
+                                let review_unresolved = review.unresolved_count();
                                 trace.record(TraceEvent::AcceptanceReviewCompleted {
-                                    accepted: review.accepted,
+                                    accepted: review_accepted,
                                     confidence: format!("{:?}", review.confidence),
                                     criteria: review.criteria.len(),
-                                    unresolved: review.unresolved_count(),
+                                    unresolved: review_unresolved,
                                     next_action: format!("{:?}", review.next_action),
                                 });
+                                persist_workflow_learning_event(
+                                    self.session_store.as_ref(),
+                                    &self.session_id,
+                                    "acceptance_review",
+                                    format!(
+                                        "Acceptance review accepted={} next={:?}",
+                                        review_accepted, review_next_action
+                                    ),
+                                    if review_accepted { 0.95 } else { 0.85 },
+                                    serde_json::json!({
+                                        "accepted": review_accepted,
+                                        "confidence": format!("{:?}", review.confidence),
+                                        "criteria": review.criteria.clone(),
+                                        "unresolved_items": review.unresolved_items.clone(),
+                                        "residual_risks": review.residual_risks.clone(),
+                                        "next_action": format!("{:?}", review_next_action),
+                                        "high_risk": high_risk,
+                                        "changed_files": changed_files.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+                                    }),
+                                );
                                 let review_text = review.format_for_prompt();
                                 tool_results_text.push('\n');
                                 tool_results_text.push_str(&review_text);
                                 messages.push(Message::system(review_text.clone()));
-                                if matches!(
-                                    review.next_action,
-                                    crate::engine::workflow_contract::AcceptanceNextAction::ContinueRepair
-                                        | crate::engine::workflow_contract::AcceptanceNextAction::Stop
-                                ) && !review.accepted
+                                if !review_accepted
+                                    && matches!(
+                                        review_next_action,
+                                        crate::engine::workflow_contract::AcceptanceNextAction::ContinueRepair
+                                            | crate::engine::workflow_contract::AcceptanceNextAction::Stop
+                                    )
                                 {
+                                    acceptance_repair_attempts += 1;
                                     messages.push(Message::system(
                                         "Acceptance review did not pass. Continue repair if possible; otherwise report the unresolved items clearly."
                                             .to_string(),
                                     ));
+                                    if high_risk
+                                        && (acceptance_repair_attempts >= 2
+                                            || matches!(
+                                                review_next_action,
+                                                crate::engine::workflow_contract::AcceptanceNextAction::Stop
+                                            ))
+                                    {
+                                        final_content = format!(
+                                            "Stopped before final closeout because high-risk acceptance review did not pass ({} unresolved item(s)).",
+                                            review_unresolved
+                                        );
+                                        break;
+                                    }
                                 }
                             }
                             Err(err) => {

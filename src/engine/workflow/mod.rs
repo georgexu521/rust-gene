@@ -548,9 +548,20 @@ mod tests {
         }
     }
 
+    fn enabled_test_policy() -> WorkflowPolicy {
+        WorkflowPolicy {
+            gate: GatePolicy {
+                workflow_enabled: true,
+                llm_classifier_enabled: false,
+            },
+            ..WorkflowPolicy::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_workflow_engine_end_to_end() {
-        let engine = WorkflowEngine::new(Arc::new(MockLlmProvider));
+        let engine =
+            WorkflowEngine::new(Arc::new(MockLlmProvider)).with_policy(enabled_test_policy());
         let result = engine
             .run("实现用户认证系统", "实现用户认证系统", &MockStepExecutor)
             .await;
@@ -583,7 +594,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_workflow_result_contains_plan() {
-        let engine = WorkflowEngine::new(Arc::new(MockLlmProvider));
+        let engine =
+            WorkflowEngine::new(Arc::new(MockLlmProvider)).with_policy(enabled_test_policy());
         let result = engine
             .run("新增一个模块", "新增模块", &MockStepExecutor)
             .await
@@ -619,7 +631,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_workflow_report_contains_policy_snapshot() {
-        let engine = WorkflowEngine::new(Arc::new(MockLlmProvider));
+        let engine =
+            WorkflowEngine::new(Arc::new(MockLlmProvider)).with_policy(enabled_test_policy());
         let result = engine
             .run("实现用户认证系统", "实现用户认证系统", &MockStepExecutor)
             .await
