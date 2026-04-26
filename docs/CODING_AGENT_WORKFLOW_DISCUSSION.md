@@ -820,13 +820,17 @@ Completed:
   - The result records accepted/not accepted, confidence, unresolved items, residual risks, and the next action.
 - Added a guided debugging contract for failed tool rounds.
   - When a tool round fails, the model can identify the symptom, likely causes, evidence to collect, smallest safe action, whether to ask the user, and whether to inspect, repair, ask, or stop.
+- Added first enforcement and observability hooks.
+  - High-risk workflows can be stopped before final closeout when acceptance review remains unresolved after bounded repair attempts or explicitly returns `stop`.
+  - Acceptance review and guided debugging outcomes are persisted as learning events.
+  - `/quick` now shows latest acceptance and guided-debug state alongside task/retrieval/reflection contract status.
+- Removed the external environment dependency from workflow engine unit tests.
+  - Default `cargo test` now passes without requiring `PRIORITY_AGENT_WORKFLOW_ENABLED=1`.
 
 Still to implement:
 
-- Use acceptance review results to more strictly gate final closeout for high-risk changes.
-- Connect guided debugging with bounded repair counters and learning events.
 - Make plan step completion and reweighting visible in the CLI/dashboard.
-- Persist workflow judgment, acceptance review, and debugging analysis into session history/learning events.
+- Persist workflow judgment itself into session history/learning events.
 - Add EvalSet cases that verify the workflow is actually triggered and affects behavior.
 
 ## Design Conclusion
