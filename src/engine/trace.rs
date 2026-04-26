@@ -195,6 +195,13 @@ pub enum TraceEvent {
         unresolved: usize,
         next_action: String,
     },
+    GuidedDebuggingCompleted {
+        blocker: bool,
+        next_action: String,
+        causes: usize,
+        evidence_items: usize,
+        ask_user: bool,
+    },
     RecoveryApplied {
         error: String,
         action: String,
@@ -252,6 +259,7 @@ impl TraceEvent {
             TraceEvent::ToolCompleted { .. } => "tool.done",
             TraceEvent::VerificationCompleted { .. } => "verify.done",
             TraceEvent::AcceptanceReviewCompleted { .. } => "acceptance.review",
+            TraceEvent::GuidedDebuggingCompleted { .. } => "guided.debug",
             TraceEvent::RecoveryApplied { .. } => "recovery",
             TraceEvent::RecoveryPlan { .. } => "recovery.plan",
             TraceEvent::McpResourceAccessed { .. } => "mcp.resource",
@@ -488,6 +496,16 @@ impl TraceEvent {
             } => format!(
                 "acceptance accepted={} confidence={} criteria={} unresolved={} next={}",
                 accepted, confidence, criteria, unresolved, next_action
+            ),
+            TraceEvent::GuidedDebuggingCompleted {
+                blocker,
+                next_action,
+                causes,
+                evidence_items,
+                ask_user,
+            } => format!(
+                "guided debug blocker={} next={} causes={} evidence={} ask_user={}",
+                blocker, next_action, causes, evidence_items, ask_user
             ),
             TraceEvent::RecoveryApplied { error, action } => {
                 format!("recovery: {} -> {}", preview(error), action)

@@ -79,6 +79,15 @@ pub enum AcceptanceNextAction {
     Stop,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebuggingNextAction {
+    InspectMore,
+    Repair,
+    AskUser,
+    Stop,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowPlanStep {
     pub description: String,
@@ -183,6 +192,49 @@ pub struct AcceptanceReview {
     #[serde(default)]
     pub residual_risks: Vec<String>,
     pub next_action: AcceptanceNextAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuidedDebuggingAnalysis {
+    pub blocker: bool,
+    pub symptom: String,
+    #[serde(default)]
+    pub likely_causes: Vec<String>,
+    #[serde(default)]
+    pub evidence_to_collect: Vec<String>,
+    pub smallest_safe_action: String,
+    pub ask_user: bool,
+    #[serde(default)]
+    pub questions: Vec<String>,
+    pub next_action: DebuggingNextAction,
+}
+
+impl GuidedDebuggingAnalysis {
+    pub fn format_for_prompt(&self) -> String {
+        let mut out = format!(
+            "Guided debugging analysis: blocker={} next_action={:?}\nSymptom: {}\nSmallest safe action: {}\n",
+            self.blocker, self.next_action, self.symptom, self.smallest_safe_action
+        );
+        if !self.likely_causes.is_empty() {
+            out.push_str("Likely causes:\n");
+            for cause in &self.likely_causes {
+                out.push_str(&format!("- {}\n", cause));
+            }
+        }
+        if !self.evidence_to_collect.is_empty() {
+            out.push_str("Evidence to collect:\n");
+            for item in &self.evidence_to_collect {
+                out.push_str(&format!("- {}\n", item));
+            }
+        }
+        if self.ask_user && !self.questions.is_empty() {
+            out.push_str("Questions for user if blocked:\n");
+            for question in &self.questions {
+                out.push_str(&format!("- {}\n", question));
+            }
+        }
+        out
+    }
 }
 
 impl AcceptanceReview {
@@ -512,6 +564,71 @@ Return only valid JSON with this shape:
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct GuidedDebuggingPrompt {
+    pub user_request: String,
+    pub workflow_context: Option<String>,
+    pub failed_tools: Vec<String>,
+    pub evidence: Vec<String>,
+}
+
+impl GuidedDebuggingPrompt {
+    pub fn new(
+        user_request: impl Into<String>,
+        workflow_context: Option<String>,
+        failed_tools: Vec<String>,
+        evidence: Vec<String>,
+    ) -> Self {
+        Self {
+            user_request: user_request.into(),
+            workflow_context,
+            failed_tools,
+            evidence,
+        }
+    }
+
+    pub fn render(&self) -> String {
+        format!(
+            r#"You are performing guided debugging for a programming-agent workflow.
+
+The agent hit a failure. Do not guess. Decide whether this is a blocker, what evidence resolves it fastest, and what the next safest action is.
+Ask the user only when the next step requires a human product/permission/architecture decision.
+
+User request:
+{user_request}
+
+Workflow context:
+{workflow_context}
+
+Failed tools:
+{failed_tools}
+
+Evidence:
+{evidence}
+
+Return only valid JSON with this shape:
+{{
+  "blocker": false,
+  "symptom": "exact failure in one sentence",
+  "likely_causes": ["cause"],
+  "evidence_to_collect": ["focused check"],
+  "smallest_safe_action": "next action",
+  "ask_user": false,
+  "questions": [],
+  "next_action": "inspect_more | repair | ask_user | stop"
+}}
+"#,
+            user_request = self.user_request,
+            workflow_context = self
+                .workflow_context
+                .as_deref()
+                .unwrap_or("No structured workflow context was available."),
+            failed_tools = bullet_list(&self.failed_tools),
+            evidence = bullet_list(&self.evidence),
+        )
+    }
+}
+
 pub struct WorkflowContractAnalyzer<'a> {
     provider: &'a dyn LlmProvider,
     model: String,
@@ -552,6 +669,20 @@ impl<'a> WorkflowContractAnalyzer<'a> {
         let response = self.provider.chat(request).await?;
         parse_acceptance_review(&response.content)
     }
+
+    pub async fn analyze_debugging(
+        &self,
+        prompt: GuidedDebuggingPrompt,
+    ) -> anyhow::Result<GuidedDebuggingAnalysis> {
+        let request = ChatRequest::new(self.model.clone())
+            .with_temperature(0.1)
+            .with_messages(vec![
+                Message::system("Return only valid JSON. Do not include markdown fences."),
+                Message::user(prompt.render()),
+            ]);
+        let response = self.provider.chat(request).await?;
+        parse_guided_debugging_analysis(&response.content)
+    }
 }
 
 pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkflowJudgment> {
@@ -565,6 +696,12 @@ pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkf
 pub fn parse_acceptance_review(content: &str) -> anyhow::Result<AcceptanceReview> {
     let json = extract_json_object(content)
         .ok_or_else(|| anyhow::anyhow!("acceptance review response did not contain JSON"))?;
+    Ok(serde_json::from_str(json)?)
+}
+
+pub fn parse_guided_debugging_analysis(content: &str) -> anyhow::Result<GuidedDebuggingAnalysis> {
+    let json = extract_json_object(content)
+        .ok_or_else(|| anyhow::anyhow!("guided debugging response did not contain JSON"))?;
     Ok(serde_json::from_str(json)?)
 }
 
@@ -720,5 +857,27 @@ mod tests {
         assert!(!review.accepted);
         assert_eq!(review.unresolved_count(), 2);
         assert_eq!(review.next_action, AcceptanceNextAction::ContinueRepair);
+    }
+
+    #[test]
+    fn parse_guided_debugging_analysis_from_json() {
+        let content = r#"{
+  "blocker": true,
+  "symptom": "cargo test failed with a type error",
+  "likely_causes": ["new enum variant not matched"],
+  "evidence_to_collect": ["run cargo check"],
+  "smallest_safe_action": "add the missing match arm",
+  "ask_user": false,
+  "questions": [],
+  "next_action": "repair"
+}"#;
+
+        let analysis = parse_guided_debugging_analysis(content).unwrap();
+
+        assert!(analysis.blocker);
+        assert_eq!(analysis.next_action, DebuggingNextAction::Repair);
+        assert!(analysis
+            .format_for_prompt()
+            .contains("Smallest safe action"));
     }
 }

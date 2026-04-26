@@ -1397,6 +1397,8 @@ impl ConversationLoop {
             let mut changed_files = Vec::new();
             let mut any_tool_success = false;
             let mut repeated_failed_tools = Vec::new();
+            let mut failed_tool_names_this_round = Vec::new();
+            let mut failed_tool_evidence = Vec::new();
             for (tc, result) in results.iter_mut() {
                 truncate_tool_result(result, &tc.name, &tc.id).await;
                 let result_content = format!(
@@ -1421,11 +1423,54 @@ impl ConversationLoop {
                     }
                     let name_count = failed_tool_names.entry(tc.name.clone()).or_insert(0);
                     *name_count += 1;
+                    failed_tool_names_this_round.push(tc.name.clone());
+                    failed_tool_evidence
+                        .push(format!("{} {} failed:\n{}", tc.name, tc.id, result.content));
                 }
 
                 if result.success && (tc.name == "file_edit" || tc.name == "file_write") {
                     if let Some(path) = tc.arguments["path"].as_str() {
                         changed_files.push(std::path::PathBuf::from(path));
+                    }
+                }
+            }
+
+            if !any_tool_success
+                && !failed_tool_evidence.is_empty()
+                && workflow_contract_enabled(self.provider.as_ref())
+            {
+                let analyzer = crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
+                    self.provider.as_ref(),
+                    self.model.clone(),
+                );
+                let prompt = crate::engine::workflow_contract::GuidedDebuggingPrompt::new(
+                    last_user_preview.as_str(),
+                    task_bundle
+                        .workflow_judgment
+                        .as_ref()
+                        .map(|judgment| judgment.to_turn_context()),
+                    failed_tool_names_this_round.clone(),
+                    failed_tool_evidence.clone(),
+                );
+                match analyzer.analyze_debugging(prompt).await {
+                    Ok(debugging) => {
+                        trace.record(TraceEvent::GuidedDebuggingCompleted {
+                            blocker: debugging.blocker,
+                            next_action: format!("{:?}", debugging.next_action),
+                            causes: debugging.likely_causes.len(),
+                            evidence_items: debugging.evidence_to_collect.len(),
+                            ask_user: debugging.ask_user,
+                        });
+                        let debugging_text = debugging.format_for_prompt();
+                        tool_results_text.push('\n');
+                        tool_results_text.push_str(&debugging_text);
+                        messages.push(Message::system(debugging_text));
+                    }
+                    Err(err) => {
+                        warn!("Guided debugging analysis failed: {}", err);
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error: format!("guided debugging analysis failed: {}", err),
+                        });
                     }
                 }
             }
