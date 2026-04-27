@@ -28,6 +28,10 @@ fn legacy_agent_memory_dir() -> PathBuf {
     memory_root().join("agent_memories")
 }
 
+fn memory_decision_log_path() -> PathBuf {
+    memory_dir().join("decisions.jsonl")
+}
+
 #[derive(Debug, Clone)]
 struct MemoryDocument {
     namespace: String,
@@ -313,6 +317,76 @@ fn memory_conflicts(docs: &[MemoryDocument], max_conflicts: usize) -> Vec<String
     conflicts
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct MemoryDecisionCounts {
+    accepted: usize,
+    proposed: usize,
+    rejected: usize,
+    blocked: usize,
+}
+
+fn load_memory_decision_counts() -> MemoryDecisionCounts {
+    let content = std::fs::read_to_string(memory_decision_log_path()).unwrap_or_default();
+    memory_decision_counts_from_jsonl(&content)
+}
+
+fn memory_decision_counts_from_jsonl(content: &str) -> MemoryDecisionCounts {
+    let mut counts = MemoryDecisionCounts::default();
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match value["status"].as_str().unwrap_or("") {
+            "accepted" => counts.accepted += 1,
+            "proposed" => counts.proposed += 1,
+            "rejected" => counts.rejected += 1,
+            "blocked" => counts.blocked += 1,
+            _ => {}
+        }
+    }
+    counts
+}
+
+fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String {
+    let counts = load_memory_decision_counts();
+    let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
+    let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
+    let agent_count = docs
+        .iter()
+        .filter(|doc| doc.namespace.starts_with("agent"))
+        .count();
+
+    let mut out = String::new();
+    out.push_str("Memory Doctor\n");
+    out.push_str(&format!("  Root: {}\n", memory_root().display()));
+    out.push_str(&format!(
+        "  Documents: {} total · {} topic · {} agent · {} chars\n",
+        docs.len(),
+        topic_count,
+        agent_count,
+        total_chars
+    ));
+    out.push_str(&format!(
+        "  Decisions: {} accepted · {} proposed · {} rejected · {} blocked\n",
+        counts.accepted, counts.proposed, counts.rejected, counts.blocked
+    ));
+    if conflicts.is_empty() {
+        out.push_str("  Conflicts: none\n");
+    } else {
+        out.push_str(&format!("  Conflicts: {}\n", conflicts.len()));
+        for conflict in conflicts.iter().take(5) {
+            out.push_str("    ");
+            out.push_str(conflict.trim_start_matches("- "));
+            out.push('\n');
+        }
+    }
+    out
+}
+
 fn extract_key_values(doc: &MemoryDocument) -> Vec<MemoryKeyValue> {
     doc.content
         .lines()
@@ -387,6 +461,40 @@ fn sanitize_topic(topic: &str) -> Option<String> {
     } else {
         Some(output)
     }
+}
+
+fn normalized_contains(existing: &str, candidate: &str) -> bool {
+    let normalized_existing = normalize_for_duplicate(existing);
+    let normalized_candidate = normalize_for_duplicate(candidate);
+    !normalized_candidate.is_empty() && normalized_existing.contains(&normalized_candidate)
+}
+
+fn normalize_for_duplicate(content: &str) -> String {
+    content
+        .to_lowercase()
+        .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "")
+}
+
+fn write_memory_file_atomically(path: &Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("memory.md");
+    let tmp_path = parent.join(format!(
+        ".{}.{}.tmp",
+        file_name,
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::write(&tmp_path, content)?;
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Memory Save 工具 - 保存信息到持久记忆
@@ -466,6 +574,25 @@ impl Tool for MemorySaveTool {
 
         // 读取现有内容
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let assessment =
+            match crate::memory::assess_memory_candidate(content, category, &existing, true) {
+                Ok(assessment) => assessment,
+                Err(issue) => {
+                    return ToolResult::error(format!(
+                        "Blocked unsafe memory [{}]: {}",
+                        issue.code, issue.message
+                    ))
+                }
+            };
+        if normalized_contains(&existing, content) {
+            return ToolResult::success(format!(
+                "Memory already exists in {} (quality {:.2}): [{}] {}",
+                path.display(),
+                assessment.score,
+                category,
+                content
+            ));
+        }
 
         // 追加新记忆
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M");
@@ -489,10 +616,11 @@ impl Tool for MemorySaveTool {
             format!("{}{}", existing, entry)
         };
 
-        match std::fs::write(&path, &new_content) {
+        match write_memory_file_atomically(&path, &new_content) {
             Ok(_) => ToolResult::success(format!(
-                "Saved to {}: [{}] {}",
+                "Saved to {} (quality {:.2}): [{}] {}",
                 path.display(),
+                assessment.score,
                 category,
                 content
             )),
@@ -511,13 +639,19 @@ impl Tool for MemoryLoadTool {
     }
 
     fn description(&self) -> &str {
-        "Load persistent memory from MEMORY.md and memory/*.md. Use this to recall user preferences, project conventions, and past decisions."
+        "Load, search, or diagnose persistent memory from MEMORY.md, USER.md, memory/*.md, and agent memory namespaces."
     }
 
     fn parameters(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "load returns memory content, search filters by query, doctor summarizes health/quality decisions/conflicts.",
+                    "enum": ["load", "search", "doctor"],
+                    "default": "load"
+                },
                 "query": {
                     "type": "string",
                     "description": "Optional: search query to filter memories. If empty, returns all memories."
@@ -534,8 +668,12 @@ impl Tool for MemoryLoadTool {
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
         let docs = load_memory_documents();
         let include_conflicts = params["include_conflicts"].as_bool().unwrap_or(true);
+        let action = params["action"].as_str().unwrap_or("load");
 
         if docs.is_empty() {
+            if action == "doctor" {
+                return ToolResult::success(format_memory_doctor(&docs, &[]));
+            }
             return ToolResult::success("Memory is empty.");
         }
 
@@ -546,22 +684,11 @@ impl Tool for MemoryLoadTool {
             Vec::new()
         };
 
-        if query.is_empty() {
-            // 返回全部（限制大小）
-            let mut output = String::new();
-            for doc in &docs {
-                output.push_str(&format!("# [{}] {}\n", doc.namespace, doc.path));
-                output.push_str(doc.content.trim());
-                output.push_str("\n\n");
-            }
-            if !conflicts.is_empty() {
-                output.push_str("# Conflicts\n");
-                output.push_str(&conflicts.join("\n"));
-                output.push('\n');
-            }
-            let truncated: String = output.chars().take(5000).collect();
-            ToolResult::success(truncated)
-        } else {
+        if action == "doctor" {
+            return ToolResult::success(format_memory_doctor(&docs, &conflicts));
+        }
+
+        if action == "search" || !query.is_empty() {
             let mut matching = search_memory_documents(&docs, query);
 
             if matching.is_empty() {
@@ -576,6 +703,21 @@ impl Tool for MemoryLoadTool {
                 let truncated: String = result.chars().take(3000).collect();
                 ToolResult::success(truncated)
             }
+        } else {
+            // 返回全部（限制大小）
+            let mut output = String::new();
+            for doc in &docs {
+                output.push_str(&format!("# [{}] {}\n", doc.namespace, doc.path));
+                output.push_str(doc.content.trim());
+                output.push_str("\n\n");
+            }
+            if !conflicts.is_empty() {
+                output.push_str("# Conflicts\n");
+                output.push_str(&conflicts.join("\n"));
+                output.push('\n');
+            }
+            let truncated: String = output.chars().take(5000).collect();
+            ToolResult::success(truncated)
         }
     }
 }
@@ -711,6 +853,31 @@ mod tests {
         let conflicts = memory_conflicts(&docs, 8);
         assert_eq!(conflicts.len(), 1);
         assert!(conflicts[0].contains("key 'language'"));
+    }
+
+    #[test]
+    fn test_memory_decision_counts_from_jsonl() {
+        let content = r#"{"status":"accepted"}
+{"status":"blocked"}
+{"status":"rejected"}
+{"status":"accepted"}"#;
+        let counts = memory_decision_counts_from_jsonl(content);
+        assert_eq!(counts.accepted, 2);
+        assert_eq!(counts.blocked, 1);
+        assert_eq!(counts.rejected, 1);
+    }
+
+    #[test]
+    fn test_format_memory_doctor_includes_conflicts_and_counts() {
+        let docs = vec![MemoryDocument {
+            namespace: "project".to_string(),
+            path: "MEMORY.md".to_string(),
+            content: "language: Chinese".to_string(),
+        }];
+        let doctor = format_memory_doctor(&docs, &["- key 'language' conflicts".to_string()]);
+        assert!(doctor.contains("Memory Doctor"));
+        assert!(doctor.contains("Documents: 1 total"));
+        assert!(doctor.contains("Conflicts: 1"));
     }
 
     #[test]

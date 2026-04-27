@@ -193,7 +193,7 @@ API Error → ErrorClassifier
 |------|------|
 | /help | 显示帮助 |
 | /clear | 清除对话历史 |
-| /memory | 查看已保存的记忆 |
+| /memory | 查看已保存的记忆；`/memory doctor` 查看记忆健康和门控决策 |
 | /save <text> | 保存到记忆 |
 | /resume | 选择或搜索历史对话并继续 |
 | /cost | 显示 token 使用和成本 |

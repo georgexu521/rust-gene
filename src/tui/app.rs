@@ -1866,6 +1866,7 @@ impl TuiApp {
             "/memory" => {
                 let query = args.trim();
                 let maintain = query == "--maintain";
+                let doctor = matches!(query, "--doctor" | "doctor");
                 let latest_user_message = self
                     .messages
                     .iter()
@@ -1885,6 +1886,17 @@ impl TuiApp {
                     if maintain {
                         let report = mem.maintain_memory();
                         report.format()
+                    } else if doctor {
+                        let summary = mem.memory_summary();
+                        let decisions = mem.memory_decision_counts();
+                        format!(
+                            "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}",
+                            summary.format(),
+                            decisions.accepted,
+                            decisions.proposed,
+                            decisions.rejected,
+                            decisions.blocked
+                        )
                     } else {
                         let summary = mem.memory_summary();
                         let project = mem.load_tier(crate::memory::manager::MemoryTier::Project);
@@ -1963,6 +1975,17 @@ impl TuiApp {
                     if maintain {
                         let report = mem.maintain_memory();
                         report.format()
+                    } else if doctor {
+                        let summary = mem.memory_summary();
+                        let decisions = mem.memory_decision_counts();
+                        format!(
+                            "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}",
+                            summary.format(),
+                            decisions.accepted,
+                            decisions.proposed,
+                            decisions.rejected,
+                            decisions.blocked
+                        )
                     } else {
                         let summary = mem.memory_summary();
                         let project = mem.load_tier(crate::memory::manager::MemoryTier::Project);
