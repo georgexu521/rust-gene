@@ -77,7 +77,7 @@ impl Tool for ConfigTool {
   max_tokens        - Maximum tokens in response
   thinking          - Enable thinking mode (0/1)
   thinking_budget   - Thinking token budget
-  permissions       - Permission mode (default/auto_low_risk/auto_all/read_only)
+  permissions       - Permission mode (default/auto/auto_low_risk/auto_all/read_only)
   hooks.pre_tool    - Pre-tool hook command
   hooks.post_tool   - Post-tool hook command
   context_window    - Context window size

@@ -155,7 +155,7 @@ impl StreamingQueryEngine {
                 crate::cost_tracker::CostTracker::new(),
             )),
             permission_mode: Arc::new(std::sync::RwLock::new(
-                crate::permissions::PermissionMode::AutoLowRisk,
+                crate::permissions::PermissionMode::AutoAll,
             )),
             session_permission_rules: Arc::new(std::sync::RwLock::new(
                 crate::permissions::PermissionRules::new(),

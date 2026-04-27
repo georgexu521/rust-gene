@@ -44,7 +44,7 @@ pub(crate) fn permission_mode_name(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Default => "default",
         PermissionMode::AutoLowRisk => "auto_low_risk",
-        PermissionMode::AutoAll => "auto_all",
+        PermissionMode::AutoAll => "auto",
         PermissionMode::ReadOnly => "read_only",
         PermissionMode::Once => "once",
     }
@@ -54,7 +54,9 @@ pub(crate) fn parse_permission_mode(mode: &str) -> Option<PermissionMode> {
     match mode.to_ascii_lowercase().as_str() {
         "default" => Some(PermissionMode::Default),
         "auto_low_risk" | "autolowrisk" | "low_risk" => Some(PermissionMode::AutoLowRisk),
-        "auto_all" | "autoall" => Some(PermissionMode::AutoAll),
+        "auto" | "developer_auto" | "developer-auto" | "auto_all" | "autoall" => {
+            Some(PermissionMode::AutoAll)
+        }
         "read_only" | "readonly" => Some(PermissionMode::ReadOnly),
         "once" => Some(PermissionMode::Once),
         _ => None,

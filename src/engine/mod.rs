@@ -245,7 +245,7 @@ impl ConversationLoopBuilder {
             worktree_manager: None,
             memory_manager: None,
             hook_manager: None,
-            permission_mode: crate::permissions::PermissionMode::AutoLowRisk,
+            permission_mode: crate::permissions::PermissionMode::AutoAll,
             session_permission_rules: crate::permissions::PermissionRules::new(),
             llm_memory_extraction: false,
             approval_channel: None,

@@ -57,11 +57,11 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 .streaming_engine
                 .as_ref()
                 .map(|e| e.permission_mode())
-                .unwrap_or(PermissionMode::AutoLowRisk);
+                .unwrap_or(PermissionMode::AutoAll);
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
             format!(
-                "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions explain <tool_name> - explain why a decision was made (with confidence & warnings)\n  /permissions export [path] - export rules to a file\n  /permissions import <path> [project|global] [merge] - import rules (merge to append)\n  /permissions dry-run <allow|deny|ask> <pattern> - test a rule against all registered tools\n  /permissions <allow|deny|ask> <pattern> [project|global]",
+                "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions explain <tool_name> - explain why a decision was made (with confidence & warnings)\n  /permissions export [path] - export rules to a file\n  /permissions import <path> [project|global] [merge] - import rules (merge to append)\n  /permissions dry-run <allow|deny|ask> <pattern> - test a rule against all registered tools\n  /permissions <allow|deny|ask> <pattern> [project|global]",
                 permission_mode_name(mode),
                 ctx.rules.always_allow.len(),
                 ctx.rules.always_deny.len(),
@@ -90,11 +90,13 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 .streaming_engine
                 .as_ref()
                 .map(|e| e.permission_mode())
-                .unwrap_or(PermissionMode::AutoLowRisk);
+                .unwrap_or(PermissionMode::AutoAll);
             output.push_str(&format!("\n\nCurrent mode: {}", permission_mode_name(mode)));
             match mode {
                 PermissionMode::AutoAll => {
-                    output.push_str("\n  (all operations auto-allowed - rules ignored)")
+                    output.push_str(
+                        "\n  (developer auto mode: common coding actions auto-run; high-risk actions still ask)",
+                    )
                 }
                 PermissionMode::AutoLowRisk => {
                     output.push_str("\n  (low-risk operations auto-allowed, others follow rules)")
@@ -310,16 +312,17 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                         "Cannot set permission mode: engine unavailable.".to_string()
                     }
                 } else {
-                    "Invalid mode. Use: default | auto_low_risk | auto_all | read_only".to_string()
+                    "Invalid mode. Use: default | auto | auto_low_risk | auto_all | read_only"
+                        .to_string()
                 }
             } else {
                 let current = app
                     .streaming_engine
                     .as_ref()
                     .map(|e| e.permission_mode())
-                    .unwrap_or(PermissionMode::AutoLowRisk);
+                    .unwrap_or(PermissionMode::AutoAll);
                 format!(
-                    "Current mode: {}\nAvailable: default | auto_low_risk | auto_all | read_only",
+                    "Current mode: {}\nAvailable: default | auto | auto_low_risk | auto_all | read_only",
                     permission_mode_name(current)
                 )
             }

@@ -55,11 +55,11 @@ pub fn match_wildcard(pattern: &str, text: &str) -> bool {
 #[derive(Default)]
 pub enum PermissionMode {
     /// 默认模式 - 每次询问
-    #[default]
     Default,
     /// 自动允许低风险操作
     AutoLowRisk,
-    /// 自动允许所有（危险）
+    /// 开发者自动模式：默认允许常规开发操作，高风险操作仍需确认
+    #[default]
     AutoAll,
     /// 只读模式
     ReadOnly,
@@ -376,7 +376,13 @@ impl PermissionContext {
                 // 只读模式下，任何写入操作都需要确认
                 matches!(tool_name, "file_write" | "file_edit" | "bash" | "mcp_tool")
             }
-            PermissionMode::AutoAll => false,
+            PermissionMode::AutoAll => {
+                // 开发者默认模式：减少常规编程中的打断，但保留显式规则和高风险兜底。
+                if has_deny || has_ask {
+                    return true;
+                }
+                self.requires_safety_confirmation(tool_name, params)
+            }
             PermissionMode::AutoLowRisk => {
                 // 规则优先: deny > allow > ask；未命中规则时按参数风险级别决定
                 if has_deny {
@@ -388,7 +394,7 @@ impl PermissionContext {
                 if has_ask {
                     return true;
                 }
-                Self::risk_level(tool_name, params) >= RiskLevel::Medium
+                self.risk_level(tool_name, params) >= RiskLevel::Medium
             }
             PermissionMode::Once => {
                 // Once 模式：先检查是否已有有效的一次性授权
@@ -445,6 +451,21 @@ impl PermissionContext {
         true
     }
 
+    /// 在 AutoAll 下是否可以跳过工具自身的普通确认。
+    ///
+    /// 有些工具出于保守默认会对所有写操作声明 requires_confirmation。
+    /// 开发者自动模式允许这类常规开发动作直接执行，但仍不绕过：
+    /// - 用户/项目显式 deny 或 ask 规则
+    /// - bash 高危命令
+    /// - 敏感路径写入、清空记忆、MCP/插件运行等高风险动作
+    pub fn auto_approves_tool_confirmation(
+        &self,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> bool {
+        self.mode == PermissionMode::AutoAll && !self.requires_confirmation(tool_name, params)
+    }
+
     /// 获取工具的权限决策详情
     pub fn check_with_details(&self, tool_name: &str) -> (PermissionDecision, Vec<String>) {
         let decision = self.rules.check(tool_name);
@@ -481,17 +502,21 @@ impl PermissionContext {
             .retain(|_, exp| exp.elapsed().as_secs() < ONCE_AUTHORIZATION_TTL_SECS);
     }
 
-    fn risk_level(tool_name: &str, params: &serde_json::Value) -> RiskLevel {
+    fn risk_level(&self, tool_name: &str, params: &serde_json::Value) -> RiskLevel {
         match tool_name {
             "file_read" | "glob" | "grep" | "project_list" | "memory_load" => RiskLevel::Low,
-            "memory_clear" | "agent" | "mcp" => RiskLevel::High,
+            "memory_clear" | "mcp" => RiskLevel::High,
+            "agent" => RiskLevel::Medium,
             "bash" => {
                 let cmd = params["command"]
                     .as_str()
                     .or_else(|| params["cmd"].as_str())
                     .unwrap_or_default()
                     .to_lowercase();
-                if Self::is_high_risk_command(&cmd) {
+                if Self::is_high_risk_command(&cmd)
+                    || Self::has_external_network_command(&cmd)
+                    || Self::has_remote_git_command(&cmd)
+                {
                     RiskLevel::High
                 } else {
                     RiskLevel::Medium
@@ -499,15 +524,128 @@ impl PermissionContext {
             }
             "file_write" | "file_edit" => {
                 let path = params["path"].as_str().unwrap_or_default();
-                if Self::is_high_risk_path(path) || Self::is_large_content_write(params) {
+                if Self::is_high_risk_path(path)
+                    || !self.path_is_in_trusted_workspace(path)
+                    || Self::is_large_content_write(params)
+                {
                     RiskLevel::High
                 } else {
                     RiskLevel::Medium
                 }
             }
+            "git" => match params["action"].as_str() {
+                Some("push") => RiskLevel::High,
+                Some("checkout" | "branch") => RiskLevel::Medium,
+                Some("add" | "commit") => RiskLevel::Low,
+                _ => RiskLevel::Low,
+            },
+            "worktree" => match params["action"].as_str() {
+                Some("remove") => RiskLevel::High,
+                Some("prune" | "create" | "switch") => RiskLevel::Medium,
+                _ => RiskLevel::Low,
+            },
+            "github" => match params["action"].as_str() {
+                Some("pr_create") => RiskLevel::Medium,
+                _ => RiskLevel::Low,
+            },
+            "web_fetch" => {
+                let url = params["url"].as_str().unwrap_or_default();
+                if self.url_is_trusted(url) {
+                    RiskLevel::Medium
+                } else {
+                    RiskLevel::High
+                }
+            }
+            "web_search" => RiskLevel::Medium,
+            "plugin" => match params["action"].as_str() {
+                Some("run") => RiskLevel::High,
+                _ => RiskLevel::Low,
+            },
             "mcp_tool" => RiskLevel::High,
             _ => RiskLevel::Low,
         }
+    }
+
+    fn requires_safety_confirmation(&self, tool_name: &str, params: &serde_json::Value) -> bool {
+        self.risk_level(tool_name, params) >= RiskLevel::High
+    }
+
+    fn path_is_in_trusted_workspace(&self, path: &str) -> bool {
+        if path.trim().is_empty() {
+            return false;
+        }
+        let input = std::path::Path::new(path);
+        let candidate = if input.is_absolute() {
+            Self::normalize_path(input)
+        } else {
+            Self::normalize_path(&self.working_dir.join(input))
+        };
+        self.trusted_workspace_roots()
+            .into_iter()
+            .any(|root| candidate.starts_with(root))
+    }
+
+    fn trusted_workspace_roots(&self) -> Vec<std::path::PathBuf> {
+        let mut roots = vec![Self::normalize_path(&self.working_dir)];
+        if let Ok(extra) = std::env::var("PRIORITY_AGENT_TRUSTED_WORKSPACES") {
+            roots.extend(
+                extra
+                    .split(':')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(|part| Self::normalize_path(std::path::Path::new(part))),
+            );
+        }
+        roots
+    }
+
+    fn url_is_trusted(&self, url: &str) -> bool {
+        if url.trim().is_empty() {
+            return false;
+        }
+        let host = match Self::url_host(url) {
+            Some(host) => host,
+            None => return false,
+        };
+        if let Ok(trusted) = std::env::var("PRIORITY_AGENT_TRUSTED_DOMAINS") {
+            return trusted
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .any(|domain| host == domain || host.ends_with(&format!(".{}", domain)));
+        }
+        false
+    }
+
+    fn url_host(url: &str) -> Option<String> {
+        let after_scheme = url.split_once("://")?.1;
+        let host_port = after_scheme.split('/').next()?.split('@').next_back()?;
+        let host = if host_port.starts_with('[') {
+            host_port
+                .find(']')
+                .map(|end| host_port[1..end].to_ascii_lowercase())?
+        } else {
+            host_port
+                .split(':')
+                .next()
+                .unwrap_or(host_port)
+                .to_ascii_lowercase()
+        };
+        (!host.is_empty()).then_some(host)
+    }
+
+    fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+        let mut normalized = std::path::PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                other => normalized.push(other.as_os_str()),
+            }
+        }
+        normalized
     }
 
     fn is_high_risk_command(cmd: &str) -> bool {
@@ -530,6 +668,18 @@ impl PermissionContext {
             "sudo ",
         ];
         dangerous_patterns.iter().any(|p| cmd.contains(p))
+    }
+
+    fn has_external_network_command(cmd: &str) -> bool {
+        let lower = cmd.to_ascii_lowercase();
+        ["curl ", "wget ", "ssh ", "scp ", "rsync ", "nc ", "ncat "]
+            .iter()
+            .any(|pattern| lower.contains(pattern))
+    }
+
+    fn has_remote_git_command(cmd: &str) -> bool {
+        let lower = cmd.to_ascii_lowercase();
+        lower.contains("git push") || lower.contains("git fetch") || lower.contains("git pull")
     }
 
     fn is_high_risk_path(path: &str) -> bool {
@@ -582,7 +732,7 @@ impl PermissionContext {
 
         let base_decision = self.rules.check(&effective_tool_name);
         let matching_rules = self.rules.get_matching_rules(&effective_tool_name);
-        let risk = Self::risk_level(tool_name, params);
+        let risk = self.risk_level(tool_name, params);
         let confidence = self.calculate_confidence(tool_name, params, &matching_rules);
 
         // Build explanation
@@ -614,9 +764,18 @@ impl PermissionContext {
             if Self::is_high_risk_path(path) {
                 warnings.push("HIGH_RISK_PATH: sensitive system path detected".to_string());
             }
+            if !self.path_is_in_trusted_workspace(path) {
+                warnings.push("OUTSIDE_WORKSPACE: path is outside trusted workspace".to_string());
+            }
             // Check for path traversal
             if path.contains("..") {
                 warnings.push("PATH_TRAVERSAL: parent directory reference detected".to_string());
+            }
+        }
+        if tool_name == "web_fetch" {
+            let url = params["url"].as_str().unwrap_or_default();
+            if !self.url_is_trusted(url) {
+                warnings.push("UNTRUSTED_NETWORK: URL host is not in trusted domains".to_string());
             }
         }
 
@@ -655,7 +814,7 @@ impl PermissionContext {
 
         // Adjust based on mode
         let mode_confidence = match self.mode {
-            PermissionMode::AutoAll => 0.9, // Trusting all operations
+            PermissionMode::AutoAll => 0.9, // Developer auto mode with high-risk guardrails
             PermissionMode::ReadOnly => 0.85,
             PermissionMode::Once => 0.8,
             PermissionMode::AutoLowRisk => 0.75, // Conservative
@@ -663,7 +822,7 @@ impl PermissionContext {
         };
 
         // Adjust for risk
-        let risk_adjustment = match Self::risk_level(tool_name, params) {
+        let risk_adjustment = match self.risk_level(tool_name, params) {
             RiskLevel::High => -0.1,
             RiskLevel::Medium => 0.0,
             RiskLevel::Low => 0.05,
@@ -953,6 +1112,58 @@ mod tests {
 
     #[test]
     fn test_permission_mode_auto_all() {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoAll,
+            rules: PermissionRules::new(),
+            working_dir: cwd,
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        assert_eq!(PermissionMode::default(), PermissionMode::AutoAll);
+
+        let safe_bash = serde_json::json!({"command": "ls -la"});
+        let dangerous_bash = serde_json::json!({"command": "rm -rf /"});
+        let network_bash = serde_json::json!({"command": "curl https://example.com/script.sh"});
+        assert!(!ctx.requires_confirmation("bash", &safe_bash));
+        assert!(ctx.requires_confirmation("bash", &dangerous_bash));
+        assert!(ctx.requires_confirmation("bash", &network_bash));
+
+        let safe_write = serde_json::json!({"path": "src/main.rs", "content": "fn main() {}"});
+        let sensitive_write = serde_json::json!({"path": "/etc/hosts", "content": "bad"});
+        assert!(!ctx.requires_confirmation("file_write", &safe_write));
+        assert!(ctx.requires_confirmation("file_write", &sensitive_write));
+
+        assert!(!ctx.requires_confirmation("git", &serde_json::json!({"action": "commit"})));
+        assert!(ctx.requires_confirmation("git", &serde_json::json!({"action": "push"})));
+        assert!(ctx.requires_confirmation("memory_clear", &serde_json::Value::Null));
+        assert!(ctx.auto_approves_tool_confirmation("file_edit", &safe_write));
+        assert!(!ctx.auto_approves_tool_confirmation("bash", &dangerous_bash));
+    }
+
+    #[test]
+    fn test_auto_all_prompts_for_outside_workspace_paths() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoAll,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("/tmp/priority-agent-workspace"),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        assert!(!ctx.requires_confirmation(
+            "file_write",
+            &serde_json::json!({"path": "src/main.rs", "content": "ok"})
+        ));
+        assert!(ctx.requires_confirmation(
+            "file_write",
+            &serde_json::json!({"path": "/Users/georgexu/Desktop/other/file.rs", "content": "no"})
+        ));
+    }
+
+    #[test]
+    fn test_auto_all_prompts_for_untrusted_web_fetch() {
         let ctx = PermissionContext {
             mode: PermissionMode::AutoAll,
             rules: PermissionRules::new(),
@@ -961,8 +1172,13 @@ mod tests {
             once_authorizations: std::collections::HashMap::new(),
         };
 
-        assert!(!ctx.requires_confirmation("bash", &serde_json::Value::Null));
-        assert!(!ctx.requires_confirmation("file_write", &serde_json::Value::Null));
+        assert!(ctx.requires_confirmation(
+            "web_fetch",
+            &serde_json::json!({"url": "https://example.com"})
+        ));
+        assert!(
+            !ctx.requires_confirmation("web_search", &serde_json::json!({"query": "rust ratatui"}))
+        );
     }
 
     #[test]

@@ -104,7 +104,8 @@ impl OnboardingStep {
                 "Permission modes control what tools can run automatically:\n\n\
                  - default: Ask for confirmation on risky operations\n\
                  - auto_low_risk: Auto-approve safe tools (file_read, grep, etc.)\n\
-                 - auto_all: Auto-approve everything (use with caution)\n\
+                 - auto: Developer auto mode; workspace coding actions auto-run, high-risk or external actions still ask\n\
+                 - auto_all: Legacy alias for auto\n\
                  - read_only: Only allow read operations\n\n\
                  Use /permissions to switch modes at any time.\n\
                  You can also set per-tool rules for finer control."

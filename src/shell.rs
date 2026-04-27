@@ -197,7 +197,7 @@ fn permission_mode_label(mode: crate::permissions::PermissionMode) -> &'static s
     match mode {
         crate::permissions::PermissionMode::Default => "default",
         crate::permissions::PermissionMode::AutoLowRisk => "auto-low-risk",
-        crate::permissions::PermissionMode::AutoAll => "auto-all",
+        crate::permissions::PermissionMode::AutoAll => "auto",
         crate::permissions::PermissionMode::ReadOnly => "read-only",
         crate::permissions::PermissionMode::Once => "once",
     }

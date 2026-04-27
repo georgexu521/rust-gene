@@ -658,7 +658,7 @@ impl ConversationLoop {
             hook_manager: ToolHookManager::from_env().map(Arc::new),
             compressor: None,
             memory_manager: None,
-            permission_mode: crate::permissions::PermissionMode::AutoLowRisk,
+            permission_mode: crate::permissions::PermissionMode::AutoAll,
             session_permission_rules: crate::permissions::PermissionRules::new(),
             llm_memory_extraction: false,
             approval_channel: None,
@@ -805,7 +805,7 @@ impl ConversationLoop {
         ctx = ctx.with_llm_provider(self.provider.clone());
         ctx = ctx.with_model(&self.model);
         ctx = ctx.with_file_cache(crate::tools::file_cache::GLOBAL_FILE_CACHE.clone());
-        // 权限模式由上层引擎注入（默认 AutoLowRisk）
+        // 权限模式由上层引擎注入（默认 AutoAll，保留高风险确认）
         ctx.permission_context.mode = self.permission_mode;
         ctx.permission_context
             .rules
@@ -2832,12 +2832,16 @@ impl ConversationLoop {
                             .reason
                             .unwrap_or_else(|| format!("blocked by pre-tool hook: {}", tool_name)),
                     )
-                } else if context
-                    .permission_context
-                    .requires_confirmation(&tool_name, &tc.arguments)
-                    || tool.requires_confirmation(&tc.arguments)
-                    || drift_requires_approval
-                {
+                } else if {
+                    let permission_requires = context
+                        .permission_context
+                        .requires_confirmation(&tool_name, &tc.arguments);
+                    let tool_requires = tool.requires_confirmation(&tc.arguments)
+                        && !context
+                            .permission_context
+                            .auto_approves_tool_confirmation(&tool_name, &tc.arguments);
+                    permission_requires || tool_requires || drift_requires_approval
+                } {
                     let mut approved = false;
                     if let (Some(ref channel), Some(tx)) = (&self.approval_channel, tx) {
                         let prompt = if drift_requires_approval {
