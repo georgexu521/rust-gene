@@ -25,6 +25,7 @@ pub mod hooks;
 pub mod human_review;
 pub mod improvement;
 pub mod intent_router;
+pub mod learning_planning;
 pub mod lsp;
 pub mod mcp;
 pub mod mcp_server;

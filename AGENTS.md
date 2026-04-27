@@ -177,6 +177,8 @@ src/
   - 重复成功流程 -> /skill-proposals scan -> SkillProposal
   - SkillProposal 经 eval/accept 后仍是 untrusted，只有 apply 才写入用户 skills 并 reload
   - 生成 skill 不覆盖已有 SKILL.md，必须保留 proposal provenance
+  - LearningEvent / 高置信检索记忆 -> learning_planning -> workflow factor adjustment
+  - planning_adjustment 必须记录 before/after plan summary 和 factor delta，方便审计
 ```
 
 ### 上下文管理 (3层)

@@ -113,6 +113,12 @@ pub enum TraceEvent {
         weight_source: Option<String>,
         reweighted: bool,
     },
+    WorkflowLearningAdjusted {
+        adjustments: usize,
+        before_top_step: Option<String>,
+        after_top_step: Option<String>,
+        reason: String,
+    },
     StageValidationCompleted {
         step: Option<String>,
         status: String,
@@ -271,6 +277,7 @@ impl TraceEvent {
             TraceEvent::TaskContextBuilt { .. } => "task.context",
             TraceEvent::WorkflowJudgmentCompleted { .. } => "workflow.judgment",
             TraceEvent::WorkflowPlanProgress { .. } => "workflow.plan",
+            TraceEvent::WorkflowLearningAdjusted { .. } => "workflow.learning",
             TraceEvent::StageValidationCompleted { .. } => "stage.validation",
             TraceEvent::ReflectionPassCompleted { .. } => "reflection.pass",
             TraceEvent::SessionGoalUpdated { .. } => "goal",
@@ -400,6 +407,24 @@ impl TraceEvent {
                     .unwrap_or_else(|| "none".to_string()),
                 weight_source.as_deref().unwrap_or("none"),
                 reweighted
+            ),
+            TraceEvent::WorkflowLearningAdjusted {
+                adjustments,
+                before_top_step,
+                after_top_step,
+                reason,
+            } => format!(
+                "workflow learning adjusted count={} before={} after={} reason={}",
+                adjustments,
+                before_top_step
+                    .as_deref()
+                    .map(preview)
+                    .unwrap_or_else(|| "none".to_string()),
+                after_top_step
+                    .as_deref()
+                    .map(preview)
+                    .unwrap_or_else(|| "none".to_string()),
+                preview(reason)
             ),
             TraceEvent::StageValidationCompleted {
                 step,

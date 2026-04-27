@@ -78,7 +78,7 @@ Common interactive commands:
 |---------|---------|
 | `/help` | Show command help |
 | `/quick` | Show compact runtime panel: goal, drift, provider, permission state |
-| `/trace` | Inspect the latest turn timeline |
+| `/trace` | Inspect the latest turn timeline, including workflow learning adjustments |
 | `/goal` | Show or pin the active goal |
 | `/goal drift` | Show recent goal drift events |
 | `/recover` | Show recent recovery plans |

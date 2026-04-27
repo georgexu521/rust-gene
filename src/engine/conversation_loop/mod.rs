@@ -965,7 +965,13 @@ impl ConversationLoop {
                 self.model.clone(),
             );
             match analyzer.analyze(workflow_contract_prompt).await {
-                Ok(judgment) => {
+                Ok(mut judgment) => {
+                    let learning_audit =
+                        crate::engine::learning_planning::apply_learning_to_workflow_judgment(
+                            &mut judgment,
+                            &learning_events,
+                            turn_retrieval_context.as_ref(),
+                        );
                     let context_note = judgment.to_turn_context();
                     trace.record(TraceEvent::WorkflowJudgmentCompleted {
                         task_type: judgment.task_type.clone(),
@@ -992,8 +998,28 @@ impl ConversationLoop {
                             .as_ref()
                             .and_then(|step| step.weight_source())
                             .map(|source| format!("{:?}", source)),
-                        reweighted: false,
+                        reweighted: learning_audit.applied,
                     });
+                    if learning_audit.applied {
+                        trace.record(TraceEvent::WorkflowLearningAdjusted {
+                            adjustments: learning_audit.adjustments.len(),
+                            before_top_step: learning_audit.before_top_step.clone(),
+                            after_top_step: learning_audit.after_top_step.clone(),
+                            reason: learning_audit.explanation.clone(),
+                        });
+                        persist_workflow_learning_event(
+                            self.session_store.as_ref(),
+                            &self.session_id,
+                            "planning_adjustment",
+                            format!(
+                                "Learning adjusted workflow plan with {} change(s)",
+                                learning_audit.adjustments.len()
+                            ),
+                            0.85,
+                            serde_json::to_value(&learning_audit)
+                                .unwrap_or_else(|_| serde_json::json!({})),
+                        );
+                    }
                     persist_workflow_learning_event(
                         self.session_store.as_ref(),
                         &self.session_id,

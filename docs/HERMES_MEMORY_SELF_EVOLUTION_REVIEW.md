@@ -600,17 +600,34 @@ Goal: make memory and learning affect future coding decisions.
 Tasks:
 
 1. Feed relevant LearningEvents and high-confidence MemoryRecords into
-   weighted planning factors.
+   weighted planning factors. ✅ via `learning_planning` using recent
+   `LearningEvent`s and high-confidence retrieved memory items.
 2. Adjust priority weights when past failures indicate risk.
+   ✅ failed workflows, recovery plans, and failed tools raise
+   verification/recovery factors.
 3. Adjust IntentRouter when past tasks show a query type needs more retrieval,
-   validation, or user clarification.
-4. Record before/after planning decisions for audit.
+   validation, or user clarification. ✅ `route_with_learning` escalates
+   retrieval/reasoning/risk and adjusts recommended tools.
+4. Record before/after planning decisions for audit. ✅ `planning_adjustment`
+   LearningEvents and `workflow.learning` trace events store before/after
+   summaries and adjustment reasons.
 
 Acceptance criteria:
 
-- A previously failed tool or workflow increases verification/recovery weight.
-- Repeated successful patterns reduce unnecessary exploration.
-- The agent can explain why memory changed the current plan.
+- A previously failed tool or workflow increases verification/recovery weight. ✅
+- Repeated successful patterns reduce unnecessary exploration. ✅
+- The agent can explain why memory changed the current plan. ✅ audit payload
+  records source, affected step, factor deltas, before/after top step, and reason.
+
+Implementation notes:
+
+- `src/engine/learning_planning.rs` applies bounded factor adjustments after the
+  model produces the workflow judgment. This keeps AI semantic judgment primary
+  while allowing software to stabilize and audit the control signal.
+- The adjustment layer can only modify factor values; it does not rewrite the
+  user's request, plan text, or acceptance contract.
+- Planning adjustments are persisted as `planning_adjustment` learning events so
+  future turns can inspect and improve the feedback loop.
 
 ## Priority Recommendation
 

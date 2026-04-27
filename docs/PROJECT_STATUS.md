@@ -50,6 +50,8 @@ env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
 - Repeated successful workflows can now become reviewed skill candidates through
   `/skill-proposals`; accepted candidates are untrusted until explicitly
   applied into the user skill path.
+- Learning and high-confidence retrieved memory now feed back into workflow
+  planning weights with traceable before/after audit records.
 
 ## Product Surface
 
