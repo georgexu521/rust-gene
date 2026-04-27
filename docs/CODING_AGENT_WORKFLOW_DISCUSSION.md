@@ -423,6 +423,529 @@ This formula should be treated as a thinking aid, not a hard-coded product rule.
 
 If the model provides a number, the software can sort by it. If the model provides a label, the software can map it to ordering. In both cases, the AI is making the judgment.
 
+## Model-Led Weighted Control
+
+The preferred weight design is not "AI freely invents a number" and not
+"a formula replaces model judgment." The better design is:
+
+```text
+AI judgment + mathematical constraint + feedback correction
+```
+
+In this model:
+
+```text
+AI understands semantics and context.
+Math turns that judgment into stable, sortable, traceable scores.
+Tools and validation results feed back into the next weighting decision.
+```
+
+The weight is therefore a control signal, not just a percentage on a task
+list. It helps the agent decide the next control action:
+
+```text
+read more code
+ask the user
+edit a file
+run focused validation
+repair a failure
+stop and report risk
+```
+
+### Responsibility Split
+
+```text
+Weight source: AI
+Weight calculation: math
+Weight execution: software
+Weight correction: feedback
+Weight explanation: AI
+```
+
+Expanded:
+
+- AI judges task type, risk, dependencies, user value, uncertainty, rework risk,
+  and why one step matters before another.
+- Math converts those judgments into normalized scores, sorts steps, clamps
+  extremes, records changes, and detects whether reweighting occurred.
+- Software stores plans, selects the active step, triggers validation and guided
+  debugging, limits repair attempts, and exposes workflow state.
+- Feedback changes the next weights: test failures raise repair/verification
+  priority, goal drift raises clarification priority, tool failures trigger
+  guided debugging, and acceptance gaps raise validation priority.
+
+### Factor-Based Weighting
+
+The agent should avoid asking the model "what is the weight?" directly. A better
+prompt is:
+
+```text
+How important is this step right now for safely completing the task?
+```
+
+The model can answer that through factors:
+
+```text
+D = dependency
+V = user_value
+R = risk_reduction
+U = uncertainty_reduction
+B = blocking
+C = cost
+```
+
+A first useful formula:
+
+```text
+raw_score =
+  D * 0.25
++ V * 0.25
++ R * 0.20
++ U * 0.15
++ B * 0.15
+- C * 0.10
+```
+
+Then:
+
+```text
+weight = raw_score / sum(raw_score for all open steps)
+```
+
+Priority mapping can be:
+
+```text
+0.80 - 1.00 = P0
+0.60 - 0.79 = P1
+0.40 - 0.59 = P2
+0.00 - 0.39 = P3
+```
+
+This formula is a control model and a thinking aid, not a claim of truth. The AI
+still owns the semantic judgment. The formula stabilizes the output so the
+system can sort, replay, compare, and learn from it.
+
+### Concrete Weight Computation
+
+Implementation should keep two numbers separate:
+
+```text
+importance_score:
+  Absolute importance of one step, in [0.0, 1.0].
+  Use this for P0/P1/P2/P3 mapping.
+
+weight_share:
+  Relative share among currently open steps, sum ~= 1.0.
+  Use this for scheduling, dashboard percentages, and reweight history.
+```
+
+This distinction matters. If `weight_share` is used for P0/P1/P2/P3, then a
+plan with many steps will make every step look low priority because each
+normalized share is small. Priority should come from absolute importance, not
+from the normalized share.
+
+#### Input Factor Bounds
+
+Every factor is a model judgment in `[0.0, 1.0]`:
+
+```text
+D = dependency
+V = user_value
+R = risk_reduction
+U = uncertainty_reduction
+B = blocking
+C = cost
+```
+
+The software must sanitize all numeric inputs:
+
+```text
+sanitize(x):
+  if x is missing, NaN, infinite, or non-numeric -> None
+  otherwise clamp(x, 0.0, 1.0)
+```
+
+For high-risk tasks, missing factors should be treated as a contract problem:
+ask the model to regenerate or fall back to a conservative P1/P2 plan. For
+medium-risk tasks, missing factors can be inferred from the priority label. For
+low-risk tasks, factors can be skipped entirely.
+
+#### Base Formula
+
+Use this as the first implementation formula:
+
+```text
+positive_score =
+  D * 0.25
++ V * 0.25
++ R * 0.20
++ U * 0.15
++ B * 0.15
+
+cost_penalty = C * 0.10
+
+importance_score = clamp(positive_score - cost_penalty, 0.05, 1.00)
+```
+
+Notes:
+
+- Positive factors sum to `1.00`.
+- Cost is a penalty, but it should not erase a step completely.
+- The `0.05` floor prevents divide-by-zero and avoids losing low-priority but
+  still valid work.
+- Completed steps should not be scheduled even if their score remains high.
+
+Then normalize across open steps:
+
+```text
+open_steps = all steps where status != completed
+sum_score = sum(step.importance_score for open_steps)
+
+if sum_score <= 0:
+  weight_share = 1.0 / open_steps.len()
+else:
+  weight_share = step.importance_score / sum_score
+```
+
+Priority label comes from `importance_score`:
+
+```text
+importance_score >= 0.80 -> P0
+importance_score >= 0.60 -> P1
+importance_score >= 0.40 -> P2
+else                     -> P3
+```
+
+#### Priority Label Fallback
+
+If the AI gives only a label and no factors, map it to an initial
+`importance_score`:
+
+```text
+P0 -> 0.90
+P1 -> 0.70
+P2 -> 0.50
+P3 -> 0.25
+
+high   -> 0.75
+medium -> 0.55
+low    -> 0.30
+```
+
+This fallback should be marked in trace as:
+
+```json
+{
+  "weight_source": "priority_label_fallback"
+}
+```
+
+#### Sorting Rule
+
+The active step should be selected with a stable comparator:
+
+```text
+sort open steps by:
+1. priority rank: P0 before P1 before P2 before P3
+2. adjusted_importance_score descending
+3. blocking descending
+4. dependency descending
+5. cost ascending
+6. original plan order ascending
+```
+
+The last tie-breaker keeps behavior stable across runs.
+
+### Feedback Reweighting
+
+Reweighting should update factor scores first, then recompute the formula. It
+should not directly mutate the final weight unless the model provides an
+explicit override.
+
+Represent feedback as an event:
+
+```json
+{
+  "event": "test_failure | tool_failure | goal_drift | acceptance_gap | step_completed | user_feedback",
+  "severity": "low | medium | high",
+  "confidence": 0.0,
+  "affected_steps": ["step-id"]
+}
+```
+
+Map severity to numeric intensity:
+
+```text
+low    -> 0.25
+medium -> 0.50
+high   -> 0.80
+
+event_strength = severity_value * confidence
+```
+
+Then apply factor deltas:
+
+```text
+factor' = clamp(factor + delta * event_strength, 0.0, 1.0)
+```
+
+Recommended first deltas:
+
+| Feedback event | Affected step updates |
+| --- | --- |
+| `test_failure` | `R += 0.25`, `B += 0.20`, `U += 0.10` |
+| `tool_failure` | create/raise diagnostic step: `U += 0.25`, `B += 0.15`; lower repeated failing action `C += 0.20` |
+| `goal_drift` | create/raise clarification step: `U += 0.30`, `R += 0.20`, `B += 0.20` |
+| `acceptance_gap` | raise validation/repair step: `V += 0.20`, `R += 0.25`, `B += 0.20` |
+| `step_completed` | mark step completed; exclude it from `open_steps` |
+| `user_feedback` | let AI propose factor deltas, then clamp and record |
+
+Reweighting should be recorded when any of these are true:
+
+```text
+top active step changed
+abs(old_importance_score - new_importance_score) >= 0.15 for any open step
+validation failed
+acceptance review returned continue_repair or stop
+goal drift was medium/high
+```
+
+Trace payload should include:
+
+```json
+{
+  "reweighted": true,
+  "reason": "test_failure",
+  "old_active_step": "Implement storage",
+  "new_active_step": "Repair persistence failure",
+  "changed_scores": [
+    {
+      "step_id": "storage",
+      "old_importance_score": 0.72,
+      "new_importance_score": 0.91,
+      "old_weight_share": 0.22,
+      "new_weight_share": 0.41
+    }
+  ]
+}
+```
+
+### Override Formula
+
+AI overrides should be represented as a separate adjustment after the formula:
+
+```text
+formula_score = computed importance_score
+override_delta = adjusted_score - formula_score
+adjusted_importance_score = clamp(adjusted_score, 0.05, 1.00)
+```
+
+Default guardrail:
+
+```text
+if abs(override_delta) > 0.25:
+  require override.reason
+  require override.confidence >= 0.70
+```
+
+If the override does not meet the guardrail, keep the formula score and record:
+
+```json
+{
+  "override_accepted": false,
+  "reason": "override delta too large without enough confidence"
+}
+```
+
+The stored step should keep both values:
+
+```json
+{
+  "formula_importance_score": 0.55,
+  "adjusted_importance_score": 0.78,
+  "weight_share": 0.31,
+  "override": {
+    "accepted": true,
+    "reason": "The user explicitly prioritized visual demo quality."
+  }
+}
+```
+
+### Suggested Rust Shape
+
+The implementation can start with these structs:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeightFactors {
+    pub dependency: f32,
+    pub user_value: f32,
+    pub risk_reduction: f32,
+    pub uncertainty_reduction: f32,
+    pub blocking: f32,
+    pub cost: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeightOverride {
+    pub adjusted_importance_score: f32,
+    pub reason: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeightComputation {
+    pub formula_importance_score: f32,
+    pub adjusted_importance_score: f32,
+    pub weight_share: f32,
+    pub priority: PriorityLabel,
+    pub source: WeightSource,
+    pub override_accepted: bool,
+}
+```
+
+Core functions:
+
+```rust
+fn compute_importance(factors: WeightFactors) -> f32;
+fn priority_from_importance(score: f32) -> PriorityLabel;
+fn normalize_weight_shares(steps: &mut [WorkflowPlanStep]);
+fn normalize_open_weight_shares(steps: &mut [WorkflowPlanStep], completed_step_ids: &[String]);
+fn apply_weight_feedback(step: &mut WorkflowPlanStep, event: &WeightFeedbackEvent);
+fn should_record_reweight(old: &[WorkflowPlanStep], new: &[WorkflowPlanStep]) -> bool;
+```
+
+The first pass does not need a complicated optimizer. Deterministic factor
+scoring plus event-driven feedback is enough.
+
+### Risk-Sensitive Weight Depth
+
+Low-risk tasks should stay fast:
+
+```json
+{
+  "risk": "low",
+  "planning_mode": "minimal",
+  "priority": "direct_edit"
+}
+```
+
+Medium-risk tasks can use priority plus reason:
+
+```json
+{
+  "risk": "medium",
+  "plan": [
+    {
+      "step": "Inspect the existing note schema",
+      "priority": "high",
+      "reason": "Tag filtering depends on the note data structure."
+    }
+  ]
+}
+```
+
+High-risk tasks should use full factor scoring:
+
+```json
+{
+  "risk": "high",
+  "plan": [
+    {
+      "step": "Identify all workflow entry points",
+      "weight": 0.91,
+      "factors": {
+        "dependency": 0.95,
+        "user_value": 0.75,
+        "risk_reduction": 0.90,
+        "uncertainty_reduction": 0.85,
+        "blocking": 0.90,
+        "cost": 0.40
+      },
+      "reason": "Missing an entry point would leave part of the coding workflow outside the new contract."
+    }
+  ]
+}
+```
+
+### AI Override With Accountability
+
+The AI should be allowed to adjust the formula's result when task context
+justifies it, but overrides must be explicit:
+
+```json
+{
+  "override": true,
+  "original_weight": 0.55,
+  "adjusted_weight": 0.78,
+  "reason": "The user asked for a visual demo first, so UI completeness has higher acceptance value than the default formula assigned."
+}
+```
+
+This prevents both failure modes:
+
+- math becoming rigid and blind to context
+- AI changing weights without accountability
+
+### User Visibility
+
+Detailed numeric weights should be internal by default. Normal users should see
+the explanation:
+
+```text
+I will handle the data model and persistence first because later features depend
+on them; UI polish comes after the core flow is verified.
+```
+
+Advanced/debug views can expose the full factor scores, raw weights, adjusted
+weights, and reweight history.
+
+### Minimal Schema Direction
+
+A practical next schema for weighted planning is:
+
+```json
+{
+  "task_type": "feature | bug_fix | refactor | investigation | test | review",
+  "risk": "low | medium | high",
+  "needs_user_questions": true,
+  "assumptions": [],
+  "plan": [
+    {
+      "id": "stable-step-id",
+      "step": "string",
+      "priority": "P0 | P1 | P2 | P3",
+      "importance_score": 0.0,
+      "weight_share": 0.0,
+      "factors": {
+        "dependency": 0.0,
+        "user_value": 0.0,
+        "risk_reduction": 0.0,
+        "uncertainty_reduction": 0.0,
+        "blocking": 0.0,
+        "cost": 0.0
+      },
+      "override": {
+        "adjusted_importance_score": 0.0,
+        "reason": "string",
+        "confidence": 0.0
+      },
+      "reason": "string",
+      "acceptance_criteria": []
+    }
+  ]
+}
+```
+
+The core product rule is:
+
+```text
+AI judges why a step matters.
+Math calculates how much it matters.
+Software chooses what to do next.
+Feedback decides whether to change the weights.
+```
+
 ## When To Use Guided Reasoning
 
 Guided reasoning should be selective. If the agent uses a deep Socratic process for every small task, the product will feel slow and overly formal. If it never uses guided reasoning, it will guess too much and fail on complex work.
@@ -842,6 +1365,48 @@ Completed after the initial slice:
   - Eval replay can now include workflow judgment, plan progress, acceptance review, and guided debugging events.
   - Tests verify these events are present and can affect expected repair/verification outcomes.
 
+Completed weighted-control refinement:
+
+- Upgrade weighted planning from "model-provided priority/weight" to
+  "model-provided factor scores + mathematical normalization + feedback
+  reweighting."
+  - This keeps the model responsible for semantic judgment.
+  - It gives the software a stable, auditable control signal.
+  - It makes reweighting explainable after validation failures, tool failures,
+    goal drift, or acceptance gaps.
+
+### 2026-04-27
+
+Completed:
+
+- Implemented the first Model-Led Weighted Control code path.
+  - `WorkflowPlanStep` now supports stable step ids, `importance_score`,
+    `weight_share`, factor scores, guarded AI overrides, and persisted
+    computation metadata.
+  - The runtime computes absolute importance from AI-provided factors using the
+    documented formula, maps importance to P0/P1/P2/P3, and normalizes relative
+    weight share across the open plan.
+  - Legacy `weight` and priority-only plans still work through explicit fallback
+    sources, so older prompt responses and tests remain compatible.
+- Added deterministic weight feedback primitives.
+  - `WeightFeedbackEvent` covers test failures, tool failures, acceptance gaps,
+    goal drift, user corrections, and completed steps.
+  - Feedback updates factors first, then recomputes importance, priority, and
+    traceable computation metadata.
+  - Open-step normalization can exclude completed step ids, and the workflow
+    contract exposes a stable `should_record_reweight` predicate for later
+    executor integration.
+- Improved workflow observability.
+  - `workflow.plan` trace events now include top importance score, normalized
+    weight share, and weight source.
+  - `/quick` surfaces those values in the contract panel.
+  - Workflow learning events now include a weighted plan summary.
+  - Guided debugging tool failures and failed acceptance reviews now feed back
+    into the active workflow plan and emit reweighted plan progress when the
+    active step or score changes materially.
+- Added coverage for factor-based weighting, override guardrails, feedback
+  reweighting, EvalSet replay, trace formatting, and CLI quick-panel display.
+
 ## Design Conclusion
 
 The preferred design is a model-led engineering workflow:
@@ -876,7 +1441,7 @@ The product should stay fast for simple tasks and become rigorous only when the 
 - How strict should ReflectionPass blocking be?
 - Should failed validation automatically trigger one repair attempt, or should that depend on task risk?
 - What prompt format best encourages model judgment without producing verbose analysis?
-- Should plan weights be shown to users, or only used internally unless requested?
+- Which parts of weighted planning should be shown in normal mode versus debug mode?
 - Should low-risk tasks bypass weighted planning entirely?
 
 ## Discussion Notes

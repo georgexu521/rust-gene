@@ -105,6 +105,12 @@ pub enum TraceEvent {
         completed_steps: usize,
         active_step: Option<String>,
         top_priority: Option<String>,
+        #[serde(default)]
+        top_importance_score: Option<f32>,
+        #[serde(default)]
+        top_weight_share: Option<f32>,
+        #[serde(default)]
+        weight_source: Option<String>,
         reweighted: bool,
     },
     ReflectionPassCompleted {
@@ -354,9 +360,12 @@ impl TraceEvent {
                 completed_steps,
                 active_step,
                 top_priority,
+                top_importance_score,
+                top_weight_share,
+                weight_source,
                 reweighted,
             } => format!(
-                "workflow plan {}/{} active={} priority={} reweighted={}",
+                "workflow plan {}/{} active={} priority={} importance={} share={} source={} reweighted={}",
                 completed_steps,
                 total_steps,
                 active_step
@@ -364,6 +373,13 @@ impl TraceEvent {
                     .map(preview)
                     .unwrap_or_else(|| "none".to_string()),
                 top_priority.as_deref().unwrap_or("none"),
+                top_importance_score
+                    .map(|score| format!("{:.2}", score))
+                    .unwrap_or_else(|| "none".to_string()),
+                top_weight_share
+                    .map(|share| format!("{:.2}", share))
+                    .unwrap_or_else(|| "none".to_string()),
+                weight_source.as_deref().unwrap_or("none"),
                 reweighted
             ),
             TraceEvent::ReflectionPassCompleted {

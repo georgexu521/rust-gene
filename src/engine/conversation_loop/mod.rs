@@ -520,6 +520,56 @@ fn is_high_risk_workflow(
             .unwrap_or(false)
 }
 
+fn apply_workflow_feedback_and_trace(
+    task_bundle: &mut crate::engine::task_context::TaskContextBundle,
+    trace: &TraceCollector,
+    feedback: crate::engine::workflow_contract::WeightFeedbackEvent,
+) {
+    let Some(judgment) = task_bundle.workflow_judgment.as_mut() else {
+        return;
+    };
+    let Some(top_step) = judgment.top_plan_step() else {
+        return;
+    };
+    let old_plan = judgment.plan.clone();
+    let target_id = top_step.id.clone();
+    let target_description = top_step.description.clone();
+
+    let Some(step) =
+        judgment
+            .plan
+            .iter_mut()
+            .find(|step| match (target_id.as_deref(), step.id.as_deref()) {
+                (Some(target), Some(id)) => target == id,
+                _ => step.description == target_description,
+            })
+    else {
+        return;
+    };
+
+    crate::engine::workflow_contract::apply_weight_feedback(step, &feedback);
+    crate::engine::workflow_contract::normalize_weight_shares(&mut judgment.plan);
+
+    if !crate::engine::workflow_contract::should_record_reweight(&old_plan, &judgment.plan) {
+        return;
+    }
+
+    let top_step = judgment.top_plan_step();
+    trace.record(TraceEvent::WorkflowPlanProgress {
+        total_steps: judgment.plan.len(),
+        completed_steps: 0,
+        active_step: top_step.as_ref().map(|step| step.description.clone()),
+        top_priority: top_step.as_ref().map(|step| format!("{:?}", step.priority)),
+        top_importance_score: top_step.as_ref().map(|step| step.normalized_weight()),
+        top_weight_share: top_step.as_ref().map(|step| step.computed_weight_share()),
+        weight_source: top_step
+            .as_ref()
+            .and_then(|step| step.weight_source())
+            .map(|source| format!("{:?}", source)),
+        reweighted: true,
+    });
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -905,14 +955,22 @@ impl ConversationLoop {
                         questions: judgment.questions.len(),
                         guided_reasoning: judgment.guided_reasoning_required,
                     });
-                    let sorted_plan = judgment.sorted_plan();
+                    let top_step = judgment.top_plan_step();
                     trace.record(TraceEvent::WorkflowPlanProgress {
-                        total_steps: sorted_plan.len(),
+                        total_steps: judgment.plan.len(),
                         completed_steps: 0,
-                        active_step: sorted_plan.first().map(|step| step.description.clone()),
-                        top_priority: sorted_plan.first().map(|step| {
-                            format!("{:?} {:.2}", step.priority, step.normalized_weight())
-                        }),
+                        active_step: top_step.as_ref().map(|step| step.description.clone()),
+                        top_priority: top_step.as_ref().map(|step| format!("{:?}", step.priority)),
+                        top_importance_score: top_step
+                            .as_ref()
+                            .map(|step| step.normalized_weight()),
+                        top_weight_share: top_step
+                            .as_ref()
+                            .map(|step| step.computed_weight_share()),
+                        weight_source: top_step
+                            .as_ref()
+                            .and_then(|step| step.weight_source())
+                            .map(|source| format!("{:?}", source)),
                         reweighted: false,
                     });
                     persist_workflow_learning_event(
@@ -939,6 +997,7 @@ impl ConversationLoop {
                             "guided_reasoning_required": judgment.guided_reasoning_required,
                             "guided_reasoning_triggers": judgment.guided_reasoning_triggers.iter().map(|trigger| format!("{:?}", trigger)).collect::<Vec<_>>(),
                             "plan_steps": judgment.plan.len(),
+                            "weighted_plan": judgment.weighted_plan_summary(),
                             "acceptance_checks": judgment.acceptance.criteria.len(),
                         }),
                     );
@@ -1557,6 +1616,20 @@ impl ConversationLoop {
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&debugging_text);
                         messages.push(Message::system(debugging_text));
+                        apply_workflow_feedback_and_trace(
+                            &mut task_bundle,
+                            &trace,
+                            crate::engine::workflow_contract::WeightFeedbackEvent {
+                                kind: crate::engine::workflow_contract::WeightFeedbackKind::ToolFailure,
+                                severity: if debugging.blocker {
+                                    crate::engine::workflow_contract::WeightFeedbackSeverity::High
+                                } else {
+                                    crate::engine::workflow_contract::WeightFeedbackSeverity::Medium
+                                },
+                                confidence: 0.85,
+                                reason: Some(debugging.symptom.clone()),
+                            },
+                        );
                     }
                     Err(err) => {
                         warn!("Guided debugging analysis failed: {}", err);
@@ -1764,6 +1837,9 @@ impl ConversationLoop {
                                         completed_steps: judgment.plan.len(),
                                         active_step: None,
                                         top_priority: None,
+                                        top_importance_score: None,
+                                        top_weight_share: None,
+                                        weight_source: None,
                                         reweighted: true,
                                     });
                                 }
@@ -1798,6 +1874,23 @@ impl ConversationLoop {
                                             | crate::engine::workflow_contract::AcceptanceNextAction::Stop
                                     )
                                 {
+                                    apply_workflow_feedback_and_trace(
+                                        &mut task_bundle,
+                                        &trace,
+                                        crate::engine::workflow_contract::WeightFeedbackEvent {
+                                            kind: crate::engine::workflow_contract::WeightFeedbackKind::AcceptanceGap,
+                                            severity: if high_risk || review_unresolved > 1 {
+                                                crate::engine::workflow_contract::WeightFeedbackSeverity::High
+                                            } else {
+                                                crate::engine::workflow_contract::WeightFeedbackSeverity::Medium
+                                            },
+                                            confidence: 0.90,
+                                            reason: Some(format!(
+                                                "acceptance review unresolved items: {}",
+                                                review_unresolved
+                                            )),
+                                        },
+                                    );
                                     acceptance_repair_attempts += 1;
                                     messages.push(Message::system(
                                         "Acceptance review did not pass. Continue repair if possible; otherwise report the unresolved items clearly."

@@ -527,7 +527,10 @@ fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRou
             total_steps: 2,
             completed_steps: 0,
             active_step: Some("Inspect relevant code and define acceptance checks".to_string()),
-            top_priority: Some("P0 1.00".to_string()),
+            top_priority: Some("P0".to_string()),
+            top_importance_score: Some(0.90),
+            top_weight_share: Some(0.55),
+            weight_source: Some("Factors".to_string()),
             reweighted: false,
         });
     }
@@ -638,6 +641,9 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
                 completed_steps: 2,
                 active_step: None,
                 top_priority: None,
+                top_importance_score: None,
+                top_weight_share: None,
+                weight_source: None,
                 reweighted: true,
             });
         }
