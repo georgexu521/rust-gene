@@ -84,6 +84,7 @@ Common interactive commands:
 | `/recover` | Show recent recovery plans |
 | `/learn` | Show recent learning events |
 | `/improvements` | Scan, review, accept, reject, or apply controlled self-evolution proposals |
+| `/skill-proposals` | Turn repeated successful workflows into reviewed, opt-in skill candidates |
 | `/memory` | Show memory namespaces; supports `search`, `conflicts`, `review`, `explain`, and `doctor` |
 | `/skills` | List bundled coding skills |
 | `/karpathy <task>` | Apply careful coding guidelines to a task |

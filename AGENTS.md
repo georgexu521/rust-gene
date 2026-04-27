@@ -174,6 +174,9 @@ src/
   - 提案只进入 proposed 状态，不自动修改 prompt/skill/routing/tool guidance
   - 用户通过 /improvements accept|reject|apply 显式审批
   - apply 前必须 accepted，高风险变更也不能绕过审批
+  - 重复成功流程 -> /skill-proposals scan -> SkillProposal
+  - SkillProposal 经 eval/accept 后仍是 untrusted，只有 apply 才写入用户 skills 并 reload
+  - 生成 skill 不覆盖已有 SKILL.md，必须保留 proposal provenance
 ```
 
 ### 上下文管理 (3层)

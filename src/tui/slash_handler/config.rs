@@ -3072,6 +3072,249 @@ fn persist_improvement_learning_event(
     );
 }
 
+/// /skill-proposals - Review generated skill candidates before activation
+pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
+    use crate::engine::skill_evolution::{
+        evaluate_skill_proposal, write_active_skill, SkillProposalStatus, SkillProposalStore,
+    };
+
+    let mut parts = args.split_whitespace();
+    let action = parts.next().unwrap_or("list");
+    let store = SkillProposalStore::default();
+
+    match action {
+        "scan" | "propose" => {
+            let limit = parts
+                .next()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(80)
+                .clamp(5, 300);
+            let events = match app.session_manager.recent_learning_events(limit) {
+                Ok(events) => events,
+                Err(e) => return format!("Skill proposal scan failed: {}", e),
+            };
+            match store.propose_from_learning_events(&events) {
+                Ok(proposals) if proposals.is_empty() => {
+                    "Skill proposal scan complete: no repeated successful procedures found."
+                        .to_string()
+                }
+                Ok(proposals) => {
+                    let mut lines = vec![format!(
+                        "Skill proposal scan complete: {} new candidate(s)",
+                        proposals.len()
+                    )];
+                    for proposal in proposals {
+                        lines.push(format_skill_proposal_line(&proposal));
+                    }
+                    lines.join("\n")
+                }
+                Err(e) => format!("Skill proposal scan failed: {}", e),
+            }
+        }
+        "list" | "" => {
+            let proposals = store.list();
+            if proposals.is_empty() {
+                "Skill Proposals\n- none yet\n\nRun /skill-proposals scan to generate candidates from repeated successful workflows.".to_string()
+            } else {
+                let mut lines = vec![format!("Skill Proposals ({} total)", proposals.len())];
+                for proposal in proposals.iter().take(20) {
+                    lines.push(format_skill_proposal_line(proposal));
+                }
+                lines.join("\n")
+            }
+        }
+        "show" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /skill-proposals show <id|name>".to_string();
+            };
+            match store.get(id) {
+                Some(proposal) => format_skill_proposal_detail(&proposal),
+                None => format!("No skill proposal matching '{}'.", id),
+            }
+        }
+        "eval" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /skill-proposals eval <id|name>".to_string();
+            };
+            match store.get(id) {
+                Some(proposal) => format_skill_eval(&evaluate_skill_proposal(&proposal)),
+                None => format!("No skill proposal matching '{}'.", id),
+            }
+        }
+        "accept" | "reject" => {
+            let Some(id) = parts.next() else {
+                return format!("Usage: /skill-proposals {} <id|name>", action);
+            };
+            let desired = if action == "accept" {
+                SkillProposalStatus::Accepted
+            } else {
+                SkillProposalStatus::Rejected
+            };
+            match store.update_status(id, desired) {
+                Ok(Some(updated)) => {
+                    persist_skill_proposal_learning_event(app, &updated, action, None);
+                    format!(
+                        "Updated skill proposal {}\n{}",
+                        updated.id,
+                        format_skill_proposal_line(&updated)
+                    )
+                }
+                Ok(None) => format!("No skill proposal matching '{}'.", id),
+                Err(e) => format!("Failed to update skill proposal: {}", e),
+            }
+        }
+        "apply" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /skill-proposals apply <id|name>".to_string();
+            };
+            let Some(current) = store.get(id) else {
+                return format!("No skill proposal matching '{}'.", id);
+            };
+            if current.status != SkillProposalStatus::Accepted {
+                return format!(
+                    "Skill proposal {} is {:?}. Accept it before applying; generated skills are not activated automatically.",
+                    current.id, current.status
+                );
+            }
+            let eval = evaluate_skill_proposal(&current);
+            if !eval.passed {
+                return format!(
+                    "Skill proposal {} failed eval and was not applied.\n{}",
+                    current.id,
+                    format_skill_eval(&eval)
+                );
+            }
+            let root = user_skill_root();
+            match write_active_skill(&current, &root) {
+                Ok(path) => match store.update_status(id, SkillProposalStatus::Applied) {
+                    Ok(Some(updated)) => {
+                        let loaded = app.skill_runtime.reload();
+                        persist_skill_proposal_learning_event(
+                            app,
+                            &updated,
+                            "apply",
+                            Some(path.display().to_string()),
+                        );
+                        format!(
+                            "Applied skill proposal {}\n- wrote: {}\n- trust: {:?}\n- reloaded skills: {}\n\nInvoke with /{} <task>",
+                            updated.id,
+                            path.display(),
+                            updated.trust,
+                            loaded,
+                            updated.name
+                        )
+                    }
+                    Ok(None) => {
+                        format!("Skill file written, but proposal status update failed for '{}'.", id)
+                    }
+                    Err(e) => format!("Skill file written, but status update failed: {}", e),
+                },
+                Err(e) => format!("Failed to apply skill proposal: {}", e),
+            }
+        }
+        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|accept <id>|reject <id>|apply <id>]".to_string(),
+    }
+}
+
+fn user_skill_root() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".priority-agent")
+        .join("skills")
+}
+
+fn format_skill_proposal_line(proposal: &crate::engine::skill_evolution::SkillProposal) -> String {
+    format!(
+        "- {} /{} [{:?}/{:?}] events={}: {}",
+        proposal.id,
+        proposal.name,
+        proposal.status,
+        proposal.trust,
+        proposal.trigger_event_ids.len(),
+        proposal.procedure
+    )
+}
+
+fn format_skill_proposal_detail(
+    proposal: &crate::engine::skill_evolution::SkillProposal,
+) -> String {
+    format!(
+        "Skill Proposal {}\n\nName: /{}\nStatus: {:?}\nTrust: {:?}\nScope: {}\nEvents: {:?}\n\nProcedure:\n{}\n\nTriggers:\n{}\n\nWorkflow:\n{}\n\nValidation:\n{}\n\nTools:\n{}\n\nEvidence:\n{}",
+        proposal.id,
+        proposal.name,
+        proposal.status,
+        proposal.trust,
+        proposal.scope,
+        proposal.trigger_event_ids,
+        proposal.procedure,
+        proposal
+            .trigger_conditions
+            .iter()
+            .map(|item| format!("- {}", item))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        proposal
+            .workflow_steps
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| format!("{}. {}", idx + 1, item))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        proposal
+            .validation
+            .iter()
+            .map(|item| format!("- {}", item))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        proposal.allowed_tools.join(", "),
+        proposal
+            .evidence
+            .iter()
+            .map(|item| format!("- {}", item))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
+fn format_skill_eval(eval: &crate::engine::skill_evolution::SkillEvalResult) -> String {
+    let mut lines = vec![format!(
+        "Skill Eval {}\nResult: {}",
+        eval.proposal_id,
+        if eval.passed { "pass" } else { "fail" }
+    )];
+    for check in &eval.quality.checks {
+        lines.push(format!(
+            "- {} {}: {}",
+            if check.passed { "ok" } else { "fail" },
+            check.name,
+            check.detail
+        ));
+    }
+    for note in &eval.notes {
+        lines.push(format!("- note: {}", note));
+    }
+    lines.join("\n")
+}
+
+fn persist_skill_proposal_learning_event(
+    app: &mut TuiApp,
+    proposal: &crate::engine::skill_evolution::SkillProposal,
+    action: &str,
+    applied_path: Option<String>,
+) {
+    let mut payload = serde_json::to_value(proposal).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(path) = applied_path {
+        payload["applied_path"] = serde_json::json!(path);
+    }
+    let _ = app.session_manager.add_learning_event(
+        "skill_proposal",
+        "skill_evolution",
+        &format!("Skill proposal {} {}", proposal.id, action),
+        0.9,
+        &payload,
+    );
+}
+
 /// /recover - Show recent recovery plans
 pub fn handle_recover(app: &mut TuiApp, args: &str) -> String {
     let limit = args.trim().parse::<usize>().unwrap_or(8).clamp(1, 50);

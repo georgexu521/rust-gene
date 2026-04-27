@@ -1333,6 +1333,14 @@ pub const CMD_IMPROVEMENTS: CommandDef = CommandDef::new(
     "Review controlled self-evolution proposals",
 );
 
+pub const CMD_SKILL_PROPOSALS: CommandDef = CommandDef::new(
+    "/skill-proposals",
+    &["/skill-proposal"],
+    "General",
+    "/skill-proposals [list|scan|show|eval|accept|reject|apply]",
+    "Review generated skill candidates before activation",
+);
+
 pub const CMD_RECOVER: CommandDef = CommandDef::new(
     "/recover",
     &[],
@@ -1489,6 +1497,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_GOAL);
     registry.register(&CMD_LEARN);
     registry.register(&CMD_IMPROVEMENTS);
+    registry.register(&CMD_SKILL_PROPOSALS);
     registry.register(&CMD_RECOVER);
     registry.register(&CMD_FEEDBACK);
 
@@ -1626,6 +1635,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_GOAL,
     &CMD_LEARN,
     &CMD_IMPROVEMENTS,
+    &CMD_SKILL_PROPOSALS,
     &CMD_RECOVER,
     &CMD_FEEDBACK,
 ];

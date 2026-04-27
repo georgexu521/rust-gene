@@ -47,6 +47,9 @@ env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
 - CLI panels are increasingly backed by actual runtime state, not decoration.
 - `karpathy-guidelines` is bundled as a coding behavior skill and exposed
   through `/skills`, `/karpathy <task>`, and code-change reflection checks.
+- Repeated successful workflows can now become reviewed skill candidates through
+  `/skill-proposals`; accepted candidates are untrusted until explicitly
+  applied into the user skill path.
 
 ## Product Surface
 

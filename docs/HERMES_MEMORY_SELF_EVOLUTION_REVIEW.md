@@ -565,18 +565,33 @@ Goal: convert reusable procedures into reviewed skills.
 
 Tasks:
 
-1. Add `SkillProposal` generated from repeated successful procedures.
-2. Add skill quality checklist and safety scan.
-3. Add proposed/untrusted/trusted skill states.
-4. Add skill eval harness for selected skills.
+1. Add `SkillProposal` generated from repeated successful procedures. ✅
+2. Add skill quality checklist and safety scan. ✅
+3. Add proposed/untrusted/trusted skill states. ✅
+4. Add skill eval harness for selected skills. ✅ lightweight proposal eval
+   backed by the quality checklist.
 5. Add native slash-command activation for accepted skills if not already
-   present in the current CLI path.
+   present in the current CLI path. ✅ `/skill-proposals apply` writes a reviewed
+   skill into the user skill path and reloads runtime skills.
 
 Acceptance criteria:
 
-- Repeated project workflows can become project-scoped skill candidates.
-- Skills are not activated until reviewed or validated.
-- Skill updates preserve user edits and record provenance.
+- Repeated project workflows can become project-scoped skill candidates. ✅
+- Skills are not activated until reviewed or validated. ✅
+- Skill updates preserve user edits and record provenance. ✅ existing skill
+  files are not overwritten; generated `SKILL.md` includes proposal provenance.
+
+Implementation notes:
+
+- Skill candidates are stored in `~/.priority-agent/skill_proposals.jsonl`.
+- `/skill-proposals scan` reads recent `LearningEvent`s and groups repeated
+  successful procedures.
+- `/skill-proposals eval <id>` runs trigger, workflow, validation, scoped-tool,
+  safety, and destructive-action checks.
+- `/skill-proposals accept <id>` moves a candidate to untrusted review state.
+- `/skill-proposals apply <id>` requires acceptance, refuses to overwrite
+  existing user edits, writes `~/.priority-agent/skills/<name>/SKILL.md`, reloads
+  skills, and records a `skill_proposal` learning event.
 
 ### Phase 6: Learning-To-Planning Feedback
 

@@ -38,6 +38,7 @@ pub mod reflection_pass;
 pub mod resource_policy;
 pub mod retrieval_context;
 pub mod session_goal;
+pub mod skill_evolution;
 pub mod socratic;
 pub mod socratic_executor;
 pub mod streaming;
