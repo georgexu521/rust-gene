@@ -160,8 +160,14 @@ src/
   4. 收到响应后 sync_turn(user, assistant) - 提取学习
 
 会话结束:
-  1. flush_session(messages) - 批量提取学习内容
-  2. 保存到 MEMORY.md / USER.md
+  1. flush_session_with_reason(session_id, reason, messages) - 带生命周期原因批量提取学习内容
+  2. 写入 memory/flush_queue.jsonl，记录 pending/running/completed/skipped_duplicate
+  3. 保存到 MEMORY.md / USER.md
+
+触发点:
+  - session_end: 每轮响应完成后
+  - pre_compress: 上下文压缩前
+  - clear/resume_switch/exit: 清空、切换会话、退出前
 ```
 
 ### 上下文管理 (3层)

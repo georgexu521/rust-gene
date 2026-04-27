@@ -32,6 +32,10 @@ fn memory_decision_log_path() -> PathBuf {
     memory_dir().join("decisions.jsonl")
 }
 
+fn memory_flush_log_path() -> PathBuf {
+    memory_dir().join("flush_queue.jsonl")
+}
+
 #[derive(Debug, Clone)]
 struct MemoryDocument {
     namespace: String,
@@ -330,6 +334,36 @@ fn load_memory_decision_counts() -> MemoryDecisionCounts {
     memory_decision_counts_from_jsonl(&content)
 }
 
+fn load_memory_flush_summary() -> crate::memory::MemoryFlushSummary {
+    let content = std::fs::read_to_string(memory_flush_log_path()).unwrap_or_default();
+    let mut latest = std::collections::HashMap::new();
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(record) = serde_json::from_str::<crate::memory::MemoryFlushRecord>(line) else {
+            continue;
+        };
+        latest.insert(record.id.clone(), record);
+    }
+
+    let mut summary = crate::memory::MemoryFlushSummary {
+        total: latest.len(),
+        ..Default::default()
+    };
+    for record in latest.values() {
+        match record.status {
+            crate::memory::MemoryFlushStatus::Pending => summary.pending += 1,
+            crate::memory::MemoryFlushStatus::Running => summary.running += 1,
+            crate::memory::MemoryFlushStatus::Completed => summary.completed += 1,
+            crate::memory::MemoryFlushStatus::Failed => summary.failed += 1,
+            crate::memory::MemoryFlushStatus::SkippedDuplicate => summary.skipped_duplicate += 1,
+        }
+    }
+    summary
+}
+
 fn memory_decision_counts_from_jsonl(content: &str) -> MemoryDecisionCounts {
     let mut counts = MemoryDecisionCounts::default();
     for line in content
@@ -353,6 +387,7 @@ fn memory_decision_counts_from_jsonl(content: &str) -> MemoryDecisionCounts {
 
 fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String {
     let counts = load_memory_decision_counts();
+    let flushes = load_memory_flush_summary();
     let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
     let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
     let agent_count = docs
@@ -373,6 +408,14 @@ fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String
     out.push_str(&format!(
         "  Decisions: {} accepted · {} proposed · {} rejected · {} blocked\n",
         counts.accepted, counts.proposed, counts.rejected, counts.blocked
+    ));
+    out.push_str(&format!(
+        "  Flushes: {} completed · {} pending · {} running · {} failed · {} skipped\n",
+        flushes.completed,
+        flushes.pending,
+        flushes.running,
+        flushes.failed,
+        flushes.skipped_duplicate
     ));
     if conflicts.is_empty() {
         out.push_str("  Conflicts: none\n");

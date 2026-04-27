@@ -172,6 +172,11 @@ pub async fn handle_session(app: &mut TuiApp, args: &str) -> String {
 }
 
 pub async fn handle_new(app: &mut TuiApp) -> String {
+    if let Some(ref engine) = app.streaming_engine {
+        engine
+            .flush_memory_for_current_history(crate::memory::MemoryFlushReason::ResumeSwitch)
+            .await;
+    }
     let model = app
         .streaming_engine
         .as_ref()
@@ -182,6 +187,10 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
             use crate::state::{MessageItem, MessageRole};
             app.messages.clear();
             app.clear_tool_transcript();
+            if let Some(ref engine) = app.streaming_engine {
+                engine.set_session_id(id.clone());
+                engine.set_history(Vec::new()).await;
+            }
             let welcome = MessageItem {
                 id: "welcome".to_string(),
                 role: MessageRole::System,

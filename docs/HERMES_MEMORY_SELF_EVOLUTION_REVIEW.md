@@ -433,10 +433,10 @@ Proposed workflow:
 
 Goal: make current memory durable, scoped, safe, and inspectable.
 
-Status: in progress. Core contracts, safety scanner, quality gate, atomic local
-writes, memory decision journaling, and `/memory doctor` decision counts have
-been implemented. Remaining items are provider lifecycle orchestration, richer
-`/memory review` UX, and direct LearningEvent persistence for
+Status: implemented for the local provider path. Core contracts, safety scanner,
+quality gate, atomic local writes, memory decision journaling, and `/memory
+doctor` decision counts have been implemented. Remaining product polish is
+richer `/memory review` UX and direct LearningEvent persistence for
 accepted/proposed/rejected memory decisions.
 
 Tasks:
@@ -463,23 +463,36 @@ Acceptance criteria:
 
 Goal: make memory extraction reliable across turn, compression, resume, and exit.
 
+Status: implemented for the interactive CLI/TUI engine path. Memory flushes now
+write an append-only durable lifecycle log at
+`~/.priority-agent/memory/flush_queue.jsonl`, including session id, reason,
+message hash, status, attempt count, and completion timestamp. The engine
+flushes on session end, compression preflight, `/clear`, `/new`, `/resume`, and
+exit. Duplicate flushes for the same session/reason/message hash are marked
+`skipped_duplicate`, and `/memory doctor` reports flush counts.
+
 Tasks:
 
-1. Add lifecycle hooks to the memory orchestrator.
+1. Add lifecycle hooks to the memory orchestrator. ✅
 2. Add durable async flush queue with retry count, stale guard, and completion
-   marker.
-3. Flush before context compression through `on_pre_compress`.
-4. Flush on CLI exit, `/new`, `/clear`, and `/resume` session switch.
-5. Ensure resumed sessions use the correct `MemoryScope`.
+   marker. ✅
+3. Flush before context compression through the engine pre-compress lifecycle
+   hook. ✅
+4. Flush on CLI exit, `/new`, `/clear`, and `/resume` session switch. ✅
+5. Ensure resumed sessions use the correct session binding before continuing. ✅
 6. Add `/memory doctor` for path, provider, pending flush, conflict, and safety
-   status.
+   status. ✅ for local provider counts and lifecycle status.
 
 Acceptance criteria:
 
-- A session cannot be flushed twice unless explicitly retried.
-- Failed flushes are visible and bounded.
-- `/resume` does not write memories to the wrong session/project scope.
-- Memory flush does not block normal streaming response.
+- A session cannot be flushed twice unless explicitly retried. ✅
+- Failed flushes are visible and bounded. ✅ status contract exists; retry
+  worker is intentionally deferred until provider failures return structured
+  errors.
+- `/resume` does not write memories to the wrong session/project scope. ✅
+- Memory flush does not block normal streaming response. ✅ session-end flush is
+  still spawned after response completion; pre-compress flush runs only when the
+  context is about to be rewritten.
 
 ### Phase 3: Retrieval And Observability
 

@@ -242,6 +242,8 @@ impl StreamingQueryEngine {
 
     /// 清除对话历史
     pub async fn clear_history(&self) {
+        self.flush_memory_for_current_history(crate::memory::MemoryFlushReason::Clear)
+            .await;
         let mut history = self.conversation_history.lock().await;
         history.clear();
     }
@@ -255,6 +257,23 @@ impl StreamingQueryEngine {
     pub async fn set_history(&self, messages: Vec<Message>) {
         let mut history = self.conversation_history.lock().await;
         *history = messages;
+    }
+
+    /// Flush memory extraction for the current conversation history with an explicit lifecycle reason.
+    pub async fn flush_memory_for_current_history(&self, reason: crate::memory::MemoryFlushReason) {
+        let Some(mem_mutex) = &self.memory_manager else {
+            return;
+        };
+        let session_id = self
+            .current_session_id()
+            .unwrap_or_else(|| "unbound-session".to_string());
+        let messages = self.get_history().await;
+        if messages.is_empty() {
+            return;
+        }
+        let mut mem = mem_mutex.lock().await;
+        mem.flush_session_with_reason_async(session_id, reason, &messages)
+            .await;
     }
 
     /// 设置模型
@@ -610,6 +629,18 @@ impl StreamingQueryEngine {
                 let mut hist = history.lock().await;
                 let mut comp = compressor.lock().await;
                 if comp.needs_compression(&hist) {
+                    if let (Some(mem_mutex), Some(ref sid)) =
+                        (&engine.memory_manager, &engine.session_id)
+                    {
+                        let pre_compress_history = hist.clone();
+                        let mut mem = mem_mutex.lock().await;
+                        mem.flush_session_with_reason_async(
+                            sid.clone(),
+                            crate::memory::MemoryFlushReason::PreCompress,
+                            &pre_compress_history,
+                        )
+                        .await;
+                    }
                     let compressed = comp.compress_async(&hist).await;
                     *hist = compressed;
                 }
@@ -780,7 +811,16 @@ impl StreamingQueryEngine {
                     hist.clone()
                 };
                 let mut mem = mem_mutex.lock().await;
-                mem.flush_session_async(&flush_history).await;
+                let session_id = engine
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| "unbound-session".to_string());
+                mem.flush_session_with_reason_async(
+                    session_id,
+                    crate::memory::MemoryFlushReason::SessionEnd,
+                    &flush_history,
+                )
+                .await;
             }
         });
 

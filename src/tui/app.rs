@@ -1889,13 +1889,15 @@ impl TuiApp {
                     } else if doctor {
                         let summary = mem.memory_summary();
                         let decisions = mem.memory_decision_counts();
+                        let flushes = mem.memory_flush_summary();
                         format!(
-                            "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}",
+                            "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}",
                             summary.format(),
                             decisions.accepted,
                             decisions.proposed,
                             decisions.rejected,
-                            decisions.blocked
+                            decisions.blocked,
+                            flushes.format()
                         )
                     } else {
                         let summary = mem.memory_summary();
@@ -1978,13 +1980,15 @@ impl TuiApp {
                     } else if doctor {
                         let summary = mem.memory_summary();
                         let decisions = mem.memory_decision_counts();
+                        let flushes = mem.memory_flush_summary();
                         format!(
-                            "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}",
+                            "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}",
                             summary.format(),
                             decisions.accepted,
                             decisions.proposed,
                             decisions.rejected,
-                            decisions.blocked
+                            decisions.blocked,
+                            flushes.format()
                         )
                     } else {
                         let summary = mem.memory_summary();
@@ -2194,10 +2198,9 @@ impl TuiApp {
             }
             "/quit" | "/exit" | "/q" => {
                 if let Some(ref engine) = self.streaming_engine {
-                    if let Some(mem) = engine.memory_manager() {
-                        let mut mem = mem.lock().await;
-                        mem.flush_session(&[]);
-                    }
+                    engine
+                        .flush_memory_for_current_history(crate::memory::MemoryFlushReason::Exit)
+                        .await;
                 }
                 "Use Ctrl+C to exit".to_string()
             }
@@ -2412,6 +2415,11 @@ impl TuiApp {
 
     /// 恢复会话
     pub(crate) async fn restore_session(&mut self, session_id: &str) -> String {
+        if let Some(ref engine) = self.streaming_engine {
+            engine
+                .flush_memory_for_current_history(crate::memory::MemoryFlushReason::ResumeSwitch)
+                .await;
+        }
         match self.session_manager.switch_to_session(session_id) {
             Ok(messages) => {
                 // 清空当前消息
@@ -2428,6 +2436,7 @@ impl TuiApp {
                     match self.session_manager.load_api_messages(session_id) {
                         Ok(api_messages) => {
                             engine.set_history(api_messages).await;
+                            engine.set_session_id(session_id.to_string());
                         }
                         Err(e) => {
                             warn!("Failed to restore engine history: {}", e);

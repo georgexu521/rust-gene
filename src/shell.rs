@@ -137,6 +137,9 @@ async fn handle_local_command(
 ) -> anyhow::Result<bool> {
     match message.trim() {
         "/exit" | "/quit" | "exit" | "quit" => {
+            engine
+                .flush_memory_for_current_history(crate::memory::MemoryFlushReason::Exit)
+                .await;
             println!("{DIM}Bye.{RESET}");
             Ok(true)
         }
@@ -165,6 +168,7 @@ async fn handle_local_command(
             Ok(true)
         }
         "/clear" => {
+            engine.clear_history().await;
             print!("\x1b[2J\x1b[H");
             io::stdout().flush()?;
             Ok(true)
@@ -242,6 +246,9 @@ async fn resume_session_command(
 
     let records = store.get_messages(&session.id)?;
     let messages = records_to_api_messages(&records);
+    engine
+        .flush_memory_for_current_history(crate::memory::MemoryFlushReason::ResumeSwitch)
+        .await;
     engine.set_history(messages).await;
     engine.set_session_id(session.id.clone());
 

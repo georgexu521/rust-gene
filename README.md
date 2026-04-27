@@ -83,7 +83,7 @@ Common interactive commands:
 | `/goal drift` | Show recent goal drift events |
 | `/recover` | Show recent recovery plans |
 | `/learn` | Show recent learning events |
-| `/memory` | Show memory namespaces; `/memory doctor` shows memory health and gate decisions |
+| `/memory` | Show memory namespaces; `/memory doctor` shows memory health, gate decisions, and flush lifecycle counts |
 | `/skills` | List bundled coding skills |
 | `/karpathy <task>` | Apply careful coding guidelines to a task |
 | `/permissions` | Inspect or edit permission rules |

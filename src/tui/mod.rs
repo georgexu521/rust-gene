@@ -663,12 +663,9 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             info!("Quit keybinding pressed, exiting...");
             // 退出前 flush 记忆
             if let Some(ref engine) = app.streaming_engine {
-                if let Some(mem) = engine.memory_manager() {
-                    let _messages = engine.get_history().await;
-                    let api_messages: Vec<crate::services::api::Message> = Vec::new();
-                    let mut mem = mem.lock().await;
-                    mem.flush_session(&api_messages);
-                }
+                engine
+                    .flush_memory_for_current_history(crate::memory::MemoryFlushReason::Exit)
+                    .await;
             }
             // 退出前写入 telemetry 会话统计（仅用户开启时生效）
             if let Some(ref engine) = app.streaming_engine {

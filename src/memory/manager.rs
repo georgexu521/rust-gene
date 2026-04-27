@@ -10,7 +10,8 @@ use crate::memory::quality::assess_memory_candidate;
 use crate::memory::types::MemoryStatus;
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,6 +26,8 @@ const MEMORY_MANIFEST_CHAR_LIMIT: usize = 2_500;
 const ACTIVE_MEMORY_SECTION_LIMIT: usize = 40;
 const ACTIVE_MEMORY_KEEP_SECTIONS: usize = 30;
 const ACTIVE_MEMORY_CHAR_LIMIT: usize = 20_000;
+const MEMORY_FLUSH_LOG_FILE: &str = "flush_queue.jsonl";
+const MEMORY_FLUSH_MAX_ATTEMPTS: u8 = 3;
 
 fn log_preview(content: &str, max_chars: usize) -> String {
     content.chars().take(max_chars).collect()
@@ -96,6 +99,27 @@ fn memory_decision_counts_from_jsonl(content: &str) -> MemoryDecisionCounts {
         }
     }
     counts
+}
+
+fn memory_flush_records_from_jsonl(content: &str) -> HashMap<String, MemoryFlushRecord> {
+    let mut records = HashMap::new();
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(record) = serde_json::from_str::<MemoryFlushRecord>(line) else {
+            continue;
+        };
+        records.insert(record.id.clone(), record);
+    }
+    records
+}
+
+fn memory_messages_hash(messages: &[Message]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    messages.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(unix)]
@@ -225,6 +249,81 @@ pub struct MemoryDecisionCounts {
     pub blocked: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryFlushReason {
+    SessionEnd,
+    Exit,
+    Clear,
+    ResumeSwitch,
+    PreCompress,
+    Manual,
+}
+
+impl std::fmt::Display for MemoryFlushReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            MemoryFlushReason::SessionEnd => "session_end",
+            MemoryFlushReason::Exit => "exit",
+            MemoryFlushReason::Clear => "clear",
+            MemoryFlushReason::ResumeSwitch => "resume_switch",
+            MemoryFlushReason::PreCompress => "pre_compress",
+            MemoryFlushReason::Manual => "manual",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryFlushStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    SkippedDuplicate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryFlushRecord {
+    pub id: String,
+    pub session_id: String,
+    pub reason: MemoryFlushReason,
+    pub status: MemoryFlushStatus,
+    pub attempts: u8,
+    pub max_attempts: u8,
+    pub message_count: usize,
+    pub messages_hash: u64,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemoryFlushSummary {
+    pub pending: usize,
+    pub running: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub skipped_duplicate: usize,
+    pub total: usize,
+}
+
+impl MemoryFlushSummary {
+    pub fn format(&self) -> String {
+        format!(
+            "Memory Flushes:\n  Completed: {}\n  Pending: {}\n  Running: {}\n  Failed: {}\n  Skipped duplicate: {}\n  Total: {}",
+            self.completed,
+            self.pending,
+            self.running,
+            self.failed,
+            self.skipped_duplicate,
+            self.total
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MemoryDecisionEvent {
     status: String,
@@ -256,6 +355,8 @@ pub struct MemoryManager {
     memory_dir: PathBuf,
     /// 记忆决策日志（accepted/proposed/rejected/blocked）
     decision_log_path: PathBuf,
+    /// durable memory flush lifecycle log
+    flush_log_path: PathBuf,
     /// 冻结快照（会话开始时捕获，整个会话不变）
     frozen_memory: Option<String>,
     frozen_user: Option<String>,
@@ -317,8 +418,9 @@ impl MemoryManager {
         Self {
             memory_path: base.join("MEMORY.md"),
             user_path: base.join("USER.md"),
-            memory_dir,
             decision_log_path: base.join(MEMORY_DIR_NAME).join("decisions.jsonl"),
+            flush_log_path: base.join(MEMORY_DIR_NAME).join(MEMORY_FLUSH_LOG_FILE),
+            memory_dir,
             frozen_memory: None,
             frozen_user: None,
             frozen_memory_files: Vec::new(),
@@ -1225,6 +1327,85 @@ Return exactly the word NONE if there is nothing critical to remember.";
         memory_decision_counts_from_jsonl(&content)
     }
 
+    pub fn memory_flush_summary(&self) -> MemoryFlushSummary {
+        let content = std::fs::read_to_string(&self.flush_log_path).unwrap_or_default();
+        let records = memory_flush_records_from_jsonl(&content);
+        let mut summary = MemoryFlushSummary::default();
+        summary.total = records.len();
+        for record in records.values() {
+            match record.status {
+                MemoryFlushStatus::Pending => summary.pending += 1,
+                MemoryFlushStatus::Running => summary.running += 1,
+                MemoryFlushStatus::Completed => summary.completed += 1,
+                MemoryFlushStatus::Failed => summary.failed += 1,
+                MemoryFlushStatus::SkippedDuplicate => summary.skipped_duplicate += 1,
+            }
+        }
+        summary
+    }
+
+    pub fn flush_session_with_reason(
+        &mut self,
+        session_id: impl Into<String>,
+        reason: MemoryFlushReason,
+        messages: &[Message],
+    ) -> MemoryFlushRecord {
+        let session_id = session_id.into();
+        let mut record = self.new_flush_record(session_id, reason, messages);
+        if self.has_completed_flush(&record) {
+            record.status = MemoryFlushStatus::SkippedDuplicate;
+            record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+            record.updated_at = record.completed_at.clone().unwrap_or(record.updated_at);
+            self.append_flush_record(&record);
+            return record;
+        }
+
+        self.append_flush_record(&record);
+        record.status = MemoryFlushStatus::Running;
+        record.attempts = 1;
+        record.updated_at = chrono::Utc::now().to_rfc3339();
+        self.append_flush_record(&record);
+
+        self.flush_session(messages);
+
+        record.status = MemoryFlushStatus::Completed;
+        record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+        record.updated_at = record.completed_at.clone().unwrap_or(record.updated_at);
+        self.append_flush_record(&record);
+        record
+    }
+
+    pub async fn flush_session_with_reason_async(
+        &mut self,
+        session_id: impl Into<String>,
+        reason: MemoryFlushReason,
+        messages: &[Message],
+    ) -> MemoryFlushRecord {
+        let session_id = session_id.into();
+        let mut record = self.new_flush_record(session_id, reason, messages);
+        if self.has_completed_flush(&record) {
+            record.status = MemoryFlushStatus::SkippedDuplicate;
+            record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+            record.updated_at = record.completed_at.clone().unwrap_or(record.updated_at);
+            self.append_flush_record(&record);
+            return record;
+        }
+
+        self.append_flush_record(&record);
+        record.status = MemoryFlushStatus::Running;
+        record.attempts = 1;
+        record.updated_at = chrono::Utc::now().to_rfc3339();
+        self.append_flush_record(&record);
+
+        self.flush_session_async(messages).await;
+
+        record.status = MemoryFlushStatus::Completed;
+        record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+        record.updated_at = record.completed_at.clone().unwrap_or(record.updated_at);
+        self.append_flush_record(&record);
+        record
+    }
+
     /// 检查是否有自某时间点以来的记忆写入（用于 forked agent 互斥）
     pub fn has_memory_writes_since(&self, turn: usize) -> bool {
         // 如果主 agent 在指定 turn 之后写过，返回 true
@@ -1478,6 +1659,61 @@ Return exactly the word NONE if there is nothing critical to remember.";
     /// 获取待保存的学习内容数量
     pub fn pending_count(&self) -> usize {
         self.pending_learnings.len()
+    }
+
+    fn new_flush_record(
+        &self,
+        session_id: String,
+        reason: MemoryFlushReason,
+        messages: &[Message],
+    ) -> MemoryFlushRecord {
+        let now = chrono::Utc::now().to_rfc3339();
+        MemoryFlushRecord {
+            id: format!("flush_{}", uuid::Uuid::new_v4().simple()),
+            session_id,
+            reason,
+            status: MemoryFlushStatus::Pending,
+            attempts: 0,
+            max_attempts: MEMORY_FLUSH_MAX_ATTEMPTS,
+            message_count: messages.len(),
+            messages_hash: memory_messages_hash(messages),
+            error: None,
+            created_at: now.clone(),
+            updated_at: now,
+            completed_at: None,
+        }
+    }
+
+    fn has_completed_flush(&self, candidate: &MemoryFlushRecord) -> bool {
+        let content = std::fs::read_to_string(&self.flush_log_path).unwrap_or_default();
+        memory_flush_records_from_jsonl(&content)
+            .values()
+            .any(|record| {
+                record.session_id == candidate.session_id
+                    && record.reason == candidate.reason
+                    && record.messages_hash == candidate.messages_hash
+                    && record.status == MemoryFlushStatus::Completed
+            })
+    }
+
+    fn append_flush_record(&self, record: &MemoryFlushRecord) {
+        if let Some(parent) = self.flush_log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let Ok(line) = serde_json::to_string(record) else {
+            return;
+        };
+        let _guard = MemoryFileLock::acquire(&self.flush_log_path).ok();
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.flush_log_path)
+        {
+            Ok(mut file) => {
+                let _ = writeln!(file, "{}", line);
+            }
+            Err(e) => debug!("Failed to record memory flush: {}", e),
+        }
     }
 
     fn record_memory_decision(&self, status: &str, category: &str, content: &str, reason: &str) {
@@ -2875,6 +3111,52 @@ Always check logs first.
         let counts = mgr.memory_decision_counts();
         assert_eq!(counts.accepted, 1);
         assert_eq!(counts.rejected + counts.proposed, 1);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_flush_with_reason_records_completed_and_skips_duplicate() {
+        let base = temp_memory_base("memory-flush-record");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        let messages = vec![
+            Message::user("I prefer compact CLI output."),
+            Message::assistant("Preference noted."),
+        ];
+
+        let first = mgr.flush_session_with_reason("sess_test", MemoryFlushReason::Exit, &messages);
+        let second = mgr.flush_session_with_reason("sess_test", MemoryFlushReason::Exit, &messages);
+
+        assert_eq!(first.status, MemoryFlushStatus::Completed);
+        assert_eq!(second.status, MemoryFlushStatus::SkippedDuplicate);
+        let summary = mgr.memory_flush_summary();
+        assert_eq!(summary.completed, 1);
+        assert_eq!(summary.skipped_duplicate, 1);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn test_flush_with_reason_async_records_completed() {
+        let base = temp_memory_base("memory-flush-async");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        let messages = vec![
+            Message::user("Project convention: run cargo fmt before tests."),
+            Message::assistant("I will follow that convention."),
+        ];
+
+        let record = mgr
+            .flush_session_with_reason_async(
+                "sess_async",
+                MemoryFlushReason::PreCompress,
+                &messages,
+            )
+            .await;
+
+        assert_eq!(record.status, MemoryFlushStatus::Completed);
+        let summary = mgr.memory_flush_summary();
+        assert_eq!(summary.completed, 1);
+        assert!(summary.format().contains("Completed: 1"));
 
         let _ = std::fs::remove_dir_all(base);
     }
