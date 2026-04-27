@@ -168,6 +168,12 @@ src/
   - session_end: 每轮响应完成后
   - pre_compress: 上下文压缩前
   - clear/resume_switch/exit: 清空、切换会话、退出前
+
+自进化:
+  - LearningEvent -> /improvements scan -> ImprovementProposal
+  - 提案只进入 proposed 状态，不自动修改 prompt/skill/routing/tool guidance
+  - 用户通过 /improvements accept|reject|apply 显式审批
+  - apply 前必须 accepted，高风险变更也不能绕过审批
 ```
 
 ### 上下文管理 (3层)

@@ -2506,6 +2506,7 @@ impl TuiApp {
             "/quick" => slash::handle_quick(self),
             "/goal" => slash::handle_goal(self, args),
             "/learn" => slash::handle_learn(self, args),
+            "/improvements" => slash::handle_improvements(self, args),
             "/recover" => slash::handle_recover(self, args),
             "/feedback" => slash::handle_feedback(self, args),
             _ => {

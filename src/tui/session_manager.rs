@@ -369,6 +369,22 @@ impl TuiSessionManager {
         Ok(self.store.recent_learning_events(session_id, limit)?)
     }
 
+    pub fn add_learning_event(
+        &self,
+        kind: &str,
+        source: &str,
+        summary: &str,
+        confidence: f64,
+        payload: &serde_json::Value,
+    ) -> anyhow::Result<i64> {
+        let Some(session_id) = self.current_session_id.as_deref() else {
+            anyhow::bail!("No active session");
+        };
+        Ok(self
+            .store
+            .add_learning_event(session_id, kind, source, summary, confidence, payload)?)
+    }
+
     /// 获取会话消息数量
     pub fn message_count(&self, session_id: &str) -> anyhow::Result<i64> {
         Ok(self.store.message_count(session_id)?)

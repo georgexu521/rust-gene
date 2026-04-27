@@ -527,27 +527,37 @@ Acceptance criteria:
 
 Goal: turn repeated behavior into controlled improvement proposals.
 
+Status: implemented for proposal generation and user-gated lifecycle. Runtime
+LearningEvents can now be scanned into `ImprovementProposal` records stored in
+`~/.priority-agent/improvements.jsonl`. Proposals target memory, skill, prompt,
+routing, or tool guidance; include trigger event ids, evidence, expected
+benefit, risk, and a validation plan; and can be listed, shown, accepted,
+rejected, or applied through `/improvements`. Applying requires prior explicit
+acceptance, so high-risk or behavior-changing suggestions are never applied
+automatically. Proposal outcomes are persisted back as LearningEvents.
+
 Tasks:
 
-1. Add `ImprovementProposal` and `ImprovementTarget`.
+1. Add `ImprovementProposal` and `ImprovementTarget`. ✅
 2. Convert user corrections, failed validations, repeated tool failures, and
-   successful fixes into candidate proposals.
+   successful fixes into candidate proposals. ✅ initial runtime-event rules for
+   repeated tool failures, recovery patterns, and corrections.
 3. Add `/improvements` commands:
-   - list
-   - show
-   - accept
-   - reject
-   - apply
+   - list ✅
+   - show ✅
+   - accept ✅
+   - reject ✅
+   - apply ✅
 4. Require validation plans for prompt, skill, routing, and tool guidance
-   changes.
-5. Store proposal outcomes as LearningEvents.
+   changes. ✅
+5. Store proposal outcomes as LearningEvents. ✅
 
 Acceptance criteria:
 
 - The agent can propose a memory, skill, or routing improvement without applying
-  it automatically.
-- High-risk changes require user approval.
-- Accepted proposals are tied to evidence and validation results.
+  it automatically. ✅
+- High-risk changes require user approval. ✅
+- Accepted proposals are tied to evidence and validation results. ✅
 
 ### Phase 5: Skill Evolution
 

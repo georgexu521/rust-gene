@@ -2924,6 +2924,154 @@ pub fn handle_learn(app: &mut TuiApp, args: &str) -> String {
     lines.join("\n")
 }
 
+/// /improvements - Controlled self-evolution proposals
+pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
+    use crate::engine::improvement::{ImprovementStore, ProposalStatus};
+
+    let mut parts = args.split_whitespace();
+    let action = parts.next().unwrap_or("list");
+    let store = ImprovementStore::default();
+
+    match action {
+        "scan" | "propose" => {
+            let limit = parts
+                .next()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(50)
+                .clamp(5, 200);
+            let events = match app.session_manager.recent_learning_events(limit) {
+                Ok(events) => events,
+                Err(e) => return format!("Improvement scan failed: {}", e),
+            };
+            match store.propose_from_learning_events(&events) {
+                Ok(proposals) if proposals.is_empty() => {
+                    "Improvement scan complete: no new proposals.".to_string()
+                }
+                Ok(proposals) => {
+                    let mut lines = vec![format!(
+                        "Improvement scan complete: {} new proposal(s)",
+                        proposals.len()
+                    )];
+                    for proposal in proposals {
+                        lines.push(format_improvement_line(&proposal));
+                    }
+                    lines.join("\n")
+                }
+                Err(e) => format!("Improvement scan failed: {}", e),
+            }
+        }
+        "list" | "" => {
+            let proposals = store.list();
+            if proposals.is_empty() {
+                "Improvements\n- none yet\n\nRun /improvements scan to generate proposals from recent learning events.".to_string()
+            } else {
+                let mut lines = vec![format!("Improvements ({} total)", proposals.len())];
+                for proposal in proposals.iter().take(20) {
+                    lines.push(format_improvement_line(proposal));
+                }
+                lines.join("\n")
+            }
+        }
+        "show" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /improvements show <id>".to_string();
+            };
+            match store.get(id) {
+                Some(proposal) => format_improvement_detail(&proposal),
+                None => format!("No improvement proposal matching '{}'.", id),
+            }
+        }
+        "accept" | "reject" | "apply" => {
+            let Some(id) = parts.next() else {
+                return format!("Usage: /improvements {} <id>", action);
+            };
+            let desired = match action {
+                "accept" => ProposalStatus::Accepted,
+                "reject" => ProposalStatus::Rejected,
+                "apply" => ProposalStatus::Applied,
+                _ => unreachable!(),
+            };
+            let Some(current) = store.get(id) else {
+                return format!("No improvement proposal matching '{}'.", id);
+            };
+            if desired == ProposalStatus::Applied && current.status != ProposalStatus::Accepted {
+                return format!(
+                    "Proposal {} is {:?}. Accept it before applying. High-risk and behavior-changing proposals require explicit approval.",
+                    current.id, current.status
+                );
+            }
+            match store.update_status(id, desired) {
+                Ok(Some(updated)) => {
+                    persist_improvement_learning_event(app, &updated, action);
+                    format!(
+                        "Updated proposal {}\n{}",
+                        updated.id,
+                        format_improvement_line(&updated)
+                    )
+                }
+                Ok(None) => format!("No improvement proposal matching '{}'.", id),
+                Err(e) => format!("Failed to update proposal: {}", e),
+            }
+        }
+        _ => {
+            "Usage: /improvements [list|scan [limit]|show <id>|accept <id>|reject <id>|apply <id>]"
+                .to_string()
+        }
+    }
+}
+
+fn format_improvement_line(proposal: &crate::engine::improvement::ImprovementProposal) -> String {
+    format!(
+        "- {} [{:?}/{:?}/{:?}] events={}: {}",
+        proposal.id,
+        proposal.status,
+        proposal.target,
+        proposal.risk,
+        proposal.trigger_event_ids.len(),
+        proposal.proposed_change
+    )
+}
+
+fn format_improvement_detail(proposal: &crate::engine::improvement::ImprovementProposal) -> String {
+    format!(
+        "Improvement Proposal {}\n\nStatus: {:?}\nTarget: {:?}\nRisk: {:?}\nEvents: {:?}\n\nProposed change:\n{}\n\nExpected benefit:\n{}\n\nValidation plan:\n{}\n\nEvidence:\n{}",
+        proposal.id,
+        proposal.status,
+        proposal.target,
+        proposal.risk,
+        proposal.trigger_event_ids,
+        proposal.proposed_change,
+        proposal.expected_benefit,
+        proposal
+            .validation
+            .iter()
+            .map(|item| format!("- {}", item))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        proposal
+            .evidence
+            .iter()
+            .map(|item| format!("- {}", item))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
+fn persist_improvement_learning_event(
+    app: &mut TuiApp,
+    proposal: &crate::engine::improvement::ImprovementProposal,
+    action: &str,
+) {
+    let payload = serde_json::to_value(proposal).unwrap_or_else(|_| serde_json::json!({}));
+    let _ = app.session_manager.add_learning_event(
+        "improvement_proposal",
+        "improvements",
+        &format!("Improvement proposal {} {}", proposal.id, action),
+        0.9,
+        &payload,
+    );
+}
+
 /// /recover - Show recent recovery plans
 pub fn handle_recover(app: &mut TuiApp, args: &str) -> String {
     let limit = args.trim().parse::<usize>().unwrap_or(8).clamp(1, 50);

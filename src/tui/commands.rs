@@ -1325,6 +1325,14 @@ pub const CMD_LEARN: CommandDef = CommandDef::new(
     "Show recent runtime learning events",
 );
 
+pub const CMD_IMPROVEMENTS: CommandDef = CommandDef::new(
+    "/improvements",
+    &[],
+    "General",
+    "/improvements [list|scan|show|accept|reject|apply]",
+    "Review controlled self-evolution proposals",
+);
+
 pub const CMD_RECOVER: CommandDef = CommandDef::new(
     "/recover",
     &[],
@@ -1480,6 +1488,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_QUICK);
     registry.register(&CMD_GOAL);
     registry.register(&CMD_LEARN);
+    registry.register(&CMD_IMPROVEMENTS);
     registry.register(&CMD_RECOVER);
     registry.register(&CMD_FEEDBACK);
 
@@ -1616,6 +1625,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_QUICK,
     &CMD_GOAL,
     &CMD_LEARN,
+    &CMD_IMPROVEMENTS,
     &CMD_RECOVER,
     &CMD_FEEDBACK,
 ];
