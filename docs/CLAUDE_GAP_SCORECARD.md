@@ -23,7 +23,7 @@ polish, eval coverage, and productization.
 
 Legend: Complete | Partial | Missing | — N/A
 
-**Quick snapshot**: Run `/doctor gap` in the interactive CLI to see live metrics.
+**Quick snapshot**: Run `/doctor gap` in the Priority Agent CLI to see live metrics.
 
 ---
 

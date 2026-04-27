@@ -192,13 +192,18 @@ impl ToolRunView {
         };
         let mut title = format!("{} · {}{}", self.summary(), status_hint, elapsed);
         if !expanded {
-            title = if self.is_active() {
-                format!("{} · {}", self.summary(), details_hint)
+            title = if self.status == ToolRunStatus::Running {
+                format!("{} · running{}", self.summary(), elapsed)
+            } else if self.status == ToolRunStatus::WaitingPermission {
+                format!("{} · permission needed", self.summary())
+            } else if self.status == ToolRunStatus::Queued {
+                format!("{} · waiting", self.summary())
             } else if self.result_body.is_some() {
                 format!(
-                    "{} · {} · {} · ctrl+t output",
+                    "{} · {}{} · {} · ctrl+t output",
                     self.summary(),
                     status_hint,
+                    elapsed,
                     details_hint
                 )
             } else {

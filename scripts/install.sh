@@ -108,7 +108,7 @@ echo "[2/4] Installing binary to $BIN_DIR..."
 mkdir -p "$BIN_DIR"
 /usr/bin/install -m 0755 "$SRC_BIN" "$BIN_DIR/priority-agent"
 
-# 创建 pa symlink（快捷命令，默认进入 interactive CLI）
+# 创建 pa symlink（快捷命令，默认启动 Priority Agent）
 ln -sf "$BIN_DIR/priority-agent" "$BIN_DIR/pa"
 echo "       Created shortcut: $BIN_DIR/pa -> priority-agent"
 
@@ -156,7 +156,7 @@ echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "Binary:     $BIN_DIR/priority-agent"
-echo "Shortcut:   $BIN_DIR/pa  (interactive CLI)"
+echo "Shortcut:   $BIN_DIR/pa"
 echo "Config:     $CONFIG_DIR/"
 echo ""
 # Warn if prefix bin is not in PATH
@@ -170,6 +170,6 @@ echo "Next steps:"
 echo "  1. Set your LLM API key:"
 echo "     export MOONSHOT_API_KEY='your-key-here'"
 echo "  2. Or edit: $CONFIG_DIR/.env"
-echo "  3. Run: pa                  # interactive CLI shortcut"
-echo "     Run: priority-agent      # full command name"
+echo "  3. Run: pa                  # start Priority Agent"
+echo "     Run: priority-agent      # same command, full name"
 echo ""

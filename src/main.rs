@@ -81,15 +81,15 @@ fn print_help() {
     println!();
     println!("Modes:");
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
-    println!("  --cli    Start scrollback-first interactive CLI");
-    println!("  --tui    Start legacy full-screen Ratatui interface");
-    println!("  (none)   Default: scrollback-first interactive CLI");
+    println!("  --cli    Start Priority Agent (default)");
+    println!("  --tui    Start the full-screen terminal interface");
+    println!("  (none)   Default: start Priority Agent");
     println!();
     println!("Examples:");
     println!("  {bin}                  # Default mode");
     println!("  {bin} --api --port 8787 # HTTP API server");
-    println!("  {bin} --cli            # Interactive terminal CLI");
-    println!("  {bin} --tui            # Legacy full-screen interface");
+    println!("  {bin} --cli            # Same as default");
+    println!("  {bin} --tui            # Full-screen interface");
 }
 
 #[tokio::main]
@@ -174,7 +174,7 @@ async fn main() {
             }
         }
         StartupMode::Cli => {
-            // 默认: scrollback-first interactive CLI.
+            // Default: scrollback-first Priority Agent CLI.
             if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
                 eprintln!("Error: CLI mode requires an interactive terminal.");
                 eprintln!("       Use --api to start the HTTP API server.");
@@ -182,7 +182,7 @@ async fn main() {
                 print_help();
                 std::process::exit(1);
             }
-            info!("Starting interactive CLI...");
+            info!("Starting Priority Agent CLI...");
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let (provider, model) = match bootstrap::init_provider() {
@@ -198,7 +198,7 @@ async fn main() {
             match bootstrap::init_components(provider, model, tool_registry, &working_dir).await {
                 Ok(components) => {
                     if let Err(e) = shell::run_shell(components.streaming_engine).await {
-                        error!("Interactive CLI failed: {}", e);
+                        error!("Priority Agent CLI failed: {}", e);
                         std::process::exit(1);
                     }
                 }
@@ -215,7 +215,7 @@ async fn main() {
                 eprintln!("       Use --api to start the HTTP API server.");
                 std::process::exit(1);
             }
-            info!("Starting legacy full-screen TUI...");
+            info!("Starting full-screen terminal interface...");
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let (provider, model) = match bootstrap::init_provider() {

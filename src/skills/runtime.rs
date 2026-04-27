@@ -1,4 +1,4 @@
-//! Runtime skill registry used by the interactive CLI and tools.
+//! Runtime skill registry used by the Priority Agent CLI and tools.
 
 use super::registry::SkillRegistry;
 use super::types::Skill;

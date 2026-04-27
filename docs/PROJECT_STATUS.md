@@ -57,7 +57,7 @@ Primary interface:
 
 Compatibility:
 
-- `priority-agent --tui` still starts the same interactive CLI.
+- `priority-agent --tui` starts the compatibility full-screen terminal interface.
 
 Secondary interfaces:
 

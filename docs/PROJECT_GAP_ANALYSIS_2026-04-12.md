@@ -218,7 +218,7 @@
 - 稳定后再迁移全部命令
 
 3. 统一命令来源
-- TUI、legacy CLI、未来 API 指令都走同一 registry
+- terminal UI、Priority Agent CLI、未来 API 指令都走同一 registry
 
 ## 6.3 P2 详细步骤
 

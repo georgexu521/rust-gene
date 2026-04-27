@@ -1677,7 +1677,7 @@ pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
 /// /status - Detailed status
 pub fn handle_status_detailed(_app: &TuiApp) -> String {
     let mut lines = vec!["Detailed Status:".to_string()];
-    lines.push("  Mode: interactive CLI".to_string());
+    lines.push("  Mode: Priority Agent CLI".to_string());
     lines.push(format!("  Rust version: {}", std::env::consts::OS));
     format!(
         "{}\n{}",

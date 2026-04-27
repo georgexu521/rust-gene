@@ -5,9 +5,9 @@ Codex, with an explicit priority/goal layer, observable runtime traces, tool
 recovery, memory, MCP, and multi-provider LLM support.
 
 The project started as a weighted-priority desktop agent. It has since evolved
-into an interactive programming agent CLI. Old references to a separate TUI mode
-should be read as the current interactive CLI; `--tui` remains only as a
-compatibility alias for `--cli`.
+into a programming-agent terminal CLI. The default command is `priority-agent`
+or the `pa` shortcut; `--tui` remains as a compatibility entry for the
+full-screen terminal interface.
 
 ## Current Status
 
@@ -17,7 +17,7 @@ Latest verified baseline:
 
 - `cargo check --quiet`
 - `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
-- Result: `862 passed; 0 failed`
+- Result: `899 passed; 0 failed`
 
 ## Quick Start
 

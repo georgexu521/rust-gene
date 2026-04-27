@@ -60,7 +60,7 @@ impl TuiSessionManager {
 
     /// 使用已有 SessionStore 和会话 ID 创建管理器。
     ///
-    /// 这用于 interactive CLI 复用 StreamingQueryEngine 的持久化会话，
+    /// 这用于 Priority Agent CLI 复用 StreamingQueryEngine 的持久化会话，
     /// 避免 UI 历史、trace、learning events 写入不同会话。
     pub fn from_store(
         store: Arc<SessionStore>,

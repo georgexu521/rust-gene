@@ -32,7 +32,7 @@ help:
 	@echo "Priority Agent - Makefile targets"
 	@echo ""
 	@echo "  make              Build release binary"
-	@echo "  make install      Build release + install to ~/.local/bin (interactive CLI)"
+	@echo "  make install      Build release + install to ~/.local/bin"
 	@echo "  make install-cli  Alias of make install"
 	@echo "  make test         Run all tests"
 	@echo "  make clean        Clean build artifacts"

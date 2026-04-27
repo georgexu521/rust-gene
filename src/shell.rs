@@ -27,6 +27,7 @@ const YELLOW: &str = "\x1b[33m";
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
 const BLUE: &str = "\x1b[34m";
+const CYAN: &str = "\x1b[36m";
 
 const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/help", "show commands"),
@@ -35,7 +36,6 @@ const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/model", "show active model"),
     ShellCommand::new("/clear", "clear terminal"),
     ShellCommand::new("/exit", "quit"),
-    ShellCommand::new("/tui", "open legacy full-screen UI"),
 ];
 
 pub async fn run_shell(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()> {
@@ -43,7 +43,7 @@ pub async fn run_shell(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()> 
         anyhow::bail!("CLI mode requires an interactive terminal");
     }
 
-    print_welcome();
+    print_welcome(&engine).await;
 
     let mut editor = build_line_editor()?;
     let history_path = shell_history_path();
@@ -88,8 +88,42 @@ pub async fn run_shell(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn print_welcome() {
-    println!("{DIM}Priority Agent · /help commands · /exit quit · /tui legacy full-screen{RESET}");
+async fn print_welcome(engine: &StreamingQueryEngine) {
+    let usage = engine.context_usage_report().await;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let dir = compact_home_path(&cwd);
+    let model = compact_line(&engine.model_name(), 30);
+    let provider = compact_line(&engine.provider_base_url(), 42);
+    let mode = permission_mode_label(engine.permission_mode());
+    let width = terminal_width().clamp(60, 110);
+    let inner = width.saturating_sub(4);
+
+    println!(
+        "{BLUE}╭─{RESET} {BOLD}Priority Agent{RESET} {DIM}coding agent{RESET}{}",
+        colored_rule(width.saturating_sub(31), BLUE)
+    );
+    println!(
+        "{BLUE}│{RESET}  {BOLD}Welcome back.{RESET} {DIM}Ask for code changes, debugging, reviews, or project inspection.{RESET}"
+    );
+    println!("{BLUE}│{RESET}");
+    println!(
+        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{}",
+        "Directory",
+        compact_line(&dir, inner.saturating_sub(12))
+    );
+    println!(
+        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{} {DIM}· provider {RESET}{}",
+        "Model", model, provider
+    );
+    println!(
+        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{} {DIM}· context {RESET}{} / {}",
+        "Mode", mode, usage.total_estimated_tokens, usage.max_context_tokens
+    );
+    println!(
+        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}/help commands · /status details · /exit quit",
+        "Shortcuts"
+    );
+    println!("{BLUE}╰{}╯{RESET}", "─".repeat(width.saturating_sub(2)));
     println!();
 }
 
@@ -124,7 +158,7 @@ async fn handle_local_command(
             Ok(true)
         }
         "/tui" => {
-            println!("{DIM}Run `pa --tui` to open the legacy full-screen interface.{RESET}");
+            println!("{DIM}Run `pa --tui` to open the full-screen terminal interface.{RESET}");
             Ok(true)
         }
         _ => Ok(false),
@@ -207,6 +241,34 @@ fn percent_bar(percent: u64, width: usize) -> String {
     let filled = ((percent as usize) * width).div_ceil(100).min(width);
     let empty = width.saturating_sub(filled);
     format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+}
+
+fn terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(width, _)| width as usize)
+        .unwrap_or(80)
+}
+
+fn colored_rule(len: usize, color: &str) -> String {
+    if len == 0 {
+        String::new()
+    } else {
+        format!("{color}{}{RESET}", "─".repeat(len))
+    }
+}
+
+fn compact_home_path(path: &std::path::Path) -> String {
+    let home = dirs::home_dir();
+    if let Some(home) = home.as_ref() {
+        if let Ok(stripped) = path.strip_prefix(home) {
+            let suffix = stripped.to_string_lossy();
+            if suffix.is_empty() {
+                return "~".to_string();
+            }
+            return format!("~/{}", suffix);
+        }
+    }
+    path.display().to_string()
 }
 
 fn compact_line(text: &str, max_chars: usize) -> String {
@@ -373,7 +435,7 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                 upsert_tool_run(&mut tool_runs, id.clone(), name.clone());
                 with_tool_run(&mut tool_runs, &id, |run| run.mark_running(name));
                 if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
-                    println_tool_line("·", YELLOW, &run.summary(), false);
+                    println_tool_line("·", YELLOW, &run.render_lines(false).join("\n"), false);
                 }
             }
             StreamEvent::ToolExecutionProgress { id, progress } => {
@@ -390,7 +452,7 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                         "✓"
                     };
                     let color = if marker == "✗" { RED } else { GREEN };
-                    println_tool_line(marker, color, &run.render_lines(false).join("\n  "), true);
+                    println_tool_line(marker, color, &run.render_lines(false).join("\n"), true);
                 }
             }
             StreamEvent::PermissionRequest {
@@ -454,7 +516,7 @@ fn println_tool_line(marker: &str, color: &str, text: &str, first_line_normal: b
                 println!("{color}{marker}{RESET} {DIM}{line}{RESET}");
             }
         } else {
-            println!("{DIM}  {line}{RESET}");
+            println!("{DIM}{line}{RESET}");
         }
     }
 }
@@ -544,6 +606,7 @@ struct AssistantPrinter {
     started: bool,
     line: String,
     in_code_block: bool,
+    blank_lines: usize,
 }
 
 impl AssistantPrinter {
@@ -579,7 +642,7 @@ impl AssistantPrinter {
 
     fn ensure_started(&mut self) -> io::Result<()> {
         if !self.started {
-            print!("{BLUE}●{RESET} ");
+            print!("{CYAN}●{RESET} ");
             self.started = true;
         }
         Ok(())
@@ -587,9 +650,14 @@ impl AssistantPrinter {
 
     fn print_line(&mut self, line: &str) -> io::Result<()> {
         let rendered = render_assistant_line(line, &mut self.in_code_block);
-        if rendered.is_empty() {
+        if rendered.trim().is_empty() {
+            if !self.started || self.blank_lines >= 1 {
+                return Ok(());
+            }
+            self.blank_lines += 1;
             println!();
         } else {
+            self.blank_lines = 0;
             println!("{rendered}");
         }
         Ok(())
@@ -599,12 +667,20 @@ impl AssistantPrinter {
 fn render_assistant_line(line: &str, in_code_block: &mut bool) -> String {
     let trimmed = line.trim_end();
     if trimmed.trim_start().starts_with("```") {
+        let was_in_code_block = *in_code_block;
         *in_code_block = !*in_code_block;
-        return format!("{DIM}{trimmed}{RESET}");
+        let label = trimmed.trim_start().trim_start_matches("```").trim();
+        if was_in_code_block {
+            return format!("{DIM}╰─{RESET}");
+        }
+        if label.is_empty() {
+            return format!("{DIM}╭─ code{RESET}");
+        }
+        return format!("{DIM}╭─ {label}{RESET}");
     }
 
     if *in_code_block {
-        return trimmed.to_string();
+        return format!("{DIM}│{RESET} {trimmed}");
     }
 
     if let Some(table_line) = render_markdown_table_line(trimmed) {
@@ -617,7 +693,50 @@ fn render_assistant_line(line: &str, in_code_block: &mut bool) -> String {
         let heading_text = heading.trim_start_matches('#').trim_start();
         return format!("{BOLD}{heading_text}{RESET}");
     }
+    if let Some(block_quote) = render_block_quote(&cleaned) {
+        return block_quote;
+    }
+    if let Some(list_item) = render_list_item(&cleaned) {
+        return list_item;
+    }
+    if let Some(numbered_item) = render_numbered_item(&cleaned) {
+        return numbered_item;
+    }
     cleaned
+}
+
+fn render_list_item(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let indent = line.len().saturating_sub(trimmed.len());
+    let marker = ["- ", "* ", "• "]
+        .iter()
+        .find(|marker| trimmed.starts_with(**marker))?;
+    let text = trimmed[marker.len()..].trim_start();
+    let spaces = " ".repeat(indent.min(6));
+    Some(format!("{spaces}{DIM}•{RESET} {text}"))
+}
+
+fn render_numbered_item(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let indent = line.len().saturating_sub(trimmed.len());
+    let dot = trimmed.find(". ")?;
+    if dot == 0 || dot > 3 {
+        return None;
+    }
+    let number = &trimmed[..dot];
+    if !number.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let text = trimmed[dot + 2..].trim_start();
+    let spaces = " ".repeat(indent.min(6));
+    Some(format!("{spaces}{DIM}{number}.{RESET} {text}"))
+}
+
+fn render_block_quote(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let text = trimmed.strip_prefix("> ")?;
+    let indent = line.len().saturating_sub(trimmed.len()).min(6);
+    Some(format!("{}{DIM}│ {text}{RESET}", " ".repeat(indent)))
 }
 
 fn render_markdown_table_line(line: &str) -> Option<String> {
@@ -682,6 +801,40 @@ mod tests {
         assert_eq!(
             render_assistant_line("**文件：** `a.md`", &mut in_code),
             "文件： a.md"
+        );
+    }
+
+    #[test]
+    fn markdown_lists_are_softened() {
+        let mut in_code = false;
+        assert_eq!(
+            render_assistant_line("- first item", &mut in_code),
+            format!("{DIM}•{RESET} first item")
+        );
+        assert_eq!(
+            render_assistant_line("  1. next item", &mut in_code),
+            format!("  {DIM}1.{RESET} next item")
+        );
+    }
+
+    #[test]
+    fn markdown_quotes_and_code_blocks_are_softened() {
+        let mut in_code = false;
+        assert_eq!(
+            render_assistant_line("> note", &mut in_code),
+            format!("{DIM}│ note{RESET}")
+        );
+        assert_eq!(
+            render_assistant_line("```rust", &mut in_code),
+            format!("{DIM}╭─ rust{RESET}")
+        );
+        assert_eq!(
+            render_assistant_line("let x = 1;", &mut in_code),
+            format!("{DIM}│{RESET} let x = 1;")
+        );
+        assert_eq!(
+            render_assistant_line("```", &mut in_code),
+            format!("{DIM}╰─{RESET}")
         );
     }
 
