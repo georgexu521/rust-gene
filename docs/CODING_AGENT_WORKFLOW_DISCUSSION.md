@@ -1407,6 +1407,33 @@ Completed:
 - Added coverage for factor-based weighting, override guardrails, feedback
   reweighting, EvalSet replay, trace formatting, and CLI quick-panel display.
 
+Completed second workflow integration slice:
+
+- Added a `CodeChangeWorkflowRunner` boundary for programming turns.
+  - It centralizes risk-sensitive workflow policy, stage validation records,
+    acceptance review history, changed-file tracking, and closeout generation.
+  - The direct conversation loop still performs provider/tool orchestration, but
+    code-change workflow state no longer lives only as ad hoc local variables.
+- Solidified risk-sensitive policy.
+  - Low-risk programming work stays minimal and quiet.
+  - Medium-risk programming work uses workflow judgment, stage validation,
+    final closeout, and two bounded repair attempts.
+  - High-risk programming work uses strict validation, visible weight details,
+    ReflectionPass blocking, and one bounded repair attempt before reassessment.
+- Added lightweight stage validation.
+  - After a meaningful file-change round, the runner records the active plan
+    step, changed files, validation status, and compact evidence.
+  - Failed stage validation produces weight feedback, so validation failures can
+    change the next active step instead of only appending text to the prompt.
+- Added structured final closeout.
+  - Coding turns can now append a closeout derived from workflow records:
+    changed files, validation status, acceptance status, and residual risk.
+  - The trace records `closeout` separately so `/trace` and `/quick` can show
+    whether the final answer was grounded in workflow records.
+- Improved CLI observability.
+  - `/quick` now includes stage validation and closeout state in the Contracts
+    block, while detailed weight values remain limited to plan/debug surfaces.
+
 ## Design Conclusion
 
 The preferred design is a model-led engineering workflow:

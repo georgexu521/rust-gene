@@ -570,6 +570,18 @@ fn apply_workflow_feedback_and_trace(
     });
 }
 
+fn trace_stage_validation(
+    trace: &TraceCollector,
+    record: &crate::engine::code_change_workflow::StageValidationRecord,
+) {
+    trace.record(TraceEvent::StageValidationCompleted {
+        step: record.step_description.clone(),
+        status: record.status.label().to_string(),
+        changed_files: record.changed_files.len(),
+        evidence_items: record.evidence.len(),
+    });
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -930,13 +942,16 @@ impl ConversationLoop {
         ) {
             task_bundle.add_risk("code-change tasks require explicit verification");
         }
+        let mut code_workflow =
+            crate::engine::code_change_workflow::CodeChangeWorkflowRunner::new(&task_bundle);
         let workflow_contract_prompt =
             crate::engine::workflow_contract::WorkflowContractPrompt::new(
                 last_user_preview.as_str(),
                 route.clone(),
                 working_dir.display().to_string(),
             );
-        if workflow_contract_prompt.should_ask_model()
+        if code_workflow.should_request_workflow_judgment()
+            && workflow_contract_prompt.should_ask_model()
             && workflow_contract_enabled(self.provider.as_ref())
         {
             let analyzer = crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
@@ -1002,6 +1017,7 @@ impl ConversationLoop {
                         }),
                     );
                     task_bundle.apply_workflow_judgment(judgment);
+                    code_workflow.refresh_policy(&task_bundle);
                     let insert_at = messages
                         .iter()
                         .take_while(|message| matches!(message, Message::System { .. }))
@@ -1034,11 +1050,7 @@ impl ConversationLoop {
             unresolved: reflection_pass.unresolved_count(),
         });
         if reflection_pass.status == crate::engine::reflection_pass::ReflectionStatus::NeedsWork
-            && matches!(
-                route.workflow,
-                crate::engine::intent_router::WorkflowKind::CodeChange
-                    | crate::engine::intent_router::WorkflowKind::BugFix
-            )
+            && code_workflow.should_block_on_reflection()
         {
             let review_prompt = format!(
                 "Reflection pass '{}' found {} unresolved issue(s) before executing a {:?} workflow. Allow the turn to continue?",
@@ -1802,6 +1814,16 @@ impl ConversationLoop {
                     findings: post_edit_reflection.findings.len(),
                     unresolved: post_edit_reflection.unresolved_count(),
                 });
+                let stage_record = code_workflow.record_stage_validation(
+                    &task_bundle,
+                    &changed_files,
+                    verify_passed,
+                    &acceptance_evidence,
+                );
+                trace_stage_validation(&trace, &stage_record);
+                if let Some(feedback) = stage_record.feedback.clone() {
+                    apply_workflow_feedback_and_trace(&mut task_bundle, &trace, feedback);
+                }
                 if let Some(judgment) = task_bundle.workflow_judgment.as_ref() {
                     if workflow_contract_enabled(self.provider.as_ref()) {
                         let analyzer =
@@ -1831,6 +1853,7 @@ impl ConversationLoop {
                                     unresolved: review_unresolved,
                                     next_action: format!("{:?}", review.next_action),
                                 });
+                                code_workflow.record_acceptance_review(review.clone());
                                 if review_accepted {
                                     trace.record(TraceEvent::WorkflowPlanProgress {
                                         total_steps: judgment.plan.len(),
@@ -1897,7 +1920,8 @@ impl ConversationLoop {
                                             .to_string(),
                                     ));
                                     if high_risk
-                                        && (acceptance_repair_attempts >= 2
+                                        && (acceptance_repair_attempts
+                                            >= code_workflow.max_repair_attempts()
                                             || matches!(
                                                 review_next_action,
                                                 crate::engine::workflow_contract::AcceptanceNextAction::Stop
@@ -1973,6 +1997,23 @@ impl ConversationLoop {
                     }
                 }
                 mem.increment_turn();
+            }
+        }
+
+        if let Some(closeout) = code_workflow.build_closeout(&task_bundle) {
+            trace.record(TraceEvent::FinalCloseoutPrepared {
+                status: closeout.status.label().to_string(),
+                changed_files: closeout.changed_files.len(),
+                validation_items: closeout.validation.len(),
+                acceptance_items: closeout.acceptance.len(),
+                residual_risks: closeout.residual_risks.len(),
+            });
+            let closeout_text = closeout.format_for_final_response();
+            if !final_content.contains("Workflow closeout:") {
+                final_content.push_str(&closeout_text);
+                if let Some(tx) = tx {
+                    let _ = tx.send(StreamEvent::TextChunk(closeout_text)).await;
+                }
             }
         }
 

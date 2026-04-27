@@ -2461,6 +2461,9 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let reflection_line = latest_trace_for_app(app)
         .and_then(|trace| latest_reflection_label(&trace))
         .unwrap_or_else(|| "none".to_string());
+    let stage_line = latest_trace_for_app(app)
+        .and_then(|trace| latest_stage_validation_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
     let acceptance_line = latest_trace_for_app(app)
         .and_then(|trace| latest_acceptance_label(&trace))
         .unwrap_or_else(|| "none".to_string());
@@ -2470,10 +2473,13 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let plan_line = latest_trace_for_app(app)
         .and_then(|trace| latest_workflow_plan_label(&trace))
         .unwrap_or_else(|| "none".to_string());
+    let closeout_line = latest_trace_for_app(app)
+        .and_then(|trace| latest_closeout_label(&trace))
+        .unwrap_or_else(|| "none".to_string());
     let a2a_line = latest_a2a_transcript_label();
 
     format!(
-        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Stage: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- Closeout: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /resource     inspect latest resource budget\n2. /goal         inspect or pin the active goal\n3. /goal drift   inspect recent goal drift\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
         app.mode,
         app.is_querying,
         pending,
@@ -2488,10 +2494,12 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         recent_commands,
         contract_line,
         plan_line,
+        stage_line,
         retrieval_line,
         reflection_line,
         acceptance_line,
         debugging_line,
+        closeout_line,
         a2a_line,
         workspace,
         cwd.display(),
@@ -2529,16 +2537,20 @@ fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> Strin
     let mut verification = false;
     let mut acceptance = false;
     let mut debugging = false;
+    let mut stage = false;
+    let mut closeout = false;
     for event in &trace.events {
         match event {
             crate::engine::trace::TraceEvent::TaskContextBuilt { .. } => task = true,
             crate::engine::trace::TraceEvent::WorkflowJudgmentCompleted { .. } => judgment = true,
             crate::engine::trace::TraceEvent::WorkflowPlanProgress { .. } => plan = true,
+            crate::engine::trace::TraceEvent::StageValidationCompleted { .. } => stage = true,
             crate::engine::trace::TraceEvent::RetrievalContextBuilt { .. } => retrieval = true,
             crate::engine::trace::TraceEvent::ReflectionPassCompleted { .. } => reflection = true,
             crate::engine::trace::TraceEvent::VerificationCompleted { .. } => verification = true,
             crate::engine::trace::TraceEvent::AcceptanceReviewCompleted { .. } => acceptance = true,
             crate::engine::trace::TraceEvent::GuidedDebuggingCompleted { .. } => debugging = true,
+            crate::engine::trace::TraceEvent::FinalCloseoutPrepared { .. } => closeout = true,
             _ => {}
         }
     }
@@ -2551,6 +2563,9 @@ fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> Strin
     }
     if plan {
         parts.push("plan");
+    }
+    if stage {
+        parts.push("stage");
     }
     if retrieval {
         parts.push("retrieval");
@@ -2566,6 +2581,9 @@ fn latest_contract_state_label(trace: &crate::engine::trace::TurnTrace) -> Strin
     }
     if debugging {
         parts.push("debug");
+    }
+    if closeout {
+        parts.push("closeout");
     }
     if parts.is_empty() {
         "none".to_string()
@@ -2615,6 +2633,30 @@ fn latest_reflection_label(trace: &crate::engine::trace::TurnTrace) -> Option<St
     })
 }
 
+fn latest_stage_validation_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::StageValidationCompleted {
+            step,
+            status,
+            changed_files,
+            evidence_items,
+        } = event
+        {
+            Some(format!(
+                "{} step={} files={} evidence={}",
+                status,
+                step.as_deref()
+                    .map(|step| compact_inline(step, 60))
+                    .unwrap_or_else(|| "none".to_string()),
+                changed_files,
+                evidence_items
+            ))
+        } else {
+            None
+        }
+    })
+}
+
 fn latest_workflow_plan_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
     trace.events.iter().rev().find_map(|event| {
         if let crate::engine::trace::TraceEvent::WorkflowPlanProgress {
@@ -2645,6 +2687,26 @@ fn latest_workflow_plan_label(trace: &crate::engine::trace::TurnTrace) -> Option
                     .unwrap_or_else(|| "none".to_string()),
                 weight_source.as_deref().unwrap_or("none"),
                 reweighted
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+fn latest_closeout_label(trace: &crate::engine::trace::TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if let crate::engine::trace::TraceEvent::FinalCloseoutPrepared {
+            status,
+            changed_files,
+            validation_items,
+            acceptance_items,
+            residual_risks,
+        } = event
+        {
+            Some(format!(
+                "{} files={} validation={} acceptance={} risks={}",
+                status, changed_files, validation_items, acceptance_items, residual_risks
             ))
         } else {
             None

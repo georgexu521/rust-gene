@@ -6,6 +6,7 @@
 pub mod auto_verify;
 pub mod batch_refactor;
 pub mod checkpoint;
+pub mod code_change_workflow;
 pub mod code_review;
 pub mod context_collapse;
 pub mod context_compressor;

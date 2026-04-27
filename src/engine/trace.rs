@@ -113,6 +113,12 @@ pub enum TraceEvent {
         weight_source: Option<String>,
         reweighted: bool,
     },
+    StageValidationCompleted {
+        step: Option<String>,
+        status: String,
+        changed_files: usize,
+        evidence_items: usize,
+    },
     ReflectionPassCompleted {
         pass_id: String,
         task_id: String,
@@ -240,6 +246,13 @@ pub enum TraceEvent {
         chars: usize,
         iterations: usize,
     },
+    FinalCloseoutPrepared {
+        status: String,
+        changed_files: usize,
+        validation_items: usize,
+        acceptance_items: usize,
+        residual_risks: usize,
+    },
     Error {
         message: String,
     },
@@ -254,6 +267,7 @@ impl TraceEvent {
             TraceEvent::TaskContextBuilt { .. } => "task.context",
             TraceEvent::WorkflowJudgmentCompleted { .. } => "workflow.judgment",
             TraceEvent::WorkflowPlanProgress { .. } => "workflow.plan",
+            TraceEvent::StageValidationCompleted { .. } => "stage.validation",
             TraceEvent::ReflectionPassCompleted { .. } => "reflection.pass",
             TraceEvent::SessionGoalUpdated { .. } => "goal",
             TraceEvent::GoalDriftDetected { .. } => "goal.drift",
@@ -278,6 +292,7 @@ impl TraceEvent {
             TraceEvent::RecoveryPlan { .. } => "recovery.plan",
             TraceEvent::McpResourceAccessed { .. } => "mcp.resource",
             TraceEvent::AssistantResponded { .. } => "assistant",
+            TraceEvent::FinalCloseoutPrepared { .. } => "closeout",
             TraceEvent::Error { .. } => "error",
         }
     }
@@ -381,6 +396,20 @@ impl TraceEvent {
                     .unwrap_or_else(|| "none".to_string()),
                 weight_source.as_deref().unwrap_or("none"),
                 reweighted
+            ),
+            TraceEvent::StageValidationCompleted {
+                step,
+                status,
+                changed_files,
+                evidence_items,
+            } => format!(
+                "stage validation step={} status={} files={} evidence={}",
+                step.as_deref()
+                    .map(preview)
+                    .unwrap_or_else(|| "none".to_string()),
+                status,
+                changed_files,
+                evidence_items
             ),
             TraceEvent::ReflectionPassCompleted {
                 pass_id,
@@ -591,6 +620,16 @@ impl TraceEvent {
                     chars, iterations
                 )
             }
+            TraceEvent::FinalCloseoutPrepared {
+                status,
+                changed_files,
+                validation_items,
+                acceptance_items,
+                residual_risks,
+            } => format!(
+                "final closeout status={} files={} validation={} acceptance={} risks={}",
+                status, changed_files, validation_items, acceptance_items, residual_risks
+            ),
             TraceEvent::Error { message } => format!("error: {}", preview(message)),
         }
     }
