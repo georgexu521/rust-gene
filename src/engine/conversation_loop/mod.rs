@@ -1824,6 +1824,63 @@ impl ConversationLoop {
                 if let Some(feedback) = stage_record.feedback.clone() {
                     apply_workflow_feedback_and_trace(&mut task_bundle, &trace, feedback);
                 }
+                if !verify_passed && workflow_contract_enabled(self.provider.as_ref()) {
+                    let analyzer = crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
+                        self.provider.as_ref(),
+                        self.model.clone(),
+                    );
+                    let prompt = crate::engine::workflow_contract::GuidedDebuggingPrompt::new(
+                        last_user_preview.as_str(),
+                        task_bundle
+                            .workflow_judgment
+                            .as_ref()
+                            .map(|judgment| judgment.to_turn_context()),
+                        vec!["stage_validation".to_string()],
+                        post_edit_evidence.clone(),
+                    );
+                    match analyzer.analyze_debugging(prompt).await {
+                        Ok(debugging) => {
+                            trace.record(TraceEvent::GuidedDebuggingCompleted {
+                                blocker: debugging.blocker,
+                                next_action: format!("{:?}", debugging.next_action),
+                                causes: debugging.likely_causes.len(),
+                                evidence_items: debugging.evidence_to_collect.len(),
+                                ask_user: debugging.ask_user,
+                            });
+                            persist_workflow_learning_event(
+                                self.session_store.as_ref(),
+                                &self.session_id,
+                                "guided_debugging",
+                                format!(
+                                    "Guided validation debugging selected {:?}: {}",
+                                    debugging.next_action, debugging.symptom
+                                ),
+                                if debugging.blocker { 0.85 } else { 0.7 },
+                                serde_json::json!({
+                                    "blocker": debugging.blocker,
+                                    "symptom": debugging.symptom.clone(),
+                                    "likely_causes": debugging.likely_causes.clone(),
+                                    "evidence_to_collect": debugging.evidence_to_collect.clone(),
+                                    "smallest_safe_action": debugging.smallest_safe_action.clone(),
+                                    "ask_user": debugging.ask_user,
+                                    "questions": debugging.questions.clone(),
+                                    "next_action": format!("{:?}", debugging.next_action),
+                                    "source": "stage_validation",
+                                }),
+                            );
+                            let debugging_text = debugging.format_for_prompt();
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&debugging_text);
+                            messages.push(Message::system(debugging_text));
+                        }
+                        Err(err) => {
+                            warn!("Guided validation debugging failed: {}", err);
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error: format!("guided validation debugging failed: {}", err),
+                            });
+                        }
+                    }
+                }
                 if let Some(judgment) = task_bundle.workflow_judgment.as_ref() {
                     if workflow_contract_enabled(self.provider.as_ref()) {
                         let analyzer =
@@ -2009,7 +2066,7 @@ impl ConversationLoop {
                 residual_risks: closeout.residual_risks.len(),
             });
             let closeout_text = closeout.format_for_final_response();
-            if !final_content.contains("Workflow closeout:") {
+            if !final_content.contains("Closeout:") {
                 final_content.push_str(&closeout_text);
                 if let Some(tx) = tx {
                     let _ = tx.send(StreamEvent::TextChunk(closeout_text)).await;

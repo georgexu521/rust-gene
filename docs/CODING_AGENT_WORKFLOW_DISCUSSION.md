@@ -1434,6 +1434,24 @@ Completed second workflow integration slice:
   - `/quick` now includes stage validation and closeout state in the Contracts
     block, while detailed weight values remain limited to plan/debug surfaces.
 
+Completed third polish slice:
+
+- Added plan-step runtime state inside `CodeChangeWorkflowRunner`.
+  - Steps can now move through pending, active, passed, failed, and skipped
+    states based on stage validation evidence.
+  - Closeout validation now reports step state rather than only raw validation
+    events.
+- Broadened guided reasoning.
+  - Validation failures now trigger the same compact guided-debugging contract
+    used for tool failures, so failed checks can produce diagnosis, likely
+    causes, smallest safe action, and whether to ask the user.
+- Tightened final closeout wording.
+  - The final section is now a concise `Closeout` block with status, changed
+    files, verification, acceptance, and risk.
+- Reduced normal CLI noise.
+  - `/quick` plan display now shows progress, active step, priority, and
+    reweighted state without exposing raw numeric weights by default.
+
 ## Design Conclusion
 
 The preferred design is a model-led engineering workflow:

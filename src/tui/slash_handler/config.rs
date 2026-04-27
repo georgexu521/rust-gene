@@ -2664,14 +2664,15 @@ fn latest_workflow_plan_label(trace: &crate::engine::trace::TurnTrace) -> Option
             completed_steps,
             active_step,
             top_priority,
-            top_importance_score,
-            top_weight_share,
-            weight_source,
+            top_importance_score: _,
+            top_weight_share: _,
+            weight_source: _,
             reweighted,
         } = event
         {
+            let reweighted_suffix = if *reweighted { " reweighted" } else { "" };
             Some(format!(
-                "{}/{} active={} priority={} importance={} share={} source={} reweighted={}",
+                "{}/{} {} ({}){}",
                 completed_steps,
                 total_steps,
                 active_step
@@ -2679,14 +2680,7 @@ fn latest_workflow_plan_label(trace: &crate::engine::trace::TurnTrace) -> Option
                     .map(|step| compact_inline(step, 60))
                     .unwrap_or_else(|| "none".to_string()),
                 top_priority.as_deref().unwrap_or("none"),
-                top_importance_score
-                    .map(|score| format!("{:.2}", score))
-                    .unwrap_or_else(|| "none".to_string()),
-                top_weight_share
-                    .map(|share| format!("{:.2}", share))
-                    .unwrap_or_else(|| "none".to_string()),
-                weight_source.as_deref().unwrap_or("none"),
-                reweighted
+                reweighted_suffix
             ))
         } else {
             None

@@ -39,6 +39,37 @@ pub enum StageValidationStatus {
     NotVerified,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStepRuntimeStatus {
+    Pending,
+    Active,
+    Passed,
+    Failed,
+    Skipped,
+}
+
+impl PlanStepRuntimeStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Active => "active",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStepRuntimeState {
+    pub id: Option<String>,
+    pub description: String,
+    pub status: PlanStepRuntimeStatus,
+    pub priority: String,
+    pub last_evidence: Option<String>,
+}
+
 impl StageValidationStatus {
     pub fn label(self) -> &'static str {
         match self {
@@ -140,21 +171,21 @@ pub struct WorkflowCloseout {
 
 impl WorkflowCloseout {
     pub fn format_for_final_response(&self) -> String {
-        let mut out = String::from("\n\nWorkflow closeout:\n");
+        let mut out = String::from("\n\nCloseout:\n");
         out.push_str(&format!("- Status: {}\n", self.status.label()));
         out.push_str(&format!(
-            "- Changed files: {}\n",
+            "- Changed: {}\n",
             if self.changed_files.is_empty() {
                 "none".to_string()
             } else {
                 self.changed_files.join(", ")
             }
         ));
-        out.push_str("- Validation:\n");
+        out.push_str("- Verified:\n");
         append_bullets(&mut out, &self.validation);
         out.push_str("- Acceptance:\n");
         append_bullets(&mut out, &self.acceptance);
-        out.push_str("- Residual risk:\n");
+        out.push_str("- Risk:\n");
         append_bullets(&mut out, &self.residual_risks);
         out
     }
@@ -165,6 +196,7 @@ pub struct CodeChangeWorkflowRunner {
     pub task_id: String,
     pub policy: RiskSensitiveWorkflowPolicy,
     changed_files: Vec<String>,
+    step_states: Vec<PlanStepRuntimeState>,
     validations: Vec<StageValidationRecord>,
     acceptance_reviews: Vec<AcceptanceReview>,
     residual_risks: Vec<String>,
@@ -180,6 +212,7 @@ impl CodeChangeWorkflowRunner {
             task_id: bundle.task_id.clone(),
             policy,
             changed_files: Vec::new(),
+            step_states: step_states_from_bundle(bundle),
             validations: Vec::new(),
             acceptance_reviews: Vec::new(),
             residual_risks: Vec::new(),
@@ -191,6 +224,7 @@ impl CodeChangeWorkflowRunner {
             &bundle.route,
             bundle.workflow_judgment.as_ref(),
         );
+        self.step_states = step_states_from_bundle(bundle);
     }
 
     pub fn should_request_workflow_judgment(&self) -> bool {
@@ -216,6 +250,17 @@ impl CodeChangeWorkflowRunner {
             .workflow_judgment
             .as_ref()
             .and_then(|judgment| judgment.top_plan_step());
+        if let Some(active) = active.as_ref() {
+            self.mark_active_step(active.id.as_deref(), &active.description);
+        } else if self.step_states.is_empty() {
+            self.step_states.push(PlanStepRuntimeState {
+                id: None,
+                description: "file-change validation".to_string(),
+                status: PlanStepRuntimeStatus::Active,
+                priority: "implicit".to_string(),
+                last_evidence: None,
+            });
+        }
         let status = if verify_passed {
             StageValidationStatus::Passed
         } else if evidence.is_empty() {
@@ -242,12 +287,15 @@ impl CodeChangeWorkflowRunner {
         });
         let record = StageValidationRecord {
             step_id: active.as_ref().and_then(|step| step.id.clone()),
-            step_description: active.map(|step| step.description),
+            step_description: active
+                .map(|step| step.description)
+                .or_else(|| Some("file-change validation".to_string())),
             status,
             changed_files: changed,
             evidence: evidence.iter().map(|item| preview(item, 160)).collect(),
             feedback,
         };
+        self.mark_stage_result(&record);
         self.validations.push(record.clone());
         record
     }
@@ -269,18 +317,10 @@ impl CodeChangeWorkflowRunner {
 
         let status = self.closeout_status();
         let mut validation = self
-            .validations
+            .step_states
             .iter()
-            .map(|record| {
-                format!(
-                    "{}: {}",
-                    record
-                        .step_description
-                        .as_deref()
-                        .unwrap_or("stage validation"),
-                    record.status.label()
-                )
-            })
+            .filter(|step| step.status != PlanStepRuntimeStatus::Pending)
+            .map(|step| format!("{}: {}", step.description, step.status.label()))
             .collect::<Vec<_>>();
         if validation.is_empty() {
             validation.push("No file-change validation was required or recorded".to_string());
@@ -349,6 +389,60 @@ impl CodeChangeWorkflowRunner {
             StageValidationStatus::Passed
         }
     }
+
+    pub fn step_states(&self) -> &[PlanStepRuntimeState] {
+        &self.step_states
+    }
+
+    fn mark_active_step(&mut self, id: Option<&str>, description: &str) {
+        let mut found = false;
+        for step in &mut self.step_states {
+            let same = match (id, step.id.as_deref()) {
+                (Some(id), Some(step_id)) => id == step_id,
+                _ => step.description == description,
+            };
+            if same && matches!(step.status, PlanStepRuntimeStatus::Pending) {
+                step.status = PlanStepRuntimeStatus::Active;
+                found = true;
+            } else if step.status == PlanStepRuntimeStatus::Active {
+                step.status = PlanStepRuntimeStatus::Pending;
+            }
+        }
+        if !found && self.step_states.is_empty() {
+            self.step_states.push(PlanStepRuntimeState {
+                id: id.map(ToString::to_string),
+                description: description.to_string(),
+                status: PlanStepRuntimeStatus::Active,
+                priority: "unknown".to_string(),
+                last_evidence: None,
+            });
+        }
+    }
+
+    fn mark_stage_result(&mut self, record: &StageValidationRecord) {
+        let runtime_status = match record.status {
+            StageValidationStatus::Passed => PlanStepRuntimeStatus::Passed,
+            StageValidationStatus::Failed => PlanStepRuntimeStatus::Failed,
+            StageValidationStatus::Partial => PlanStepRuntimeStatus::Active,
+            StageValidationStatus::NotVerified => PlanStepRuntimeStatus::Active,
+        };
+        let evidence = record.evidence.first().cloned();
+        for step in &mut self.step_states {
+            let same = match (record.step_id.as_deref(), step.id.as_deref()) {
+                (Some(id), Some(step_id)) => id == step_id,
+                _ => record
+                    .step_description
+                    .as_ref()
+                    .map(|description| description == &step.description)
+                    .unwrap_or(false),
+            };
+            if same {
+                step.status = runtime_status;
+                step.last_evidence = evidence.clone();
+                return;
+            }
+        }
+    }
 }
 
 pub fn is_programming_workflow(workflow: WorkflowKind) -> bool {
@@ -363,6 +457,26 @@ fn append_bullets(out: &mut String, items: &[String]) {
             out.push_str(&format!("  - {}\n", item));
         }
     }
+}
+
+fn step_states_from_bundle(bundle: &TaskContextBundle) -> Vec<PlanStepRuntimeState> {
+    bundle
+        .workflow_judgment
+        .as_ref()
+        .map(|judgment| {
+            judgment
+                .sorted_plan()
+                .into_iter()
+                .map(|step| PlanStepRuntimeState {
+                    id: step.id,
+                    description: step.description,
+                    status: PlanStepRuntimeStatus::Pending,
+                    priority: format!("{:?}", step.priority),
+                    last_evidence: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn push_unique(items: &mut Vec<String>, value: String) {
@@ -439,8 +553,10 @@ mod tests {
             .changed_files
             .iter()
             .any(|path| path == "src/main.rs"));
-        assert!(closeout
-            .format_for_final_response()
-            .contains("Workflow closeout"));
+        assert!(closeout.format_for_final_response().contains("Closeout:"));
+        assert!(runner
+            .step_states()
+            .iter()
+            .any(|step| step.status == PlanStepRuntimeStatus::Failed));
     }
 }
