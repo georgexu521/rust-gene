@@ -691,8 +691,8 @@ impl Tool for MemoryLoadTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "load returns memory content, search filters by query, doctor summarizes health/quality decisions/conflicts.",
-                    "enum": ["load", "search", "doctor"],
+                    "description": "load returns memory content, search filters by query, doctor summarizes health, conflicts lists conflicts, review summarizes decisions/flushes/conflicts, explain shows why a matching memory was retrieved.",
+                    "enum": ["load", "search", "doctor", "conflicts", "review", "explain"],
                     "default": "load"
                 },
                 "query": {
@@ -714,7 +714,7 @@ impl Tool for MemoryLoadTool {
         let action = params["action"].as_str().unwrap_or("load");
 
         if docs.is_empty() {
-            if action == "doctor" {
+            if matches!(action, "doctor" | "review") {
                 return ToolResult::success(format_memory_doctor(&docs, &[]));
             }
             return ToolResult::success("Memory is empty.");
@@ -729,6 +729,34 @@ impl Tool for MemoryLoadTool {
 
         if action == "doctor" {
             return ToolResult::success(format_memory_doctor(&docs, &conflicts));
+        }
+
+        if action == "conflicts" {
+            return if conflicts.is_empty() {
+                ToolResult::success("Memory conflicts: none")
+            } else {
+                ToolResult::success(format!("Memory Conflicts\n{}", conflicts.join("\n")))
+            };
+        }
+
+        if action == "review" {
+            return ToolResult::success(format_memory_doctor(&docs, &conflicts));
+        }
+
+        if action == "explain" {
+            if query.trim().is_empty() {
+                return ToolResult::error("query is required for memory explain");
+            }
+            let matching = search_memory_documents(&docs, query);
+            return if matching.is_empty() {
+                ToolResult::success(format!("No memories matching '{}'", query))
+            } else {
+                ToolResult::success(format!(
+                    "Memory Explain\nselector: {}\nreason: matched memory namespace/path/content text. Use /memory search for retrieval ids in the interactive CLI.\n\n{}",
+                    query,
+                    matching.join("\n")
+                ))
+            };
         }
 
         if action == "search" || !query.is_empty() {

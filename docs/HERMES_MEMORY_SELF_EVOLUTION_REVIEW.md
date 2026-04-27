@@ -498,22 +498,30 @@ Acceptance criteria:
 
 Goal: make memory useful at the exact moment it is needed.
 
+Status: implemented for memory retrieval. Memory prefetch now builds individual
+`RetrievalItem` records instead of one opaque memory block. Each item includes a
+stable retrieval id, provenance, reason, trust level, score, and conflict flag.
+Memory ranking uses lexical match, scope, confidence, recency, and semantic
+proxy factors; conflicts reduce confidence and are visible in trace and
+`/memory` commands. Prompt injection boundaries now explicitly mark retrieval
+context as background context, not user instructions.
+
 Tasks:
 
 1. Route memory retrieval through `RetrievalContext` as individual provenance
-   items, not one opaque block.
-2. Add ranking using semantic/lexical/scope/confidence/recency factors.
-3. Emit trace events for selected memories and discarded high-score conflicts.
+   items, not one opaque block. ✅
+2. Add ranking using semantic/lexical/scope/confidence/recency factors. ✅
+3. Emit trace events for selected memories and discarded high-score conflicts. ✅
 4. Add `/memory search`, `/memory conflicts`, `/memory review`, and `/memory
-   explain <id>`.
-5. Add prompt fences that distinguish memory from user instructions.
+   explain <id>`. ✅
+5. Add prompt fences that distinguish memory from user instructions. ✅
 
 Acceptance criteria:
 
-- Trace shows which memories were injected and why.
-- Conflicting memories reduce retrieval confidence.
+- Trace shows which memories were injected and why. ✅
+- Conflicting memories reduce retrieval confidence. ✅
 - The model can cite memory provenance internally without treating it as
-  instruction.
+  instruction. ✅
 
 ### Phase 4: Self-Evolution Proposal System
 

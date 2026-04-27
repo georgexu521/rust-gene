@@ -2602,14 +2602,17 @@ fn latest_retrieval_context_label(trace: &crate::engine::trace::TurnTrace) -> Op
             sources,
             items,
             estimated_tokens,
+            conflicts,
+            ..
         } = event
         {
             Some(format!(
-                "{} {} item(s) from {} tokens~{}",
+                "{} {} item(s) from {} tokens~{} conflicts={}",
                 policy,
                 items,
                 sources.join("+"),
-                estimated_tokens
+                estimated_tokens,
+                conflicts
             ))
         } else {
             None

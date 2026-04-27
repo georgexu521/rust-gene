@@ -161,6 +161,10 @@ pub enum TraceEvent {
         sources: Vec<String>,
         items: usize,
         estimated_tokens: usize,
+        #[serde(default)]
+        provenance: Vec<String>,
+        #[serde(default)]
+        conflicts: usize,
     },
     MemorySynced {
         mode: String,
@@ -471,13 +475,29 @@ impl TraceEvent {
                 sources,
                 items,
                 estimated_tokens,
-            } => format!(
-                "retrieval context: policy={} sources={} items={} tokens~{}",
-                policy,
-                sources.join(","),
-                items,
-                estimated_tokens
-            ),
+                provenance,
+                conflicts,
+            } => {
+                let provenance = if provenance.is_empty() {
+                    "none".to_string()
+                } else {
+                    provenance
+                        .iter()
+                        .take(3)
+                        .map(|item| preview(item))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                };
+                format!(
+                    "retrieval context: policy={} sources={} items={} tokens~{} conflicts={} provenance={}",
+                    policy,
+                    sources.join(","),
+                    items,
+                    estimated_tokens,
+                    conflicts,
+                    provenance
+                )
+            }
             TraceEvent::MemorySynced { mode } => format!("memory synced: {}", mode),
             TraceEvent::ContextCompacted {
                 before_tokens,

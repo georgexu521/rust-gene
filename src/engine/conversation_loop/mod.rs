@@ -258,6 +258,8 @@ fn record_mcp_resource_trace(
         sources: vec!["Mcp".to_string()],
         items: usize::from(result.success),
         estimated_tokens: crate::engine::retrieval_context::estimate_tokens(&result.content),
+        provenance: vec![format!("mcp.resource:{}:{}", server, uri)],
+        conflicts: 0,
     });
 }
 
@@ -302,6 +304,8 @@ fn record_web_retrieval_trace(
                 .collect(),
             items: ctx.items.len(),
             estimated_tokens: ctx.token_estimate,
+            provenance: ctx.provenance_summaries(),
+            conflicts: ctx.conflict_count(),
         });
     }
 }
@@ -918,6 +922,8 @@ impl ConversationLoop {
                     .collect(),
                 items: ctx.items.len(),
                 estimated_tokens: ctx.token_estimate,
+                provenance: ctx.provenance_summaries(),
+                conflicts: ctx.conflict_count(),
             });
         }
         let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
@@ -1371,37 +1377,35 @@ impl ConversationLoop {
                     .rposition(|m| matches!(m, Message::User { .. }))
                 {
                     if let Message::User { content } = &request_messages[last_user_idx] {
-                        let prefetch = mem
-                            .prefetch_with_llm_rerank(content, self.provider.as_ref(), &self.model)
+                        let retrieval_context = mem
+                            .prefetch_retrieval_context_with_llm_rerank(
+                                content,
+                                self.provider.as_ref(),
+                                &self.model,
+                                route.retrieval,
+                            )
                             .await;
-                        if !prefetch.is_empty() {
-                            let retrieval_context =
-                                crate::engine::retrieval_context::RetrievalContext::from_memory_prefetch(
-                                    content,
-                                    &prefetch,
-                                    route.retrieval,
-                                );
+                        if let Some(ref ctx) = retrieval_context {
                             trace.record(TraceEvent::MemoryPrefetch {
-                                chars: prefetch.chars().count(),
+                                chars: ctx
+                                    .items
+                                    .iter()
+                                    .map(|item| item.content_preview.chars().count())
+                                    .sum(),
                             });
-                            if let Some(ref ctx) = retrieval_context {
-                                trace.record(TraceEvent::RetrievalContextBuilt {
-                                    policy: format!("{:?}", ctx.policy),
-                                    sources: ctx
-                                        .items
-                                        .iter()
-                                        .map(|item| format!("{:?}", item.source))
-                                        .collect(),
-                                    items: ctx.items.len(),
-                                    estimated_tokens: ctx.token_estimate,
-                                });
-                            }
-                            let retrieval_block = retrieval_context
-                                .as_ref()
-                                .map(|ctx| ctx.format_for_prompt())
-                                .unwrap_or_else(|| {
-                                    format!("<relevant-memory>\n{}\n</relevant-memory>", prefetch)
-                                });
+                            trace.record(TraceEvent::RetrievalContextBuilt {
+                                policy: format!("{:?}", ctx.policy),
+                                sources: ctx
+                                    .items
+                                    .iter()
+                                    .map(|item| format!("{:?}", item.source))
+                                    .collect(),
+                                items: ctx.items.len(),
+                                estimated_tokens: ctx.token_estimate,
+                                provenance: ctx.provenance_summaries(),
+                                conflicts: ctx.conflict_count(),
+                            });
+                            let retrieval_block = ctx.format_for_prompt();
                             let enhanced = format!("{}\n{}", content, retrieval_block);
                             request_messages[last_user_idx] = Message::user(&enhanced);
                             debug!("Prefetched memory context injected into user message");

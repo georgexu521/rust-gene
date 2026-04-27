@@ -39,6 +39,29 @@ fn normalized_contains(existing: &str, candidate: &str) -> bool {
     !normalized_candidate.is_empty() && normalized_existing.contains(&normalized_candidate)
 }
 
+fn collect_memory_key_values(
+    content: &str,
+    out: &mut std::collections::HashMap<String, HashSet<String>>,
+) {
+    for line in content.lines().map(str::trim) {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key
+            .trim()
+            .trim_start_matches(['-', '*', '#', ' '])
+            .to_lowercase();
+        let value = value.trim().trim_matches('`').to_lowercase();
+        if key.len() < 2 || key.len() > 48 || value.len() < 2 || value.len() > 180 {
+            continue;
+        }
+        if key.contains("http") || value.contains("http") {
+            continue;
+        }
+        out.entry(key).or_default().insert(value);
+    }
+}
+
 fn normalize_for_duplicate(content: &str) -> String {
     content
         .to_lowercase()
@@ -563,6 +586,78 @@ impl MemoryManager {
         matches.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.source.cmp(&b.source)));
         matches.truncate(max_results);
         matches
+    }
+
+    pub fn preview_retrieval_context(
+        &self,
+        user_message: &str,
+        max_results: usize,
+        policy: crate::engine::intent_router::RetrievalPolicy,
+    ) -> Option<crate::engine::retrieval_context::RetrievalContext> {
+        let matches = self.preview_relevant_memories(user_message, max_results);
+        let conflicts = self.memory_conflicts(8);
+        crate::engine::retrieval_context::RetrievalContext::from_memory_matches(
+            user_message,
+            matches,
+            &conflicts,
+            policy,
+        )
+    }
+
+    pub async fn prefetch_retrieval_context_with_llm_rerank(
+        &mut self,
+        user_message: &str,
+        provider: &dyn LlmProvider,
+        model: &str,
+        policy: crate::engine::intent_router::RetrievalPolicy,
+    ) -> Option<crate::engine::retrieval_context::RetrievalContext> {
+        if self.prefetched_this_turn {
+            return None;
+        }
+        self.prefetched_this_turn = true;
+        let candidates = self.preview_relevant_memories(user_message, 10);
+        if candidates.is_empty() {
+            return None;
+        }
+        let selected =
+            rerank_memory_matches_with_llm(user_message, &candidates, provider, model, 5).await;
+        let conflicts = self.memory_conflicts(8);
+        crate::engine::retrieval_context::RetrievalContext::from_memory_matches(
+            user_message,
+            selected,
+            &conflicts,
+            policy,
+        )
+    }
+
+    pub fn memory_conflicts(&self, max_conflicts: usize) -> Vec<String> {
+        let mut by_key: std::collections::HashMap<String, HashSet<String>> =
+            std::collections::HashMap::new();
+        collect_memory_key_values(&self.load_tier(MemoryTier::Project), &mut by_key);
+        collect_memory_key_values(&self.load_tier(MemoryTier::User), &mut by_key);
+        for file in load_memory_files(&self.memory_dir) {
+            collect_memory_key_values(&file.content, &mut by_key);
+        }
+
+        let mut conflicts: Vec<String> = by_key
+            .into_iter()
+            .filter_map(|(key, values)| {
+                if values.len() > 1 {
+                    let mut values = values.into_iter().collect::<Vec<_>>();
+                    values.sort();
+                    Some(format!(
+                        "- key '{}' has conflicting values: {}",
+                        key,
+                        values.join(" | ")
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        conflicts.sort();
+        conflicts.truncate(max_conflicts);
+        conflicts
     }
 
     /// 同步：保存本轮对话中学习到的内容（启发式提取）
@@ -2835,6 +2930,43 @@ Always check logs first.
         assert_eq!(matches[0].source, "memory/tui-design.md");
         assert!(matches[0].score > 0);
         assert!(matches[0].snippet.contains("transcript anchoring"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_memory_conflicts_and_retrieval_context() {
+        let base = temp_memory_base("memory-conflicts-retrieval");
+        std::fs::write(
+            base.join("MEMORY.md"),
+            "language: chinese\nCLI should be compact.",
+        )
+        .unwrap();
+        std::fs::write(
+            base.join("USER.md"),
+            "language: english\nPrefer concise output.",
+        )
+        .unwrap();
+
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        mgr.freeze_snapshot();
+
+        let conflicts = mgr.memory_conflicts(8);
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].contains("language"));
+
+        let ctx = mgr
+            .preview_retrieval_context(
+                "compact language",
+                5,
+                crate::engine::intent_router::RetrievalPolicy::Memory,
+            )
+            .expect("retrieval context");
+        assert!(!ctx.items.is_empty());
+        assert!(ctx
+            .provenance_summaries()
+            .iter()
+            .any(|p| p.contains("memory.match")));
 
         let _ = std::fs::remove_dir_all(base);
     }

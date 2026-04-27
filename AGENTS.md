@@ -155,8 +155,8 @@ src/
 
 每轮对话:
   1. reset_turn() - 重置预取状态
-  2. prefetch(query) - 搜索相关记忆注入上下文
-  3. 发送增强后的消息给 LLM
+  2. prefetch_retrieval_context_with_llm_rerank(query) - 搜索相关记忆，生成带 provenance/reason/trust/conflict 的 RetrievalContext
+  3. 通过 retrieval-context prompt fence 注入，明确记忆不是用户指令
   4. 收到响应后 sync_turn(user, assistant) - 提取学习
 
 会话结束:

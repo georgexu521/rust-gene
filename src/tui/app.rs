@@ -249,6 +249,76 @@ fn recent_activity_preview() -> String {
     lines.join("\n")
 }
 
+fn format_memory_retrieval_context(
+    ctx: &crate::engine::retrieval_context::RetrievalContext,
+) -> String {
+    let mut lines = vec![
+        "Memory Search".to_string(),
+        format!(
+            "Query: {} · items: {} · tokens~{} · conflicts: {}",
+            ctx.query,
+            ctx.items.len(),
+            ctx.token_estimate,
+            ctx.conflict_count()
+        ),
+        String::new(),
+    ];
+    for item in &ctx.items {
+        let preview = item
+            .content_preview
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+        lines.push(format!(
+            "- {} · {} · score {:.2} · {:?}{}",
+            item.id,
+            item.title,
+            item.score,
+            item.trust,
+            if item.conflict { " · conflict" } else { "" }
+        ));
+        lines.push(format!("  reason: {}", item.reason));
+        lines.push(format!("  provenance: {}", item.provenance));
+        lines.push(format!(
+            "  {}",
+            preview.chars().take(240).collect::<String>()
+        ));
+    }
+    lines.join("\n")
+}
+
+fn explain_memory_retrieval_item(
+    ctx: &crate::engine::retrieval_context::RetrievalContext,
+    selector: &str,
+) -> String {
+    let selector = selector.to_lowercase();
+    let Some(item) = ctx.items.iter().find(|item| {
+        item.id.to_lowercase().contains(&selector)
+            || item.title.to_lowercase().contains(&selector)
+            || item.provenance.to_lowercase().contains(&selector)
+    }) else {
+        return format!(
+            "No retrieval item matching '{}'. Run /memory search <query> to see ids.",
+            selector
+        );
+    };
+    format!(
+        "Memory Retrieval Explanation\n\nid: {}\nsource: {:?}\ntitle: {}\nscore: {:.2}\ntrust: {:?}\nconflict: {}\nprovenance: {}\nreason: {}\n\n{}",
+        item.id,
+        item.source,
+        item.title,
+        item.score,
+        item.trust,
+        item.conflict,
+        item.provenance,
+        item.reason,
+        item.content_preview
+    )
+}
+
 fn read_git_branch_fast(cwd: &std::path::Path) -> Option<String> {
     let head_path = cwd.join(".git").join("HEAD");
     let head = std::fs::read_to_string(head_path).ok()?;
@@ -1867,6 +1937,10 @@ impl TuiApp {
                 let query = args.trim();
                 let maintain = query == "--maintain";
                 let doctor = matches!(query, "--doctor" | "doctor");
+                let (memory_action, memory_arg) = query
+                    .split_once(' ')
+                    .map(|(action, rest)| (action, rest.trim()))
+                    .unwrap_or((query, ""));
                 let latest_user_message = self
                     .messages
                     .iter()
@@ -1899,6 +1973,67 @@ impl TuiApp {
                             decisions.blocked,
                             flushes.format()
                         )
+                    } else if memory_action == "conflicts" {
+                        let conflicts = mem.memory_conflicts(20);
+                        if conflicts.is_empty() {
+                            "Memory conflicts: none".to_string()
+                        } else {
+                            format!("Memory Conflicts\n{}", conflicts.join("\n"))
+                        }
+                    } else if memory_action == "review" {
+                        let summary = mem.memory_summary();
+                        let decisions = mem.memory_decision_counts();
+                        let flushes = mem.memory_flush_summary();
+                        let conflicts = mem.memory_conflicts(8);
+                        format!(
+                            "Memory Review\n\n{}\n\nDecisions: {} accepted · {} proposed · {} rejected · {} blocked\n{}\n\nConflicts:\n{}",
+                            summary.format(),
+                            decisions.accepted,
+                            decisions.proposed,
+                            decisions.rejected,
+                            decisions.blocked,
+                            flushes.format(),
+                            if conflicts.is_empty() {
+                                "none".to_string()
+                            } else {
+                                conflicts.join("\n")
+                            }
+                        )
+                    } else if memory_action == "search" {
+                        let search_query = if memory_arg.is_empty() {
+                            latest_user_message
+                        } else {
+                            memory_arg
+                        };
+                        match mem.preview_retrieval_context(
+                            search_query,
+                            8,
+                            crate::engine::intent_router::RetrievalPolicy::Memory,
+                        ) {
+                            Some(ctx) => format_memory_retrieval_context(&ctx),
+                            None => format!("No memory retrieval hits for '{}'.", search_query),
+                        }
+                    } else if memory_action == "explain" {
+                        if memory_arg.is_empty() {
+                            "Usage: /memory explain <retrieval-id-or-source>".to_string()
+                        } else {
+                            let search_query = if latest_user_message.is_empty() {
+                                memory_arg
+                            } else {
+                                latest_user_message
+                            };
+                            match mem.preview_retrieval_context(
+                                search_query,
+                                20,
+                                crate::engine::intent_router::RetrievalPolicy::Memory,
+                            ) {
+                                Some(ctx) => explain_memory_retrieval_item(&ctx, memory_arg),
+                                None => format!(
+                                    "No memory retrieval context available for '{}'.",
+                                    search_query
+                                ),
+                            }
+                        }
                     } else {
                         let summary = mem.memory_summary();
                         let project = mem.load_tier(crate::memory::manager::MemoryTier::Project);
