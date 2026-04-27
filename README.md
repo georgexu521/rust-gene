@@ -88,7 +88,8 @@ Common interactive commands:
 | `/karpathy <task>` | Apply careful coding guidelines to a task |
 | `/permissions` | Inspect or edit permission rules |
 | `/mcp status` | Show MCP server health and approvals |
-| `/sessions` | List and resume persisted sessions |
+| `/sessions` | List persisted conversations |
+| `/resume` | Pick or search a prior conversation and continue it |
 | `/cost` | Inspect token and cost usage |
 
 ## Architecture

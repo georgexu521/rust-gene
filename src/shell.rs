@@ -6,6 +6,8 @@
 //! used by mature coding-agent CLIs more closely than a dashboard-style TUI.
 
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
+use crate::services::api::Message;
+use crate::session_store::{MessageRecord, SessionRecord, SessionStore};
 use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunView};
 use futures::StreamExt;
 use rustyline::completion::{Completer, Pair};
@@ -32,6 +34,8 @@ const CYAN: &str = "\x1b[36m";
 const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/help", "show commands"),
     ShellCommand::new("/commands", "show commands"),
+    ShellCommand::new("/resume", "resume a previous conversation"),
+    ShellCommand::new("/sessions", "list previous conversations"),
     ShellCommand::new("/status", "show model and context status"),
     ShellCommand::new("/model", "show active model"),
     ShellCommand::new("/clear", "clear terminal"),
@@ -148,6 +152,14 @@ async fn handle_local_command(
             );
             Ok(true)
         }
+        "/sessions" => {
+            print_sessions(engine, 20)?;
+            Ok(true)
+        }
+        command if command == "/resume" || command.starts_with("/resume ") => {
+            resume_session_command(engine, command).await?;
+            Ok(true)
+        }
         "/status" => {
             print_status(engine).await;
             Ok(true)
@@ -172,7 +184,205 @@ fn print_command_help() {
     }
     println!("{DIM}  /?        {RESET}alias for /help");
     println!();
-    println!("{DIM}Tips: ↑/↓ history · Tab complete slash commands · Ctrl+C interrupt line{RESET}");
+    println!(
+        "{DIM}Tips: /resume opens prior conversations · ↑/↓ history · Tab complete slash commands{RESET}"
+    );
+}
+
+fn print_sessions(engine: &StreamingQueryEngine, limit: i64) -> anyhow::Result<()> {
+    let Some((store, current_id)) = engine.session_binding() else {
+        println!("{DIM}No session store is configured for this run.{RESET}");
+        return Ok(());
+    };
+    let sessions = store.list_sessions(limit)?;
+    if sessions.is_empty() {
+        println!("{DIM}No previous sessions found.{RESET}");
+        return Ok(());
+    }
+    print_session_list(&store, &sessions, Some(&current_id))?;
+    Ok(())
+}
+
+async fn resume_session_command(
+    engine: &StreamingQueryEngine,
+    command: &str,
+) -> anyhow::Result<()> {
+    let Some((store, current_id)) = engine.session_binding() else {
+        println!("{DIM}No session store is configured for this run.{RESET}");
+        return Ok(());
+    };
+
+    let sessions = resumable_sessions(&store, store.list_sessions(40)?);
+    if sessions.is_empty() {
+        println!("{DIM}No previous sessions found.{RESET}");
+        return Ok(());
+    }
+
+    let query = command.strip_prefix("/resume").unwrap_or("").trim();
+    let selected = if query.is_empty() {
+        print_session_list(&store, &sessions, Some(&current_id))?;
+        print!("{DIM}Resume session [number/id/search, empty to cancel] {RESET}");
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        let answer = answer.trim();
+        if answer.is_empty() {
+            println!("{DIM}Resume cancelled.{RESET}");
+            return Ok(());
+        }
+        resolve_session_selection(&store, &sessions, answer)?
+    } else {
+        resolve_session_selection(&store, &sessions, query)?
+    };
+
+    let Some(session) = selected else {
+        println!("{YELLOW}No matching session found.{RESET}");
+        return Ok(());
+    };
+
+    let records = store.get_messages(&session.id)?;
+    let messages = records_to_api_messages(&records);
+    engine.set_history(messages).await;
+    engine.set_session_id(session.id.clone());
+
+    println!(
+        "{GREEN}✓{RESET} Resumed {} {DIM}· {} messages · updated {}{RESET}",
+        display_session_title(&session),
+        records.len(),
+        session.updated_at
+    );
+    print_recent_session_preview(&records);
+    Ok(())
+}
+
+fn print_session_list(
+    store: &SessionStore,
+    sessions: &[SessionRecord],
+    current_id: Option<&str>,
+) -> anyhow::Result<()> {
+    println!("{BOLD}Conversations{RESET}");
+    for (idx, session) in sessions.iter().enumerate() {
+        let count = store.message_count(&session.id).unwrap_or_default();
+        let marker = if current_id == Some(session.id.as_str()) {
+            "*"
+        } else {
+            " "
+        };
+        println!(
+            "{DIM}{:>2}.{}{RESET} {:<42} {DIM}{:>3} msgs · {} · {}{RESET}",
+            idx + 1,
+            marker,
+            compact_line(&display_session_title(session), 42),
+            count,
+            compact_line(&session.model, 18),
+            session.updated_at
+        );
+        println!("{DIM}    {}{RESET}", session.id);
+    }
+    Ok(())
+}
+
+fn resumable_sessions(store: &SessionStore, sessions: Vec<SessionRecord>) -> Vec<SessionRecord> {
+    sessions
+        .into_iter()
+        .filter(|session| store.message_count(&session.id).unwrap_or_default() > 0)
+        .collect()
+}
+
+fn resolve_session_selection(
+    store: &SessionStore,
+    sessions: &[SessionRecord],
+    query: &str,
+) -> anyhow::Result<Option<SessionRecord>> {
+    if matches!(query, "latest" | "last" | "continue") {
+        return Ok(sessions.first().cloned());
+    }
+
+    if let Ok(index) = query.parse::<usize>() {
+        if (1..=sessions.len()).contains(&index) {
+            return Ok(Some(sessions[index - 1].clone()));
+        }
+    }
+
+    let query_lower = query.to_lowercase();
+    if let Some(session) = sessions.iter().find(|session| {
+        session.id.starts_with(query)
+            || session.title.to_lowercase().contains(&query_lower)
+            || session.model.to_lowercase().contains(&query_lower)
+    }) {
+        return Ok(Some(session.clone()));
+    }
+
+    let matches = store.search_messages(query, 8).unwrap_or_default();
+    for message in matches {
+        if let Some(session) = store.get_session(&message.session_id)? {
+            return Ok(Some(session));
+        }
+    }
+
+    Ok(None)
+}
+
+fn records_to_api_messages(records: &[MessageRecord]) -> Vec<Message> {
+    records
+        .iter()
+        .map(|record| match record.role.as_str() {
+            "user" => Message::user(record.content.clone()),
+            "assistant" => {
+                let tool_calls = record.tool_calls.as_ref().and_then(|value| {
+                    if value.is_array() {
+                        serde_json::from_value::<Vec<crate::services::api::ToolCall>>(value.clone())
+                            .ok()
+                    } else {
+                        None
+                    }
+                });
+                if let Some(tool_calls) = tool_calls {
+                    Message::assistant_with_tools(record.content.clone(), tool_calls)
+                } else {
+                    Message::assistant(record.content.clone())
+                }
+            }
+            "tool" => Message::tool(
+                record.tool_call_id.clone().unwrap_or_default(),
+                record.content.clone(),
+            ),
+            _ => Message::system(record.content.clone()),
+        })
+        .collect()
+}
+
+fn print_recent_session_preview(records: &[MessageRecord]) {
+    let recent = records
+        .iter()
+        .rev()
+        .filter(|record| matches!(record.role.as_str(), "user" | "assistant"))
+        .take(4)
+        .collect::<Vec<_>>();
+    if recent.is_empty() {
+        return;
+    }
+    println!("{DIM}Recent context:{RESET}");
+    for record in recent.into_iter().rev() {
+        let label = if record.role == "user" {
+            "you"
+        } else {
+            "agent"
+        };
+        println!(
+            "{DIM}  {:<5}{RESET} {}",
+            label,
+            compact_line(&record.content, 86)
+        );
+    }
+}
+
+fn display_session_title(session: &SessionRecord) -> String {
+    if session.title.trim().is_empty() {
+        format!("Session {}", &session.id[..8.min(session.id.len())])
+    } else {
+        session.title.clone()
+    }
 }
 
 async fn print_status(engine: &StreamingQueryEngine) {
@@ -874,5 +1084,62 @@ mod tests {
             helper.hint("/he", 3, &Context::new(&history)),
             Some("lp".to_string())
         );
+    }
+
+    #[test]
+    fn session_selection_accepts_index_id_and_title() {
+        let store = SessionStore::in_memory().expect("store");
+        store
+            .create_session("session-alpha", "Fix login bug", "model-a")
+            .unwrap();
+        store
+            .create_session("session-beta", "Build dashboard", "model-b")
+            .unwrap();
+        let sessions = store.list_sessions(10).unwrap();
+
+        let by_index = resolve_session_selection(&store, &sessions, "1")
+            .unwrap()
+            .unwrap();
+        assert!(by_index.id == "session-alpha" || by_index.id == "session-beta");
+
+        let by_id = resolve_session_selection(&store, &sessions, "session-alpha")
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_id.id, "session-alpha");
+
+        let by_title = resolve_session_selection(&store, &sessions, "dashboard")
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_title.id, "session-beta");
+    }
+
+    #[test]
+    fn message_records_restore_api_history() {
+        let records = vec![
+            MessageRecord {
+                id: 1,
+                session_id: "s".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning: None,
+                created_at: "now".to_string(),
+            },
+            MessageRecord {
+                id: 2,
+                session_id: "s".to_string(),
+                role: "assistant".to_string(),
+                content: "hi".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning: None,
+                created_at: "now".to_string(),
+            },
+        ];
+
+        let messages = records_to_api_messages(&records);
+        assert!(matches!(messages[0], Message::User { .. }));
+        assert!(matches!(messages[1], Message::Assistant { .. }));
     }
 }

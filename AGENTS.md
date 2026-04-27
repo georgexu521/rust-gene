@@ -195,7 +195,7 @@ API Error → ErrorClassifier
 | /clear | 清除对话历史 |
 | /memory | 查看已保存的记忆 |
 | /save <text> | 保存到记忆 |
-| /resume | 会话恢复信息 |
+| /resume | 选择或搜索历史对话并继续 |
 | /cost | 显示 token 使用和成本 |
 | /diff | 显示最近 git 变更 |
 | /model | 显示当前模型 |

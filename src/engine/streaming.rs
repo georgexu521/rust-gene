@@ -107,7 +107,7 @@ pub struct StreamingQueryEngine {
     /// Current session goal shown in `/goal` and `/quick`.
     goal_manager: Arc<crate::engine::session_goal::SessionGoalManager>,
     /// 当前会话 ID
-    session_id: Option<String>,
+    session_id: Arc<RwLock<Option<String>>>,
     /// 成本追踪器
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     /// 当前权限模式（可在运行时通过 TUI 命令切换）
@@ -150,7 +150,7 @@ impl StreamingQueryEngine {
             session_store: None,
             trace_store: Arc::new(crate::engine::trace::TraceStore::default()),
             goal_manager: Arc::new(crate::engine::session_goal::SessionGoalManager::new()),
-            session_id: None,
+            session_id: Arc::new(RwLock::new(None)),
             cost_tracker: Arc::new(tokio::sync::Mutex::new(
                 crate::cost_tracker::CostTracker::new(),
             )),
@@ -184,7 +184,7 @@ impl StreamingQueryEngine {
         session_id: String,
     ) -> Self {
         self.session_store = Some(store);
-        self.session_id = Some(session_id);
+        self.set_session_id(session_id);
         self
     }
 
@@ -201,10 +201,25 @@ impl StreamingQueryEngine {
     /// UI 层用这个绑定复用同一个 SessionStore/session_id，避免一轮对话
     /// 同时写入 CLI 会话和引擎会话两套历史。
     pub fn session_binding(&self) -> Option<(Arc<crate::session_store::SessionStore>, String)> {
+        let session_id = self.current_session_id()?;
         self.session_store
             .as_ref()
-            .zip(self.session_id.as_ref())
-            .map(|(store, session_id)| (store.clone(), session_id.clone()))
+            .map(|store| (store.clone(), session_id))
+    }
+
+    /// 当前持久化会话 ID。
+    pub fn current_session_id(&self) -> Option<String> {
+        self.session_id
+            .read()
+            .map(|session_id| session_id.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    }
+
+    /// 切换当前持久化会话 ID。
+    pub fn set_session_id(&self, session_id: impl Into<String>) {
+        if let Ok(mut current) = self.session_id.write() {
+            *current = Some(session_id.into());
+        }
     }
 
     /// 设置记忆快照（在 system prompt 中注入冻结的记忆）
@@ -537,7 +552,7 @@ impl StreamingQueryEngine {
         let history = self.conversation_history.clone();
         let compressor = self.compressor.clone();
         let session_store = self.session_store.clone();
-        let session_id = self.session_id.clone();
+        let session_id = self.current_session_id();
         let trace_store = self.trace_store.clone();
 
         let mut engine = StreamingEngineInner {
@@ -554,7 +569,7 @@ impl StreamingQueryEngine {
             memory_manager: self.memory_manager.clone(),
             compressor: self.compressor.clone(),
             session_store: self.session_store.clone(),
-            session_id: self.session_id.clone(),
+            session_id: self.current_session_id(),
             trace_store: trace_store.clone(),
             goal_manager: self.goal_manager.clone(),
             cost_tracker: self.cost_tracker.clone(),
@@ -574,6 +589,16 @@ impl StreamingQueryEngine {
 
                 // 持久化用户消息
                 if let (Some(ref store), Some(ref sid)) = (&session_store, &session_id) {
+                    if store.message_count(sid).unwrap_or_default() == 0 {
+                        if let Ok(Some(session)) = store.get_session(sid) {
+                            if session.title.trim().is_empty()
+                                || matches!(session.title.as_str(), "CLI Session" | "New Session")
+                            {
+                                let title = session_title_from_user_message(&user_msg);
+                                let _ = store.update_session_title(sid, &title);
+                            }
+                        }
+                    }
                     if let Err(e) = store.add_message(sid, "user", &user_msg, None, None) {
                         warn!("Failed to persist user message: {}", e);
                     }
@@ -779,6 +804,18 @@ impl StreamingQueryEngine {
 
         Ok(result)
     }
+}
+
+fn session_title_from_user_message(message: &str) -> String {
+    let title = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.is_empty() {
+        return "New Session".to_string();
+    }
+    let mut out: String = title.chars().take(60).collect();
+    if out.chars().count() < title.chars().count() {
+        out.push('…');
+    }
+    out
 }
 
 fn estimate_registry_tool_schema_tokens(registry: &ToolRegistry) -> (usize, u64, String) {
