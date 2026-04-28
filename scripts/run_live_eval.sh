@@ -114,18 +114,86 @@ PY
 }
 
 json_payload() {
-  local prompt_file="$1" system_file="$2"
-  python3 - "$prompt_file" "$system_file" <<'PY'
+  local prompt_file="$1" system_file="$2" context_file="$3"
+  python3 - "$prompt_file" "$system_file" "$context_file" <<'PY'
 import json, sys
 prompt = open(sys.argv[1], encoding="utf-8").read()
 system = open(sys.argv[2], encoding="utf-8").read()
+context = open(sys.argv[3], encoding="utf-8").read()
+message = prompt
+if context.strip():
+    message += "\n\n---\nRepository context for planning:\n" + context
 print(json.dumps({
-    "message": prompt,
+    "message": message,
     "system_prompt": system,
     "stream": False,
     "temperature": 0.2,
 }, ensure_ascii=False))
 PY
+}
+
+task_keywords() {
+  local file="$1"
+  python3 - "$file" <<'PY'
+import re, sys, yaml
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = yaml.safe_load(fh) or {}
+text = "\n".join(str(data.get(k, "")) for k in ("id", "title", "type", "prompt"))
+stop = {
+    "this", "that", "with", "from", "into", "should", "must", "only", "when",
+    "true", "false", "mode", "task", "code", "file", "files", "test", "tests",
+    "要求", "修复", "问题", "新增", "更新", "项目", "任务", "代码", "测试",
+}
+terms = []
+for term in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}|[\u4e00-\u9fff]{2,}", text):
+    normalized = term.strip().lower()
+    if normalized in stop:
+        continue
+    if normalized not in terms:
+        terms.append(normalized)
+for term in terms[:14]:
+    print(term)
+PY
+}
+
+build_repo_context() {
+  local file="$1" task_workdir="$2" out="$3"
+  local id title
+  id="$(yaml_get "$file" id)"
+  title="$(yaml_get "$file" title)"
+  {
+    echo "Task id: $id"
+    echo "Task title: $title"
+    echo "Repo language: Rust"
+    echo "Current ref: $(git -C "$task_workdir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo
+    echo "High-signal repository files:"
+    (cd "$task_workdir" && find src -name '*.rs' -type f | sort | sed -n '1,180p') 2>/dev/null || true
+    echo
+    echo "Keyword hits:"
+    local term
+    while IFS= read -r term; do
+      [[ -z "$term" ]] && continue
+      echo
+      echo "## $term"
+      (cd "$task_workdir" && rg -n -m 8 --glob '*.rs' --glob '*.md' "$term" src docs Cargo.toml 2>/dev/null | sed -n '1,12p') || true
+    done < <(task_keywords "$file")
+  } >"$out"
+}
+
+task_env_base() {
+  local id="$1"
+  echo "$ROOT_DIR/$WORK_ROOT/$RUN_ID/$id/env"
+}
+
+ensure_task_env() {
+  local id="$1" env_base
+  env_base="$(task_env_base "$id")"
+  mkdir -p \
+    "$env_base/home" \
+    "$env_base/xdg-config" \
+    "$env_base/xdg-data" \
+    "$env_base/xdg-state"
 }
 
 find_free_port() {
@@ -174,7 +242,7 @@ resolve_ref() {
 
 prepare_task() {
   local file="$1"
-  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata
+  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base
   id="$(yaml_get "$file" id)"
   title="$(yaml_get "$file" title)"
   base_ref="$(yaml_get "$file" repo.base_ref HEAD)"
@@ -183,21 +251,24 @@ prepare_task() {
   prompt_file="$WORK_ROOT/$RUN_ID/$id/prompt.txt"
   runbook="$WORK_ROOT/$RUN_ID/$id/RUNBOOK.md"
   metadata="$WORK_ROOT/$RUN_ID/$id/metadata.json"
+  env_base="$(task_env_base "$id")"
 
   mkdir -p "$(dirname "$task_workdir")"
+  ensure_task_env "$id"
   if [[ ! -d "$task_workdir/.git" && ! -f "$task_workdir/.git" ]]; then
     git worktree add --force --detach "$task_workdir" "$resolved_ref" >/dev/null
   fi
 
   yaml_get "$file" prompt >"$prompt_file"
-  python3 - "$file" "$metadata" "$task_workdir" "$resolved_ref" <<'PY'
+  python3 - "$file" "$metadata" "$task_workdir" "$resolved_ref" "$env_base" <<'PY'
 import json, sys, yaml
-sample_path, metadata_path, workdir, resolved_ref = sys.argv[1:5]
+sample_path, metadata_path, workdir, resolved_ref, env_base = sys.argv[1:6]
 with open(sample_path, encoding="utf-8") as fh:
     sample = yaml.safe_load(fh) or {}
 sample["_sample_path"] = sample_path
 sample["_workdir"] = workdir
 sample["_resolved_ref"] = resolved_ref
+sample["_env_base"] = env_base
 with open(metadata_path, "w", encoding="utf-8") as fh:
     json.dump(sample, fh, ensure_ascii=False, indent=2)
 PY
@@ -210,6 +281,7 @@ PY
     echo "- Requested base ref: $base_ref"
     echo "- Resolved base ref: $resolved_ref"
     echo "- Worktree: $task_workdir"
+    echo "- Isolated env: $env_base"
     echo "- MiniMax model: ${MINIMAX_MODEL:-MiniMax-M2.7}"
     echo
     echo "## Prompt"
@@ -228,7 +300,18 @@ PY
     echo
     echo '```bash'
     echo "cd \"$task_workdir\""
-    echo "MINIMAX_API_KEY=\"\${MINIMAX_API_KEY:?}\" \"$ROOT_DIR/target/release/priority-agent\""
+    echo "mkdir -p \"$env_base/home\" \"$env_base/xdg-config\" \"$env_base/xdg-data\" \"$env_base/xdg-state\""
+    echo "HOME=\"$env_base/home\" \\"
+    echo "XDG_CONFIG_HOME=\"$env_base/xdg-config\" \\"
+    echo "XDG_DATA_HOME=\"$env_base/xdg-data\" \\"
+    echo "XDG_STATE_HOME=\"$env_base/xdg-state\" \\"
+    echo "PRIORITY_AGENT_A2A_TRANSCRIPT_PATH=\"$env_base/a2a-transcript.jsonl\" \\"
+    echo "MINIMAX_API_KEY=\"\${MINIMAX_API_KEY:?}\" \\"
+    echo "MINIMAX_BASE_URL=\"\${MINIMAX_BASE_URL:-}\" \\"
+    echo "MINIMAX_MODEL=\"\${MINIMAX_MODEL:-MiniMax-M2.7}\" \\"
+    echo "OPENAI_API_KEY=\"\" \\"
+    echo "MOONSHOT_API_KEY=\"\" \\"
+    echo "\"$ROOT_DIR/target/release/priority-agent\""
     echo '```'
     echo
     echo "After the agent run, collect results with:"
@@ -253,7 +336,7 @@ build_binary() {
 
 api_plan_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir server_log system_file response_file plan_file payload_file port server_pid ready
+  local id report_dir server_log system_file response_file plan_file payload_file context_file env_base port server_pid ready
   id="$(yaml_get "$file" id)"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
@@ -262,6 +345,8 @@ api_plan_task() {
   response_file="$report_dir/api-response.json"
   plan_file="$report_dir/minimax-plan.md"
   payload_file="$report_dir/request.json"
+  context_file="$report_dir/repo-context.txt"
+  env_base="$(task_env_base "$id")"
 
   if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
     echo "MINIMAX_API_KEY is required for api-plan/full mode." >&2
@@ -269,6 +354,7 @@ api_plan_task() {
   fi
 
   build_binary
+  ensure_task_env "$id"
 
   cat >"$system_file" <<'EOF'
 You are evaluating Priority Agent on a live coding regression task.
@@ -287,11 +373,17 @@ If you are uncertain, say what should be inspected next instead of fabricating
 tool results.
 EOF
 
-  json_payload "$WORK_ROOT/$RUN_ID/$id/prompt.txt" "$system_file" >"$payload_file"
+  build_repo_context "$file" "$task_workdir" "$context_file"
+  json_payload "$WORK_ROOT/$RUN_ID/$id/prompt.txt" "$system_file" "$context_file" >"$payload_file"
   port="$(find_free_port)"
   (
     cd "$task_workdir"
     env \
+      HOME="$env_base/home" \
+      XDG_CONFIG_HOME="$env_base/xdg-config" \
+      XDG_DATA_HOME="$env_base/xdg-data" \
+      XDG_STATE_HOME="$env_base/xdg-state" \
+      PRIORITY_AGENT_A2A_TRANSCRIPT_PATH="$env_base/a2a-transcript.jsonl" \
       MINIMAX_API_KEY="$MINIMAX_API_KEY" \
       MINIMAX_BASE_URL="${MINIMAX_BASE_URL:-}" \
       MINIMAX_MODEL="${MINIMAX_MODEL:-MiniMax-M2.7}" \
@@ -348,7 +440,7 @@ PY
 
 collect_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir report diff_stat diff_patch cmd_log test_status
+  local id report_dir report diff_stat diff_patch cmd_log test_status env_base
   id="$(yaml_get "$file" id)"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
@@ -357,6 +449,7 @@ collect_task() {
   diff_patch="$report_dir/diff.patch"
   cmd_log="$report_dir/required-commands.log"
   test_status="skipped"
+  env_base="$(task_env_base "$id")"
 
   git -C "$task_workdir" status --short >"$report_dir/git-status.txt" || true
   git -C "$task_workdir" diff --stat >"$diff_stat" || true
@@ -382,6 +475,7 @@ collect_task() {
     echo "- Run id: \`$RUN_ID\`"
     echo "- Sample: \`$file\`"
     echo "- Worktree: \`$task_workdir\`"
+    echo "- Isolated env: \`$env_base\`"
     echo "- Test status: \`$test_status\`"
     echo "- Generated: \`$(date '+%Y-%m-%d %H:%M:%S %z')\`"
     echo

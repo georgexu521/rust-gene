@@ -1,3 +1,16 @@
 /target
 .DS_Store
 **/.DS_Store
+
+# Live eval transient artifacts. Keep curated summaries/reports in docs, but
+# avoid committing raw API payloads, server logs, and generated patch dumps.
+docs/benchmarks/live-*/**/api-response.json
+docs/benchmarks/live-*/**/api-server.log
+docs/benchmarks/live-*/**/request.json
+docs/benchmarks/live-*/**/system-prompt.txt
+docs/benchmarks/live-*/**/repo-context.txt
+docs/benchmarks/live-*/**/minimax-plan.md
+docs/benchmarks/live-*/**/diff.patch
+docs/benchmarks/live-*/**/diff-stat.txt
+docs/benchmarks/live-*/**/git-status.txt
+docs/benchmarks/live-*/**/required-commands.log
