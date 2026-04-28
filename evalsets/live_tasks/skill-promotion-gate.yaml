@@ -1,0 +1,57 @@
+id: skill-promotion-gate
+title: skill apply should require promotion evidence
+type: bug_fix
+complexity: medium
+risk: medium
+
+repo:
+  fixture: priority-agent
+  base_ref: "818f3a7"
+  setup:
+    - cargo test -q skill_evolution -- --test-threads=1
+
+prompt: |
+  修复 /skill-proposals apply 没有强制使用 fitness promotion gate 的问题。
+
+  要求：
+  - 覆盖已有 skill 时必须调用 compare_skill_versions_for_promotion。
+  - 首次激活 skill 可以没有 baseline，但要明确记录例外原因。
+  - replacement 必须检查 fitness delta、regression rate、eval count、risk penalty、semantic drift。
+  - apply/rollback/restore 要和 EvolutionController 的冷却状态衔接。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+
+expected_behavior:
+  - 已有 skill 的替换不能绕过 promotion gate。
+  - 无 baseline 的首次激活路径有明确审计文字。
+  - 失败 gate 时不会写入用户 skill。
+  - 新增或更新 skill proposal / fitness / gate 测试。
+
+acceptance:
+  required_commands:
+    - cargo test -q skill_evolution -- --test-threads=1
+    - cargo test -q slash_handler -- --test-threads=1
+    - cargo test -q -- --test-threads=1
+  diff_constraints:
+    max_files_changed: 8
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - promotion gate 是否是硬门槛？
+    - 首次激活和替换已有 skill 是否语义清晰？
+    - rollback 指针是否可审计？
+
+scoring:
+  success: 0.35
+  test_pass: 0.20
+  promotion_gate_correctness: 0.25
+  rollback_safety: 0.10
+  closeout_quality: 0.10

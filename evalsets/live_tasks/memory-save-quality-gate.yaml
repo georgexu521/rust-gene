@@ -1,0 +1,57 @@
+id: memory-save-quality-gate
+title: memory_save should respect quality gates
+type: bug_fix
+complexity: medium
+risk: high
+
+repo:
+  fixture: priority-agent
+  base_ref: "818f3a7"
+  setup:
+    - cargo test -q memory -- --test-threads=1
+
+prompt: |
+  修复 memory_save 绕过记忆质量门控的问题。
+
+  要求：
+  - 模型调用 memory_save 时必须按普通候选走 MemoryWriteScore 门控。
+  - 只有用户显式 /save 才能走 explicit override。
+  - explicit override 也不能绕过 sensitivity、volatility、duplication 这类硬性限制。
+  - 保存结果必须能告诉用户真实 outcome，而不是无条件显示 Saved。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - memory_clear
+  - git_push
+
+expected_behavior:
+  - memory_save 不再用 explicit=true 直接写入长期记忆。
+  - MemoryQualityAssessment 的 explicit 只降低阈值或进入 proposed，不直接 Accepted。
+  - /save 能展示 accepted/proposed/rejected/blocked/duplicate 等结果。
+  - 新增或更新覆盖质量门控的测试。
+
+acceptance:
+  required_commands:
+    - cargo test -q memory -- --test-threads=1
+    - cargo test -q -- --test-threads=1
+  diff_constraints:
+    max_files_changed: 8
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - 是否区分了模型工具保存和用户显式保存？
+    - 数学门控是否真的参与写入决策？
+    - 最终用户提示是否和真实写入状态一致？
+
+scoring:
+  success: 0.40
+  test_pass: 0.20
+  memory_gate_correctness: 0.20
+  diff_discipline: 0.10
+  closeout_quality: 0.10

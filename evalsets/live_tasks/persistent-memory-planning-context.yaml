@@ -1,0 +1,57 @@
+id: persistent-memory-planning-context
+title: persistent memory should affect workflow planning
+type: bug_fix
+complexity: medium
+risk: high
+
+repo:
+  fixture: priority-agent
+  base_ref: "818f3a7"
+  setup:
+    - cargo test -q learning_planning -- --test-threads=1
+
+prompt: |
+  修复持久记忆没有进入编程计划加权路径的问题。
+
+  要求：
+  - workflow judgment 前就要预取 persistent memory。
+  - planning 和 prompt 注入应尽量共用同一个 RetrievalContext。
+  - RetrievalSource::Memory 的高置信相关记忆应该能影响 learning_planning。
+  - trace 中要能看到 memory prefetch 和 retrieval context。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - memory_clear
+  - git_push
+
+expected_behavior:
+  - turn_retrieval_context 包含 project/session/memory 相关上下文。
+  - apply_learning_to_workflow_judgment 能接收到 Memory source。
+  - 无关 memory 不应泛化提升所有步骤权重。
+  - 新增或更新 planning/memory 相关测试。
+
+acceptance:
+  required_commands:
+    - cargo test -q learning_planning -- --test-threads=1
+    - cargo test -q retrieval_context -- --test-threads=1
+    - cargo test -q -- --test-threads=1
+  diff_constraints:
+    max_files_changed: 8
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - planning 是否使用真实 persistent memory，而不是只在 prompt 阶段注入？
+    - Memory source 的影响是否按 per-step relevance 计算？
+
+scoring:
+  success: 0.35
+  test_pass: 0.20
+  planning_integration: 0.25
+  trace_observability: 0.10
+  diff_discipline: 0.10

@@ -17,6 +17,9 @@ Use this file as the source of truth for what is on the critical path.
 - `workflow-weekly-report.sh`: weekly metrics reporting.
 - `workflow-real-devflow-round2.sh`: replay fixture wrapper.
 - `workflow-real-devflow-round3.sh`: replay fixture wrapper.
+- `run_live_eval.sh`: semi-automatic live coding task regression harness. It can
+  prepare task worktrees, ask MiniMax for a planning response, and collect
+  diff/test/report artifacts.
 
 ## Manual Dev/Ops Utilities
 
