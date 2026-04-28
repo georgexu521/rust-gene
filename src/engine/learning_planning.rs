@@ -10,7 +10,7 @@ use crate::engine::workflow_contract::{
 };
 use crate::session_store::LearningEventRecord;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LearningPlanningAudit {
@@ -39,8 +39,16 @@ struct LearningPlanningSignals {
     failed_workflows: usize,
     recovery_plans: usize,
     repeated_success_patterns: Vec<String>,
-    high_confidence_memory: usize,
+    high_confidence_memories: Vec<MemoryPlanningSignal>,
     memory_conflicts: usize,
+}
+
+#[derive(Debug, Clone)]
+struct MemoryPlanningSignal {
+    title: String,
+    content: String,
+    score: f32,
+    trust: TrustLevel,
 }
 
 pub fn apply_learning_to_workflow_judgment(
@@ -121,14 +129,21 @@ pub fn apply_learning_to_workflow_judgment(
             );
         }
 
-        if signals.high_confidence_memory > 0 {
-            let strength = (signals.high_confidence_memory as f32 * 0.04).clamp(0.04, 0.12);
-            if is_memory_sensitive_step(step.description.as_str(), step.reason.as_str()) {
+        if !signals.high_confidence_memories.is_empty() {
+            let relevance = memory_step_relevance(
+                &signals.high_confidence_memories,
+                step.description.as_str(),
+                step.reason.as_str(),
+            );
+            if relevance >= 0.25
+                && is_memory_sensitive_step(step.description.as_str(), step.reason.as_str())
+            {
+                let strength = (relevance * 0.12).clamp(0.03, 0.12);
                 factors.dependency += strength;
                 factors.uncertainty_reduction += strength;
                 reasons.push(format!(
-                    "high-confidence memory raised context-sensitive planning weight ({:.2})",
-                    strength
+                    "relevant high-confidence memory raised context-sensitive planning weight ({:.2}, relevance {:.2})",
+                    strength, relevance
                 ));
             }
         }
@@ -154,13 +169,14 @@ pub fn apply_learning_to_workflow_judgment(
 
         step.factors = Some(factors);
         recompute_step_weight(step);
+        let after = step.factors.unwrap_or(factors);
         adjustments.push(LearningPlanningAdjustment {
             step_id: step.id.clone(),
             step_description: step.description.clone(),
             source: "learning_to_planning".to_string(),
             kind: "factor_adjustment".to_string(),
             reason: reasons.join("; "),
-            factor_delta: factor_delta_json(before, factors),
+            factor_delta: factor_delta_json(before, after),
         });
     }
 
@@ -264,7 +280,12 @@ impl LearningPlanningSignals {
                 }
                 if item.score >= 0.70 && matches!(item.trust, TrustLevel::High | TrustLevel::Medium)
                 {
-                    signals.high_confidence_memory += 1;
+                    signals.high_confidence_memories.push(MemoryPlanningSignal {
+                        title: item.title.clone(),
+                        content: item.content_preview.clone(),
+                        score: item.score,
+                        trust: item.trust,
+                    });
                 }
             }
         }
@@ -277,7 +298,7 @@ impl LearningPlanningSignals {
             && self.failed_workflows == 0
             && self.recovery_plans == 0
             && self.repeated_success_patterns.is_empty()
-            && self.high_confidence_memory == 0
+            && self.high_confidence_memories.is_empty()
             && self.memory_conflicts == 0
     }
 }
@@ -296,13 +317,66 @@ fn procedure_pattern(event: &LearningEventRecord) -> Option<String> {
 }
 
 fn repeated_success_matches(patterns: &[String], description: &str, reason: &str) -> bool {
-    let haystack = normalize_text(&format!("{} {}", description, reason));
+    let step_tokens = informative_tokens(&format!("{} {}", description, reason));
+    if step_tokens.is_empty() {
+        return false;
+    }
     patterns.iter().any(|pattern| {
-        pattern
-            .split_whitespace()
-            .filter(|word| word.len() > 3)
-            .any(|word| haystack.contains(word))
+        let pattern_tokens = informative_tokens(pattern);
+        token_sets_related(&pattern_tokens, &step_tokens)
     })
+}
+
+fn memory_step_relevance(
+    memories: &[MemoryPlanningSignal],
+    description: &str,
+    reason: &str,
+) -> f32 {
+    let step_tokens = informative_tokens(&format!("{} {}", description, reason));
+    if step_tokens.is_empty() {
+        return 0.0;
+    }
+
+    memories
+        .iter()
+        .map(|memory| {
+            let memory_tokens = informative_tokens(&format!("{} {}", memory.title, memory.content));
+            let overlap = overlap_count(&memory_tokens, &step_tokens);
+            if overlap == 0 {
+                return 0.0;
+            }
+            let union = memory_tokens.union(&step_tokens).count().max(1) as f32;
+            let jaccard = overlap as f32 / union;
+            let trust_factor = match memory.trust {
+                TrustLevel::High => 1.0,
+                TrustLevel::Medium => 0.82,
+                TrustLevel::Low => 0.45,
+            };
+            let overlap_factor = if overlap >= 2 { 1.0 } else { 0.45 };
+            (jaccard * 0.60 + memory.score * 0.40) * trust_factor * overlap_factor
+        })
+        .fold(0.0, f32::max)
+        .clamp(0.0, 1.0)
+}
+
+fn token_sets_related(left: &HashSet<String>, right: &HashSet<String>) -> bool {
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    let overlap = overlap_count(left, right);
+    if overlap >= 2 {
+        return true;
+    }
+    if overlap == 0 {
+        return false;
+    }
+    let union = left.union(right).count().max(1) as f32;
+    let jaccard = overlap as f32 / union;
+    jaccard >= 0.45 && left.len().min(right.len()) <= 2
+}
+
+fn overlap_count(left: &HashSet<String>, right: &HashSet<String>) -> usize {
+    left.intersection(right).count()
 }
 
 fn step_mentions(description: &str, reason: &str, needle: &str) -> bool {
@@ -369,6 +443,37 @@ fn normalize_text(value: &str) -> String {
         .take(8)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn informative_tokens(value: &str) -> HashSet<String> {
+    normalize_text(value)
+        .split_whitespace()
+        .filter(|word| word.chars().count() > 3)
+        .filter(|word| !is_planning_stopword(word))
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn is_planning_stopword(word: &str) -> bool {
+    matches!(
+        word,
+        "project"
+            | "context"
+            | "workflow"
+            | "task"
+            | "tasks"
+            | "test"
+            | "tests"
+            | "step"
+            | "steps"
+            | "plan"
+            | "planning"
+            | "check"
+            | "verify"
+            | "validation"
+            | "memory"
+            | "agent"
+    )
 }
 
 fn factor_delta_json(before: WeightFactors, after: WeightFactors) -> serde_json::Value {
@@ -502,6 +607,8 @@ mod tests {
     #[test]
     fn repeated_success_reduces_exploration_weight() {
         let mut judgment = judgment();
+        judgment.plan[0].description = "Inspect cargo failure context".to_string();
+        judgment.plan[0].reason = "Read cargo diagnostics before editing".to_string();
         for step in &mut judgment.plan {
             recompute_step_weight(step);
         }
@@ -511,24 +618,61 @@ mod tests {
             event(
                 1,
                 "workflow_outcome",
-                "project context workflow succeeded",
-                serde_json::json!({"success": true, "procedure": "project context"}),
+                "cargo failure inspection workflow succeeded",
+                serde_json::json!({"success": true, "procedure": "cargo failure inspection"}),
             ),
             event(
                 2,
                 "workflow_outcome",
-                "project context workflow succeeded again",
-                serde_json::json!({"success": true, "procedure": "project context"}),
+                "cargo failure inspection workflow succeeded again",
+                serde_json::json!({"success": true, "procedure": "cargo failure inspection"}),
             ),
         ];
-
         let audit = apply_learning_to_workflow_judgment(&mut judgment, &events, None);
         assert!(audit.applied);
         assert!(judgment.plan[0].normalized_weight() < before);
     }
 
     #[test]
+    fn repeated_success_does_not_match_generic_words_only() {
+        let events = vec!["project context workflow", "context project workflow"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+
+        assert!(!repeated_success_matches(
+            &events,
+            "Inspect project context",
+            "Need context before editing"
+        ));
+    }
+
+    #[test]
     fn high_confidence_memory_adjusts_context_step() {
+        let mut judgment = judgment();
+        judgment.plan[0].description = "Inspect cargo diagnostics".to_string();
+        judgment.plan[0].reason = "Need compile failure context before editing".to_string();
+        for step in &mut judgment.plan {
+            recompute_step_weight(step);
+        }
+        normalize_weight_shares(&mut judgment.plan);
+        let before = judgment.plan[0].normalized_weight();
+        let mut ctx = RetrievalContext::new("fix bug", RetrievalPolicy::Project);
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Memory,
+            "USER.md",
+            "Cargo diagnostics should be inspected before editing compile failures",
+            0.9,
+            "memory.match:USER.md",
+            TrustLevel::High,
+        ));
+        let audit = apply_learning_to_workflow_judgment(&mut judgment, &[], Some(&ctx));
+        assert!(audit.applied);
+        assert!(judgment.plan[0].normalized_weight() > before);
+    }
+
+    #[test]
+    fn unrelated_high_confidence_memory_does_not_adjust_context_step() {
         let mut judgment = judgment();
         for step in &mut judgment.plan {
             recompute_step_weight(step);
@@ -539,14 +683,14 @@ mod tests {
         ctx.add_item(RetrievalItem::new(
             RetrievalSource::Memory,
             "USER.md",
-            "Project prefers cargo test before final response",
-            0.9,
+            "User prefers concise Chinese final responses",
+            0.95,
             "memory.match:USER.md",
             TrustLevel::High,
         ));
 
         let audit = apply_learning_to_workflow_judgment(&mut judgment, &[], Some(&ctx));
-        assert!(audit.applied);
-        assert!(judgment.plan[0].normalized_weight() > before);
+        assert!(!audit.applied);
+        assert_eq!(judgment.plan[0].normalized_weight(), before);
     }
 }

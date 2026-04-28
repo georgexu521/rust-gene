@@ -3141,6 +3141,15 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 None => format!("No skill proposal matching '{}'.", id),
             }
         }
+        "fitness" | "stats" => {
+            let Some(name) = parts.next() else {
+                return "Usage: /skill-proposals fitness <skill-name>".to_string();
+            };
+            match store.fitness_snapshot(name) {
+                Some(snapshot) => format_skill_fitness(&snapshot),
+                None => format!("No skill usage events found for '{}'.", name),
+            }
+        }
         "accept" | "reject" => {
             let Some(id) = parts.next() else {
                 return format!("Usage: /skill-proposals {} <id|name>", action);
@@ -3212,7 +3221,7 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Failed to apply skill proposal: {}", e),
             }
         }
-        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|accept <id>|reject <id>|apply <id>]".to_string(),
+        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|accept <id>|reject <id>|apply <id>]".to_string(),
     }
 }
 
@@ -3225,11 +3234,12 @@ fn user_skill_root() -> std::path::PathBuf {
 
 fn format_skill_proposal_line(proposal: &crate::engine::skill_evolution::SkillProposal) -> String {
     format!(
-        "- {} /{} [{:?}/{:?}] events={}: {}",
+        "- {} /{} [{:?}/{:?}] score={:.2} events={}: {}",
         proposal.id,
         proposal.name,
         proposal.status,
         proposal.trust,
+        proposal.creation_score,
         proposal.trigger_event_ids.len(),
         proposal.procedure
     )
@@ -3239,12 +3249,15 @@ fn format_skill_proposal_detail(
     proposal: &crate::engine::skill_evolution::SkillProposal,
 ) -> String {
     format!(
-        "Skill Proposal {}\n\nName: /{}\nStatus: {:?}\nTrust: {:?}\nScope: {}\nEvents: {:?}\n\nProcedure:\n{}\n\nTriggers:\n{}\n\nWorkflow:\n{}\n\nValidation:\n{}\n\nTools:\n{}\n\nEvidence:\n{}",
+        "Skill Proposal {}\n\nName: /{}\nStatus: {:?}\nTrust: {:?}\nScope: {}\nCreation score: {:.2}\nEvidence count: {}\nScope confidence: {:.2}\nEvents: {:?}\n\nProcedure:\n{}\n\nTriggers:\n{}\n\nWorkflow:\n{}\n\nValidation:\n{}\n\nTools:\n{}\n\nEvidence:\n{}",
         proposal.id,
         proposal.name,
         proposal.status,
         proposal.trust,
         proposal.scope,
+        proposal.creation_score,
+        proposal.evidence_count,
+        proposal.scope_confidence,
         proposal.trigger_event_ids,
         proposal.procedure,
         proposal
@@ -3294,6 +3307,26 @@ fn format_skill_eval(eval: &crate::engine::skill_evolution::SkillEvalResult) -> 
         lines.push(format!("- note: {}", note));
     }
     lines.join("\n")
+}
+
+fn format_skill_fitness(snapshot: &crate::engine::skill_evolution::SkillFitnessSnapshot) -> String {
+    format!(
+        "Skill Fitness /{}\nVersion: {}\nEvents: {}\nFitness: {:.2}\n\nFactors:\n- task_success: {:.2}\n- acceptance_pass_rate: {:.2}\n- test_pass_rate: {:.2}\n- user_satisfaction: {:.2}\n- reuse_rate: {:.2}\n- time_saved: {:.2}\n- tool_efficiency: {:.2}\n- failure_rate: {:.2}\n- cost: {:.2}\n- risk_penalty: {:.2}",
+        snapshot.skill_name,
+        snapshot.skill_version,
+        snapshot.events,
+        snapshot.fitness,
+        snapshot.stats.task_success,
+        snapshot.stats.acceptance_pass_rate,
+        snapshot.stats.test_pass_rate,
+        snapshot.stats.user_satisfaction,
+        snapshot.stats.reuse_rate,
+        snapshot.stats.time_saved,
+        snapshot.stats.tool_efficiency,
+        snapshot.stats.failure_rate,
+        snapshot.stats.cost,
+        snapshot.stats.risk_penalty
+    )
 }
 
 fn persist_skill_proposal_learning_event(

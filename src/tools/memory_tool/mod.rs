@@ -2,7 +2,7 @@ use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 fn memory_root() -> PathBuf {
@@ -427,7 +427,67 @@ fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String
             out.push('\n');
         }
     }
+    let maintenance = memory_maintenance_decisions(docs, conflicts);
+    if !maintenance.is_empty() {
+        out.push_str("  Maintenance scores:\n");
+        for (path, decision) in maintenance.iter().take(5) {
+            out.push_str(&format!(
+                "    {}: {:.2} {:?}\n",
+                path, decision.score, decision.action
+            ));
+        }
+    }
     out
+}
+
+fn memory_maintenance_decisions(
+    docs: &[MemoryDocument],
+    conflicts: &[String],
+) -> Vec<(String, crate::memory::MemoryKeepDecision)> {
+    let mut decisions = docs
+        .iter()
+        .map(|doc| {
+            let redundancy = repeated_line_ratio(&doc.content);
+            let has_conflict = document_has_conflict(doc, conflicts);
+            let factors = crate::memory::memory_keep_factors_from_document(
+                &doc.namespace,
+                &doc.content,
+                has_conflict,
+                redundancy,
+            );
+            (doc.path.clone(), crate::memory::score_memory_keep(factors))
+        })
+        .collect::<Vec<_>>();
+    decisions.sort_by(|a, b| a.1.score.total_cmp(&b.1.score));
+    decisions
+}
+
+fn document_has_conflict(doc: &MemoryDocument, conflicts: &[String]) -> bool {
+    if conflicts.is_empty() {
+        return false;
+    }
+    let lower_path = doc.path.to_lowercase();
+    let lower_namespace = doc.namespace.to_lowercase();
+    conflicts.iter().any(|conflict| {
+        let lower = conflict.to_lowercase();
+        lower.contains(&lower_path) || lower.contains(&lower_namespace)
+    })
+}
+
+fn repeated_line_ratio(content: &str) -> f32 {
+    let mut total = 0usize;
+    let mut unique = HashSet::new();
+    for line in content.lines().map(str::trim) {
+        if line.len() < 12 {
+            continue;
+        }
+        total += 1;
+        unique.insert(line.to_lowercase());
+    }
+    if total == 0 {
+        return 0.0;
+    }
+    ((total - unique.len()) as f32 / total as f32).clamp(0.0, 1.0)
 }
 
 fn extract_key_values(doc: &MemoryDocument) -> Vec<MemoryKeyValue> {
@@ -618,7 +678,7 @@ impl Tool for MemorySaveTool {
         // 读取现有内容
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         let assessment =
-            match crate::memory::assess_memory_candidate(content, category, &existing, true) {
+            match crate::memory::assess_memory_candidate(content, category, &existing, false) {
                 Ok(assessment) => assessment,
                 Err(issue) => {
                     return ToolResult::error(format!(
@@ -634,6 +694,15 @@ impl Tool for MemorySaveTool {
                 assessment.score,
                 category,
                 content
+            ));
+        }
+        if assessment.status != crate::memory::MemoryStatus::Accepted {
+            return ToolResult::success(format!(
+                "Memory not saved to {}: quality gate returned {:?} (quality {:.2}). Reason: {}",
+                path.display(),
+                assessment.status,
+                assessment.score,
+                assessment.reason
             ));
         }
 

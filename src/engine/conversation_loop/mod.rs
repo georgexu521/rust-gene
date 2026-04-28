@@ -169,6 +169,10 @@ fn persist_turn_learning_event(
         "event_count": trace.events.len(),
         "duration_ms": trace.duration_ms(),
     });
+    let payload = crate::engine::experience_ledger::attach_experience_payload(
+        payload,
+        crate::engine::experience_ledger::ExperienceRecord::from_turn_trace(trace),
+    );
     let confidence = if trace.status == TurnStatus::Completed {
         1.0
     } else {
@@ -479,6 +483,10 @@ fn persist_tool_outcome_learning_event(
         "output_chars": result.content.chars().count(),
         "recovery": recovery,
     });
+    let payload = crate::engine::experience_ledger::attach_experience_payload(
+        payload,
+        crate::engine::experience_ledger::ExperienceRecord::from_tool_outcome(tool_call, result),
+    );
     if let Err(e) = store.add_learning_event(
         session_id,
         "tool_outcome",

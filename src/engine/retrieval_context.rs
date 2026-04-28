@@ -362,8 +362,11 @@ fn retrieval_item_id(
 
 fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: bool) -> f32 {
     let lexical = ((item.score as f32) / 40.0).clamp(0.0, 1.0);
-    let semantic = ((item.score as f32) / 60.0).clamp(0.0, 1.0);
-    let scope = if item.source.starts_with("USER.md") {
+    let token_estimate = estimate_tokens(&item.snippet).max(1) as f32;
+    let match_density = ((item.score as f32 / token_estimate) * 4.0).clamp(0.0, 1.0);
+    let semantic_similarity =
+        (lexical * 0.60 + match_density * 0.40 + memory_type_boost(&item.snippet)).clamp(0.0, 1.0);
+    let scope_match = if item.source.starts_with("USER.md") {
         0.95
     } else if item.source.starts_with("MEMORY.md") {
         0.80
@@ -372,15 +375,57 @@ fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: 
     } else {
         0.65
     };
-    let confidence = if conflict { 0.35 } else { 0.85 };
+    let trust = if item.source.starts_with("USER.md") {
+        0.95
+    } else if item.source.starts_with("memory/") {
+        0.80
+    } else {
+        0.75
+    };
     let recency = if item.source.contains("archive") {
         0.35
     } else {
         0.65
     };
+    let token_cost = (token_estimate / 600.0).clamp(0.0, 1.0);
+    let prior_usefulness = if item.source.contains("accepted") || item.source.contains("learned") {
+        0.75
+    } else {
+        0.55
+    };
+    let task_criticality = (0.45 + match_density * 0.35 + lexical * 0.20).clamp(0.0, 1.0);
 
-    (lexical * 0.45 + scope * 0.20 + confidence * 0.20 + recency * 0.10 + semantic * 0.05)
-        .clamp(0.0, 1.0)
+    crate::memory::score_recall(
+        crate::memory::RecallFactors {
+            semantic_similarity,
+            scope_match,
+            recency,
+            trust,
+            prior_usefulness,
+            task_criticality,
+            token_cost,
+        },
+        conflict,
+    )
+    .score
+}
+
+fn memory_type_boost(snippet: &str) -> f32 {
+    let lower = snippet.to_lowercase();
+    if lower.contains("user preference:")
+        || lower.contains("project convention:")
+        || lower.contains("decision:")
+        || lower.contains("successful fix:")
+        || lower.contains("failure pattern:")
+        || lower.contains("偏好")
+        || lower.contains("约定")
+        || lower.contains("决策")
+        || lower.contains("修复")
+    {
+        0.08
+    } else {
+        0.0
+    }
 }
 
 fn memory_retrieval_reason(item: &crate::memory::manager::MemoryMatch, conflict: bool) -> String {

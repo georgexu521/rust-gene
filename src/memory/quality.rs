@@ -1,4 +1,7 @@
 use crate::memory::safety::{scan_memory_content, MemorySafetyIssue};
+use crate::memory::scoring::{
+    memory_write_factors_from_signals, score_memory_write, MemoryWriteFactors,
+};
 use crate::memory::types::{MemoryKind, MemoryStatus, SensitivityLevel};
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +14,7 @@ pub struct MemoryQualityAssessment {
     pub volatility: f32,
     pub sensitivity_risk: f32,
     pub duplication: f32,
+    pub write_factors: MemoryWriteFactors,
     pub score: f32,
     pub status: MemoryStatus,
     pub sensitivity: SensitivityLevel,
@@ -160,26 +164,24 @@ pub fn assess_memory_candidate(
     };
 
     let duplication = duplicate_score(existing_content, content);
-    let score =
-        (stable_fact * 0.25 + future_utility * 0.25 + specificity * 0.20 + relevance * 0.20
-            - volatility * 0.15
-            - sensitivity_risk * 0.20
-            - duplication * 0.15)
-            .clamp(0.0, 1.0);
-
-    let status =
-        if sensitivity == SensitivityLevel::Unsafe || sensitivity == SensitivityLevel::SecretLike {
-            MemoryStatus::Rejected
-        } else if explicit || score >= 0.65 {
-            MemoryStatus::Accepted
-        } else if score >= 0.45 {
-            MemoryStatus::Proposed
-        } else {
-            MemoryStatus::Rejected
-        };
+    let write_factors = memory_write_factors_from_signals(
+        kind,
+        content,
+        stable_fact,
+        future_utility,
+        relevance,
+        volatility,
+        sensitivity_risk,
+        duplication,
+        explicit,
+    );
+    let write_decision = score_memory_write(write_factors, sensitivity, duplication, explicit);
+    let score = write_decision.score;
+    let status = write_decision.status;
 
     let reason = format!(
-        "quality={score:.2}, kind={kind:?}, stable={stable_fact:.2}, utility={future_utility:.2}, specificity={specificity:.2}, relevance={relevance:.2}, volatility={volatility:.2}, duplication={duplication:.2}"
+        "{}, kind={kind:?}, stable={stable_fact:.2}, utility={future_utility:.2}, specificity={specificity:.2}, volatility={volatility:.2}, duplication={duplication:.2}",
+        write_decision.reason
     );
 
     Ok(MemoryQualityAssessment {
@@ -190,6 +192,7 @@ pub fn assess_memory_candidate(
         volatility,
         sensitivity_risk,
         duplication,
+        write_factors,
         score,
         status,
         sensitivity,
@@ -255,6 +258,23 @@ mod tests {
             assessment.status,
             MemoryStatus::Proposed | MemoryStatus::Rejected
         ));
+    }
+
+    #[test]
+    fn explicit_does_not_accept_low_quality_note() {
+        let assessment =
+            assess_memory_candidate("This might be useful later", "note", "", true).unwrap();
+        assert_ne!(assessment.status, MemoryStatus::Accepted);
+        assert!(assessment.score < 0.60);
+    }
+
+    #[test]
+    fn explicit_does_not_accept_duplicate_memory() {
+        let existing =
+            "Project convention: run cargo test --quiet before committing Rust workflow changes.";
+        let assessment = assess_memory_candidate(existing, "convention", existing, true).unwrap();
+        assert_ne!(assessment.status, MemoryStatus::Accepted);
+        assert!(assessment.duplication >= 0.85);
     }
 
     #[test]

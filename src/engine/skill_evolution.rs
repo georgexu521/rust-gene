@@ -13,6 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const MIN_EVENTS_FOR_SKILL_PROPOSAL: usize = 2;
+const MIN_SKILL_CREATION_SCORE: f32 = 0.70;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +32,43 @@ pub enum SkillTrustState {
     Trusted,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SkillCreationFactors {
+    pub repeatability: f32,
+    pub complexity: f32,
+    pub success_evidence: f32,
+    pub future_utility: f32,
+    pub user_correction_value: f32,
+    pub over_specificity: f32,
+}
+
+impl Default for SkillCreationFactors {
+    fn default() -> Self {
+        Self {
+            repeatability: 0.70,
+            complexity: 0.70,
+            success_evidence: 0.80,
+            future_utility: 0.70,
+            user_correction_value: 0.15,
+            over_specificity: 0.10,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SkillFitnessStats {
+    pub task_success: f32,
+    pub acceptance_pass_rate: f32,
+    pub test_pass_rate: f32,
+    pub user_satisfaction: f32,
+    pub reuse_rate: f32,
+    pub time_saved: f32,
+    pub tool_efficiency: f32,
+    pub failure_rate: f32,
+    pub cost: f32,
+    pub risk_penalty: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillProposal {
     pub id: String,
@@ -44,6 +82,14 @@ pub struct SkillProposal {
     pub allowed_tools: Vec<String>,
     pub status: SkillProposalStatus,
     pub trust: SkillTrustState,
+    #[serde(default = "default_creation_score")]
+    pub creation_score: f32,
+    #[serde(default)]
+    pub creation_factors: SkillCreationFactors,
+    #[serde(default)]
+    pub evidence_count: usize,
+    #[serde(default = "default_scope_confidence")]
+    pub scope_confidence: f32,
     pub evidence: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -70,9 +116,46 @@ pub struct SkillEvalResult {
     pub notes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillUsageEvent {
+    pub skill_name: String,
+    pub skill_version: String,
+    pub success: bool,
+    pub acceptance_passed: Option<bool>,
+    pub tests_passed: Option<bool>,
+    pub user_satisfaction: Option<f32>,
+    pub duration_ms: Option<u64>,
+    pub tool_calls: usize,
+    pub risk_penalty: f32,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillFitnessSnapshot {
+    pub skill_name: String,
+    pub skill_version: String,
+    pub events: usize,
+    pub stats: SkillFitnessStats,
+    pub fitness: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillPromotionGate {
+    pub passed: bool,
+    pub old_fitness: f32,
+    pub new_fitness: f32,
+    pub delta: f32,
+    pub regression_rate: f32,
+    pub eval_count: usize,
+    pub risk_penalty: f32,
+    pub semantic_drift: f32,
+    pub reasons: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SkillProposalStore {
     path: PathBuf,
+    usage_path: PathBuf,
 }
 
 impl SkillProposalStore {
@@ -83,8 +166,19 @@ impl SkillProposalStore {
             .join("skill_proposals.jsonl")
     }
 
+    pub fn default_usage_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".priority-agent")
+            .join("skill_usage.jsonl")
+    }
+
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        let usage_path = path
+            .parent()
+            .map(|parent| parent.join("skill_usage.jsonl"))
+            .unwrap_or_else(Self::default_usage_path);
+        Self { path, usage_path }
     }
 
     pub fn default() -> Self {
@@ -105,6 +199,18 @@ impl SkillProposalStore {
 
     pub fn upsert(&self, proposal: &SkillProposal) -> anyhow::Result<()> {
         append_jsonl(&self.path, proposal)
+    }
+
+    pub fn record_usage(&self, event: &SkillUsageEvent) -> anyhow::Result<()> {
+        append_jsonl_value(&self.usage_path, event)
+    }
+
+    pub fn usage_events(&self, skill_name: &str) -> Vec<SkillUsageEvent> {
+        read_skill_usage_events(&self.usage_path, skill_name)
+    }
+
+    pub fn fitness_snapshot(&self, skill_name: &str) -> Option<SkillFitnessSnapshot> {
+        skill_fitness_snapshot(skill_name, &self.usage_events(skill_name))
     }
 
     pub fn update_status(
@@ -156,7 +262,7 @@ impl SkillProposal {
 
     pub fn to_skill_markdown(&self) -> String {
         format!(
-            "---\nname: {}\ndescription: {}\nversion: 0.1.0\nauthor: priority-agent\ntriggers:\n{}\nallowed-tools:\n{}\ntrust: {:?}\nprovenance: {}\nuser-invocable: true\n---\n\n# {}\n\n## When To Use\n{}\n\n## Procedure\n{}\n\n## Validation\n{}\n\n## Provenance\n{}\n",
+            "---\nname: {}\ndescription: {}\nversion: 0.1.0\nauthor: priority-agent\ntriggers:\n{}\nallowed-tools:\n{}\ntrust: {:?}\ncreation-score: {:.2}\nevidence-count: {}\nscope-confidence: {:.2}\nprovenance: {}\nuser-invocable: true\n---\n\n# {}\n\n## When To Use\n{}\n\n## Procedure\n{}\n\n## Validation\n{}\n\n## Provenance\n{}\n",
             self.name,
             yaml_string(&format!("Reusable workflow for {}.", self.procedure)),
             self.trigger_conditions
@@ -170,6 +276,9 @@ impl SkillProposal {
                 .collect::<Vec<_>>()
                 .join("\n"),
             self.trust,
+            self.creation_score,
+            self.evidence_count,
+            self.scope_confidence,
             yaml_string(&self.id),
             title_from_name(&self.name),
             self.trigger_conditions
@@ -213,20 +322,45 @@ pub fn generate_skill_proposals(events: &[LearningEventRecord]) -> Vec<SkillProp
         if group.len() < MIN_EVENTS_FOR_SKILL_PROPOSAL {
             continue;
         }
-        proposals.push(SkillProposal::new(
+        let scope = infer_scope(&group);
+        let trigger_event_ids = group.iter().map(|event| event.id).collect::<Vec<_>>();
+        let trigger_conditions = infer_triggers(&procedure, &group);
+        let workflow_steps = infer_workflow_steps(&procedure, &group);
+        let validation = infer_validation(&group);
+        let allowed_tools = infer_allowed_tools(&group);
+        let evidence = group
+            .iter()
+            .take(6)
+            .map(|event| format!("#{} {}", event.id, event.summary))
+            .collect::<Vec<_>>();
+        let creation_factors = skill_creation_factors_from_events(
+            &procedure,
+            &scope,
+            &group,
+            &workflow_steps,
+            &validation,
+            &allowed_tools,
+        );
+        let creation_score = compute_skill_creation_score(creation_factors);
+        if creation_score < MIN_SKILL_CREATION_SCORE {
+            continue;
+        }
+
+        let mut proposal = SkillProposal::new(
             procedure.clone(),
-            infer_scope(&group),
-            group.iter().map(|event| event.id).collect(),
-            infer_triggers(&procedure, &group),
-            infer_workflow_steps(&procedure, &group),
-            infer_validation(&group),
-            infer_allowed_tools(&group),
-            group
-                .iter()
-                .take(6)
-                .map(|event| format!("#{} {}", event.id, event.summary))
-                .collect(),
-        ));
+            scope,
+            trigger_event_ids,
+            trigger_conditions,
+            workflow_steps,
+            validation,
+            allowed_tools,
+            evidence,
+        );
+        proposal.creation_factors = creation_factors;
+        proposal.creation_score = creation_score;
+        proposal.evidence_count = group.len();
+        proposal.scope_confidence = infer_scope_confidence(&group);
+        proposals.push(proposal);
     }
     proposals
 }
@@ -236,6 +370,12 @@ pub fn evaluate_skill_proposal(proposal: &SkillProposal) -> SkillEvalResult {
     let mut notes = Vec::new();
     if proposal.trigger_event_ids.len() < MIN_EVENTS_FOR_SKILL_PROPOSAL {
         notes.push("needs at least two supporting successful procedure events".to_string());
+    }
+    if proposal.creation_score < MIN_SKILL_CREATION_SCORE {
+        notes.push(format!(
+            "creation score {:.2} is below promotion threshold {:.2}",
+            proposal.creation_score, MIN_SKILL_CREATION_SCORE
+        ));
     }
     if proposal.trust == SkillTrustState::Trusted && proposal.status != SkillProposalStatus::Applied
     {
@@ -346,6 +486,18 @@ impl SkillProposal {
         let now = chrono::Utc::now().to_rfc3339();
         let name = format!("workflow-{}", slugify(&procedure));
         let id = stable_skill_proposal_id(&scope, &procedure);
+        let creation_factors = skill_creation_factors_from_parts(
+            &procedure,
+            &scope,
+            trigger_event_ids.len(),
+            &workflow_steps,
+            &validation,
+            &allowed_tools,
+            &evidence,
+        );
+        let creation_score = compute_skill_creation_score(creation_factors);
+        let evidence_count = trigger_event_ids.len();
+        let scope_confidence = if scope == "project" { 0.65 } else { 0.85 };
         Self {
             id,
             name,
@@ -358,10 +510,359 @@ impl SkillProposal {
             allowed_tools,
             status: SkillProposalStatus::Proposed,
             trust: SkillTrustState::Proposed,
+            creation_score,
+            creation_factors,
+            evidence_count,
+            scope_confidence,
             evidence,
             created_at: now.clone(),
             updated_at: now,
         }
+    }
+}
+
+fn default_creation_score() -> f32 {
+    MIN_SKILL_CREATION_SCORE
+}
+
+fn default_scope_confidence() -> f32 {
+    0.65
+}
+
+pub fn compute_skill_creation_score(factors: SkillCreationFactors) -> f32 {
+    (factors.repeatability * 0.25
+        + factors.complexity * 0.25
+        + factors.success_evidence * 0.20
+        + factors.future_utility * 0.15
+        + factors.user_correction_value * 0.15
+        - factors.over_specificity * 0.20)
+        .clamp(0.0, 1.0)
+}
+
+pub fn compute_skill_fitness(stats: SkillFitnessStats) -> f32 {
+    (stats.task_success * 0.30
+        + stats.acceptance_pass_rate * 0.20
+        + stats.test_pass_rate * 0.15
+        + stats.user_satisfaction * 0.10
+        + stats.reuse_rate * 0.10
+        + stats.time_saved * 0.10
+        + stats.tool_efficiency * 0.05
+        - stats.failure_rate * 0.15
+        - stats.cost * 0.10
+        - stats.risk_penalty * 0.20)
+        .clamp(0.0, 1.0)
+}
+
+pub fn skill_fitness_snapshot(
+    skill_name: &str,
+    events: &[SkillUsageEvent],
+) -> Option<SkillFitnessSnapshot> {
+    if events.is_empty() {
+        return None;
+    }
+    let mut latest_version = events
+        .last()
+        .map(|event| event.skill_version.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let total = events.len() as f32;
+    let successes = events.iter().filter(|event| event.success).count() as f32;
+    let acceptance_known = events
+        .iter()
+        .filter(|event| event.acceptance_passed.is_some())
+        .count() as f32;
+    let acceptance_passed = events
+        .iter()
+        .filter(|event| event.acceptance_passed == Some(true))
+        .count() as f32;
+    let tests_known = events
+        .iter()
+        .filter(|event| event.tests_passed.is_some())
+        .count() as f32;
+    let tests_passed = events
+        .iter()
+        .filter(|event| event.tests_passed == Some(true))
+        .count() as f32;
+    let avg_satisfaction = average_optional(events.iter().map(|event| event.user_satisfaction));
+    let avg_duration = average_u64(events.iter().filter_map(|event| event.duration_ms));
+    let avg_tools = events
+        .iter()
+        .map(|event| event.tool_calls as f32)
+        .sum::<f32>()
+        / total;
+    let avg_risk = events.iter().map(|event| event.risk_penalty).sum::<f32>() / total;
+    if let Some(event) = events
+        .iter()
+        .rev()
+        .find(|event| !event.skill_version.is_empty())
+    {
+        latest_version = event.skill_version.clone();
+    }
+
+    let stats = SkillFitnessStats {
+        task_success: successes / total,
+        acceptance_pass_rate: ratio_or_default(acceptance_passed, acceptance_known, 0.65),
+        test_pass_rate: ratio_or_default(tests_passed, tests_known, 0.65),
+        user_satisfaction: avg_satisfaction.unwrap_or(0.65).clamp(0.0, 1.0),
+        reuse_rate: (total / 10.0).clamp(0.0, 1.0),
+        time_saved: duration_efficiency(avg_duration),
+        tool_efficiency: tool_efficiency(avg_tools),
+        failure_rate: 1.0 - successes / total,
+        cost: cost_penalty(avg_duration, avg_tools),
+        risk_penalty: avg_risk.clamp(0.0, 1.0),
+    };
+    Some(SkillFitnessSnapshot {
+        skill_name: skill_name.to_string(),
+        skill_version: latest_version,
+        events: events.len(),
+        fitness: compute_skill_fitness(stats),
+        stats,
+    })
+}
+
+pub fn compare_skill_versions_for_promotion(
+    old_fitness: f32,
+    new: &SkillFitnessSnapshot,
+    regression_rate: f32,
+    semantic_drift: f32,
+) -> SkillPromotionGate {
+    let delta = new.fitness - old_fitness;
+    let risk_penalty = new.stats.risk_penalty;
+    let mut reasons = Vec::new();
+    if delta <= 0.05 {
+        reasons.push(format!("fitness delta {:.2} <= 0.05", delta));
+    }
+    if regression_rate > 0.0 {
+        reasons.push(format!("regression rate {:.2} > 0", regression_rate));
+    }
+    if new.events < 3 {
+        reasons.push(format!("eval count {} < 3", new.events));
+    }
+    if risk_penalty >= 0.35 {
+        reasons.push(format!("risk penalty {:.2} >= 0.35", risk_penalty));
+    }
+    if semantic_drift >= 0.30 {
+        reasons.push(format!("semantic drift {:.2} >= 0.30", semantic_drift));
+    }
+    SkillPromotionGate {
+        passed: reasons.is_empty(),
+        old_fitness,
+        new_fitness: new.fitness,
+        delta,
+        regression_rate,
+        eval_count: new.events,
+        risk_penalty,
+        semantic_drift,
+        reasons,
+    }
+}
+
+fn skill_creation_factors_from_events(
+    procedure: &str,
+    scope: &str,
+    events: &[&LearningEventRecord],
+    workflow_steps: &[String],
+    validation: &[String],
+    allowed_tools: &[String],
+) -> SkillCreationFactors {
+    let evidence = events
+        .iter()
+        .map(|event| format!("{} {}", event.summary, event.payload))
+        .collect::<Vec<_>>();
+    let mut factors = skill_creation_factors_from_parts(
+        procedure,
+        scope,
+        events.len(),
+        workflow_steps,
+        validation,
+        allowed_tools,
+        &evidence,
+    );
+    if !events.is_empty() {
+        let avg_confidence = events
+            .iter()
+            .map(|event| event.confidence as f32)
+            .sum::<f32>()
+            / events.len() as f32;
+        factors.success_evidence = factors.success_evidence.max(avg_confidence.clamp(0.0, 1.0));
+    }
+    let has_observed_steps = events.iter().any(|event| {
+        event
+            .payload
+            .get("steps")
+            .and_then(|value| value.as_array())
+            .map(|steps| {
+                steps
+                    .iter()
+                    .filter(|value| value.as_str().is_some())
+                    .count()
+                    >= 2
+            })
+            .unwrap_or(false)
+    });
+    let has_observed_tools = events.iter().any(|event| {
+        event
+            .payload
+            .get("tool")
+            .and_then(|value| value.as_str())
+            .is_some()
+            || event
+                .payload
+                .get("tools")
+                .and_then(|value| value.as_array())
+                .map(|tools| tools.iter().any(|value| value.as_str().is_some()))
+                .unwrap_or(false)
+    });
+    if !has_observed_steps {
+        factors.complexity = (factors.complexity - 0.20).max(0.0);
+    }
+    if !has_observed_tools {
+        factors.future_utility = (factors.future_utility - 0.15).max(0.0);
+    }
+    factors
+}
+
+fn skill_creation_factors_from_parts(
+    procedure: &str,
+    scope: &str,
+    evidence_count: usize,
+    workflow_steps: &[String],
+    validation: &[String],
+    allowed_tools: &[String],
+    evidence: &[String],
+) -> SkillCreationFactors {
+    let procedure_tokens = informative_skill_tokens(procedure);
+    let text_blob = format!(
+        "{} {} {} {}",
+        procedure,
+        scope,
+        workflow_steps.join(" "),
+        evidence.join(" ")
+    )
+    .to_lowercase();
+
+    let repeatability: f32 = match evidence_count {
+        0 => 0.0,
+        1 => 0.35,
+        2 => 0.78,
+        3 => 0.90,
+        _ => 1.0,
+    };
+    let has_explicit_steps = workflow_steps
+        .iter()
+        .filter(|step| !step.starts_with("Confirm the current task matches"))
+        .count()
+        >= 2;
+    let complexity: f32 = (0.30_f32
+        + if has_explicit_steps {
+            0.25_f32
+        } else {
+            0.10_f32
+        }
+        + if allowed_tools.len() >= 2 {
+            0.15_f32
+        } else {
+            0.05_f32
+        }
+        + if !validation.is_empty() {
+            0.12_f32
+        } else {
+            0.0_f32
+        }
+        + if procedure_tokens.len() >= 3 {
+            0.15_f32
+        } else {
+            0.05_f32
+        })
+    .clamp(0.0, 1.0);
+    let success_evidence: f32 = if evidence_count >= 2 { 0.82 } else { 0.45 };
+    let future_utility: f32 = (0.42_f32
+        + if allowed_tools.len() >= 2 {
+            0.18_f32
+        } else {
+            0.05_f32
+        }
+        + if !validation.is_empty() {
+            0.12_f32
+        } else {
+            0.0_f32
+        }
+        + if procedure_tokens.len() >= 2 {
+            0.12_f32
+        } else {
+            0.0_f32
+        }
+        + if scope != "project" {
+            0.08_f32
+        } else {
+            0.0_f32
+        })
+    .clamp(0.0, 1.0);
+    let user_correction_value: f32 = if contains_any(
+        &text_blob,
+        &[
+            "correction",
+            "user corrected",
+            "用户纠正",
+            "wrong",
+            "mistake",
+        ],
+    ) {
+        0.85
+    } else {
+        0.15
+    };
+    let over_specificity = over_specificity_score(procedure, scope, &text_blob);
+
+    SkillCreationFactors {
+        repeatability,
+        complexity,
+        success_evidence,
+        future_utility,
+        user_correction_value,
+        over_specificity,
+    }
+}
+
+fn over_specificity_score(procedure: &str, scope: &str, text: &str) -> f32 {
+    let mut score: f32 = 0.05;
+    if scope.starts_with("project:") {
+        score += 0.05;
+    }
+    if text.contains("/users/") || text.contains("tmp/") || text.contains(".tmp") {
+        score += 0.25;
+    }
+    if procedure
+        .split(|ch: char| !ch.is_alphanumeric())
+        .any(|token| token.len() >= 12 && token.chars().any(|ch| ch.is_ascii_digit()))
+    {
+        score += 0.25;
+    }
+    if contains_any(
+        text,
+        &["one-off", "temporary", "for this run", "临时", "一次性"],
+    ) {
+        score += 0.30;
+    }
+    score.clamp(0.0, 1.0)
+}
+
+fn infer_scope_confidence(events: &[&LearningEventRecord]) -> f32 {
+    let project_count = events
+        .iter()
+        .filter(|event| {
+            event
+                .payload
+                .get("project")
+                .and_then(|value| value.as_str())
+                .is_some()
+        })
+        .count();
+    if project_count >= events.len().max(1) {
+        0.90
+    } else if project_count > 0 {
+        0.75
+    } else {
+        0.65
     }
 }
 
@@ -524,6 +1025,31 @@ fn normalize_procedure(value: &str) -> String {
     words.join(" ")
 }
 
+fn informative_skill_tokens(value: &str) -> Vec<String> {
+    normalize_procedure(value)
+        .split_whitespace()
+        .filter(|word| {
+            !matches!(
+                *word,
+                "project"
+                    | "workflow"
+                    | "task"
+                    | "tasks"
+                    | "context"
+                    | "check"
+                    | "verify"
+                    | "test"
+                    | "tests"
+            )
+        })
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn contains_any(content: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| content.contains(needle))
+}
+
 fn stable_skill_proposal_id(scope: &str, procedure: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     scope.hash(&mut hasher);
@@ -606,6 +1132,10 @@ fn read_latest_proposals(path: &Path) -> Vec<SkillProposal> {
 }
 
 fn append_jsonl(path: &Path, proposal: &SkillProposal) -> anyhow::Result<()> {
+    append_jsonl_value(path, proposal)
+}
+
+fn append_jsonl_value<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -613,8 +1143,75 @@ fn append_jsonl(path: &Path, proposal: &SkillProposal) -> anyhow::Result<()> {
         .create(true)
         .append(true)
         .open(path)?;
-    writeln!(file, "{}", serde_json::to_string(proposal)?)?;
+    writeln!(file, "{}", serde_json::to_string(value)?)?;
     Ok(())
+}
+
+fn read_skill_usage_events(path: &Path, skill_name: &str) -> Vec<SkillUsageEvent> {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let mut events = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str::<SkillUsageEvent>(line).ok())
+        .filter(|event| event.skill_name == skill_name)
+        .collect::<Vec<_>>();
+    events.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    events
+}
+
+fn average_optional(values: impl Iterator<Item = Option<f32>>) -> Option<f32> {
+    let mut total = 0.0;
+    let mut count = 0.0;
+    for value in values.flatten() {
+        total += value;
+        count += 1.0;
+    }
+    if count == 0.0 {
+        None
+    } else {
+        Some(total / count)
+    }
+}
+
+fn average_u64(values: impl Iterator<Item = u64>) -> Option<f32> {
+    let mut total = 0.0;
+    let mut count = 0.0;
+    for value in values {
+        total += value as f32;
+        count += 1.0;
+    }
+    if count == 0.0 {
+        None
+    } else {
+        Some(total / count)
+    }
+}
+
+fn ratio_or_default(numerator: f32, denominator: f32, default: f32) -> f32 {
+    if denominator <= 0.0 {
+        default
+    } else {
+        (numerator / denominator).clamp(0.0, 1.0)
+    }
+}
+
+fn duration_efficiency(avg_duration_ms: Option<f32>) -> f32 {
+    let Some(avg_duration_ms) = avg_duration_ms else {
+        return 0.55;
+    };
+    (1.0 / (1.0 + avg_duration_ms / 120_000.0)).clamp(0.0, 1.0)
+}
+
+fn tool_efficiency(avg_tools: f32) -> f32 {
+    (1.0 / (1.0 + avg_tools / 12.0)).clamp(0.0, 1.0)
+}
+
+fn cost_penalty(avg_duration_ms: Option<f32>, avg_tools: f32) -> f32 {
+    let duration_penalty = avg_duration_ms
+        .map(|duration| (duration / 300_000.0).clamp(0.0, 1.0))
+        .unwrap_or(0.25);
+    (duration_penalty * 0.55 + (avg_tools / 20.0).clamp(0.0, 1.0) * 0.45).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -643,12 +1240,26 @@ mod tests {
             event(
                 1,
                 "rust compile fix",
-                serde_json::json!({"tools": ["grep", "file_read", "bash"]}),
+                serde_json::json!({
+                    "tools": ["grep", "file_read", "bash"],
+                    "steps": [
+                        "Inspect the compiler error and related source file.",
+                        "Apply the smallest Rust type or borrow fix.",
+                        "Run cargo test for the affected crate."
+                    ]
+                }),
             ),
             event(
                 2,
                 "rust compile fix",
-                serde_json::json!({"tools": ["grep", "file_read", "bash"]}),
+                serde_json::json!({
+                    "tools": ["grep", "file_read", "bash"],
+                    "steps": [
+                        "Inspect the compiler error and related source file.",
+                        "Apply the smallest Rust type or borrow fix.",
+                        "Run cargo test for the affected crate."
+                    ]
+                }),
             ),
         ];
 
@@ -656,7 +1267,20 @@ mod tests {
         assert_eq!(proposals.len(), 1);
         assert_eq!(proposals[0].trigger_event_ids, vec![1, 2]);
         assert_eq!(proposals[0].trust, SkillTrustState::Proposed);
+        assert!(proposals[0].creation_score >= MIN_SKILL_CREATION_SCORE);
+        assert_eq!(proposals[0].evidence_count, 2);
         assert!(quality_check_skill_proposal(&proposals[0]).passed);
+    }
+
+    #[test]
+    fn repeated_trivial_procedures_do_not_create_skill_proposal() {
+        let events = vec![
+            event(1, "say hi", serde_json::json!({})),
+            event(2, "say hi", serde_json::json!({})),
+        ];
+
+        let proposals = generate_skill_proposals(&events);
+        assert!(proposals.is_empty());
     }
 
     #[test]
@@ -715,5 +1339,111 @@ mod tests {
             .unwrap();
         assert_eq!(applied.trust, SkillTrustState::Trusted);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn skill_fitness_penalizes_failures_cost_and_risk() {
+        let strong = compute_skill_fitness(SkillFitnessStats {
+            task_success: 0.95,
+            acceptance_pass_rate: 0.90,
+            test_pass_rate: 0.90,
+            user_satisfaction: 0.80,
+            reuse_rate: 0.60,
+            time_saved: 0.60,
+            tool_efficiency: 0.70,
+            failure_rate: 0.05,
+            cost: 0.20,
+            risk_penalty: 0.10,
+        });
+        let weak = compute_skill_fitness(SkillFitnessStats {
+            task_success: 0.50,
+            acceptance_pass_rate: 0.40,
+            test_pass_rate: 0.40,
+            user_satisfaction: 0.30,
+            reuse_rate: 0.20,
+            time_saved: 0.10,
+            tool_efficiency: 0.20,
+            failure_rate: 0.50,
+            cost: 0.70,
+            risk_penalty: 0.60,
+        });
+
+        assert!(strong > weak);
+        assert!((0.0..=1.0).contains(&strong));
+    }
+
+    #[test]
+    fn skill_usage_events_aggregate_into_fitness_snapshot() {
+        let events = vec![
+            SkillUsageEvent {
+                skill_name: "debug-rust".to_string(),
+                skill_version: "0.1.0".to_string(),
+                success: true,
+                acceptance_passed: Some(true),
+                tests_passed: Some(true),
+                user_satisfaction: Some(0.9),
+                duration_ms: Some(30_000),
+                tool_calls: 4,
+                risk_penalty: 0.05,
+                created_at: "2026-04-28T00:00:00Z".to_string(),
+            },
+            SkillUsageEvent {
+                skill_name: "debug-rust".to_string(),
+                skill_version: "0.1.0".to_string(),
+                success: true,
+                acceptance_passed: Some(true),
+                tests_passed: Some(true),
+                user_satisfaction: Some(0.8),
+                duration_ms: Some(40_000),
+                tool_calls: 5,
+                risk_penalty: 0.05,
+                created_at: "2026-04-28T00:01:00Z".to_string(),
+            },
+            SkillUsageEvent {
+                skill_name: "debug-rust".to_string(),
+                skill_version: "0.1.0".to_string(),
+                success: false,
+                acceptance_passed: Some(false),
+                tests_passed: Some(false),
+                user_satisfaction: Some(0.2),
+                duration_ms: Some(180_000),
+                tool_calls: 18,
+                risk_penalty: 0.30,
+                created_at: "2026-04-28T00:02:00Z".to_string(),
+            },
+        ];
+
+        let snapshot = skill_fitness_snapshot("debug-rust", &events).unwrap();
+        assert_eq!(snapshot.events, 3);
+        assert!(snapshot.fitness > 0.0);
+        assert!(snapshot.stats.failure_rate > 0.0);
+    }
+
+    #[test]
+    fn promotion_gate_blocks_regressions() {
+        let snapshot = SkillFitnessSnapshot {
+            skill_name: "debug-rust".to_string(),
+            skill_version: "0.2.0".to_string(),
+            events: 5,
+            stats: SkillFitnessStats {
+                task_success: 0.9,
+                acceptance_pass_rate: 0.9,
+                test_pass_rate: 0.9,
+                user_satisfaction: 0.8,
+                reuse_rate: 0.5,
+                time_saved: 0.8,
+                tool_efficiency: 0.8,
+                failure_rate: 0.1,
+                cost: 0.1,
+                risk_penalty: 0.1,
+            },
+            fitness: 0.80,
+        };
+        let gate = compare_skill_versions_for_promotion(0.70, &snapshot, 0.2, 0.1);
+        assert!(!gate.passed);
+        assert!(gate
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("regression")));
     }
 }
