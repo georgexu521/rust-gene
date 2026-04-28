@@ -3213,6 +3213,9 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
             }
             match store.update_status(id, desired) {
                 Ok(Some(updated)) => {
+                    if desired == ProposalStatus::Applied {
+                        record_evolution_update(improvement_target(&updated));
+                    }
                     persist_improvement_learning_event(app, &updated, action);
                     format!(
                         "Updated proposal {}\n{}",
@@ -3486,6 +3489,9 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
             }
             match std::fs::rename(&backup.path, &active_dir) {
                 Ok(()) => {
+                    record_evolution_update(
+                        crate::engine::evolution_controller::EvolutionTarget::Skill,
+                    );
                     let loaded = app.skill_runtime.reload();
                     let payload = serde_json::json!({
                         "skill_name": name,
@@ -3546,6 +3552,9 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
             match std::fs::rename(&skill_dir, &disabled_dir) {
                 Ok(()) => {
                     let _ = store.update_status(&latest.proposal_id, SkillProposalStatus::Accepted);
+                    record_evolution_update(
+                        crate::engine::evolution_controller::EvolutionTarget::Skill,
+                    );
                     let loaded = app.skill_runtime.reload();
                     let payload = serde_json::json!({
                         "skill_name": name,
@@ -3682,7 +3691,8 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                     format_skill_eval(&eval)
                 );
             }
-            if let Some(report) = run_bound_skill_evalsets(&current) {
+            let bound_report = run_bound_skill_evalsets(&current);
+            if let Some(ref report) = bound_report {
                 if !report.ok {
                     return format!(
                         "Skill proposal {} failed bound evalsets and was not applied.\n{}",
@@ -3702,10 +3712,19 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                     format_evolution_gate(&gate)
                 );
             }
+            if let Err(report) = validate_skill_promotion_for_apply(&store, &current, bound_report.as_ref()) {
+                return format!(
+                    "Skill proposal {} was not applied by promotion gate.\n{}",
+                    current.id, report
+                );
+            }
             let root = user_skill_root();
             match write_active_skill(&current, &root) {
                 Ok(path) => match store.record_applied_version(id, &path) {
                     Ok(Some((updated, _version))) => {
+                        record_evolution_update(
+                            crate::engine::evolution_controller::EvolutionTarget::Skill,
+                        );
                         let loaded = app.skill_runtime.reload();
                         persist_skill_proposal_learning_event(
                             app,
@@ -3880,6 +3899,9 @@ fn format_skill_proposal_detail(
 struct BoundSkillEvalReport {
     ok: bool,
     summary: String,
+    total: usize,
+    passed: usize,
+    failed: usize,
 }
 
 fn run_bound_skill_evalsets(
@@ -3891,6 +3913,9 @@ fn run_bound_skill_evalsets(
     let eval_dir = std::env::current_dir().ok()?.join("evalsets");
     let mut summaries = Vec::new();
     let mut ok = true;
+    let mut total = 0usize;
+    let mut passed = 0usize;
+    let mut failed = 0usize;
     for binding in &proposal.evalset_bindings {
         match crate::engine::evalset::run_evalsets_from_dir(&eval_dir, Some(binding)) {
             Ok(reports) if reports.is_empty() => {
@@ -3900,6 +3925,11 @@ fn run_bound_skill_evalsets(
             Ok(reports) => {
                 let binding_ok = reports.iter().all(|report| report.ok());
                 ok &= binding_ok;
+                for report in &reports {
+                    total += report.total;
+                    passed += report.passed;
+                    failed += report.failed;
+                }
                 summaries.push(crate::engine::evalset::format_reports(&reports));
             }
             Err(e) => {
@@ -3911,7 +3941,124 @@ fn run_bound_skill_evalsets(
     Some(BoundSkillEvalReport {
         ok,
         summary: summaries.join("\n\n"),
+        total,
+        passed,
+        failed,
     })
+}
+
+fn validate_skill_promotion_for_apply(
+    store: &crate::engine::skill_evolution::SkillProposalStore,
+    proposal: &crate::engine::skill_evolution::SkillProposal,
+    bound_report: Option<&BoundSkillEvalReport>,
+) -> Result<Option<crate::engine::skill_evolution::SkillPromotionGate>, String> {
+    let records = store.version_records(&proposal.name);
+    let active_exists = user_skill_root().join(&proposal.name).exists();
+    if records.is_empty() && !active_exists {
+        return Ok(None);
+    }
+
+    let latest = records.last().ok_or_else(|| {
+        format!(
+            "Active /{} exists but no version baseline is recorded; rollback or record a baseline before replacing it.",
+            proposal.name
+        )
+    })?;
+    let candidate_version = proposal.skill_version();
+    if latest.version == candidate_version {
+        return Err(format!(
+            "Candidate version '{}' matches the active /{} version; cannot compare promotion fitness. Regenerate the proposal or record candidate usage under a distinct version.",
+            candidate_version, proposal.name
+        ));
+    }
+
+    let all_events = store.usage_events(&proposal.name);
+    let old_events = all_events
+        .iter()
+        .filter(|event| event.skill_version == latest.version && !event.provisional)
+        .cloned()
+        .collect::<Vec<_>>();
+    let old_snapshot =
+        crate::engine::skill_evolution::skill_fitness_snapshot(&proposal.name, &old_events)
+            .ok_or_else(|| {
+                format!(
+                    "Existing /{} version '{}' has no confirmed fitness baseline. Record usage before replacing it.",
+                    proposal.name, latest.version
+                )
+            })?;
+
+    let new_events = all_events
+        .iter()
+        .filter(|event| event.skill_version == candidate_version && !event.provisional)
+        .cloned()
+        .collect::<Vec<_>>();
+    let new_snapshot =
+        crate::engine::skill_evolution::skill_fitness_snapshot(&proposal.name, &new_events)
+            .or_else(|| bound_report.and_then(|report| skill_fitness_from_bound_eval(proposal, report)))
+            .ok_or_else(|| {
+                format!(
+                    "Candidate /{} version '{}' has no promotion evidence. Record at least 3 candidate outcomes or bind passing evalsets before replacing an active skill.",
+                    proposal.name, candidate_version
+                )
+            })?;
+    let regression_rate = if new_snapshot.events == 0 {
+        1.0
+    } else {
+        new_snapshot.stats.failure_rate
+    };
+    let semantic_drift = estimate_skill_semantic_drift(proposal);
+    let gate = crate::engine::skill_evolution::compare_skill_versions_for_promotion(
+        old_snapshot.fitness,
+        &new_snapshot,
+        regression_rate,
+        semantic_drift,
+    );
+    if gate.passed {
+        Ok(Some(gate))
+    } else {
+        Err(format_skill_promotion_gate(&gate))
+    }
+}
+
+fn skill_fitness_from_bound_eval(
+    proposal: &crate::engine::skill_evolution::SkillProposal,
+    report: &BoundSkillEvalReport,
+) -> Option<crate::engine::skill_evolution::SkillFitnessSnapshot> {
+    if report.total == 0 {
+        return None;
+    }
+    let pass_rate = report.passed as f32 / report.total as f32;
+    let failure_rate = report.failed as f32 / report.total as f32;
+    let stats = crate::engine::skill_evolution::SkillFitnessStats {
+        task_success: pass_rate,
+        acceptance_pass_rate: pass_rate,
+        test_pass_rate: pass_rate,
+        user_satisfaction: if report.ok { 0.75 } else { 0.35 },
+        reuse_rate: (proposal.evidence_count as f32 / 10.0).clamp(0.0, 1.0),
+        time_saved: 0.55,
+        tool_efficiency: 0.55,
+        failure_rate,
+        cost: 0.20,
+        risk_penalty: if report.ok { 0.05 } else { 0.30 },
+    };
+    Some(crate::engine::skill_evolution::SkillFitnessSnapshot {
+        skill_name: proposal.name.clone(),
+        skill_version: proposal.skill_version(),
+        events: report.total,
+        fitness: crate::engine::skill_evolution::compute_skill_fitness(stats),
+        stats,
+    })
+}
+
+fn estimate_skill_semantic_drift(proposal: &crate::engine::skill_evolution::SkillProposal) -> f32 {
+    let step_count = proposal.workflow_steps.len() as f32;
+    let validation_count = proposal.validation.len() as f32;
+    let evidence_count = proposal.evidence_count.max(1) as f32;
+    let shape_risk =
+        ((step_count - validation_count).abs() / (step_count.max(1.0) + 2.0)).clamp(0.0, 0.25);
+    let specificity_risk = proposal.creation_factors.over_specificity * 0.50;
+    let evidence_risk = (1.0 / evidence_count).min(0.25);
+    (shape_risk + specificity_risk + evidence_risk).clamp(0.0, 1.0)
 }
 
 fn format_skill_eval(eval: &crate::engine::skill_evolution::SkillEvalResult) -> String {
@@ -4000,23 +4147,87 @@ fn persist_skill_proposal_learning_event(
     );
 }
 
+const EVOLUTION_COOLDOWN_SECS: u64 = 300;
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct PersistentEvolutionState {
+    #[serde(default)]
+    last_update_turn:
+        std::collections::HashMap<crate::engine::evolution_controller::EvolutionTarget, u64>,
+}
+
+fn evolution_state_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".priority-agent")
+        .join("evolution_state.json")
+}
+
+fn now_evolution_turn() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn load_evolution_state() -> PersistentEvolutionState {
+    std::fs::read_to_string(evolution_state_path())
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+fn save_evolution_state(state: &PersistentEvolutionState) {
+    let path = evolution_state_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(content) = serde_json::to_string_pretty(state) {
+        let _ = std::fs::write(path, content);
+    }
+}
+
+fn load_evolution_controller() -> crate::engine::evolution_controller::EvolutionController {
+    crate::engine::evolution_controller::EvolutionController::new()
+        .with_cooldown_turns(EVOLUTION_COOLDOWN_SECS)
+        .with_last_updates(load_evolution_state().last_update_turn)
+}
+
+fn record_evolution_update(target: crate::engine::evolution_controller::EvolutionTarget) {
+    let mut state = load_evolution_state();
+    state.last_update_turn.insert(target, now_evolution_turn());
+    save_evolution_state(&state);
+}
+
+fn improvement_target(
+    proposal: &crate::engine::improvement::ImprovementProposal,
+) -> crate::engine::evolution_controller::EvolutionTarget {
+    match proposal.target {
+        crate::engine::improvement::ImprovementTarget::Memory => {
+            crate::engine::evolution_controller::EvolutionTarget::Memory
+        }
+        crate::engine::improvement::ImprovementTarget::Skill => {
+            crate::engine::evolution_controller::EvolutionTarget::Skill
+        }
+        crate::engine::improvement::ImprovementTarget::Prompt => {
+            crate::engine::evolution_controller::EvolutionTarget::PromptSection
+        }
+        crate::engine::improvement::ImprovementTarget::Routing => {
+            crate::engine::evolution_controller::EvolutionTarget::WorkflowPolicy
+        }
+        crate::engine::improvement::ImprovementTarget::ToolGuidance => {
+            crate::engine::evolution_controller::EvolutionTarget::ToolDescription
+        }
+    }
+}
+
 fn improvement_evolution_gate(
     proposal: &crate::engine::improvement::ImprovementProposal,
 ) -> crate::engine::evolution_controller::EvolutionGateDecision {
-    use crate::engine::evolution_controller::{
-        EvolutionController, EvolutionTarget, EvolutionTriggerFactors,
-    };
+    use crate::engine::evolution_controller::EvolutionTriggerFactors;
     let risk = risk_value(proposal.risk);
-    let target = match proposal.target {
-        crate::engine::improvement::ImprovementTarget::Memory => EvolutionTarget::Memory,
-        crate::engine::improvement::ImprovementTarget::Skill => EvolutionTarget::Skill,
-        crate::engine::improvement::ImprovementTarget::Prompt => EvolutionTarget::PromptSection,
-        crate::engine::improvement::ImprovementTarget::Routing => EvolutionTarget::WorkflowPolicy,
-        crate::engine::improvement::ImprovementTarget::ToolGuidance => {
-            EvolutionTarget::ToolDescription
-        }
-    };
-    EvolutionController::new().gate(
+    let target = improvement_target(proposal);
+    load_evolution_controller().gate(
         target,
         EvolutionTriggerFactors {
             repeated_failure: (proposal.trigger_event_ids.len() as f32 / 4.0).clamp(0.0, 1.0),
@@ -4048,17 +4259,15 @@ fn improvement_evolution_gate(
             },
             risk,
         },
-        0,
+        now_evolution_turn(),
     )
 }
 
 fn skill_evolution_gate(
     proposal: &crate::engine::skill_evolution::SkillProposal,
 ) -> crate::engine::evolution_controller::EvolutionGateDecision {
-    use crate::engine::evolution_controller::{
-        EvolutionController, EvolutionTarget, EvolutionTriggerFactors,
-    };
-    EvolutionController::new().gate(
+    use crate::engine::evolution_controller::{EvolutionTarget, EvolutionTriggerFactors};
+    load_evolution_controller().gate(
         EvolutionTarget::Skill,
         EvolutionTriggerFactors {
             repeated_failure: 0.0,
@@ -4069,7 +4278,7 @@ fn skill_evolution_gate(
             evolution_cost: proposal.creation_factors.over_specificity.max(0.20),
             risk: 1.0 - proposal.scope_confidence,
         },
-        0,
+        now_evolution_turn(),
     )
 }
 

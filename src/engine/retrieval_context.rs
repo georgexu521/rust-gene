@@ -363,9 +363,11 @@ fn retrieval_item_id(
 fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: bool) -> f32 {
     let lexical = ((item.score as f32) / 40.0).clamp(0.0, 1.0);
     let token_estimate = estimate_tokens(&item.snippet).max(1) as f32;
-    let match_density = ((item.score as f32 / token_estimate) * 4.0).clamp(0.0, 1.0);
-    let semantic_similarity =
-        (lexical * 0.60 + match_density * 0.40 + memory_type_boost(&item.snippet)).clamp(0.0, 1.0);
+    let density = ((item.score as f32 / token_estimate) * 4.0).clamp(0.0, 1.0);
+    let semantic_similarity = item
+        .rerank_score
+        .unwrap_or_else(|| memory_type_boost(&item.snippet).max(0.35))
+        .clamp(0.0, 1.0);
     let scope_match = if item.source.starts_with("USER.md") {
         0.95
     } else if item.source.starts_with("MEMORY.md") {
@@ -393,7 +395,7 @@ fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: 
     } else {
         0.55
     };
-    let task_criticality = (0.45 + match_density * 0.35 + lexical * 0.20).clamp(0.0, 1.0);
+    let task_criticality = (0.45 + density * 0.35 + lexical * 0.20).clamp(0.0, 1.0);
 
     crate::memory::score_recall(
         crate::memory::RecallFactors {
@@ -457,10 +459,47 @@ fn memory_conflict_matches_item(
 ) -> bool {
     let conflict = conflict.to_lowercase();
     let snippet = item.snippet.to_lowercase();
-    conflict
+    if let Some((key, values)) = parse_memory_conflict(&conflict) {
+        return snippet.contains(&key) && values.iter().any(|value| snippet.contains(value));
+    }
+
+    let tokens = conflict
         .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
-        .filter(|part| part.len() >= 3)
-        .any(|part| snippet.contains(part))
+        .filter(|part| {
+            part.len() >= 4
+                && !matches!(
+                    *part,
+                    "memory" | "project" | "user" | "value" | "values" | "conflicting"
+                )
+        })
+        .collect::<Vec<_>>();
+    tokens.len() >= 2
+        && tokens
+            .iter()
+            .filter(|part| snippet.contains(**part))
+            .count()
+            >= 2
+}
+
+fn parse_memory_conflict(conflict: &str) -> Option<(String, Vec<String>)> {
+    let key_start = conflict.find("key '")? + 5;
+    let key_end = conflict[key_start..].find('\'')? + key_start;
+    let key = conflict[key_start..key_end].trim().to_string();
+    if key.is_empty() {
+        return None;
+    }
+    let values_start = conflict.find("values:")? + "values:".len();
+    let values = conflict[values_start..]
+        .split('|')
+        .map(str::trim)
+        .filter(|value| value.len() >= 2)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        None
+    } else {
+        Some((key, values))
+    }
 }
 
 #[cfg(test)]
@@ -490,6 +529,7 @@ mod tests {
         let matches = vec![crate::memory::manager::MemoryMatch {
             source: "memory/cli.md".to_string(),
             score: 30,
+            rerank_score: Some(0.90),
             snippet: "language: Chinese\nUse compact CLI status bars.".to_string(),
         }];
         let conflicts =
@@ -507,6 +547,26 @@ mod tests {
         assert!(ctx.items[0].conflict);
         assert!(ctx.provenance_summaries()[0].contains("memory.match:memory/cli.md"));
         assert!(ctx.format_for_prompt().contains("provenance="));
+    }
+
+    #[test]
+    fn memory_conflict_matching_uses_structured_key_and_value() {
+        let conflict = "- key 'language' has conflicting values: chinese | english";
+        let unrelated = crate::memory::manager::MemoryMatch {
+            source: "memory/cli.md".to_string(),
+            score: 30,
+            rerank_score: Some(0.90),
+            snippet: "The project memory mentions conflicting work before.".to_string(),
+        };
+        let related = crate::memory::manager::MemoryMatch {
+            source: "memory/cli.md".to_string(),
+            score: 30,
+            rerank_score: Some(0.90),
+            snippet: "language: Chinese\nUse compact CLI status bars.".to_string(),
+        };
+
+        assert!(!memory_conflict_matches_item(conflict, &unrelated));
+        assert!(memory_conflict_matches_item(conflict, &related));
     }
 
     #[test]

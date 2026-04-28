@@ -57,7 +57,7 @@ pub struct EvolutionGateDecision {
     pub reasons: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvolutionController {
     cooldown_turns: u64,
     last_update_turn: HashMap<EvolutionTarget, u64>,
@@ -80,6 +80,15 @@ impl EvolutionController {
     pub fn with_cooldown_turns(mut self, cooldown_turns: u64) -> Self {
         self.cooldown_turns = cooldown_turns;
         self
+    }
+
+    pub fn with_last_updates(mut self, last_update_turn: HashMap<EvolutionTarget, u64>) -> Self {
+        self.last_update_turn = last_update_turn;
+        self
+    }
+
+    pub fn last_update_turns(&self) -> &HashMap<EvolutionTarget, u64> {
+        &self.last_update_turn
     }
 
     pub fn mark_updated(&mut self, target: EvolutionTarget, turn_index: u64) {

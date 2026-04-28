@@ -252,6 +252,7 @@ pub struct MemoryFileSnapshot {
 pub struct MemoryMatch {
     pub source: String,
     pub score: usize,
+    pub rerank_score: Option<f32>,
     pub snippet: String,
 }
 
@@ -270,6 +271,86 @@ pub struct MemoryDecisionCounts {
     pub proposed: usize,
     pub rejected: usize,
     pub blocked: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryWriteOutcomeStatus {
+    Saved,
+    Proposed,
+    Rejected,
+    Blocked,
+    Duplicate,
+    Failed,
+    InvalidTarget,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryWriteOutcome {
+    pub status: MemoryWriteOutcomeStatus,
+    pub quality_score: Option<f32>,
+    pub reason: String,
+    pub path: Option<PathBuf>,
+}
+
+impl MemoryWriteOutcome {
+    fn saved(path: impl Into<PathBuf>, score: f32, reason: impl Into<String>) -> Self {
+        Self {
+            status: MemoryWriteOutcomeStatus::Saved,
+            quality_score: Some(score),
+            reason: reason.into(),
+            path: Some(path.into()),
+        }
+    }
+
+    fn gated(status: MemoryStatus, score: f32, reason: impl Into<String>) -> Self {
+        let status = match status {
+            MemoryStatus::Proposed => MemoryWriteOutcomeStatus::Proposed,
+            MemoryStatus::Accepted => MemoryWriteOutcomeStatus::Saved,
+            _ => MemoryWriteOutcomeStatus::Rejected,
+        };
+        Self {
+            status,
+            quality_score: Some(score),
+            reason: reason.into(),
+            path: None,
+        }
+    }
+
+    fn duplicate(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
+        Self {
+            status: MemoryWriteOutcomeStatus::Duplicate,
+            quality_score: None,
+            reason: reason.into(),
+            path: Some(path.into()),
+        }
+    }
+
+    fn blocked(reason: impl Into<String>) -> Self {
+        Self {
+            status: MemoryWriteOutcomeStatus::Blocked,
+            quality_score: None,
+            reason: reason.into(),
+            path: None,
+        }
+    }
+
+    fn failed(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
+        Self {
+            status: MemoryWriteOutcomeStatus::Failed,
+            quality_score: None,
+            reason: reason.into(),
+            path: Some(path.into()),
+        }
+    }
+
+    fn invalid_target(reason: impl Into<String>) -> Self {
+        Self {
+            status: MemoryWriteOutcomeStatus::InvalidTarget,
+            quality_score: None,
+            reason: reason.into(),
+            path: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1093,7 +1174,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
     }
 
     /// 添加学习内容（异步版本 — 推荐在异步上下文中使用）
-    pub async fn add_learning_async(&self, content: &str, category: &str) {
+    pub async fn add_learning_async(&self, content: &str, category: &str) -> MemoryWriteOutcome {
         let path = match category {
             "preference" | "user" => &self.user_path,
             _ => &self.memory_path,
@@ -1113,7 +1194,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
                     content,
                     &format!("{}: {}", issue.code, issue.message),
                 );
-                return;
+                return MemoryWriteOutcome::blocked(format!("{}: {}", issue.code, issue.message));
             }
         };
         if assessment.status != MemoryStatus::Accepted {
@@ -1129,7 +1210,11 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 content,
                 &assessment.reason,
             );
-            return;
+            return MemoryWriteOutcome::gated(
+                assessment.status,
+                assessment.score,
+                assessment.reason,
+            );
         }
         if normalized_contains(&existing, content) {
             debug!(
@@ -1142,7 +1227,10 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 content,
                 "duplicate memory already exists",
             );
-            return;
+            return MemoryWriteOutcome::duplicate(
+                path.to_path_buf(),
+                "duplicate memory already exists",
+            );
         }
 
         let entry = format!(
@@ -1165,7 +1253,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
         let new_content = format!("{}{}{}", existing, header, entry);
         if let Err(e) = write_memory_file_atomically(path, &new_content) {
             debug!("Failed to save memory (async): {}", e);
-            return;
+            return MemoryWriteOutcome::failed(path.to_path_buf(), e.to_string());
         }
         self.record_memory_decision("accepted", category, content, &assessment.reason);
 
@@ -1174,13 +1262,19 @@ Return exactly the word NONE if there is nothing critical to remember.";
             category,
             log_preview(content, 50)
         );
+        MemoryWriteOutcome::saved(path.to_path_buf(), assessment.score, assessment.reason)
     }
 
     /// 添加学习内容到分主题记忆文件（异步版本）
-    pub async fn add_topic_learning_async(&self, content: &str, category: &str, topic: &str) {
+    pub async fn add_topic_learning_async(
+        &self,
+        content: &str,
+        category: &str,
+        topic: &str,
+    ) -> MemoryWriteOutcome {
         let Some(path) = topic_memory_path(&self.memory_dir, topic) else {
             debug!("Skipping topic memory with invalid topic: {}", topic);
-            return;
+            return MemoryWriteOutcome::invalid_target(format!("invalid topic '{}'", topic));
         };
 
         if let Some(parent) = path.parent() {
@@ -1201,7 +1295,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
                     content,
                     &format!("{}: {}", issue.code, issue.message),
                 );
-                return;
+                return MemoryWriteOutcome::blocked(format!("{}: {}", issue.code, issue.message));
             }
         };
         if assessment.status != MemoryStatus::Accepted {
@@ -1217,7 +1311,11 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 content,
                 &assessment.reason,
             );
-            return;
+            return MemoryWriteOutcome::gated(
+                assessment.status,
+                assessment.score,
+                assessment.reason,
+            );
         }
         if normalized_contains(&existing, content) {
             debug!(
@@ -1230,7 +1328,10 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 content,
                 "duplicate topic memory already exists",
             );
-            return;
+            return MemoryWriteOutcome::duplicate(
+                path.clone(),
+                "duplicate topic memory already exists",
+            );
         }
 
         let entry = format!(
@@ -1248,7 +1349,7 @@ Return exactly the word NONE if there is nothing critical to remember.";
 
         if let Err(e) = write_memory_file_atomically(&path, &new_content) {
             debug!("Failed to save topic memory (async): {}", e);
-            return;
+            return MemoryWriteOutcome::failed(path.clone(), e.to_string());
         }
         self.record_memory_decision("accepted", category, content, &assessment.reason);
 
@@ -1258,17 +1359,22 @@ Return exactly the word NONE if there is nothing critical to remember.";
             category,
             log_preview(content, 50)
         );
+        MemoryWriteOutcome::saved(path, assessment.score, assessment.reason)
     }
 
     /// 自动选择 USER.md、MEMORY.md 或分主题文件保存学习内容（异步版本）。
-    pub async fn add_auto_learning_async(&self, content: &str, category: &str) {
+    pub async fn add_auto_learning_async(
+        &self,
+        content: &str,
+        category: &str,
+    ) -> MemoryWriteOutcome {
         if matches!(category, "preference" | "user") {
-            self.add_learning_async(content, category).await;
+            self.add_learning_async(content, category).await
         } else if let Some(topic) = infer_learning_topic(content, category) {
             self.add_topic_learning_async(content, category, topic)
-                .await;
+                .await
         } else {
-            self.add_learning_async(content, category).await;
+            self.add_learning_async(content, category).await
         }
     }
 
@@ -2181,7 +2287,10 @@ Select at most 5 ids. Do not explain.";
     let mut used = HashSet::new();
     for id in selected_ids {
         if id < candidates.len() && used.insert(id) {
-            selected.push(candidates[id].clone());
+            let mut candidate = candidates[id].clone();
+            let rank_score = 1.0 - (selected.len() as f32 * 0.12);
+            candidate.rerank_score = Some(rank_score.clamp(0.35, 1.0));
+            selected.push(candidate);
             if selected.len() >= max_results {
                 return selected;
             }
@@ -2189,7 +2298,9 @@ Select at most 5 ids. Do not explain.";
     }
     for (idx, candidate) in candidates.iter().enumerate() {
         if used.insert(idx) {
-            selected.push(candidate.clone());
+            let mut candidate = candidate.clone();
+            candidate.rerank_score.get_or_insert(0.35);
+            selected.push(candidate);
             if selected.len() >= max_results {
                 break;
             }
@@ -2372,6 +2483,7 @@ fn rank_memory_paragraphs(source: &str, content: &str, keywords: &[String]) -> V
                 Some(MemoryMatch {
                     source: source.to_string(),
                     score,
+                    rerank_score: None,
                     snippet: paragraph.trim().chars().take(800).collect(),
                 })
             }
@@ -2392,6 +2504,7 @@ fn rank_memory_files(files: &[MemoryFileSnapshot], keywords: &[String]) -> Vec<M
                 Some(MemoryMatch {
                     source,
                     score,
+                    rerank_score: None,
                     snippet,
                 })
             }
@@ -2773,11 +2886,13 @@ Always check logs first.
             MemoryMatch {
                 source: "memory/tui-design.md".to_string(),
                 score: 20,
+                rerank_score: None,
                 snippet: "Claude-style scroll anchoring and transcript layout.".to_string(),
             },
             MemoryMatch {
                 source: "memory/context-management.md".to_string(),
                 score: 12,
+                rerank_score: None,
                 snippet: "Prompt token budget and memory snapshot details.".to_string(),
             },
         ];
@@ -2793,6 +2908,10 @@ Always check logs first.
 
         assert_eq!(reranked[0].source, "memory/context-management.md");
         assert_eq!(reranked[1].source, "memory/tui-design.md");
+        assert!(
+            reranked[0].rerank_score.unwrap_or_default()
+                > reranked[1].rerank_score.unwrap_or_default()
+        );
     }
 
     #[test]

@@ -184,6 +184,55 @@ fn parse_memory_save_args(args: &str) -> (MemorySaveTarget, Option<&str>, &str) 
     (MemorySaveTarget::Auto, None, trimmed)
 }
 
+fn format_memory_write_outcome(
+    content: &str,
+    outcome: &crate::memory::manager::MemoryWriteOutcome,
+) -> String {
+    use crate::memory::manager::MemoryWriteOutcomeStatus;
+
+    let score = outcome
+        .quality_score
+        .map(|score| format!("quality {:.2}", score))
+        .unwrap_or_else(|| "quality n/a".to_string());
+    let path = outcome
+        .path
+        .as_ref()
+        .map(|path| format!("\nPath: {}", path.display()))
+        .unwrap_or_default();
+    match outcome.status {
+        MemoryWriteOutcomeStatus::Saved => {
+            format!("Saved memory: {}\n{}{}", content, score, path)
+        }
+        MemoryWriteOutcomeStatus::Duplicate => {
+            format!(
+                "Memory already exists; not saved again: {}\nReason: {}{}",
+                content, outcome.reason, path
+            )
+        }
+        MemoryWriteOutcomeStatus::Proposed => {
+            format!(
+                "Memory was not saved to long-term memory yet: quality gate proposed review.\n{}; reason: {}",
+                score, outcome.reason
+            )
+        }
+        MemoryWriteOutcomeStatus::Rejected => {
+            format!(
+                "Memory was not saved: quality gate rejected it.\n{}; reason: {}",
+                score, outcome.reason
+            )
+        }
+        MemoryWriteOutcomeStatus::Blocked => {
+            format!("Memory was blocked for safety: {}", outcome.reason)
+        }
+        MemoryWriteOutcomeStatus::Failed => {
+            format!("Memory save failed: {}{}", outcome.reason, path)
+        }
+        MemoryWriteOutcomeStatus::InvalidTarget => {
+            format!("Memory save target is invalid: {}", outcome.reason)
+        }
+    }
+}
+
 fn dedupe_palette_commands(commands: Vec<String>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut deduped = Vec::new();
@@ -2326,9 +2375,9 @@ impl TuiApp {
 
                         if let Some(memory_manager) = memory_manager {
                             let mem = memory_manager.lock().await;
-                            match save_target {
+                            let outcome = match save_target {
                                 MemorySaveTarget::User => {
-                                    mem.add_learning_async(save_content, "preference").await;
+                                    mem.add_learning_async(save_content, "preference").await
                                 }
                                 MemorySaveTarget::Topic => {
                                     mem.add_topic_learning_async(
@@ -2336,18 +2385,18 @@ impl TuiApp {
                                         "note",
                                         save_topic.unwrap_or("notes"),
                                     )
-                                    .await;
+                                    .await
                                 }
                                 MemorySaveTarget::Auto => {
-                                    mem.add_auto_learning_async(save_content, "note").await;
+                                    mem.add_auto_learning_async(save_content, "note").await
                                 }
-                            }
-                            format!("Saved: {}", save_content)
+                            };
+                            format_memory_write_outcome(save_content, &outcome)
                         } else {
                             let mem = crate::memory::MemoryManager::new();
-                            match save_target {
+                            let outcome = match save_target {
                                 MemorySaveTarget::User => {
-                                    mem.add_learning_async(save_content, "preference").await;
+                                    mem.add_learning_async(save_content, "preference").await
                                 }
                                 MemorySaveTarget::Topic => {
                                     mem.add_topic_learning_async(
@@ -2355,13 +2404,13 @@ impl TuiApp {
                                         "note",
                                         save_topic.unwrap_or("notes"),
                                     )
-                                    .await;
+                                    .await
                                 }
                                 MemorySaveTarget::Auto => {
-                                    mem.add_auto_learning_async(save_content, "note").await;
+                                    mem.add_auto_learning_async(save_content, "note").await
                                 }
-                            }
-                            format!("Saved: {}", save_content)
+                            };
+                            format_memory_write_outcome(save_content, &outcome)
                         }
                     }
                 }

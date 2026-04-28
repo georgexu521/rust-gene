@@ -609,6 +609,7 @@ impl SkillProposal {
         let creation_score = compute_skill_creation_score(creation_factors);
         let evidence_count = trigger_event_ids.len();
         let scope_confidence = if scope == "project" { 0.65 } else { 0.85 };
+        let active_version = Some(format!("candidate-{}", id));
         Self {
             id,
             name,
@@ -626,7 +627,7 @@ impl SkillProposal {
             evidence_count,
             scope_confidence,
             evalset_bindings: Vec::new(),
-            active_version: Some("0.1.0".to_string()),
+            active_version,
             rollback_to: None,
             applied_path: None,
             evidence,
@@ -1516,7 +1517,7 @@ mod tests {
 
         assert_eq!(updated.status, SkillProposalStatus::Applied);
         assert_eq!(updated.trust, SkillTrustState::Trusted);
-        assert_eq!(record.version, "0.1.0");
+        assert!(record.version.starts_with("candidate-skill_"));
         assert_eq!(record.evalset_bindings, vec!["smoke"]);
         assert_eq!(store.version_records(&proposal.name).len(), 1);
     }
