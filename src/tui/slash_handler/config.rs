@@ -2905,6 +2905,18 @@ fn compact_inline(text: &str, max_chars: usize) -> String {
 
 /// /learn - Show recent runtime learning events
 pub fn handle_learn(app: &mut TuiApp, args: &str) -> String {
+    let mut parts = args.split_whitespace();
+    if matches!(parts.next(), Some("show")) {
+        let Some(id) = parts.next().and_then(|value| value.parse::<i64>().ok()) else {
+            return "Usage: /learn show <id>".to_string();
+        };
+        return match app.session_manager.learning_event(id) {
+            Ok(Some(event)) => format_learning_event_detail(&event),
+            Ok(None) => format!("Learning event #{} not found in current session.", id),
+            Err(e) => format!("Learning event unavailable: {}", e),
+        };
+    }
+
     let limit = args.trim().parse::<i64>().unwrap_or(8).clamp(1, 50);
     let events = match app.session_manager.recent_learning_events(limit) {
         Ok(events) => events,
@@ -2922,6 +2934,21 @@ pub fn handle_learn(app: &mut TuiApp, args: &str) -> String {
         ));
     }
     lines.join("\n")
+}
+
+fn format_learning_event_detail(event: &crate::session_store::LearningEventRecord) -> String {
+    let pretty_payload =
+        serde_json::to_string_pretty(&event.payload).unwrap_or_else(|_| event.payload.to_string());
+    format!(
+        "Learning Event #{}\nKind: {}\nSource: {}\nConfidence: {:.2}\nCreated: {}\nSummary: {}\n\nPayload:\n{}",
+        event.id,
+        event.kind,
+        event.source,
+        event.confidence,
+        event.created_at,
+        event.summary,
+        pretty_payload
+    )
 }
 
 /// /improvements - Controlled self-evolution proposals
@@ -3000,6 +3027,20 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
                     current.id, current.status
                 );
             }
+            if desired == ProposalStatus::Applied {
+                let gate = improvement_evolution_gate(&current);
+                if matches!(
+                    gate.action,
+                    crate::engine::evolution_controller::EvolutionAction::Reject
+                        | crate::engine::evolution_controller::EvolutionAction::Monitor
+                ) {
+                    return format!(
+                        "Proposal {} was not applied by evolution gate.\n{}",
+                        current.id,
+                        format_evolution_gate(&gate)
+                    );
+                }
+            }
             match store.update_status(id, desired) {
                 Ok(Some(updated)) => {
                     persist_improvement_learning_event(app, &updated, action);
@@ -3062,7 +3103,11 @@ fn persist_improvement_learning_event(
     proposal: &crate::engine::improvement::ImprovementProposal,
     action: &str,
 ) {
-    let payload = serde_json::to_value(proposal).unwrap_or_else(|_| serde_json::json!({}));
+    let mut payload = serde_json::to_value(proposal).unwrap_or_else(|_| serde_json::json!({}));
+    if action == "apply" {
+        payload["evolution_gate"] =
+            serde_json::to_value(improvement_evolution_gate(proposal)).unwrap_or_default();
+    }
     let _ = app.session_manager.add_learning_event(
         "improvement_proposal",
         "improvements",
@@ -3191,6 +3236,18 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                     "Skill proposal {} failed eval and was not applied.\n{}",
                     current.id,
                     format_skill_eval(&eval)
+                );
+            }
+            let gate = skill_evolution_gate(&current);
+            if matches!(
+                gate.action,
+                crate::engine::evolution_controller::EvolutionAction::Reject
+                    | crate::engine::evolution_controller::EvolutionAction::Monitor
+            ) {
+                return format!(
+                    "Skill proposal {} was not applied by evolution gate.\n{}",
+                    current.id,
+                    format_evolution_gate(&gate)
                 );
             }
             let root = user_skill_root();
@@ -3339,6 +3396,10 @@ fn persist_skill_proposal_learning_event(
     if let Some(path) = applied_path {
         payload["applied_path"] = serde_json::json!(path);
     }
+    if action == "apply" {
+        payload["evolution_gate"] =
+            serde_json::to_value(skill_evolution_gate(proposal)).unwrap_or_default();
+    }
     let _ = app.session_manager.add_learning_event(
         "skill_proposal",
         "skill_evolution",
@@ -3346,6 +3407,100 @@ fn persist_skill_proposal_learning_event(
         0.9,
         &payload,
     );
+}
+
+fn improvement_evolution_gate(
+    proposal: &crate::engine::improvement::ImprovementProposal,
+) -> crate::engine::evolution_controller::EvolutionGateDecision {
+    use crate::engine::evolution_controller::{
+        EvolutionController, EvolutionTarget, EvolutionTriggerFactors,
+    };
+    let risk = risk_value(proposal.risk);
+    let target = match proposal.target {
+        crate::engine::improvement::ImprovementTarget::Memory => EvolutionTarget::Memory,
+        crate::engine::improvement::ImprovementTarget::Skill => EvolutionTarget::Skill,
+        crate::engine::improvement::ImprovementTarget::Prompt => EvolutionTarget::PromptSection,
+        crate::engine::improvement::ImprovementTarget::Routing => EvolutionTarget::WorkflowPolicy,
+        crate::engine::improvement::ImprovementTarget::ToolGuidance => {
+            EvolutionTarget::ToolDescription
+        }
+    };
+    EvolutionController::new().gate(
+        target,
+        EvolutionTriggerFactors {
+            repeated_failure: (proposal.trigger_event_ids.len() as f32 / 4.0).clamp(0.0, 1.0),
+            reuse_frequency: 0.55,
+            user_correction_frequency: if proposal
+                .evidence
+                .iter()
+                .any(|item| item.to_lowercase().contains("correction"))
+            {
+                0.80
+            } else {
+                0.35
+            },
+            task_impact: if proposal.target == crate::engine::improvement::ImprovementTarget::Memory
+            {
+                0.55
+            } else {
+                0.75
+            },
+            optimization_potential: 0.70,
+            evolution_cost: if matches!(
+                proposal.target,
+                crate::engine::improvement::ImprovementTarget::Prompt
+                    | crate::engine::improvement::ImprovementTarget::Routing
+            ) {
+                0.65
+            } else {
+                0.35
+            },
+            risk,
+        },
+        0,
+    )
+}
+
+fn skill_evolution_gate(
+    proposal: &crate::engine::skill_evolution::SkillProposal,
+) -> crate::engine::evolution_controller::EvolutionGateDecision {
+    use crate::engine::evolution_controller::{
+        EvolutionController, EvolutionTarget, EvolutionTriggerFactors,
+    };
+    EvolutionController::new().gate(
+        EvolutionTarget::Skill,
+        EvolutionTriggerFactors {
+            repeated_failure: 0.0,
+            reuse_frequency: (proposal.evidence_count as f32 / 6.0).clamp(0.0, 1.0),
+            user_correction_frequency: proposal.creation_factors.user_correction_value,
+            task_impact: proposal.creation_factors.future_utility,
+            optimization_potential: proposal.creation_score,
+            evolution_cost: proposal.creation_factors.over_specificity.max(0.20),
+            risk: 1.0 - proposal.scope_confidence,
+        },
+        0,
+    )
+}
+
+fn risk_value(risk: crate::engine::intent_router::RiskLevel) -> f32 {
+    match risk {
+        crate::engine::intent_router::RiskLevel::Low => 0.20,
+        crate::engine::intent_router::RiskLevel::Medium => 0.50,
+        crate::engine::intent_router::RiskLevel::High => 0.85,
+    }
+}
+
+fn format_evolution_gate(
+    gate: &crate::engine::evolution_controller::EvolutionGateDecision,
+) -> String {
+    let mut lines = vec![format!(
+        "Evolution gate: {:?} target={:?} score={:.2} auto_apply={}",
+        gate.action, gate.target, gate.score, gate.auto_apply_allowed
+    )];
+    for reason in &gate.reasons {
+        lines.push(format!("- {}", reason));
+    }
+    lines.join("\n")
 }
 
 /// /recover - Show recent recovery plans

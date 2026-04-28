@@ -603,6 +603,40 @@ impl SessionStore {
         })?;
         rows.collect()
     }
+
+    /// Load one learning event by id within a session.
+    pub fn learning_event(
+        &self,
+        session_id: &str,
+        id: i64,
+    ) -> SqlResult<Option<LearningEventRecord>> {
+        let conn = self.conn();
+        let result = conn.query_row(
+            "SELECT id, session_id, kind, source, summary, confidence, payload, created_at
+             FROM learning_events
+             WHERE session_id = ?1 AND id = ?2",
+            params![session_id, id],
+            |row| {
+                let payload_text: String = row.get(6)?;
+                Ok(LearningEventRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    source: row.get(3)?,
+                    summary: row.get(4)?,
+                    confidence: row.get(5)?,
+                    payload: serde_json::from_str(&payload_text)
+                        .unwrap_or_else(|_| serde_json::json!({})),
+                    created_at: row.get(7)?,
+                })
+            },
+        );
+        match result {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// 数据库统计

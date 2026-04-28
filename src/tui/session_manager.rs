@@ -369,6 +369,17 @@ impl TuiSessionManager {
         Ok(self.store.recent_learning_events(session_id, limit)?)
     }
 
+    /// 获取当前会话的指定学习事件。
+    pub fn learning_event(
+        &self,
+        id: i64,
+    ) -> anyhow::Result<Option<crate::session_store::LearningEventRecord>> {
+        let Some(session_id) = self.current_session_id.as_deref() else {
+            return Ok(None);
+        };
+        Ok(self.store.learning_event(session_id, id)?)
+    }
+
     pub fn add_learning_event(
         &self,
         kind: &str,
