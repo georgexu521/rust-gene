@@ -388,6 +388,8 @@ fn memory_decision_counts_from_jsonl(content: &str) -> MemoryDecisionCounts {
 fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String {
     let counts = load_memory_decision_counts();
     let flushes = load_memory_flush_summary();
+    let calibration = crate::memory::run_memory_calibration_samples();
+    let calibration_passed = calibration.iter().filter(|result| result.passed).count();
     let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
     let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
     let agent_count = docs
@@ -417,6 +419,26 @@ fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String
         flushes.failed,
         flushes.skipped_duplicate
     ));
+    out.push_str("  Quality gates: accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n");
+    out.push_str(&format!(
+        "  Calibration: {}/{} passed\n",
+        calibration_passed,
+        calibration.len()
+    ));
+    for result in calibration.iter().filter(|result| !result.passed).take(5) {
+        let score = result
+            .score
+            .map(|score| format!("{score:.2}"))
+            .unwrap_or_else(|| "n/a".to_string());
+        out.push_str(&format!(
+            "    FAIL {} expected={} actual={} score={} reason={}\n",
+            result.id,
+            result.expected.label(),
+            result.actual.label(),
+            score,
+            compact_line(&result.reason, 120)
+        ));
+    }
     if conflicts.is_empty() {
         out.push_str("  Conflicts: none\n");
     } else {
@@ -1018,6 +1040,8 @@ mod tests {
         assert!(doctor.contains("Memory Doctor"));
         assert!(doctor.contains("Documents: 1 total"));
         assert!(doctor.contains("Conflicts: 1"));
+        assert!(doctor.contains("Quality gates:"));
+        assert!(doctor.contains("Calibration:"));
     }
 
     #[test]

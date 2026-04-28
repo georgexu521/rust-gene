@@ -390,7 +390,12 @@ src/memory/maintenance.rs
   score_memory_keep()
 ```
 
-This should feed `/memory doctor` and future `/memory review`.
+This feeds `/memory doctor` and future `/memory review`. `/memory doctor` also
+runs a built-in calibration suite covering high-value project conventions, user
+preferences, vague notes, explicit low-value saves, duplicate memories, and
+secret-like content. Calibration failures indicate that scoring thresholds or
+hard safety gates have drifted and should be fixed before trusting new memory
+writes.
 
 ## Experience Ledger
 
@@ -560,7 +565,9 @@ CLI targets:
 /skill-proposals gate <name> [old-fitness]
 /skill-proposals bind-eval <id> <evalset>
 /skill-proposals versions <name>
+/skill-proposals rollback-list [name]
 /skill-proposals rollback <name> --yes
+/skill-proposals restore <name> [backup-name] --yes
 ```
 
 ## Evolution Controller
@@ -733,8 +740,10 @@ manual `/skill-proposals record` outcome feedback, `/skill-proposals gate`,
 Provisional events count toward reuse but not success/failure. Bound evalsets
 block apply when they fail, and apply records version metadata plus a rollback
 pointer. `/skill-proposals rollback <name> --yes` safely disables an active
-generated skill by moving it aside instead of deleting it. Richer rollback
-restore UX is still pending.
+generated skill by moving it aside instead of deleting it.
+`/skill-proposals rollback-list [name]` lists disabled backups, and
+`/skill-proposals restore <name> [backup-name] --yes` restores a disabled
+backup only when no active skill directory exists.
 
 Tasks:
 

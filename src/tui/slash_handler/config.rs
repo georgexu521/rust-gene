@@ -3329,10 +3329,113 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 lines.join("\n")
             }
         }
+        "rollback-list" | "disabled" => {
+            let filter = parts.next();
+            let backups = disabled_skill_backups(&user_skill_root(), filter);
+            if backups.is_empty() {
+                match filter {
+                    Some(name) => format!("No disabled rollback backups found for /{}.", name),
+                    None => "No disabled rollback backups found.".to_string(),
+                }
+            } else {
+                let mut lines = vec![format!("Disabled Skill Backups ({} total)", backups.len())];
+                for backup in backups.iter().take(20) {
+                    lines.push(format!(
+                        "- /{} backup={} path={}",
+                        backup.skill_name,
+                        backup.backup_name,
+                        backup.path.display()
+                    ));
+                }
+                lines.push(
+                    "Restore with: /skill-proposals restore <skill-name> [backup-name] --yes"
+                        .to_string(),
+                );
+                lines.join("\n")
+            }
+        }
+        "restore" => {
+            let Some(name) = parts.next() else {
+                return "Usage: /skill-proposals restore <skill-name> [backup-name] --yes"
+                    .to_string();
+            };
+            if !is_safe_skill_dir_name(name) {
+                return "Invalid skill name. Use only the skill directory name, not a path."
+                    .to_string();
+            }
+            let mut backup_name: Option<&str> = None;
+            let mut confirmed = false;
+            for part in parts {
+                if part == "--yes" {
+                    confirmed = true;
+                } else {
+                    backup_name = Some(part);
+                }
+            }
+            if !confirmed {
+                return format!(
+                    "Restore reactivates a disabled /{} skill backup.\nUsage: /skill-proposals restore {} [backup-name] --yes",
+                    name, name
+                );
+            }
+            if let Some(backup_name) = backup_name {
+                if !is_safe_skill_dir_name(backup_name) {
+                    return "Invalid backup name. Use the basename shown by /skill-proposals rollback-list."
+                        .to_string();
+                }
+            }
+            let root = user_skill_root();
+            let active_dir = root.join(name);
+            if active_dir.exists() {
+                return format!(
+                    "Refusing restore: active skill directory already exists: {}",
+                    active_dir.display()
+                );
+            }
+            let Some(backup) = resolve_disabled_skill_backup(&root, name, backup_name) else {
+                return format!(
+                    "No disabled backup found for /{}.\nUse /skill-proposals rollback-list {} to inspect backups.",
+                    name, name
+                );
+            };
+            if !backup.path.starts_with(&root) || !active_dir.starts_with(&root) {
+                return "Refusing restore outside user skill root.".to_string();
+            }
+            match std::fs::rename(&backup.path, &active_dir) {
+                Ok(()) => {
+                    let loaded = app.skill_runtime.reload();
+                    let payload = serde_json::json!({
+                        "skill_name": name,
+                        "backup_name": backup.backup_name,
+                        "restored_path": active_dir,
+                        "source_path": backup.path,
+                    });
+                    let _ = app.session_manager.add_learning_event(
+                        "skill_rollback_restore",
+                        "skill_evolution",
+                        &format!("Restored disabled skill /{}", name),
+                        0.9,
+                        &payload,
+                    );
+                    format!(
+                        "Restored /{}\n- from: {}\n- active: {}\n- reloaded skills: {}",
+                        name,
+                        backup.backup_name,
+                        active_dir.display(),
+                        loaded
+                    )
+                }
+                Err(e) => format!("Failed to restore /{}: {}", name, e),
+            }
+        }
         "rollback" => {
             let Some(name) = parts.next() else {
                 return "Usage: /skill-proposals rollback <skill-name> --yes".to_string();
             };
+            if !is_safe_skill_dir_name(name) {
+                return "Invalid skill name. Use only the skill directory name, not a path."
+                    .to_string();
+            }
             let confirmed = parts.any(|part| part == "--yes");
             if !confirmed {
                 return format!(
@@ -3545,7 +3648,7 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Failed to apply skill proposal: {}", e),
             }
         }
-        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|gate <name>|versions <name>|rollback <name> --yes|bind-eval <id> <evalset>|record <name> <success|fail>|accept <id>|reject <id>|apply <id>]".to_string(),
+        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|gate <name>|versions <name>|rollback-list [name]|rollback <name> --yes|restore <name> [backup] --yes|bind-eval <id> <evalset>|record <name> <success|fail>|accept <id>|reject <id>|apply <id>]".to_string(),
     }
 }
 
@@ -3554,6 +3657,70 @@ fn user_skill_root() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".priority-agent")
         .join("skills")
+}
+
+#[derive(Debug, Clone)]
+struct DisabledSkillBackup {
+    skill_name: String,
+    backup_name: String,
+    path: std::path::PathBuf,
+}
+
+fn is_safe_skill_dir_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
+fn disabled_skill_backups(
+    root: &std::path::Path,
+    filter: Option<&str>,
+) -> Vec<DisabledSkillBackup> {
+    let mut backups = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return backups;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(backup_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some((skill_name, _suffix)) = backup_name.split_once(".disabled-") else {
+            continue;
+        };
+        if filter.is_some_and(|needle| needle != skill_name) {
+            continue;
+        }
+        backups.push(DisabledSkillBackup {
+            skill_name: skill_name.to_string(),
+            backup_name: backup_name.to_string(),
+            path,
+        });
+    }
+    backups.sort_by(|a, b| b.backup_name.cmp(&a.backup_name));
+    backups
+}
+
+fn resolve_disabled_skill_backup(
+    root: &std::path::Path,
+    skill_name: &str,
+    backup_name: Option<&str>,
+) -> Option<DisabledSkillBackup> {
+    let backups = disabled_skill_backups(root, Some(skill_name));
+    match backup_name {
+        Some(name) => backups
+            .into_iter()
+            .find(|backup| backup.backup_name == name),
+        None => backups.into_iter().next(),
+    }
 }
 
 fn format_skill_proposal_line(proposal: &crate::engine::skill_evolution::SkillProposal) -> String {
@@ -3948,5 +4115,36 @@ pub fn handle_feedback(app: &mut TuiApp, args: &str) -> String {
     match append_feedback(&session_id, message) {
         Ok(path) => format!("Feedback recorded to {}.", path.display()),
         Err(e) => format!("Failed to record feedback: {}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_skill_dir_name_rejects_paths() {
+        assert!(is_safe_skill_dir_name("rust-debug"));
+        assert!(is_safe_skill_dir_name("rust_debug.v1"));
+        assert!(!is_safe_skill_dir_name("../rust-debug"));
+        assert!(!is_safe_skill_dir_name("rust/debug"));
+        assert!(!is_safe_skill_dir_name(".."));
+    }
+
+    #[test]
+    fn disabled_skill_backups_filters_and_sorts_latest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("lint.disabled-20260101000000")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lint.disabled-20260201000000")).unwrap();
+        std::fs::create_dir_all(dir.path().join("other.disabled-20260101000000")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lint")).unwrap();
+
+        let backups = disabled_skill_backups(dir.path(), Some("lint"));
+        assert_eq!(backups.len(), 2);
+        assert_eq!(backups[0].backup_name, "lint.disabled-20260201000000");
+        assert_eq!(backups[0].skill_name, "lint");
+
+        let latest = resolve_disabled_skill_backup(dir.path(), "lint", None).unwrap();
+        assert_eq!(latest.backup_name, "lint.disabled-20260201000000");
     }
 }

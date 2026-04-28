@@ -1345,7 +1345,7 @@ pub const CMD_SKILL_PROPOSALS: CommandDef = CommandDef::new(
     "/skill-proposals",
     &["/skill-proposal"],
     "General",
-    "/skill-proposals [list|scan|show|eval|fitness|gate|versions|rollback|bind-eval|record|accept|reject|apply]",
+    "/skill-proposals [list|scan|show|eval|fitness|gate|versions|rollback-list|rollback|restore|bind-eval|record|accept|reject|apply]",
     "Review generated skill candidates before activation",
 );
 

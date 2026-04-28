@@ -1,3 +1,4 @@
+pub mod calibration;
 pub mod manager;
 pub mod provider;
 pub mod quality;
@@ -6,6 +7,10 @@ pub mod safety;
 pub mod scoring;
 pub mod types;
 
+pub use calibration::{
+    built_in_memory_calibration_samples, run_memory_calibration_samples, MemoryCalibrationActual,
+    MemoryCalibrationExpectation, MemoryCalibrationResult, MemoryCalibrationSample,
+};
 pub use manager::{
     MemoryFlushReason, MemoryFlushRecord, MemoryFlushStatus, MemoryFlushSummary, MemoryManager,
 };
