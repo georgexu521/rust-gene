@@ -516,6 +516,7 @@ impl PermissionContext {
                 if Self::is_high_risk_command(&cmd)
                     || Self::has_external_network_command(&cmd)
                     || Self::has_remote_git_command(&cmd)
+                    || self.bash_references_outside_workspace_path(&cmd)
                 {
                     RiskLevel::High
                 } else {
@@ -583,6 +584,48 @@ impl PermissionContext {
         self.trusted_workspace_roots()
             .into_iter()
             .any(|root| candidate.starts_with(root))
+    }
+
+    fn bash_references_outside_workspace_path(&self, cmd: &str) -> bool {
+        Self::extract_absolute_paths_from_shell(cmd)
+            .into_iter()
+            .any(|path| !self.path_is_in_trusted_workspace(&path))
+    }
+
+    fn extract_absolute_paths_from_shell(cmd: &str) -> Vec<String> {
+        let mut paths = Vec::new();
+        for raw in cmd.split(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '"' | '\'' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ';' | '|' | '&'
+                )
+        }) {
+            let token = raw.trim_matches(|ch: char| matches!(ch, '<' | '>' | ',' | ':' | '='));
+            if token.is_empty() {
+                continue;
+            }
+
+            let candidate = if token.starts_with('/') {
+                Some(token.to_string())
+            } else if let Some((_, path)) = token.split_once("=/") {
+                Some(format!("/{}", path))
+            } else if let Some((_, path)) = token.split_once(":/") {
+                Some(format!("/{}", path))
+            } else {
+                None
+            };
+
+            if let Some(path) = candidate {
+                let trimmed = path.as_str().trim_matches(|ch: char| {
+                    matches!(ch, '<' | '>' | ',' | ':' | ')' | ']' | '}' | '.')
+                });
+                if trimmed.starts_with('/') {
+                    paths.push(trimmed.to_string());
+                }
+            }
+        }
+        paths
     }
 
     fn trusted_workspace_roots(&self) -> Vec<std::path::PathBuf> {
@@ -753,6 +796,12 @@ impl PermissionContext {
             let cmd = params["command"].as_str().unwrap_or_default();
             if Self::is_high_risk_command(cmd) {
                 warnings.push("HIGH_RISK_COMMAND: dangerous shell command detected".to_string());
+            }
+            if self.bash_references_outside_workspace_path(cmd) {
+                warnings.push(
+                    "OUTSIDE_WORKSPACE: shell command references a path outside the trusted workspace"
+                        .to_string(),
+                );
             }
             if crate::security::is_dangerous_command(cmd) {
                 warnings
@@ -1159,6 +1208,34 @@ mod tests {
         assert!(ctx.requires_confirmation(
             "file_write",
             &serde_json::json!({"path": "/Users/georgexu/Desktop/other/file.rs", "content": "no"})
+        ));
+    }
+
+    #[test]
+    fn test_auto_all_prompts_for_bash_outside_workspace_paths() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoAll,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("/tmp/priority-agent-workspace"),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        assert!(!ctx.requires_confirmation(
+            "bash",
+            &serde_json::json!({"command": "sed -n '1,20p' src/main.rs"})
+        ));
+        assert!(!ctx.requires_confirmation(
+            "bash",
+            &serde_json::json!({"command": "sed -n '1,20p' /tmp/priority-agent-workspace/src/main.rs"})
+        ));
+        assert!(ctx.requires_confirmation(
+            "bash",
+            &serde_json::json!({"command": "sed -n '1,20p' /Users/georgexu/Desktop/rust-agent/src/main.rs"})
+        ));
+        assert!(ctx.requires_confirmation(
+            "bash",
+            &serde_json::json!({"command": "rg memory --glob '*.rs' root=/Users/georgexu/Desktop/rust-agent/src"})
         ));
     }
 
