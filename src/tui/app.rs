@@ -33,6 +33,17 @@ struct PendingSkillInvocation {
     started_at: std::time::Instant,
 }
 
+#[derive(Debug, Clone)]
+struct SkillOutcomeAttribution {
+    success: bool,
+    acceptance_passed: Option<bool>,
+    tests_passed: Option<bool>,
+    user_satisfaction: Option<f32>,
+    risk_penalty: f32,
+    confidence: f32,
+    source: &'static str,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StreamUsageSnapshot {
     pub prompt_tokens: u32,
@@ -44,6 +55,82 @@ pub struct StreamUsageSnapshot {
 impl StreamUsageSnapshot {
     pub fn total_tokens(self) -> u32 {
         self.prompt_tokens + self.completion_tokens
+    }
+}
+
+fn skill_outcome_attribution(
+    trace: Option<&crate::engine::trace::TurnTrace>,
+    has_response: bool,
+    stream_error: bool,
+    failed_tool: bool,
+) -> SkillOutcomeAttribution {
+    let mut latest_acceptance = None;
+    let mut latest_verification = None;
+    if let Some(trace) = trace {
+        for event in trace.events.iter().rev() {
+            match event {
+                crate::engine::trace::TraceEvent::AcceptanceReviewCompleted {
+                    accepted,
+                    unresolved,
+                    ..
+                } if latest_acceptance.is_none() => {
+                    latest_acceptance = Some((*accepted, *unresolved));
+                }
+                crate::engine::trace::TraceEvent::VerificationCompleted { passed, .. }
+                    if latest_verification.is_none() =>
+                {
+                    latest_verification = Some(*passed);
+                }
+                _ => {}
+            }
+            if latest_acceptance.is_some() && latest_verification.is_some() {
+                break;
+            }
+        }
+    }
+
+    if let Some((accepted, unresolved)) = latest_acceptance {
+        let verified = latest_verification.unwrap_or(accepted);
+        let success = accepted && verified && !stream_error && !failed_tool;
+        return SkillOutcomeAttribution {
+            success,
+            acceptance_passed: Some(accepted),
+            tests_passed: Some(verified),
+            user_satisfaction: Some(if success { 0.85 } else { 0.20 }),
+            risk_penalty: if success {
+                0.05
+            } else if unresolved > 0 {
+                0.45
+            } else {
+                0.30
+            },
+            confidence: 0.90,
+            source: "acceptance_review",
+        };
+    }
+
+    if let Some(verified) = latest_verification {
+        let success = verified && has_response && !stream_error && !failed_tool;
+        return SkillOutcomeAttribution {
+            success,
+            acceptance_passed: None,
+            tests_passed: Some(verified),
+            user_satisfaction: Some(if success { 0.75 } else { 0.25 }),
+            risk_penalty: if success { 0.10 } else { 0.35 },
+            confidence: 0.78,
+            source: "verification",
+        };
+    }
+
+    let success = has_response && !stream_error && !failed_tool;
+    SkillOutcomeAttribution {
+        success,
+        acceptance_passed: Some(success),
+        tests_passed: None,
+        user_satisfaction: Some(if success { 0.70 } else { 0.25 }),
+        risk_penalty: if success { 0.05 } else { 0.30 },
+        confidence: 0.65,
+        source: "heuristic",
     }
 }
 
@@ -2614,20 +2701,24 @@ impl TuiApp {
             .any(|run| run.status == ToolRunStatus::Failed);
         let stream_error = assistant_response.contains("[Error:");
         let has_response = !assistant_response.trim().is_empty();
-        let success = has_response && !stream_error && !failed_tool;
+        let trace = self
+            .streaming_engine
+            .as_ref()
+            .and_then(|engine| engine.trace_store().latest())
+            .or_else(|| self.session_manager.latest_trace().ok().flatten());
+        let attribution =
+            skill_outcome_attribution(trace.as_ref(), has_response, stream_error, failed_tool);
         let tool_calls = self.tool_runs_snapshot.len();
-        let risk_penalty = if success { 0.05 } else { 0.30 };
-        let satisfaction = if success { Some(0.70) } else { Some(0.25) };
         let store = crate::engine::skill_evolution::SkillProposalStore::default();
         for pending in self.pending_skill_invocations.drain(..) {
             let event = crate::engine::skill_evolution::SkillUsageEvent {
                 skill_name: pending.name.clone(),
                 skill_version: pending.version.clone(),
                 provisional: false,
-                success,
-                acceptance_passed: Some(success),
-                tests_passed: None,
-                user_satisfaction: satisfaction,
+                success: attribution.success,
+                acceptance_passed: attribution.acceptance_passed,
+                tests_passed: attribution.tests_passed,
+                user_satisfaction: attribution.user_satisfaction,
                 duration_ms: Some(
                     pending
                         .started_at
@@ -2636,7 +2727,7 @@ impl TuiApp {
                         .min(u128::from(u64::MAX)) as u64,
                 ),
                 tool_calls,
-                risk_penalty,
+                risk_penalty: attribution.risk_penalty,
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
             if let Err(e) = store.record_usage(&event) {
@@ -2647,11 +2738,16 @@ impl TuiApp {
                     "skill_usage",
                     "skill_runtime",
                     &format!(
-                        "Skill /{} outcome inferred: {}",
+                        "Skill /{} outcome inferred from {}: {}",
                         pending.name,
-                        if success { "success" } else { "fail" }
+                        attribution.source,
+                        if attribution.success {
+                            "success"
+                        } else {
+                            "fail"
+                        }
                     ),
-                    0.65,
+                    f64::from(attribution.confidence),
                     &payload,
                 );
             }
@@ -3764,5 +3860,60 @@ mod tests {
             });
 
         assert!(app.compute_permission_diff().is_none());
+    }
+
+    #[test]
+    fn skill_outcome_prefers_acceptance_review_signal() {
+        let mut trace = crate::engine::trace::TurnTrace::new("s1", 1, "use skill");
+        trace
+            .events
+            .push(crate::engine::trace::TraceEvent::VerificationCompleted {
+                changed_files: 2,
+                passed: true,
+            });
+        trace.events.push(
+            crate::engine::trace::TraceEvent::AcceptanceReviewCompleted {
+                accepted: true,
+                confidence: "high".to_string(),
+                criteria: 3,
+                unresolved: 0,
+                next_action: "close".to_string(),
+            },
+        );
+
+        let outcome = skill_outcome_attribution(Some(&trace), true, false, false);
+
+        assert!(outcome.success);
+        assert_eq!(outcome.acceptance_passed, Some(true));
+        assert_eq!(outcome.tests_passed, Some(true));
+        assert_eq!(outcome.source, "acceptance_review");
+        assert!(outcome.confidence > 0.8);
+    }
+
+    #[test]
+    fn skill_outcome_blocks_on_unresolved_acceptance() {
+        let mut trace = crate::engine::trace::TurnTrace::new("s1", 1, "use skill");
+        trace
+            .events
+            .push(crate::engine::trace::TraceEvent::VerificationCompleted {
+                changed_files: 2,
+                passed: true,
+            });
+        trace.events.push(
+            crate::engine::trace::TraceEvent::AcceptanceReviewCompleted {
+                accepted: false,
+                confidence: "medium".to_string(),
+                criteria: 3,
+                unresolved: 1,
+                next_action: "repair".to_string(),
+            },
+        );
+
+        let outcome = skill_outcome_attribution(Some(&trace), true, false, false);
+
+        assert!(!outcome.success);
+        assert_eq!(outcome.acceptance_passed, Some(false));
+        assert_eq!(outcome.tests_passed, Some(true));
+        assert!(outcome.risk_penalty >= 0.45);
     }
 }

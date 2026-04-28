@@ -138,9 +138,9 @@ Remaining implementation gaps:
 - Skill fitness events, version comparison, manual outcome recording, and CLI
   inspection exist. Provisional invocation events count toward reuse but not
   success/failure, so they do not inflate Fitness before a confirmed outcome.
-  Automatic final-outcome attribution now covers ordinary interactive CLI skill
-  responses with conservative heuristics; deeper acceptance-review attribution,
-  automatic EvalSet binding, rollback pointer materialization, and full
+  Automatic final-outcome attribution now prefers acceptance review and
+  verification trace signals, then falls back to conservative CLI heuristics.
+  Automatic EvalSet binding, rollback pointer materialization, and full
   promotion UX are not fully productized yet.
 - Evolution trigger scoring and cooldown exist, but controller decisions are not
   yet routed through all improvement/skill proposal commands.
@@ -727,14 +727,14 @@ Goal: prove skills improve behavior before promotion.
 
 Status: mostly implemented. `SkillUsageEvent`, `SkillFitnessSnapshot`, a
 promotion comparator, provisional skill invocation telemetry, conservative
-automatic outcome attribution, manual `/skill-proposals record` outcome
-feedback, `/skill-proposals gate`, `/skill-proposals bind-eval`, and
-`/skill-proposals versions` exist. Provisional events count toward reuse but not
-success/failure. Bound evalsets block apply when they fail, and apply records
-version metadata plus a rollback pointer. `/skill-proposals rollback <name>
---yes` safely disables an active generated skill by moving it aside instead of
-deleting it. Acceptance-review attribution and richer rollback restore UX are
-still pending.
+automatic outcome attribution, acceptance-review attribution from `TurnTrace`,
+manual `/skill-proposals record` outcome feedback, `/skill-proposals gate`,
+`/skill-proposals bind-eval`, and `/skill-proposals versions` exist.
+Provisional events count toward reuse but not success/failure. Bound evalsets
+block apply when they fail, and apply records version metadata plus a rollback
+pointer. `/skill-proposals rollback <name> --yes` safely disables an active
+generated skill by moving it aside instead of deleting it. Richer rollback
+restore UX is still pending.
 
 Tasks:
 
