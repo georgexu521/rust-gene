@@ -136,7 +136,8 @@ mod tests {
 
         let prompt = assembler.build_for_turn("hello", &[]).system_prompt;
 
-        assert_eq!(prompt, "base prompt");
+        assert!(prompt.starts_with("base prompt"));
+        assert!(prompt.contains("Workspace Boundary"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

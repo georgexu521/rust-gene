@@ -109,12 +109,25 @@ pub fn load_instruction_layers(working_dir: &Path) -> Vec<InstructionLayer> {
 
 pub fn compose_system_prompt(base_prompt: &str, working_dir: &Path) -> String {
     let layers = load_instruction_layers(working_dir);
+    let workspace = working_dir
+        .canonicalize()
+        .unwrap_or_else(|_| working_dir.to_path_buf());
+    let mut out = String::from(base_prompt);
+    out.push_str("\n\n## Workspace Boundary\n");
+    out.push_str(&format!("- Current workspace: `{}`\n", workspace.display()));
+    out.push_str(
+        "- Treat this directory as the active project root for this session.\n\
+         - Resolve relative paths against this workspace.\n\
+         - Do not read, write, or inspect files outside this workspace unless the user explicitly asks for that path.\n\
+         - If a remembered or suggested absolute path points outside this workspace, re-check the current workspace instead of using it.\n",
+    );
+
     if layers.is_empty() {
         debug!(
             "No AGENTS.md layers found for working_dir={}",
             working_dir.display()
         );
-        return base_prompt.to_string();
+        return out;
     }
 
     debug!(
@@ -123,7 +136,6 @@ pub fn compose_system_prompt(base_prompt: &str, working_dir: &Path) -> String {
         working_dir.display()
     );
 
-    let mut out = String::from(base_prompt);
     out.push_str("\n\n## Layered Instructions (AGENTS.md)\n");
     out.push_str(
         "Apply these instructions in order; later layers override earlier ones when conflicts exist.\n",
@@ -166,7 +178,9 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let base = "base prompt";
         let got = compose_system_prompt(base, &tmp);
-        assert_eq!(got, base);
+        assert!(got.starts_with(base));
+        assert!(got.contains("Workspace Boundary"));
+        assert!(got.contains("Current workspace"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

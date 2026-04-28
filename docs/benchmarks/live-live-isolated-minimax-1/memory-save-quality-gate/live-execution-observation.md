@@ -26,6 +26,11 @@ outside the trusted workspace as high risk. In `AutoAll`, those commands require
 confirmation instead of silently executing. This closes the specific path leak
 seen in this run while keeping normal relative workspace commands fast.
 
+The system prompt also now includes a `Workspace Boundary` section with the
+current workspace path and explicit instructions to resolve relative paths
+inside that workspace and ignore remembered outside paths unless the user asks
+for them.
+
 ## Validation
 
 Added and passed a focused permission regression:
@@ -38,4 +43,11 @@ Also passed the full permission test module:
 
 ```text
 cargo test -q permissions::tests:: -- --test-threads=1
+```
+
+Prompt-boundary regressions also passed:
+
+```text
+cargo test -q instructions::tests:: -- --test-threads=1
+cargo test -q engine::prompt_context::tests:: -- --test-threads=1
 ```
