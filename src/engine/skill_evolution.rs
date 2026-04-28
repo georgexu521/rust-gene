@@ -90,6 +90,14 @@ pub struct SkillProposal {
     pub evidence_count: usize,
     #[serde(default = "default_scope_confidence")]
     pub scope_confidence: f32,
+    #[serde(default)]
+    pub evalset_bindings: Vec<String>,
+    #[serde(default)]
+    pub active_version: Option<String>,
+    #[serde(default)]
+    pub rollback_to: Option<String>,
+    #[serde(default)]
+    pub applied_path: Option<String>,
     pub evidence: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -154,10 +162,22 @@ pub struct SkillPromotionGate {
     pub reasons: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillVersionRecord {
+    pub proposal_id: String,
+    pub skill_name: String,
+    pub version: String,
+    pub applied_path: String,
+    pub rollback_to: Option<String>,
+    pub evalset_bindings: Vec<String>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SkillProposalStore {
     path: PathBuf,
     usage_path: PathBuf,
+    version_path: PathBuf,
 }
 
 impl SkillProposalStore {
@@ -175,12 +195,27 @@ impl SkillProposalStore {
             .join("skill_usage.jsonl")
     }
 
+    pub fn default_version_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".priority-agent")
+            .join("skill_versions.jsonl")
+    }
+
     pub fn new(path: PathBuf) -> Self {
         let usage_path = path
             .parent()
             .map(|parent| parent.join("skill_usage.jsonl"))
             .unwrap_or_else(Self::default_usage_path);
-        Self { path, usage_path }
+        let version_path = path
+            .parent()
+            .map(|parent| parent.join("skill_versions.jsonl"))
+            .unwrap_or_else(Self::default_version_path);
+        Self {
+            path,
+            usage_path,
+            version_path,
+        }
     }
 
     pub fn default() -> Self {
@@ -213,6 +248,63 @@ impl SkillProposalStore {
 
     pub fn fitness_snapshot(&self, skill_name: &str) -> Option<SkillFitnessSnapshot> {
         skill_fitness_snapshot(skill_name, &self.usage_events(skill_name))
+    }
+
+    pub fn version_records(&self, skill_name: &str) -> Vec<SkillVersionRecord> {
+        read_skill_version_records(&self.version_path, skill_name)
+    }
+
+    pub fn bind_evalset(
+        &self,
+        id_or_prefix: &str,
+        evalset_name: &str,
+    ) -> anyhow::Result<Option<SkillProposal>> {
+        let Some(mut proposal) = self.get(id_or_prefix) else {
+            return Ok(None);
+        };
+        if !proposal
+            .evalset_bindings
+            .iter()
+            .any(|binding| binding == evalset_name)
+        {
+            proposal.evalset_bindings.push(evalset_name.to_string());
+        }
+        proposal.updated_at = chrono::Utc::now().to_rfc3339();
+        self.upsert(&proposal)?;
+        Ok(Some(proposal))
+    }
+
+    pub fn record_applied_version(
+        &self,
+        id_or_prefix: &str,
+        applied_path: &Path,
+    ) -> anyhow::Result<Option<(SkillProposal, SkillVersionRecord)>> {
+        let Some(mut proposal) = self.get(id_or_prefix) else {
+            return Ok(None);
+        };
+        let version = proposal.skill_version();
+        let rollback_to = self
+            .version_records(&proposal.name)
+            .last()
+            .map(|record| record.version.clone());
+        proposal.status = SkillProposalStatus::Applied;
+        proposal.trust = SkillTrustState::Trusted;
+        proposal.active_version = Some(version.clone());
+        proposal.rollback_to = rollback_to.clone();
+        proposal.applied_path = Some(applied_path.display().to_string());
+        proposal.updated_at = chrono::Utc::now().to_rfc3339();
+        self.upsert(&proposal)?;
+        let record = SkillVersionRecord {
+            proposal_id: proposal.id.clone(),
+            skill_name: proposal.name.clone(),
+            version,
+            applied_path: applied_path.display().to_string(),
+            rollback_to,
+            evalset_bindings: proposal.evalset_bindings.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        append_jsonl_value(&self.version_path, &record)?;
+        Ok(Some((proposal, record)))
     }
 
     pub fn update_status(
@@ -264,9 +356,10 @@ impl SkillProposal {
 
     pub fn to_skill_markdown(&self) -> String {
         format!(
-            "---\nname: {}\ndescription: {}\nversion: 0.1.0\nauthor: priority-agent\ntriggers:\n{}\nallowed-tools:\n{}\ntrust: {:?}\ncreation-score: {:.2}\nevidence-count: {}\nscope-confidence: {:.2}\nprovenance: {}\nuser-invocable: true\n---\n\n# {}\n\n## When To Use\n{}\n\n## Procedure\n{}\n\n## Validation\n{}\n\n## Provenance\n{}\n",
+            "---\nname: {}\ndescription: {}\nversion: {}\nauthor: priority-agent\ntriggers:\n{}\nallowed-tools:\n{}\ntrust: {:?}\ncreation-score: {:.2}\nevidence-count: {}\nscope-confidence: {:.2}\nevalsets:\n{}\nrollback-to: {}\nprovenance: {}\nuser-invocable: true\n---\n\n# {}\n\n## When To Use\n{}\n\n## Procedure\n{}\n\n## Validation\n{}\n\n## EvalSets\n{}\n\n## Provenance\n{}\n",
             self.name,
             yaml_string(&format!("Reusable workflow for {}.", self.procedure)),
+            self.skill_version(),
             self.trigger_conditions
                 .iter()
                 .map(|trigger| format!("  - {}", yaml_string(trigger)))
@@ -281,6 +374,11 @@ impl SkillProposal {
             self.creation_score,
             self.evidence_count,
             self.scope_confidence,
+            yaml_list(&self.evalset_bindings),
+            self.rollback_to
+                .as_deref()
+                .map(yaml_string)
+                .unwrap_or_else(|| "null".to_string()),
             yaml_string(&self.id),
             title_from_name(&self.name),
             self.trigger_conditions
@@ -299,12 +397,23 @@ impl SkillProposal {
                 .map(|item| format!("- {}", item))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            self.evalset_bindings
+                .iter()
+                .map(|item| format!("- {}", item))
+                .collect::<Vec<_>>()
+                .join("\n"),
             self.evidence
                 .iter()
                 .map(|item| format!("- {}", item))
                 .collect::<Vec<_>>()
                 .join("\n")
         )
+    }
+
+    pub fn skill_version(&self) -> String {
+        self.active_version
+            .clone()
+            .unwrap_or_else(|| "0.1.0".to_string())
     }
 }
 
@@ -516,6 +625,10 @@ impl SkillProposal {
             creation_factors,
             evidence_count,
             scope_confidence,
+            evalset_bindings: Vec::new(),
+            active_version: Some("0.1.0".to_string()),
+            rollback_to: None,
+            applied_path: None,
             evidence,
             created_at: now.clone(),
             updated_at: now,
@@ -1108,6 +1221,17 @@ fn yaml_string(value: &str) -> String {
         .to_string()
 }
 
+fn yaml_list(values: &[String]) -> String {
+    if values.is_empty() {
+        return "  []".to_string();
+    }
+    values
+        .iter()
+        .map(|value| format!("  - {}", yaml_string(value)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn check(name: &str, passed: bool, detail: &str) -> SkillQualityCheck {
     SkillQualityCheck {
         name: name.to_string(),
@@ -1165,6 +1289,19 @@ fn read_skill_usage_events(path: &Path, skill_name: &str) -> Vec<SkillUsageEvent
         .collect::<Vec<_>>();
     events.sort_by(|a, b| a.created_at.cmp(&b.created_at));
     events
+}
+
+fn read_skill_version_records(path: &Path, skill_name: &str) -> Vec<SkillVersionRecord> {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let mut records = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str::<SkillVersionRecord>(line).ok())
+        .filter(|record| record.skill_name == skill_name)
+        .collect::<Vec<_>>();
+    records.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    records
 }
 
 fn average_optional(values: impl Iterator<Item = Option<f32>>) -> Option<f32> {
@@ -1346,6 +1483,42 @@ mod tests {
             .unwrap();
         assert_eq!(applied.trust, SkillTrustState::Trusted);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn store_records_applied_skill_version_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let proposal_path = dir.path().join("skill_proposals.jsonl");
+        let store = SkillProposalStore::new(proposal_path);
+        let mut proposal = SkillProposal::new(
+            "review patch workflow".to_string(),
+            "project".to_string(),
+            vec![1, 2],
+            vec!["Use for repeated patch reviews.".to_string()],
+            vec![
+                "Inspect the diff and touched files.".to_string(),
+                "Run targeted tests for changed behavior.".to_string(),
+            ],
+            vec!["Run code review checks.".to_string()],
+            vec!["grep".to_string(), "file_read".to_string()],
+            vec!["evidence".to_string()],
+        );
+        proposal.status = SkillProposalStatus::Accepted;
+        proposal.trust = SkillTrustState::Untrusted;
+        proposal.evalset_bindings = vec!["smoke".to_string()];
+        store.upsert(&proposal).unwrap();
+        let applied_path = dir.path().join("skills").join("review").join("SKILL.md");
+
+        let (updated, record) = store
+            .record_applied_version(&proposal.id, &applied_path)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.status, SkillProposalStatus::Applied);
+        assert_eq!(updated.trust, SkillTrustState::Trusted);
+        assert_eq!(record.version, "0.1.0");
+        assert_eq!(record.evalset_bindings, vec!["smoke"]);
+        assert_eq!(store.version_records(&proposal.name).len(), 1);
     }
 
     #[test]

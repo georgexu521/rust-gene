@@ -3282,6 +3282,71 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 None => format!("No skill usage events found for '{}'.", name),
             }
         }
+        "gate" => {
+            let Some(name) = parts.next() else {
+                return "Usage: /skill-proposals gate <skill-name> [old-fitness]".to_string();
+            };
+            let old_fitness = parts
+                .next()
+                .and_then(|value| value.parse::<f32>().ok())
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+            match store.fitness_snapshot(name) {
+                Some(snapshot) => {
+                    let gate = crate::engine::skill_evolution::compare_skill_versions_for_promotion(
+                        old_fitness,
+                        &snapshot,
+                        0.0,
+                        0.0,
+                    );
+                    format_skill_promotion_gate(&gate)
+                }
+                None => format!("No skill usage events found for '{}'.", name),
+            }
+        }
+        "versions" => {
+            let Some(name) = parts.next() else {
+                return "Usage: /skill-proposals versions <skill-name>".to_string();
+            };
+            let records = store.version_records(name);
+            if records.is_empty() {
+                format!("No applied versions recorded for '{}'.", name)
+            } else {
+                let mut lines = vec![format!("Skill Versions /{}", name)];
+                for record in records.iter().rev().take(10) {
+                    lines.push(format!(
+                        "- {} path={} rollback_to={} evalsets={}",
+                        record.version,
+                        record.applied_path,
+                        record.rollback_to.as_deref().unwrap_or("none"),
+                        if record.evalset_bindings.is_empty() {
+                            "none".to_string()
+                        } else {
+                            record.evalset_bindings.join(",")
+                        }
+                    ));
+                }
+                lines.join("\n")
+            }
+        }
+        "bind-eval" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /skill-proposals bind-eval <id|name> <evalset-name>".to_string();
+            };
+            let Some(evalset) = parts.next() else {
+                return "Usage: /skill-proposals bind-eval <id|name> <evalset-name>".to_string();
+            };
+            match store.bind_evalset(id, evalset) {
+                Ok(Some(updated)) => format!(
+                    "Bound evalset '{}' to skill proposal {}\n{}",
+                    evalset,
+                    updated.id,
+                    format_skill_proposal_line(&updated)
+                ),
+                Ok(None) => format!("No skill proposal matching '{}'.", id),
+                Err(e) => format!("Failed to bind evalset: {}", e),
+            }
+        }
         "record" => {
             let Some(name) = parts.next() else {
                 return "Usage: /skill-proposals record <skill-name> <success|fail> [version]"
@@ -3374,6 +3439,14 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                     format_skill_eval(&eval)
                 );
             }
+            if let Some(report) = run_bound_skill_evalsets(&current) {
+                if !report.ok {
+                    return format!(
+                        "Skill proposal {} failed bound evalsets and was not applied.\n{}",
+                        current.id, report.summary
+                    );
+                }
+            }
             let gate = skill_evolution_gate(&current);
             if matches!(
                 gate.action,
@@ -3388,8 +3461,8 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
             }
             let root = user_skill_root();
             match write_active_skill(&current, &root) {
-                Ok(path) => match store.update_status(id, SkillProposalStatus::Applied) {
-                    Ok(Some(updated)) => {
+                Ok(path) => match store.record_applied_version(id, &path) {
+                    Ok(Some((updated, _version))) => {
                         let loaded = app.skill_runtime.reload();
                         persist_skill_proposal_learning_event(
                             app,
@@ -3406,15 +3479,16 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                             updated.name
                         )
                     }
-                    Ok(None) => {
-                        format!("Skill file written, but proposal status update failed for '{}'.", id)
-                    }
+                    Ok(None) => format!(
+                        "Skill file written, but version record update failed for '{}'.",
+                        id
+                    ),
                     Err(e) => format!("Skill file written, but status update failed: {}", e),
                 },
                 Err(e) => format!("Failed to apply skill proposal: {}", e),
             }
         }
-        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|record <name> <success|fail>|accept <id>|reject <id>|apply <id>]".to_string(),
+        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|gate <name>|versions <name>|bind-eval <id> <evalset>|record <name> <success|fail>|accept <id>|reject <id>|apply <id>]".to_string(),
     }
 }
 
@@ -3427,13 +3501,19 @@ fn user_skill_root() -> std::path::PathBuf {
 
 fn format_skill_proposal_line(proposal: &crate::engine::skill_evolution::SkillProposal) -> String {
     format!(
-        "- {} /{} [{:?}/{:?}] score={:.2} events={}: {}",
+        "- {} /{} v{} [{:?}/{:?}] score={:.2} events={} evalsets={}: {}",
         proposal.id,
         proposal.name,
+        proposal.skill_version(),
         proposal.status,
         proposal.trust,
         proposal.creation_score,
         proposal.trigger_event_ids.len(),
+        if proposal.evalset_bindings.is_empty() {
+            "none".to_string()
+        } else {
+            proposal.evalset_bindings.join(",")
+        },
         proposal.procedure
     )
 }
@@ -3442,15 +3522,23 @@ fn format_skill_proposal_detail(
     proposal: &crate::engine::skill_evolution::SkillProposal,
 ) -> String {
     format!(
-        "Skill Proposal {}\n\nName: /{}\nStatus: {:?}\nTrust: {:?}\nScope: {}\nCreation score: {:.2}\nEvidence count: {}\nScope confidence: {:.2}\nEvents: {:?}\n\nProcedure:\n{}\n\nTriggers:\n{}\n\nWorkflow:\n{}\n\nValidation:\n{}\n\nTools:\n{}\n\nEvidence:\n{}",
+        "Skill Proposal {}\n\nName: /{}\nVersion: {}\nStatus: {:?}\nTrust: {:?}\nScope: {}\nCreation score: {:.2}\nEvidence count: {}\nScope confidence: {:.2}\nEvalSets: {}\nRollback to: {}\nApplied path: {}\nEvents: {:?}\n\nProcedure:\n{}\n\nTriggers:\n{}\n\nWorkflow:\n{}\n\nValidation:\n{}\n\nTools:\n{}\n\nEvidence:\n{}",
         proposal.id,
         proposal.name,
+        proposal.skill_version(),
         proposal.status,
         proposal.trust,
         proposal.scope,
         proposal.creation_score,
         proposal.evidence_count,
         proposal.scope_confidence,
+        if proposal.evalset_bindings.is_empty() {
+            "none".to_string()
+        } else {
+            proposal.evalset_bindings.join(", ")
+        },
+        proposal.rollback_to.as_deref().unwrap_or("none"),
+        proposal.applied_path.as_deref().unwrap_or("none"),
         proposal.trigger_event_ids,
         proposal.procedure,
         proposal
@@ -3480,6 +3568,43 @@ fn format_skill_proposal_detail(
             .collect::<Vec<_>>()
             .join("\n")
     )
+}
+
+struct BoundSkillEvalReport {
+    ok: bool,
+    summary: String,
+}
+
+fn run_bound_skill_evalsets(
+    proposal: &crate::engine::skill_evolution::SkillProposal,
+) -> Option<BoundSkillEvalReport> {
+    if proposal.evalset_bindings.is_empty() {
+        return None;
+    }
+    let eval_dir = std::env::current_dir().ok()?.join("evalsets");
+    let mut summaries = Vec::new();
+    let mut ok = true;
+    for binding in &proposal.evalset_bindings {
+        match crate::engine::evalset::run_evalsets_from_dir(&eval_dir, Some(binding)) {
+            Ok(reports) if reports.is_empty() => {
+                ok = false;
+                summaries.push(format!("- {}: no matching evalset", binding));
+            }
+            Ok(reports) => {
+                let binding_ok = reports.iter().all(|report| report.ok());
+                ok &= binding_ok;
+                summaries.push(crate::engine::evalset::format_reports(&reports));
+            }
+            Err(e) => {
+                ok = false;
+                summaries.push(format!("- {}: {}", binding, e));
+            }
+        }
+    }
+    Some(BoundSkillEvalReport {
+        ok,
+        summary: summaries.join("\n\n"),
+    })
 }
 
 fn format_skill_eval(eval: &crate::engine::skill_evolution::SkillEvalResult) -> String {
@@ -3520,6 +3645,29 @@ fn format_skill_fitness(snapshot: &crate::engine::skill_evolution::SkillFitnessS
         snapshot.stats.cost,
         snapshot.stats.risk_penalty
     )
+}
+
+fn format_skill_promotion_gate(
+    gate: &crate::engine::skill_evolution::SkillPromotionGate,
+) -> String {
+    let mut lines = vec![format!(
+        "Skill Promotion Gate\nResult: {}\nOld fitness: {:.2}\nNew fitness: {:.2}\nDelta: {:.2}\nEval count: {}\nRegression rate: {:.2}\nRisk penalty: {:.2}\nSemantic drift: {:.2}",
+        if gate.passed { "pass" } else { "blocked" },
+        gate.old_fitness,
+        gate.new_fitness,
+        gate.delta,
+        gate.eval_count,
+        gate.regression_rate,
+        gate.risk_penalty,
+        gate.semantic_drift
+    )];
+    if !gate.reasons.is_empty() {
+        lines.push("Reasons:".to_string());
+        for reason in &gate.reasons {
+            lines.push(format!("- {}", reason));
+        }
+    }
+    lines.join("\n")
 }
 
 fn persist_skill_proposal_learning_event(

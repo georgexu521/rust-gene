@@ -556,10 +556,10 @@ src/engine/skill_fitness.rs
 CLI targets:
 
 ```text
-/skills stats
-/skills fitness <name>
-/skill-proposals promote <id>
-/skill-proposals rollback <name>
+/skill-proposals fitness <name>
+/skill-proposals gate <name> [old-fitness]
+/skill-proposals bind-eval <id> <evalset>
+/skill-proposals versions <name>
 ```
 
 ## Evolution Controller
@@ -724,12 +724,14 @@ Acceptance:
 
 Goal: prove skills improve behavior before promotion.
 
-Status: partially implemented. `SkillUsageEvent`, `SkillFitnessSnapshot`, a
+Status: mostly implemented. `SkillUsageEvent`, `SkillFitnessSnapshot`, a
 promotion comparator, provisional skill invocation telemetry, conservative
-automatic outcome attribution, and manual `/skill-proposals record` outcome
-feedback exist. Provisional events count toward reuse but not success/failure.
-EvalSet binding, rollback metadata, acceptance-review attribution, and full
-promotion UI are still pending.
+automatic outcome attribution, manual `/skill-proposals record` outcome
+feedback, `/skill-proposals gate`, `/skill-proposals bind-eval`, and
+`/skill-proposals versions` exist. Provisional events count toward reuse but not
+success/failure. Bound evalsets block apply when they fail, and apply records
+version metadata plus a rollback pointer. Acceptance-review attribution and full
+rollback UX are still pending.
 
 Tasks:
 
