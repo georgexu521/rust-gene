@@ -123,8 +123,9 @@ The first implementation pass against this design has also landed:
 - `/experience` now exposes structured Experience Ledger records from the
   interactive CLI.
 - Skill invocation now writes a lightweight provisional usage event, and
-  `/skill-proposals record <skill> <success|fail> [version]` can manually attach
-  outcome feedback to a skill fitness history.
+  the interactive CLI infers a conservative confirmed outcome when that response
+  finishes. `/skill-proposals record <skill> <success|fail> [version]` can
+  manually attach outcome feedback to a skill fitness history.
 
 Remaining implementation gaps:
 
@@ -137,9 +138,10 @@ Remaining implementation gaps:
 - Skill fitness events, version comparison, manual outcome recording, and CLI
   inspection exist. Provisional invocation events count toward reuse but not
   success/failure, so they do not inflate Fitness before a confirmed outcome.
-  Automatic final-outcome attribution for invoked skills, automatic EvalSet
-  binding, rollback pointer materialization, and full promotion UX are not fully
-  productized yet.
+  Automatic final-outcome attribution now covers ordinary interactive CLI skill
+  responses with conservative heuristics; deeper acceptance-review attribution,
+  automatic EvalSet binding, rollback pointer materialization, and full
+  promotion UX are not fully productized yet.
 - Evolution trigger scoring and cooldown exist, but controller decisions are not
   yet routed through all improvement/skill proposal commands.
 
@@ -723,10 +725,11 @@ Acceptance:
 Goal: prove skills improve behavior before promotion.
 
 Status: partially implemented. `SkillUsageEvent`, `SkillFitnessSnapshot`, a
-promotion comparator, provisional skill invocation telemetry, and manual
-`/skill-proposals record` outcome feedback exist. Provisional events count
-toward reuse but not success/failure. EvalSet binding, rollback metadata,
-automatic final-outcome attribution, and full promotion UI are still pending.
+promotion comparator, provisional skill invocation telemetry, conservative
+automatic outcome attribution, and manual `/skill-proposals record` outcome
+feedback exist. Provisional events count toward reuse but not success/failure.
+EvalSet binding, rollback metadata, acceptance-review attribution, and full
+promotion UI are still pending.
 
 Tasks:
 

@@ -7,7 +7,7 @@ use crate::permissions::{PermissionMode, PermissionRules, RuleSource, SourcedRul
 use crate::state::{AppContext, MessageItem, MessageRole, TaskItem};
 use crate::tools::Tool;
 use crate::tui::components::input::InputState;
-use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunView};
+use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunStatus, ToolRunView};
 use futures::StreamExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +24,13 @@ const LONG_PASTE_LINE_THRESHOLD: usize = 12;
 struct PastedBlock {
     placeholder: String,
     content: String,
+}
+
+#[derive(Debug, Clone)]
+struct PendingSkillInvocation {
+    name: String,
+    version: String,
+    started_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -645,6 +652,8 @@ pub struct TuiApp {
     pub provider_select_query: String,
     /// 最近一次 provider 切换提示
     pub provider_notice: Option<String>,
+    /// Skill invocations waiting for final assistant outcome attribution.
+    pending_skill_invocations: Vec<PendingSkillInvocation>,
 }
 
 impl TuiApp {
@@ -810,6 +819,7 @@ impl TuiApp {
             provider_select_selected: 0,
             provider_select_query: String::new(),
             provider_notice: None,
+            pending_skill_invocations: Vec::new(),
         }
     }
 
@@ -1537,6 +1547,8 @@ impl TuiApp {
                         final_response_to_persist = Some(last_msg.content.clone());
                     }
                 }
+                let final_response_for_outcome =
+                    final_response_to_persist.clone().unwrap_or_default();
                 if self.should_persist_messages_from_tui() {
                     if let Some(response) = final_response_to_persist {
                         if let Err(e) = self
@@ -1547,6 +1559,7 @@ impl TuiApp {
                         }
                     }
                 }
+                self.record_pending_skill_outcomes(&final_response_for_outcome);
                 self.typewriter_position = 0;
                 // 流式响应完成，发送终端通知
                 crate::tui::notify::send_notification("Priority Agent", "Response ready");
@@ -2583,6 +2596,65 @@ impl TuiApp {
                 0.75,
                 &payload,
             );
+        }
+        self.pending_skill_invocations.push(PendingSkillInvocation {
+            name: skill_name.to_string(),
+            version: skill_version.to_string(),
+            started_at: std::time::Instant::now(),
+        });
+    }
+
+    fn record_pending_skill_outcomes(&mut self, assistant_response: &str) {
+        if self.pending_skill_invocations.is_empty() {
+            return;
+        }
+        let failed_tool = self
+            .tool_runs_snapshot
+            .iter()
+            .any(|run| run.status == ToolRunStatus::Failed);
+        let stream_error = assistant_response.contains("[Error:");
+        let has_response = !assistant_response.trim().is_empty();
+        let success = has_response && !stream_error && !failed_tool;
+        let tool_calls = self.tool_runs_snapshot.len();
+        let risk_penalty = if success { 0.05 } else { 0.30 };
+        let satisfaction = if success { Some(0.70) } else { Some(0.25) };
+        let store = crate::engine::skill_evolution::SkillProposalStore::default();
+        for pending in self.pending_skill_invocations.drain(..) {
+            let event = crate::engine::skill_evolution::SkillUsageEvent {
+                skill_name: pending.name.clone(),
+                skill_version: pending.version.clone(),
+                provisional: false,
+                success,
+                acceptance_passed: Some(success),
+                tests_passed: None,
+                user_satisfaction: satisfaction,
+                duration_ms: Some(
+                    pending
+                        .started_at
+                        .elapsed()
+                        .as_millis()
+                        .min(u128::from(u64::MAX)) as u64,
+                ),
+                tool_calls,
+                risk_penalty,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            if let Err(e) = store.record_usage(&event) {
+                warn!("Failed to record skill outcome event: {}", e);
+            }
+            if let Ok(payload) = serde_json::to_value(&event) {
+                let _ = self.session_manager.add_learning_event(
+                    "skill_usage",
+                    "skill_runtime",
+                    &format!(
+                        "Skill /{} outcome inferred: {}",
+                        pending.name,
+                        if success { "success" } else { "fail" }
+                    ),
+                    0.65,
+                    &payload,
+                );
+            }
         }
     }
 
