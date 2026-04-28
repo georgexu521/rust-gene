@@ -329,6 +329,67 @@ struct MemoryDecisionCounts {
     blocked: usize,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct MemoryDoctorJson {
+    root: String,
+    documents: MemoryDoctorDocumentsJson,
+    decisions: MemoryDecisionCountsJson,
+    flushes: MemoryFlushCountsJson,
+    quality_gates: MemoryQualityGatesJson,
+    calibration: MemoryCalibrationReportJson,
+    conflicts: Vec<String>,
+    maintenance: Vec<MemoryMaintenanceJson>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MemoryDoctorDocumentsJson {
+    total: usize,
+    topic: usize,
+    agent: usize,
+    chars: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MemoryDecisionCountsJson {
+    accepted: usize,
+    proposed: usize,
+    rejected: usize,
+    blocked: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MemoryFlushCountsJson {
+    completed: usize,
+    pending: usize,
+    running: usize,
+    failed: usize,
+    skipped_duplicate: usize,
+    total: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MemoryQualityGatesJson {
+    accept_threshold: f32,
+    propose_threshold: f32,
+    explicit_override_threshold: f32,
+    hard_stops: Vec<&'static str>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MemoryCalibrationReportJson {
+    passed: usize,
+    total: usize,
+    results: Vec<crate::memory::MemoryCalibrationResult>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MemoryMaintenanceJson {
+    path: String,
+    score: f32,
+    action: String,
+    reason: String,
+}
+
 fn load_memory_decision_counts() -> MemoryDecisionCounts {
     let content = std::fs::read_to_string(memory_decision_log_path()).unwrap_or_default();
     memory_decision_counts_from_jsonl(&content)
@@ -460,6 +521,65 @@ fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String
         }
     }
     out
+}
+
+fn memory_doctor_json(docs: &[MemoryDocument], conflicts: &[String]) -> serde_json::Value {
+    let counts = load_memory_decision_counts();
+    let flushes = load_memory_flush_summary();
+    let calibration = crate::memory::run_memory_calibration_samples();
+    let calibration_passed = calibration.iter().filter(|result| result.passed).count();
+    let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
+    let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
+    let agent_count = docs
+        .iter()
+        .filter(|doc| doc.namespace.starts_with("agent"))
+        .count();
+    let maintenance = memory_maintenance_decisions(docs, conflicts)
+        .into_iter()
+        .map(|(path, decision)| MemoryMaintenanceJson {
+            path,
+            score: decision.score,
+            action: format!("{:?}", decision.action),
+            reason: decision.reason,
+        })
+        .collect();
+    let report = MemoryDoctorJson {
+        root: memory_root().display().to_string(),
+        documents: MemoryDoctorDocumentsJson {
+            total: docs.len(),
+            topic: topic_count,
+            agent: agent_count,
+            chars: total_chars,
+        },
+        decisions: MemoryDecisionCountsJson {
+            accepted: counts.accepted,
+            proposed: counts.proposed,
+            rejected: counts.rejected,
+            blocked: counts.blocked,
+        },
+        flushes: MemoryFlushCountsJson {
+            completed: flushes.completed,
+            pending: flushes.pending,
+            running: flushes.running,
+            failed: flushes.failed,
+            skipped_duplicate: flushes.skipped_duplicate,
+            total: flushes.total,
+        },
+        quality_gates: MemoryQualityGatesJson {
+            accept_threshold: 0.65,
+            propose_threshold: 0.45,
+            explicit_override_threshold: 0.60,
+            hard_stops: vec!["unsafe_content", "secret_like_content", "duplicate_memory"],
+        },
+        calibration: MemoryCalibrationReportJson {
+            passed: calibration_passed,
+            total: calibration.len(),
+            results: calibration,
+        },
+        conflicts: conflicts.to_vec(),
+        maintenance,
+    };
+    serde_json::to_value(report).unwrap_or_else(|_| serde_json::json!({}))
 }
 
 fn memory_maintenance_decisions(
@@ -782,8 +902,8 @@ impl Tool for MemoryLoadTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "load returns memory content, search filters by query, doctor summarizes health, conflicts lists conflicts, review summarizes decisions/flushes/conflicts, explain shows why a matching memory was retrieved.",
-                    "enum": ["load", "search", "doctor", "conflicts", "review", "explain"],
+                    "description": "load returns memory content, search filters by query, doctor summarizes health, doctor_json returns machine-readable health, conflicts lists conflicts, review summarizes decisions/flushes/conflicts, explain shows why a matching memory was retrieved.",
+                    "enum": ["load", "search", "doctor", "doctor_json", "conflicts", "review", "explain"],
                     "default": "load"
                 },
                 "query": {
@@ -805,6 +925,9 @@ impl Tool for MemoryLoadTool {
         let action = params["action"].as_str().unwrap_or("load");
 
         if docs.is_empty() {
+            if action == "doctor_json" {
+                return ToolResult::success(memory_doctor_json(&docs, &[]).to_string());
+            }
             if matches!(action, "doctor" | "review") {
                 return ToolResult::success(format_memory_doctor(&docs, &[]));
             }
@@ -820,6 +943,10 @@ impl Tool for MemoryLoadTool {
 
         if action == "doctor" {
             return ToolResult::success(format_memory_doctor(&docs, &conflicts));
+        }
+
+        if action == "doctor_json" {
+            return ToolResult::success(memory_doctor_json(&docs, &conflicts).to_string());
         }
 
         if action == "conflicts" {
@@ -1042,6 +1169,22 @@ mod tests {
         assert!(doctor.contains("Conflicts: 1"));
         assert!(doctor.contains("Quality gates:"));
         assert!(doctor.contains("Calibration:"));
+    }
+
+    #[test]
+    fn test_memory_doctor_json_includes_calibration_and_gates() {
+        let docs = vec![MemoryDocument {
+            namespace: "project".to_string(),
+            path: "MEMORY.md".to_string(),
+            content: "language: Chinese".to_string(),
+        }];
+        let report = memory_doctor_json(&docs, &[]);
+        assert_eq!(report["documents"]["total"].as_u64(), Some(1));
+        assert!(report["calibration"]["total"].as_u64().unwrap_or(0) >= 1);
+        let accept_threshold = report["quality_gates"]["accept_threshold"]
+            .as_f64()
+            .unwrap_or_default();
+        assert!((accept_threshold - 0.65).abs() < 0.001);
     }
 
     #[test]

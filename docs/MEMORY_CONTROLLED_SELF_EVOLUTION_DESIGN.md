@@ -395,7 +395,9 @@ runs a built-in calibration suite covering high-value project conventions, user
 preferences, vague notes, explicit low-value saves, duplicate memories, and
 secret-like content. Calibration failures indicate that scoring thresholds or
 hard safety gates have drifted and should be fixed before trusting new memory
-writes.
+writes. `/memory doctor json` and the `memory_load` tool's `doctor_json` action
+return the same health signal in machine-readable form for dashboards and
+automation.
 
 ## Experience Ledger
 
@@ -568,6 +570,9 @@ CLI targets:
 /skill-proposals rollback-list [name]
 /skill-proposals rollback <name> --yes
 /skill-proposals restore <name> [backup-name] --yes
+/evolution audit [limit]
+/evolution json [limit]
+/evolution show <event-id>
 ```
 
 ## Evolution Controller

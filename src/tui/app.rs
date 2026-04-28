@@ -2036,7 +2036,12 @@ impl TuiApp {
             "/memory" => {
                 let query = args.trim();
                 let maintain = query == "--maintain";
-                let doctor = matches!(query, "--doctor" | "doctor");
+                let doctor = matches!(
+                    query,
+                    "--doctor" | "doctor" | "doctor json" | "doctor --json" | "--doctor json"
+                );
+                let doctor_json =
+                    matches!(query, "doctor json" | "doctor --json" | "--doctor json");
                 let (memory_action, memory_arg) = query
                     .split_once(' ')
                     .map(|(action, rest)| (action, rest.trim()))
@@ -2064,15 +2069,49 @@ impl TuiApp {
                         let summary = mem.memory_summary();
                         let decisions = mem.memory_decision_counts();
                         let flushes = mem.memory_flush_summary();
-                        format!(
-                            "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}",
-                            summary.format(),
-                            decisions.accepted,
-                            decisions.proposed,
-                            decisions.rejected,
-                            decisions.blocked,
-                            flushes.format()
-                        )
+                        let calibration = crate::memory::run_memory_calibration_samples();
+                        let calibration_passed =
+                            calibration.iter().filter(|result| result.passed).count();
+                        let conflicts = mem.memory_conflicts(8);
+                        if doctor_json {
+                            serde_json::json!({
+                                "summary": {
+                                    "project_memory_chars": summary.project_memory_chars,
+                                    "project_memory_files": summary.project_memory_files,
+                                    "project_memory_file_chars": summary.project_memory_file_chars,
+                                    "user_memory_chars": summary.user_memory_chars,
+                                    "session_memory_items": summary.session_memory_items,
+                                    "has_frozen_snapshot": summary.has_frozen_snapshot,
+                                },
+                                "decisions": decisions,
+                                "flushes": flushes,
+                                "quality_gates": {
+                                    "accept_threshold": 0.65,
+                                    "propose_threshold": 0.45,
+                                    "explicit_override_threshold": 0.60,
+                                    "hard_stops": ["unsafe_content", "secret_like_content", "duplicate_memory"],
+                                },
+                                "calibration": {
+                                    "passed": calibration_passed,
+                                    "total": calibration.len(),
+                                    "results": calibration,
+                                },
+                                "conflicts": conflicts,
+                            })
+                            .to_string()
+                        } else {
+                            format!(
+                                "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}\n\nQuality gates:\n  accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n\nCalibration: {}/{} passed",
+                                summary.format(),
+                                decisions.accepted,
+                                decisions.proposed,
+                                decisions.rejected,
+                                decisions.blocked,
+                                flushes.format(),
+                                calibration_passed,
+                                calibration.len()
+                            )
+                        }
                     } else if memory_action == "conflicts" {
                         let conflicts = mem.memory_conflicts(20);
                         if conflicts.is_empty() {
@@ -2216,15 +2255,48 @@ impl TuiApp {
                         let summary = mem.memory_summary();
                         let decisions = mem.memory_decision_counts();
                         let flushes = mem.memory_flush_summary();
-                        format!(
-                            "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}",
-                            summary.format(),
-                            decisions.accepted,
-                            decisions.proposed,
-                            decisions.rejected,
-                            decisions.blocked,
-                            flushes.format()
-                        )
+                        let calibration = crate::memory::run_memory_calibration_samples();
+                        let calibration_passed =
+                            calibration.iter().filter(|result| result.passed).count();
+                        if doctor_json {
+                            serde_json::json!({
+                                "summary": {
+                                    "project_memory_chars": summary.project_memory_chars,
+                                    "project_memory_files": summary.project_memory_files,
+                                    "project_memory_file_chars": summary.project_memory_file_chars,
+                                    "user_memory_chars": summary.user_memory_chars,
+                                    "session_memory_items": summary.session_memory_items,
+                                    "has_frozen_snapshot": summary.has_frozen_snapshot,
+                                },
+                                "decisions": decisions,
+                                "flushes": flushes,
+                                "quality_gates": {
+                                    "accept_threshold": 0.65,
+                                    "propose_threshold": 0.45,
+                                    "explicit_override_threshold": 0.60,
+                                    "hard_stops": ["unsafe_content", "secret_like_content", "duplicate_memory"],
+                                },
+                                "calibration": {
+                                    "passed": calibration_passed,
+                                    "total": calibration.len(),
+                                    "results": calibration,
+                                },
+                                "conflicts": mem.memory_conflicts(8),
+                            })
+                            .to_string()
+                        } else {
+                            format!(
+                                "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}\n\nQuality gates:\n  accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n\nCalibration: {}/{} passed",
+                                summary.format(),
+                                decisions.accepted,
+                                decisions.proposed,
+                                decisions.rejected,
+                                decisions.blocked,
+                                flushes.format(),
+                                calibration_passed,
+                                calibration.len()
+                            )
+                        }
                     } else {
                         let summary = mem.memory_summary();
                         let project = mem.load_tier(crate::memory::manager::MemoryTier::Project);
@@ -2607,6 +2679,7 @@ impl TuiApp {
             "/goal" => slash::handle_goal(self, args),
             "/learn" => slash::handle_learn(self, args),
             "/experience" => slash::handle_experience(self, args),
+            "/evolution" => slash::handle_evolution(self, args),
             "/improvements" => slash::handle_improvements(self, args),
             "/skill-proposals" => slash::handle_skill_proposals(self, args),
             "/recover" => slash::handle_recover(self, args),

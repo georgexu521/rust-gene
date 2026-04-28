@@ -1333,6 +1333,14 @@ pub const CMD_EXPERIENCE: CommandDef = CommandDef::new(
     "Inspect structured experience ledger records",
 );
 
+pub const CMD_EVOLUTION: CommandDef = CommandDef::new(
+    "/evolution",
+    &[],
+    "General",
+    "/evolution [audit|json|show <id>]",
+    "Inspect controlled self-evolution audit events",
+);
+
 pub const CMD_IMPROVEMENTS: CommandDef = CommandDef::new(
     "/improvements",
     &[],
@@ -1505,6 +1513,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_GOAL);
     registry.register(&CMD_LEARN);
     registry.register(&CMD_EXPERIENCE);
+    registry.register(&CMD_EVOLUTION);
     registry.register(&CMD_IMPROVEMENTS);
     registry.register(&CMD_SKILL_PROPOSALS);
     registry.register(&CMD_RECOVER);
@@ -1644,6 +1653,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_GOAL,
     &CMD_LEARN,
     &CMD_EXPERIENCE,
+    &CMD_EVOLUTION,
     &CMD_IMPROVEMENTS,
     &CMD_SKILL_PROPOSALS,
     &CMD_RECOVER,

@@ -3021,6 +3021,89 @@ pub fn handle_experience(app: &mut TuiApp, args: &str) -> String {
     }
 }
 
+/// /evolution - Inspect controlled self-evolution audit events.
+pub fn handle_evolution(app: &mut TuiApp, args: &str) -> String {
+    let mut parts = args.split_whitespace();
+    let action = parts.next().unwrap_or("audit");
+    match action {
+        "audit" | "list" | "" => {
+            let limit = parts
+                .next()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(20)
+                .clamp(1, 100);
+            let events = match app.session_manager.recent_learning_events(limit * 4) {
+                Ok(events) => events,
+                Err(e) => return format!("Evolution audit unavailable: {}", e),
+            };
+            let events = events
+                .into_iter()
+                .filter(|event| is_evolution_learning_event(event))
+                .take(limit as usize)
+                .collect::<Vec<_>>();
+            if events.is_empty() {
+                return "Evolution Audit\n- no evolution events yet".to_string();
+            }
+            let mut lines = vec![format!("Evolution Audit ({} recent)", events.len())];
+            for event in events {
+                lines.push(format!(
+                    "- #{} {} [{}] conf={:.2} at {}: {}",
+                    event.id,
+                    event.kind,
+                    event.source,
+                    event.confidence,
+                    event.created_at,
+                    event.summary
+                ));
+            }
+            lines.push("Use /learn show <id> for full payload.".to_string());
+            lines.join("\n")
+        }
+        "json" => {
+            let limit = parts
+                .next()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(50)
+                .clamp(1, 200);
+            let events = match app.session_manager.recent_learning_events(limit * 4) {
+                Ok(events) => events,
+                Err(e) => return format!("Evolution audit unavailable: {}", e),
+            };
+            let events = events
+                .into_iter()
+                .filter(|event| is_evolution_learning_event(event))
+                .take(limit as usize)
+                .collect::<Vec<_>>();
+            serde_json::to_string_pretty(&events).unwrap_or_else(|_| "[]".to_string())
+        }
+        "show" => {
+            let Some(id) = parts.next().and_then(|value| value.parse::<i64>().ok()) else {
+                return "Usage: /evolution show <id>".to_string();
+            };
+            match app.session_manager.learning_event(id) {
+                Ok(Some(event)) if is_evolution_learning_event(&event) => {
+                    format_learning_event_detail(&event)
+                }
+                Ok(Some(_)) => format!("Learning event #{} is not an evolution audit event.", id),
+                Ok(None) => format!("Evolution event #{} not found in current session.", id),
+                Err(e) => format!("Evolution event unavailable: {}", e),
+            }
+        }
+        _ => "Usage: /evolution [audit [limit]|json [limit]|show <id>]".to_string(),
+    }
+}
+
+fn is_evolution_learning_event(event: &crate::session_store::LearningEventRecord) -> bool {
+    let kind = event.kind.as_str();
+    let source = event.source.as_str();
+    kind.contains("improvement")
+        || kind.contains("skill_")
+        || kind.contains("evolution")
+        || source.contains("improvement")
+        || source.contains("skill_evolution")
+        || source.contains("skill_proposals")
+}
+
 fn format_experience_event(event: &crate::session_store::LearningEventRecord) -> String {
     let experience = &event.payload["experience"];
     let pretty =
