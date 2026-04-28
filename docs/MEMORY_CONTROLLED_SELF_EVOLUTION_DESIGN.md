@@ -560,6 +560,7 @@ CLI targets:
 /skill-proposals gate <name> [old-fitness]
 /skill-proposals bind-eval <id> <evalset>
 /skill-proposals versions <name>
+/skill-proposals rollback <name> --yes
 ```
 
 ## Evolution Controller
@@ -730,8 +731,10 @@ automatic outcome attribution, manual `/skill-proposals record` outcome
 feedback, `/skill-proposals gate`, `/skill-proposals bind-eval`, and
 `/skill-proposals versions` exist. Provisional events count toward reuse but not
 success/failure. Bound evalsets block apply when they fail, and apply records
-version metadata plus a rollback pointer. Acceptance-review attribution and full
-rollback UX are still pending.
+version metadata plus a rollback pointer. `/skill-proposals rollback <name>
+--yes` safely disables an active generated skill by moving it aside instead of
+deleting it. Acceptance-review attribution and richer rollback restore UX are
+still pending.
 
 Tasks:
 

@@ -3329,6 +3329,63 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 lines.join("\n")
             }
         }
+        "rollback" => {
+            let Some(name) = parts.next() else {
+                return "Usage: /skill-proposals rollback <skill-name> --yes".to_string();
+            };
+            let confirmed = parts.any(|part| part == "--yes");
+            if !confirmed {
+                return format!(
+                    "Rollback disables the active /{} skill by moving its directory aside.\nUsage: /skill-proposals rollback {} --yes",
+                    name, name
+                );
+            }
+            let records = store.version_records(name);
+            let Some(latest) = records.last() else {
+                return format!("No applied versions recorded for '{}'.", name);
+            };
+            let root = user_skill_root();
+            let skill_dir = root.join(name);
+            if !skill_dir.exists() {
+                return format!("Active skill directory does not exist: {}", skill_dir.display());
+            }
+            if !skill_dir.starts_with(&root) {
+                return format!("Refusing rollback outside user skill root: {}", skill_dir.display());
+            }
+            let disabled_dir = root.join(format!(
+                "{}.disabled-{}",
+                name,
+                chrono::Utc::now().format("%Y%m%d%H%M%S")
+            ));
+            match std::fs::rename(&skill_dir, &disabled_dir) {
+                Ok(()) => {
+                    let _ = store.update_status(&latest.proposal_id, SkillProposalStatus::Accepted);
+                    let loaded = app.skill_runtime.reload();
+                    let payload = serde_json::json!({
+                        "skill_name": name,
+                        "disabled_path": disabled_dir,
+                        "previous_path": skill_dir,
+                        "version": latest.version,
+                        "proposal_id": latest.proposal_id,
+                    });
+                    let _ = app.session_manager.add_learning_event(
+                        "skill_rollback",
+                        "skill_evolution",
+                        &format!("Rolled back active skill /{}", name),
+                        0.9,
+                        &payload,
+                    );
+                    format!(
+                        "Rolled back /{}\n- moved: {}\n- disabled: {}\n- proposal returned to Accepted\n- reloaded skills: {}",
+                        name,
+                        skill_dir.display(),
+                        disabled_dir.display(),
+                        loaded
+                    )
+                }
+                Err(e) => format!("Failed to rollback /{}: {}", name, e),
+            }
+        }
         "bind-eval" => {
             let Some(id) = parts.next() else {
                 return "Usage: /skill-proposals bind-eval <id|name> <evalset-name>".to_string();
@@ -3488,7 +3545,7 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Failed to apply skill proposal: {}", e),
             }
         }
-        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|gate <name>|versions <name>|bind-eval <id> <evalset>|record <name> <success|fail>|accept <id>|reject <id>|apply <id>]".to_string(),
+        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|gate <name>|versions <name>|rollback <name> --yes|bind-eval <id> <evalset>|record <name> <success|fail>|accept <id>|reject <id>|apply <id>]".to_string(),
     }
 }
 
