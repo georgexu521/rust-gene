@@ -120,6 +120,8 @@ pub struct SkillEvalResult {
 pub struct SkillUsageEvent {
     pub skill_name: String,
     pub skill_version: String,
+    #[serde(default)]
+    pub provisional: bool,
     pub success: bool,
     pub acceptance_passed: Option<bool>,
     pub tests_passed: Option<bool>,
@@ -565,25 +567,30 @@ pub fn skill_fitness_snapshot(
         .map(|event| event.skill_version.clone())
         .unwrap_or_else(|| "unknown".to_string());
     let total = events.len() as f32;
-    let successes = events.iter().filter(|event| event.success).count() as f32;
-    let acceptance_known = events
+    let confirmed = events
+        .iter()
+        .filter(|event| !event.provisional)
+        .collect::<Vec<_>>();
+    let outcome_total = confirmed.len() as f32;
+    let successes = confirmed.iter().filter(|event| event.success).count() as f32;
+    let acceptance_known = confirmed
         .iter()
         .filter(|event| event.acceptance_passed.is_some())
         .count() as f32;
-    let acceptance_passed = events
+    let acceptance_passed = confirmed
         .iter()
         .filter(|event| event.acceptance_passed == Some(true))
         .count() as f32;
-    let tests_known = events
+    let tests_known = confirmed
         .iter()
         .filter(|event| event.tests_passed.is_some())
         .count() as f32;
-    let tests_passed = events
+    let tests_passed = confirmed
         .iter()
         .filter(|event| event.tests_passed == Some(true))
         .count() as f32;
-    let avg_satisfaction = average_optional(events.iter().map(|event| event.user_satisfaction));
-    let avg_duration = average_u64(events.iter().filter_map(|event| event.duration_ms));
+    let avg_satisfaction = average_optional(confirmed.iter().map(|event| event.user_satisfaction));
+    let avg_duration = average_u64(confirmed.iter().filter_map(|event| event.duration_ms));
     let avg_tools = events
         .iter()
         .map(|event| event.tool_calls as f32)
@@ -599,14 +606,14 @@ pub fn skill_fitness_snapshot(
     }
 
     let stats = SkillFitnessStats {
-        task_success: successes / total,
+        task_success: ratio_or_default(successes, outcome_total, 0.65),
         acceptance_pass_rate: ratio_or_default(acceptance_passed, acceptance_known, 0.65),
         test_pass_rate: ratio_or_default(tests_passed, tests_known, 0.65),
         user_satisfaction: avg_satisfaction.unwrap_or(0.65).clamp(0.0, 1.0),
         reuse_rate: (total / 10.0).clamp(0.0, 1.0),
         time_saved: duration_efficiency(avg_duration),
         tool_efficiency: tool_efficiency(avg_tools),
-        failure_rate: 1.0 - successes / total,
+        failure_rate: 1.0 - ratio_or_default(successes, outcome_total, 0.65),
         cost: cost_penalty(avg_duration, avg_tools),
         risk_penalty: avg_risk.clamp(0.0, 1.0),
     };
@@ -1378,6 +1385,7 @@ mod tests {
             SkillUsageEvent {
                 skill_name: "debug-rust".to_string(),
                 skill_version: "0.1.0".to_string(),
+                provisional: false,
                 success: true,
                 acceptance_passed: Some(true),
                 tests_passed: Some(true),
@@ -1390,6 +1398,7 @@ mod tests {
             SkillUsageEvent {
                 skill_name: "debug-rust".to_string(),
                 skill_version: "0.1.0".to_string(),
+                provisional: false,
                 success: true,
                 acceptance_passed: Some(true),
                 tests_passed: Some(true),
@@ -1402,6 +1411,7 @@ mod tests {
             SkillUsageEvent {
                 skill_name: "debug-rust".to_string(),
                 skill_version: "0.1.0".to_string(),
+                provisional: false,
                 success: false,
                 acceptance_passed: Some(false),
                 tests_passed: Some(false),
@@ -1417,6 +1427,44 @@ mod tests {
         assert_eq!(snapshot.events, 3);
         assert!(snapshot.fitness > 0.0);
         assert!(snapshot.stats.failure_rate > 0.0);
+    }
+
+    #[test]
+    fn provisional_skill_invocations_do_not_count_as_outcomes() {
+        let events = vec![
+            SkillUsageEvent {
+                skill_name: "debug-rust".to_string(),
+                skill_version: "0.1.0".to_string(),
+                provisional: true,
+                success: false,
+                acceptance_passed: None,
+                tests_passed: None,
+                user_satisfaction: None,
+                duration_ms: None,
+                tool_calls: 0,
+                risk_penalty: 0.05,
+                created_at: "2026-04-28T00:00:00Z".to_string(),
+            },
+            SkillUsageEvent {
+                skill_name: "debug-rust".to_string(),
+                skill_version: "0.1.0".to_string(),
+                provisional: false,
+                success: true,
+                acceptance_passed: Some(true),
+                tests_passed: Some(true),
+                user_satisfaction: Some(0.9),
+                duration_ms: Some(30_000),
+                tool_calls: 4,
+                risk_penalty: 0.05,
+                created_at: "2026-04-28T00:01:00Z".to_string(),
+            },
+        ];
+
+        let snapshot = skill_fitness_snapshot("debug-rust", &events).unwrap();
+        assert_eq!(snapshot.events, 2);
+        assert!((snapshot.stats.task_success - 1.0).abs() < f32::EPSILON);
+        assert!((snapshot.stats.failure_rate - 0.0).abs() < f32::EPSILON);
+        assert!(snapshot.stats.reuse_rate > 0.0);
     }
 
     #[test]

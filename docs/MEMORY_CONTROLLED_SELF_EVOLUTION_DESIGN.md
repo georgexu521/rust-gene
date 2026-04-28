@@ -120,6 +120,11 @@ The first implementation pass against this design has also landed:
 - `src/engine/evolution_controller.rs` implements `EvolutionTriggerScore`,
   target risk policy, cooldown checks, and the "no auto-apply for high-risk
   targets" rule.
+- `/experience` now exposes structured Experience Ledger records from the
+  interactive CLI.
+- Skill invocation now writes a lightweight provisional usage event, and
+  `/skill-proposals record <skill> <success|fail> [version]` can manually attach
+  outcome feedback to a skill fitness history.
 
 Remaining implementation gaps:
 
@@ -129,9 +134,12 @@ Remaining implementation gaps:
   provider-backed semantic similarity.
 - Memory maintenance scoring is visible in doctor/review output, but automatic
   archive/delete is intentionally not enabled yet.
-- Skill fitness events and version comparison exist, but automatic EvalSet
-  binding, rollback pointer materialization, and promotion commands are not
-  fully productized yet.
+- Skill fitness events, version comparison, manual outcome recording, and CLI
+  inspection exist. Provisional invocation events count toward reuse but not
+  success/failure, so they do not inflate Fitness before a confirmed outcome.
+  Automatic final-outcome attribution for invoked skills, automatic EvalSet
+  binding, rollback pointer materialization, and full promotion UX are not fully
+  productized yet.
 - Evolution trigger scoring and cooldown exist, but controller decisions are not
   yet routed through all improvement/skill proposal commands.
 
@@ -676,9 +684,10 @@ Acceptance:
 
 Goal: make learning events reliable enough for scoring.
 
-Status: partially implemented. Turn and tool learning events now include a typed
-`experience` payload while preserving old fields. Dedicated query commands and
-candidate memory/skill links are still pending.
+Status: mostly implemented. Turn and tool learning events now include a typed
+`experience` payload while preserving old fields. `/experience last|list|show`
+exposes recent records in the interactive CLI. Candidate memory/skill links are
+still pending.
 
 Tasks:
 
@@ -713,9 +722,11 @@ Acceptance:
 
 Goal: prove skills improve behavior before promotion.
 
-Status: partially implemented. `SkillUsageEvent`, `SkillFitnessSnapshot`, and a
-promotion comparator exist. EvalSet binding, rollback metadata, and promotion UI
-are still pending.
+Status: partially implemented. `SkillUsageEvent`, `SkillFitnessSnapshot`, a
+promotion comparator, provisional skill invocation telemetry, and manual
+`/skill-proposals record` outcome feedback exist. Provisional events count
+toward reuse but not success/failure. EvalSet binding, rollback metadata,
+automatic final-outcome attribution, and full promotion UI are still pending.
 
 Tasks:
 

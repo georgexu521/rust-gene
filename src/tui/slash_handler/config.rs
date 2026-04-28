@@ -2951,6 +2951,93 @@ fn format_learning_event_detail(event: &crate::session_store::LearningEventRecor
     )
 }
 
+/// /experience - Inspect typed ExperienceRecord payloads.
+pub fn handle_experience(app: &mut TuiApp, args: &str) -> String {
+    let mut parts = args.split_whitespace();
+    let action = parts.next().unwrap_or("last");
+    match action {
+        "last" | "" => {
+            let events = match app.session_manager.recent_learning_events(30) {
+                Ok(events) => events,
+                Err(e) => return format!("Experience ledger unavailable: {}", e),
+            };
+            match events
+                .iter()
+                .find(|event| event.payload.get("experience").is_some())
+            {
+                Some(event) => format_experience_event(event),
+                None => "Experience Ledger\n- no structured experience records yet".to_string(),
+            }
+        }
+        "list" => {
+            let limit = parts
+                .next()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(10)
+                .clamp(1, 50);
+            let events = match app.session_manager.recent_learning_events(limit * 3) {
+                Ok(events) => events,
+                Err(e) => return format!("Experience ledger unavailable: {}", e),
+            };
+            let lines = events
+                .iter()
+                .filter(|event| event.payload.get("experience").is_some())
+                .take(limit as usize)
+                .map(|event| {
+                    let experience = &event.payload["experience"];
+                    format!(
+                        "- #{} {} workflow={} outcome={} tools={}",
+                        event.id,
+                        event.kind,
+                        experience["workflow"].as_str().unwrap_or("unknown"),
+                        experience["final_outcome"].as_str().unwrap_or("unknown"),
+                        experience["cost"]["tool_calls"].as_u64().unwrap_or(0)
+                    )
+                })
+                .collect::<Vec<_>>();
+            if lines.is_empty() {
+                "Experience Ledger\n- no structured experience records yet".to_string()
+            } else {
+                format!("Experience Ledger\n{}", lines.join("\n"))
+            }
+        }
+        "show" => {
+            let Some(id) = parts.next().and_then(|value| value.parse::<i64>().ok()) else {
+                return "Usage: /experience show <id>".to_string();
+            };
+            match app.session_manager.learning_event(id) {
+                Ok(Some(event)) if event.payload.get("experience").is_some() => {
+                    format_experience_event(&event)
+                }
+                Ok(Some(_)) => format!(
+                    "Learning event #{} has no structured experience payload.",
+                    id
+                ),
+                Ok(None) => format!("Experience event #{} not found in current session.", id),
+                Err(e) => format!("Experience event unavailable: {}", e),
+            }
+        }
+        _ => "Usage: /experience [last|list [limit]|show <id>]".to_string(),
+    }
+}
+
+fn format_experience_event(event: &crate::session_store::LearningEventRecord) -> String {
+    let experience = &event.payload["experience"];
+    let pretty =
+        serde_json::to_string_pretty(experience).unwrap_or_else(|_| experience.to_string());
+    format!(
+        "Experience #{}\nKind: {}\nSource: {}\nCreated: {}\nWorkflow: {}\nOutcome: {}\nTool calls: {}\n\n{}",
+        event.id,
+        event.kind,
+        event.source,
+        event.created_at,
+        experience["workflow"].as_str().unwrap_or("unknown"),
+        experience["final_outcome"].as_str().unwrap_or("unknown"),
+        experience["cost"]["tool_calls"].as_u64().unwrap_or(0),
+        pretty
+    )
+}
+
 /// /improvements - Controlled self-evolution proposals
 pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
     use crate::engine::improvement::{ImprovementStore, ProposalStatus};
@@ -3195,6 +3282,55 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 None => format!("No skill usage events found for '{}'.", name),
             }
         }
+        "record" => {
+            let Some(name) = parts.next() else {
+                return "Usage: /skill-proposals record <skill-name> <success|fail> [version]"
+                    .to_string();
+            };
+            let Some(outcome) = parts.next() else {
+                return "Usage: /skill-proposals record <skill-name> <success|fail> [version]"
+                    .to_string();
+            };
+            let success = match outcome {
+                "success" | "pass" | "passed" => true,
+                "fail" | "failed" | "failure" => false,
+                _ => return "Outcome must be success or fail.".to_string(),
+            };
+            let version = parts.next().unwrap_or("manual");
+            let event = crate::engine::skill_evolution::SkillUsageEvent {
+                skill_name: name.to_string(),
+                skill_version: version.to_string(),
+                provisional: false,
+                success,
+                acceptance_passed: Some(success),
+                tests_passed: None,
+                user_satisfaction: if success { Some(0.80) } else { Some(0.25) },
+                duration_ms: None,
+                tool_calls: 0,
+                risk_penalty: if success { 0.05 } else { 0.25 },
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            match store.record_usage(&event) {
+                Ok(()) => {
+                    let _ = app.session_manager.add_learning_event(
+                        "skill_usage",
+                        "skill_proposals",
+                        &format!("Skill /{} outcome recorded: {}", name, outcome),
+                        0.85,
+                        &serde_json::to_value(&event).unwrap_or_else(|_| serde_json::json!({})),
+                    );
+                    match store.fitness_snapshot(name) {
+                        Some(snapshot) => format!(
+                            "Recorded skill usage for /{}\n{}",
+                            name,
+                            format_skill_fitness(&snapshot)
+                        ),
+                        None => format!("Recorded skill usage for /{}.", name),
+                    }
+                }
+                Err(e) => format!("Failed to record skill usage: {}", e),
+            }
+        }
         "accept" | "reject" => {
             let Some(id) = parts.next() else {
                 return format!("Usage: /skill-proposals {} <id|name>", action);
@@ -3278,7 +3414,7 @@ pub fn handle_skill_proposals(app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Failed to apply skill proposal: {}", e),
             }
         }
-        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|accept <id>|reject <id>|apply <id>]".to_string(),
+        _ => "Usage: /skill-proposals [list|scan [limit]|show <id>|eval <id>|fitness <name>|record <name> <success|fail>|accept <id>|reject <id>|apply <id>]".to_string(),
     }
 }
 

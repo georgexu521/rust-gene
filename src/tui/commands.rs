@@ -1321,8 +1321,16 @@ pub const CMD_LEARN: CommandDef = CommandDef::new(
     "/learn",
     &[],
     "General",
-    "/learn [limit]",
+    "/learn [limit|show <id>]",
     "Show recent runtime learning events",
+);
+
+pub const CMD_EXPERIENCE: CommandDef = CommandDef::new(
+    "/experience",
+    &[],
+    "General",
+    "/experience [last|list|show <id>]",
+    "Inspect structured experience ledger records",
 );
 
 pub const CMD_IMPROVEMENTS: CommandDef = CommandDef::new(
@@ -1496,6 +1504,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_QUICK);
     registry.register(&CMD_GOAL);
     registry.register(&CMD_LEARN);
+    registry.register(&CMD_EXPERIENCE);
     registry.register(&CMD_IMPROVEMENTS);
     registry.register(&CMD_SKILL_PROPOSALS);
     registry.register(&CMD_RECOVER);
@@ -1634,6 +1643,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_QUICK,
     &CMD_GOAL,
     &CMD_LEARN,
+    &CMD_EXPERIENCE,
     &CMD_IMPROVEMENTS,
     &CMD_SKILL_PROPOSALS,
     &CMD_RECOVER,

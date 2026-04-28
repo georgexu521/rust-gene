@@ -2506,12 +2506,18 @@ impl TuiApp {
             "/quick" => slash::handle_quick(self),
             "/goal" => slash::handle_goal(self, args),
             "/learn" => slash::handle_learn(self, args),
+            "/experience" => slash::handle_experience(self, args),
             "/improvements" => slash::handle_improvements(self, args),
             "/skill-proposals" => slash::handle_skill_proposals(self, args),
             "/recover" => slash::handle_recover(self, args),
             "/feedback" => slash::handle_feedback(self, args),
             _ => {
                 if let Some(invocation) = self.skill_runtime.invocation(&cmd, args) {
+                    let skill_version = self
+                        .skill_runtime
+                        .get(&cmd)
+                        .map(|skill| skill.meta.version.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
                     self.apply_skill_invocation_policy(&invocation);
                     let mut notice = format!("Skill /{} applied", invocation.name);
                     if !invocation.allowed_tools.is_empty() {
@@ -2536,6 +2542,7 @@ impl TuiApp {
                         notice.push_str(&format!(" · context: {}", context));
                     }
                     self.add_system_message(notice);
+                    self.record_skill_invocation_usage(&invocation.name, &skill_version);
                     self.send_message(invocation.prompt).await;
                     String::new()
                 } else {
@@ -2548,6 +2555,35 @@ impl TuiApp {
         };
 
         self.add_system_message(response);
+    }
+
+    fn record_skill_invocation_usage(&mut self, skill_name: &str, skill_version: &str) {
+        let event = crate::engine::skill_evolution::SkillUsageEvent {
+            skill_name: skill_name.to_string(),
+            skill_version: skill_version.to_string(),
+            provisional: true,
+            success: false,
+            acceptance_passed: None,
+            tests_passed: None,
+            user_satisfaction: None,
+            duration_ms: None,
+            tool_calls: 0,
+            risk_penalty: 0.05,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let store = crate::engine::skill_evolution::SkillProposalStore::default();
+        if let Err(e) = store.record_usage(&event) {
+            warn!("Failed to record skill usage event: {}", e);
+        }
+        if let Ok(payload) = serde_json::to_value(&event) {
+            let _ = self.session_manager.add_learning_event(
+                "skill_usage",
+                "skill_runtime",
+                &format!("Skill /{} invoked", skill_name),
+                0.75,
+                &payload,
+            );
+        }
     }
 
     /// 恢复会话
