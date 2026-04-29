@@ -461,11 +461,15 @@ collect_task() {
     local cmd
     while IFS= read -r cmd; do
       [[ -z "$cmd" ]] && continue
-      {
+      (
+        set +e
         echo "\$ $cmd"
         (cd "$task_workdir" && bash -lc "$cmd")
+        status=$?
+        echo "[exit status: $status]"
         echo
-      } >>"$cmd_log" 2>&1 || test_status="failed"
+        exit "$status"
+      ) >>"$cmd_log" 2>&1 || test_status="failed"
     done < <(yaml_list "$file" acceptance.required_commands)
   fi
 

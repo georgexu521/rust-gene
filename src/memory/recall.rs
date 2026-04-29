@@ -11,7 +11,7 @@ pub enum RecallDecision {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RecallFactors {
-    pub semantic_similarity: f32,
+    pub match_quality: f32,
     pub scope_match: f32,
     pub recency: f32,
     pub trust: f32,
@@ -23,7 +23,7 @@ pub struct RecallFactors {
 impl RecallFactors {
     pub fn clamped(self) -> Self {
         Self {
-            semantic_similarity: self.semantic_similarity.clamp(0.0, 1.0),
+            match_quality: self.match_quality.clamp(0.0, 1.0),
             scope_match: self.scope_match.clamp(0.0, 1.0),
             recency: self.recency.clamp(0.0, 1.0),
             trust: self.trust.clamp(0.0, 1.0),
@@ -44,7 +44,7 @@ pub struct RecallScore {
 
 pub fn score_recall(factors: RecallFactors, conflict: bool) -> RecallScore {
     let factors = factors.clamped();
-    let base = (factors.semantic_similarity * 0.30
+    let base = (factors.match_quality * 0.30
         + factors.scope_match * 0.20
         + factors.recency * 0.15
         + factors.trust * 0.15
@@ -67,8 +67,8 @@ pub fn score_recall(factors: RecallFactors, conflict: bool) -> RecallScore {
         RecallDecision::Omit
     };
     let reason = format!(
-        "recall_score={score:.2}, decision={decision:?}, semantic={:.2}, scope={:.2}, recency={:.2}, trust={:.2}, usefulness={:.2}, criticality={:.2}, token_cost={:.2}",
-        factors.semantic_similarity,
+        "recall_score={score:.2}, decision={decision:?}, match_quality={:.2}, scope={:.2}, recency={:.2}, trust={:.2}, usefulness={:.2}, criticality={:.2}, token_cost={:.2}",
+        factors.match_quality,
         factors.scope_match,
         factors.recency,
         factors.trust,
@@ -92,7 +92,7 @@ mod tests {
     fn conflict_caps_recall_below_inject_range() {
         let score = score_recall(
             RecallFactors {
-                semantic_similarity: 1.0,
+                match_quality: 1.0,
                 scope_match: 1.0,
                 recency: 1.0,
                 trust: 1.0,

@@ -364,10 +364,12 @@ fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: 
     let lexical = ((item.score as f32) / 40.0).clamp(0.0, 1.0);
     let token_estimate = estimate_tokens(&item.snippet).max(1) as f32;
     let density = ((item.score as f32 / token_estimate) * 4.0).clamp(0.0, 1.0);
-    let semantic_similarity = item
-        .rerank_score
-        .unwrap_or_else(|| memory_type_boost(&item.snippet).max(0.35))
-        .clamp(0.0, 1.0);
+    let match_quality = if let Some(rerank_score) = item.rerank_score {
+        (rerank_score.clamp(0.0, 1.0) * 0.60 + lexical * 0.25 + density * 0.15).clamp(0.0, 1.0)
+    } else {
+        let structural_boost = memory_type_boost(&item.snippet);
+        (lexical * 0.55 + density * 0.30 + structural_boost * 0.15).clamp(0.0, 1.0)
+    };
     let scope_match = if item.source.starts_with("USER.md") {
         0.95
     } else if item.source.starts_with("MEMORY.md") {
@@ -399,7 +401,7 @@ fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: 
 
     crate::memory::score_recall(
         crate::memory::RecallFactors {
-            semantic_similarity,
+            match_quality,
             scope_match,
             recency,
             trust,
