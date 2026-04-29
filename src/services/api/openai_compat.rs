@@ -2,7 +2,9 @@
 //!
 //! 将内部类型转换为 async-openai 类型，供 Kimi/OpenAI 等兼容 API 使用
 
-use crate::services::api::{ChatRequest, ChatResponse, Message, ToolCall, Usage};
+use crate::services::api::{
+    sanitize_assistant_content, ChatRequest, ChatResponse, Message, ToolCall, Usage,
+};
 use anyhow::{Context, Result};
 use async_openai::types::{
     ChatCompletionMessageToolCall, ChatCompletionRequestAssistantMessage,
@@ -86,7 +88,7 @@ pub fn convert_response(response: CreateChatCompletionResponse) -> Result<ChatRe
     });
 
     Ok(ChatResponse {
-        content: message.content.unwrap_or_default(),
+        content: sanitize_assistant_content(message.content.unwrap_or_default()),
         tool_calls,
         usage,
     })

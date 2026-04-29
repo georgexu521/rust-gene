@@ -2,7 +2,9 @@
 //!
 //! 支持 OpenAI 兼容格式的 API 调用，支持 extended thinking
 
-use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage};
+use crate::services::api::{
+    sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
+};
 use anyhow::{Context, Result};
 use async_openai::{
     config::{Config, OpenAIConfig},
@@ -273,7 +275,7 @@ impl LlmProvider for KimiClient {
         });
 
         Ok(ChatResponse {
-            content: message.content.unwrap_or_default(),
+            content: sanitize_assistant_content(message.content.unwrap_or_default()),
             tool_calls,
             usage,
         })

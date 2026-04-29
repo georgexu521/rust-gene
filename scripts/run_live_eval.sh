@@ -408,7 +408,7 @@ build_binary() {
 
 api_plan_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir server_log system_file response_file plan_file payload_file context_file env_base port server_pid ready
+  local id report_dir server_log system_file response_file plan_file payload_file context_file headers_file lint_file env_base port server_pid ready
   id="$(yaml_get "$file" id)"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
@@ -418,6 +418,8 @@ api_plan_task() {
   plan_file="$report_dir/minimax-plan.md"
   payload_file="$report_dir/request.json"
   context_file="$report_dir/repo-context.txt"
+  headers_file="$report_dir/api-response.headers"
+  lint_file="$report_dir/plan-lint.txt"
   env_base="$(task_env_base "$id")"
 
   if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
@@ -441,6 +443,8 @@ Do not claim that you edited files. Produce a concise engineering plan only:
 3. list likely files to inspect,
 4. list acceptance checks,
 5. note memory/skill/evolution risks if relevant.
+Any XML-like tag, pseudo tool call, or "let me inspect/run/edit" action text is
+an evaluation failure for this plan-only mode. Stop after the plan.
 If you are uncertain, say what should be inspected next instead of fabricating
 tool results.
 EOF
@@ -486,17 +490,23 @@ EOF
     exit 1
   fi
 
-  local curl_status=0
-  curl -fsS -X POST "http://127.0.0.1:$port/api/chat" \
+  local curl_status=0 http_status
+  curl -sS -D "$headers_file" -o "$response_file" \
+    -X POST "http://127.0.0.1:$port/api/chat" \
     -H "Content-Type: application/json" \
-    --data-binary "@$payload_file" >"$response_file" || curl_status=$?
+    --data-binary "@$payload_file" || curl_status=$?
   cleanup_server
   if [[ "$curl_status" -ne 0 ]]; then
     echo "API chat request failed. See $server_log and $payload_file" >&2
     exit "$curl_status"
   fi
+  http_status="$(awk 'NR==1{print $2}' "$headers_file")"
+  if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "API chat request returned HTTP $http_status. See $response_file, $headers_file, and $payload_file" >&2
+    exit 1
+  fi
 
-  python3 - "$response_file" "$plan_file" <<'PY'
+  python3 - "$response_file" "$plan_file" "$lint_file" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as fh:
     data = json.load(fh)
@@ -505,7 +515,22 @@ with open(sys.argv[2], "w", encoding="utf-8") as fh:
     fh.write(content)
     if not content.endswith("\n"):
         fh.write("\n")
+
+forbidden = ["<think", "</think>", "<thinking", "</thinking>", "TOOL_CALL", "<tool_call"]
+violations = [marker for marker in forbidden if marker.lower() in content.lower()]
+with open(sys.argv[3], "w", encoding="utf-8") as fh:
+    if violations:
+        fh.write("status=failed\n")
+        fh.write("reason=forbidden markers in API plan output\n")
+        for marker in violations:
+            fh.write(f"violation={marker}\n")
+    else:
+        fh.write("status=ok\n")
 PY
+  if grep -q '^status=failed' "$lint_file"; then
+    echo "MiniMax plan failed lint. See $lint_file and $plan_file" >&2
+    exit 1
+  fi
 
   echo "$plan_file"
 }

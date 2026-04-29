@@ -5,7 +5,9 @@
 # Live eval transient artifacts. Keep curated summaries/reports in docs, but
 # avoid committing raw API payloads, server logs, and generated patch dumps.
 docs/benchmarks/live-*/**/api-response.json
+docs/benchmarks/live-*/**/api-response.headers
 docs/benchmarks/live-*/**/api-server.log
+docs/benchmarks/live-*/**/plan-lint.txt
 docs/benchmarks/live-*/**/request.json
 docs/benchmarks/live-*/**/system-prompt.txt
 docs/benchmarks/live-*/**/repo-context.txt
