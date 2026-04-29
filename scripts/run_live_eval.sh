@@ -113,6 +113,78 @@ if isinstance(cur, list):
 PY
 }
 
+write_agent_prompt() {
+  local file="$1" out="$2"
+  python3 - "$file" "$out" <<'PY'
+import sys, yaml
+
+sample_path, out_path = sys.argv[1], sys.argv[2]
+with open(sample_path, "r", encoding="utf-8") as fh:
+    sample = yaml.safe_load(fh) or {}
+
+def list_block(title, values, empty="(none)"):
+    lines = [f"## {title}"]
+    if values:
+        lines.extend(f"- {item}" for item in values)
+    else:
+        lines.append(empty)
+    return lines
+
+acceptance = sample.get("acceptance") or {}
+diff_constraints = acceptance.get("diff_constraints") or {}
+
+lines = [
+    f"# Live coding regression task: {sample.get('title', sample.get('id', 'unknown'))}",
+    "",
+    f"- Task id: `{sample.get('id', 'unknown')}`",
+    f"- Type: `{sample.get('type', 'unknown')}`",
+    f"- Risk: `{sample.get('risk', 'unknown')}`",
+    f"- Complexity: `{sample.get('complexity', 'unknown')}`",
+    "",
+    "## User task",
+    "",
+    str(sample.get("prompt", "")).strip(),
+    "",
+]
+
+lines.extend(list_block("Allowed tools", sample.get("allowed_tools") or []))
+lines.append("")
+lines.extend(list_block("Forbidden tools", sample.get("forbidden_tools") or []))
+lines.append("")
+lines.extend(list_block("Expected behavior", sample.get("expected_behavior") or []))
+lines.append("")
+lines.extend([
+    "## Acceptance checks",
+    "",
+    "Before your final response, run every required command below. If any command fails, inspect the failure, repair the code, and rerun the relevant command. Do not claim completion while required commands are failing.",
+])
+required = acceptance.get("required_commands") or []
+if required:
+    lines.extend(f"- `{cmd}`" for cmd in required)
+else:
+    lines.append("- (none)")
+lines.append("")
+lines.extend([
+    "## Diff constraints",
+    "",
+    f"- Max files changed: `{diff_constraints.get('max_files_changed', 'unspecified')}`",
+])
+for forbidden in diff_constraints.get("forbidden_paths") or []:
+    lines.append(f"- Do not change path: `{forbidden}`")
+lines.append("")
+lines.extend([
+    "## Closeout requirements",
+    "",
+    "- Summarize files changed and why.",
+    "- List validation commands you ran and their pass/fail status.",
+    "- Mention any remaining risk or blocker explicitly.",
+])
+
+with open(out_path, "w", encoding="utf-8") as fh:
+    fh.write("\n".join(lines).rstrip() + "\n")
+PY
+}
+
 json_payload() {
   local prompt_file="$1" system_file="$2" context_file="$3"
   python3 - "$prompt_file" "$system_file" "$context_file" <<'PY'
@@ -259,7 +331,7 @@ prepare_task() {
     git worktree add --force --detach "$task_workdir" "$resolved_ref" >/dev/null
   fi
 
-  yaml_get "$file" prompt >"$prompt_file"
+  write_agent_prompt "$file" "$prompt_file"
   python3 - "$file" "$metadata" "$task_workdir" "$resolved_ref" "$env_base" <<'PY'
 import json, sys, yaml
 sample_path, metadata_path, workdir, resolved_ref, env_base = sys.argv[1:6]
