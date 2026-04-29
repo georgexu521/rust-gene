@@ -341,6 +341,16 @@ scripts/run_live_eval.sh \
 自动完成代码修改；真正的代码修改仍通过 prepared worktree 里的 interactive CLI
 或后续更完整的 runner 执行。
 
+当前基线：
+
+- 2026-04-29 已扩展到 11 个 live task，覆盖 baseline、near-neighbor variant
+  和 broader coding-agent workflow 三层。
+- 严格计划门禁运行通过：`validation-round3-strict-final`，11/11 pass。
+- 汇总报告：`docs/benchmarks/live-validation-round3-strict-final/summary.md`。
+- `api-plan` lint 已能拦截 hidden reasoning / pseudo tool call / action-like
+  plan closeout，例如 `let me run` 或 `ready to proceed with implementation`。
+- `--case all` 已能正确传播单个任务失败，不会在部分失败后仍返回成功。
+
 ### Step 4: 接入评分报告
 
 生成 `docs/benchmarks/report-live-task-YYYYMMDD.md`：

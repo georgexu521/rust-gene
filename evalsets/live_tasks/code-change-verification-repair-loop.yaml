@@ -1,0 +1,56 @@
+id: code-change-verification-repair-loop
+title: failed verification should trigger repair before closeout
+type: feature
+complexity: high
+risk: high
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  setup:
+    - cargo test -q reflection_pass -- --test-threads=1
+
+prompt: |
+  完善真实 code-change workflow 的验证-修复闭环。
+
+  要求：
+  - 如果代码修改后的 required command 失败，agent 不应直接 closeout。
+  - ReflectionPass / verification trace 要记录失败命令、失败摘要和下一步 repair action。
+  - repair 后要重新运行相关命令，并在最终 closeout 中列出验证状态。
+  - 增加一个失败验证触发 repair 的回归测试或 eval replay。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+
+expected_behavior:
+  - failed verification blocks success closeout.
+  - repair loop has bounded attempts and visible trace.
+  - final response cannot claim tests passed if tests failed.
+
+acceptance:
+  required_commands:
+    - cargo test -q reflection_pass -- --test-threads=1
+    - cargo test -q evalset -- --test-threads=1
+    - cargo test -q -- --test-threads=1
+  diff_constraints:
+    max_files_changed: 12
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - closeout 是否被失败验证阻断？
+    - repair 是否有边界，不会无限循环？
+    - trace 是否足够复盘？
+
+scoring:
+  success: 0.35
+  test_pass: 0.20
+  repair_loop_correctness: 0.25
+  trace_observability: 0.10
+  diff_discipline: 0.10

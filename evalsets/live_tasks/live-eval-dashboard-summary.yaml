@@ -1,0 +1,55 @@
+id: live-eval-dashboard-summary
+title: live eval reports should summarize pass rates and failure modes
+type: feature
+complexity: medium
+risk: medium
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  setup:
+    - bash -n scripts/run_live_eval.sh
+
+prompt: |
+  为 live eval 增加汇总报告能力，方便长期对标 Claude Code / Codex。
+
+  要求：
+  - 对一个 run-id 下的任务生成 summary.md。
+  - 汇总每个任务的 plan lint、HTTP/API 状态、required command 状态、主要失败模式。
+  - 报告要区分 plan-only 通过和真实 code-change 通过，不能混淆。
+  - 增加脚本帮助文档或测试，保证 summary 生成可重复。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+
+expected_behavior:
+  - "`scripts/run_live_eval.sh` 或配套脚本能生成 run summary。"
+  - summary 明确标注 plan_quality、tool_boundary、verification_status。
+  - 报告可作为 memory/skill/evolution 的训练信号入口。
+
+acceptance:
+  required_commands:
+    - bash -n scripts/run_live_eval.sh
+    - scripts/run_live_eval.sh --list
+    - cargo test -q -- --test-threads=1
+  diff_constraints:
+    max_files_changed: 8
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - 报告是否能一眼看出失败模式？
+    - 是否避免把 plan-only 当成真实完成？
+
+scoring:
+  success: 0.35
+  test_pass: 0.15
+  report_usefulness: 0.30
+  benchmark_alignment: 0.10
+  diff_discipline: 0.10

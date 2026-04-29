@@ -445,6 +445,9 @@ Do not claim that you edited files. Produce a concise engineering plan only:
 5. note memory/skill/evolution risks if relevant.
 Any XML-like tag, pseudo tool call, or "let me inspect/run/edit" action text is
 an evaluation failure for this plan-only mode. Stop after the plan.
+Do not include an implementation preamble, a "ready to proceed" sentence, or a
+closing sentence about running commands. The response must end immediately after
+the fifth plan section.
 If you are uncertain, say what should be inspected next instead of fabricating
 tool results.
 EOF
@@ -517,7 +520,18 @@ with open(sys.argv[2], "w", encoding="utf-8") as fh:
         fh.write("\n")
 
 forbidden = ["<think", "</think>", "<thinking", "</thinking>", "TOOL_CALL", "<tool_call"]
-violations = [marker for marker in forbidden if marker.lower() in content.lower()]
+forbidden_phrases = [
+    "let me start",
+    "let me inspect",
+    "let me run",
+    "let me edit",
+    "ready to proceed with implementation",
+]
+lower_content = content.lower()
+violations = [marker for marker in forbidden if marker.lower() in lower_content]
+violations.extend(
+    f"action_text:{phrase}" for phrase in forbidden_phrases if phrase in lower_content
+)
 with open(sys.argv[3], "w", encoding="utf-8") as fh:
     if violations:
         fh.write("status=failed\n")
@@ -624,7 +638,9 @@ run_one() {
       ;;
     api-plan)
       task_workdir="$(prepare_task "$file")"
-      plan_path="$(api_plan_task "$file" "$task_workdir")"
+      if ! plan_path="$(api_plan_task "$file" "$task_workdir")"; then
+        return 1
+      fi
       echo "MiniMax plan for $id: $plan_path"
       ;;
     collect)
@@ -637,7 +653,9 @@ run_one() {
       ;;
     full)
       task_workdir="$(prepare_task "$file")"
-      plan_path="$(api_plan_task "$file" "$task_workdir")"
+      if ! plan_path="$(api_plan_task "$file" "$task_workdir")"; then
+        return 1
+      fi
       report_path="$(collect_task "$file" "$task_workdir")"
       echo "MiniMax plan for $id: $plan_path"
       echo "Collected $id: $report_path"
@@ -664,10 +682,17 @@ main() {
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
 
   if [[ "$CASE_ID" == "all" ]]; then
-    local file
+    local file failures=0
     for file in $(task_files); do
-      run_one "$file"
+      if ! run_one "$file"; then
+        echo "Live eval task failed: $(yaml_get "$file" id)" >&2
+        failures=$((failures + 1))
+      fi
     done
+    if [[ "$failures" -gt 0 ]]; then
+      echo "Live eval completed with $failures failed task(s)." >&2
+      exit 1
+    fi
   else
     local file
     if ! file="$(find_task_file "$CASE_ID")"; then
