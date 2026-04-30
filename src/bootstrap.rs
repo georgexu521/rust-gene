@@ -96,6 +96,15 @@ fn load_mcp_servers_from_env() -> Vec<crate::engine::mcp::McpServerConfig> {
     }
 }
 
+fn env_bool(name: &str) -> Option<bool> {
+    let raw = std::env::var(name).ok()?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 /// 清理超过保留期限的快照，防止磁盘无限增长
 /// 默认保留 7 天，可通过 `PRIORITY_AGENT_SNAPSHOT_RETENTION_DAYS` 覆盖
 pub fn cleanup_old_snapshots() {
@@ -243,13 +252,15 @@ pub async fn init_components(
     let query_engine = Arc::new(query_engine_builder);
 
     // StreamingQueryEngine
+    let llm_memory_extraction = env_bool("PRIORITY_AGENT_LLM_MEMORY_EXTRACTION")
+        .unwrap_or(app_config.features.llm_memory_extraction);
     let mut streaming_engine_builder =
         StreamingQueryEngine::new(provider.clone(), tool_registry.clone(), &model)
             .with_max_iterations(engine_config.max_iterations)
             .with_task_manager(task_manager.clone())
             .with_lsp_manager(lsp_manager.clone())
             .with_worktree_manager(worktree_manager.clone())
-            .with_llm_memory_extraction(app_config.features.llm_memory_extraction);
+            .with_llm_memory_extraction(llm_memory_extraction);
     if let Some(ref mcp) = mcp_manager {
         streaming_engine_builder = streaming_engine_builder.with_mcp_manager(mcp.clone());
     }

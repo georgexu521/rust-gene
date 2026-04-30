@@ -59,6 +59,96 @@ pub(crate) fn safe_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
     &s[start..]
 }
 
+const HIGH_SIGNAL_TOOL_RESULT_TERMS: &[&str] = &[
+    "assess_memory_candidate",
+    "memorywriteoutcome",
+    "write_decision.status",
+    "memorystatus::accepted",
+    "record_memory_decision",
+    "add_learning_async",
+    "add_topic_learning_async",
+    "add_auto_learning_async",
+    "format!(\"saved:",
+    "saved: {}",
+    "memory_save",
+    "/save",
+    "acceptance",
+    "failed",
+    "panic",
+    "error:",
+];
+
+fn high_signal_tool_result_snippets(content: &str, max_bytes: usize) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() || max_bytes == 0 {
+        return String::new();
+    }
+
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if high_signal_term_match(line).is_some() {
+            let start = idx.saturating_sub(2);
+            let end = (idx + 3).min(lines.len());
+            if let Some((_, last_end)) = ranges.last_mut() {
+                if start <= *last_end {
+                    *last_end = (*last_end).max(end);
+                    continue;
+                }
+            }
+            ranges.push((start, end));
+        }
+    }
+
+    let mut out = String::new();
+    for (start, end) in ranges {
+        if !out.is_empty() {
+            out.push_str("\n...\n");
+        }
+        for line in &lines[start..end] {
+            out.push_str(&format_high_signal_context_line(line));
+            out.push('\n');
+            if out.len() >= max_bytes {
+                return safe_prefix_by_bytes(&out, max_bytes).to_string();
+            }
+        }
+    }
+    out
+}
+
+fn high_signal_term_match(line: &str) -> Option<(&'static str, usize)> {
+    let lower = line.to_lowercase();
+    HIGH_SIGNAL_TOOL_RESULT_TERMS
+        .iter()
+        .find_map(|term| lower.find(term).map(|idx| (*term, idx)))
+}
+
+fn format_high_signal_context_line(line: &str) -> String {
+    const CONTEXT_LINE_LIMIT: usize = 320;
+    const SIGNAL_LINE_LIMIT: usize = 900;
+
+    if line.len() <= CONTEXT_LINE_LIMIT {
+        return line.to_string();
+    }
+
+    if let Some((term, idx)) = high_signal_term_match(line) {
+        let start = idx.saturating_sub(SIGNAL_LINE_LIMIT / 3);
+        let end = (idx + term.len() + SIGNAL_LINE_LIMIT * 2 / 3).min(line.len());
+        let mut byte_start = start;
+        while byte_start > 0 && !line.is_char_boundary(byte_start) {
+            byte_start -= 1;
+        }
+        let mut byte_end = end;
+        while byte_end < line.len() && !line.is_char_boundary(byte_end) {
+            byte_end += 1;
+        }
+        let prefix = if byte_start > 0 { "..." } else { "" };
+        let suffix = if byte_end < line.len() { "..." } else { "" };
+        return format!("{prefix}{}{suffix}", &line[byte_start..byte_end]);
+    }
+
+    format!("{}...", safe_prefix_by_bytes(line, CONTEXT_LINE_LIMIT))
+}
+
 /// 截断工具结果，如果超过阈值则写入磁盘
 pub(crate) async fn truncate_tool_result(
     result: &mut ToolResult,
@@ -86,14 +176,21 @@ pub(crate) async fn truncate_tool_result(
             let target_half_bytes = 2048.min(original_len / 2);
             let first = safe_prefix_by_bytes(&original, target_half_bytes);
             let last = safe_suffix_by_bytes(&original, target_half_bytes);
+            let relevant = high_signal_tool_result_snippets(&original, 4096);
+            let relevant_section = if relevant.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\n\n--- Relevant snippets ---\n{}", relevant)
+            };
             result.content = format!(
-                "[Output truncated: {} bytes -> saved to {}]\n\n--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}",
+                "[Output truncated: {} bytes -> saved to {}]\n\n--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}{}",
                 original_len,
                 file_path.display(),
                 first.len(),
                 first,
                 last.len(),
-                last
+                last,
+                relevant_section
             );
         }
     }
@@ -166,6 +263,19 @@ mod tests {
         assert!(result.content.contains("Output truncated"));
         assert!(result.content.contains("--- First"));
         assert!(result.content.contains("--- Last"));
+    }
+
+    #[tokio::test]
+    async fn test_truncate_tool_result_preserves_high_signal_middle_snippet() {
+        let content = format!(
+            "{}\nlet assessment = assess_memory_candidate(content, category, &existing, true);\n{}",
+            "A".repeat(20_000),
+            "B".repeat(20_000)
+        );
+        let mut result = ToolResult::success(content);
+        truncate_tool_result(&mut result, "file_read", "call_signal").await;
+        assert!(result.content.contains("--- Relevant snippets ---"));
+        assert!(result.content.contains("assess_memory_candidate"));
     }
 
     #[tokio::test]

@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 const MAX_EDITABLE_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
+const DEFAULT_MAX_FILE_EDIT_REPLACEMENTS: usize = 20;
 
 fn is_unc_or_network_path(path: &str) -> bool {
     path.starts_with("\\\\") || path.starts_with("//")
@@ -38,6 +39,14 @@ fn check_file_size_limit(path: &Path, operation: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn max_file_edit_replacements() -> usize {
+    std::env::var("PRIORITY_AGENT_MAX_FILE_EDIT_REPLACEMENTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_MAX_FILE_EDIT_REPLACEMENTS)
 }
 
 /// 智能引号归一化（Claude Code 模式）
@@ -703,7 +712,7 @@ impl Tool for FileEditTool {
                 },
                 "expected_replacements": {
                     "type": "integer",
-                    "description": "How many times old_string should appear. Defaults to 1. Set to null or omit to replace all occurrences.",
+                    "description": "How many times old_string should appear. Defaults to 1. Use values greater than 1 only for deliberate mass replacements.",
                     "minimum": 1
                 },
                 "insert_after": {
@@ -983,6 +992,14 @@ impl FileEditTool {
 
         let count = occurrences.len();
         let expected_count = expected.unwrap_or(1);
+        let max_replacements = max_file_edit_replacements();
+
+        if expected_count > max_replacements {
+            return Err(format!(
+                "Refusing file_edit with {} replacement(s): exceeds safety limit {}. Use narrower anchors or set PRIORITY_AGENT_MAX_FILE_EDIT_REPLACEMENTS explicitly for deliberate bulk edits.",
+                expected_count, max_replacements
+            ));
+        }
 
         if count != expected_count {
             let ctx = build_match_context(&content, &occurrences, 2);
@@ -1385,6 +1402,28 @@ mod tests {
         assert!(result.success, "edit failed: {:?}", result.error);
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert_eq!(content.matches("bbb").count(), 2);
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_excessive_bulk_replacements() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_bulk_limit.txt";
+        tokio::fs::write(path, "aaa\n".repeat(51)).await.unwrap();
+
+        let params = json!({
+            "path": path,
+            "old_string": "aaa",
+            "new_string": "bbb",
+            "expected_replacements": 51
+        });
+        let context = ToolContext::new(".", "test-session-edit-bulk-limit");
+        let result = tool.execute(params, context).await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("Refusing file_edit with 51 replacement"));
 
         let _ = tokio::fs::remove_file(path).await;
     }

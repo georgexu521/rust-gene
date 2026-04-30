@@ -21,8 +21,12 @@ use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tracing::{debug, info};
 
-/// Thinking beta header 名称（Anthropic 格式）
-const THINKING_BETA_HEADER: &str = "Anthropic-Beta";
+/// Thinking beta header 名称（Anthropic 格式）。
+///
+/// `HeaderName::from_static` requires a lowercase HTTP header name. Keep this
+/// literal lowercase so provider discovery/tests cannot panic when thinking is
+/// enabled.
+const THINKING_BETA_HEADER: &str = "anthropic-beta";
 /// interleaved-thinking beta - 允许在 tool use 期间进行 thinking
 const THINKING_BETA_VALUE: &str = "interleaved-thinking=2025-05-14";
 

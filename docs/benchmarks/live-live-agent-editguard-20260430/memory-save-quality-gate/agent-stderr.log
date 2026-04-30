@@ -1,0 +1,3 @@
+2026-04-30T02:43:21.974945Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: workflow judgment response did not contain JSON
+
+[timeout after 900s]

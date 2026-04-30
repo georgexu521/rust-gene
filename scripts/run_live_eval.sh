@@ -14,28 +14,34 @@ WORKDIR=""
 REPORT_DIR="docs/benchmarks"
 SKIP_BUILD=0
 RUN_TESTS=0
+AGENT_TIMEOUT_SECS="${PRIORITY_AGENT_LIVE_EVAL_TIMEOUT_SECS:-1800}"
+AGENT_IDLE_SECS="${PRIORITY_AGENT_LIVE_EVAL_IDLE_SECS:-300}"
 
 usage() {
   cat <<'EOF'
 Usage:
   scripts/run_live_eval.sh --list
-  scripts/run_live_eval.sh --case <id|all> --mode <prepare|api-plan|collect|full> [options]
+  scripts/run_live_eval.sh --case <id|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
 
 Modes:
   list      List live task samples.
   prepare   Create a git worktree, prompt.txt, and RUNBOOK.md.
   api-plan  Prepare a worktree, start the API server, and ask MiniMax for a plan.
+  agent-run Prepare a worktree, run Priority Agent non-interactively, then collect.
   collect   Collect diff/test output from an existing worktree.
   full      prepare + api-plan + optional collect.
 
 Options:
   --case ID          Live task id, or "all".
-  --mode MODE        list, prepare, api-plan, collect, or full.
+  --mode MODE        list, prepare, api-plan, agent-run, collect, or full.
   --workdir DIR      Existing task worktree for collect mode.
   --label LABEL      Report/run label (default: live-eval).
   --run-id ID        Stable run id (default: timestamp).
-  --run-tests        Run acceptance.required_commands during collect/full.
+  --run-tests        Run acceptance.required_commands during collect/agent-run/full.
   --skip-build       Reuse target/release/priority-agent for api-plan.
+  --timeout SECS     Timeout for agent-run mode (default: 1800).
+  --idle-timeout SECS
+                     Kill agent-run if output/events/stderr stay idle (default: 300).
   -h, --help         Show this help.
 
 MiniMax:
@@ -55,6 +61,8 @@ while [[ $# -gt 0 ]]; do
     --run-id) RUN_ID="${2:-}"; shift 2 ;;
     --run-tests) RUN_TESTS=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
+    --timeout) AGENT_TIMEOUT_SECS="${2:-}"; shift 2 ;;
+    --idle-timeout) AGENT_IDLE_SECS="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -175,9 +183,13 @@ lines.append("")
 lines.extend([
     "## Closeout requirements",
     "",
+    "- This is a real code-change evaluation in an isolated worktree. Do not stop at investigation.",
+    "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, either make a focused edit or clearly state the concrete blocker.",
+    "- If the code is already fixed, prove it with the required commands and still provide a Closeout.",
     "- Summarize files changed and why.",
     "- List validation commands you ran and their pass/fail status.",
     "- Mention any remaining risk or blocker explicitly.",
+    "- The final response must include a `Closeout:` section.",
 ])
 
 with open(out_path, "w", encoding="utf-8") as fh:
@@ -314,7 +326,7 @@ resolve_ref() {
 
 prepare_task() {
   local file="$1"
-  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base
+  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base prepare_log
   id="$(yaml_get "$file" id)"
   title="$(yaml_get "$file" title)"
   base_ref="$(yaml_get "$file" repo.base_ref HEAD)"
@@ -323,12 +335,55 @@ prepare_task() {
   prompt_file="$WORK_ROOT/$RUN_ID/$id/prompt.txt"
   runbook="$WORK_ROOT/$RUN_ID/$id/RUNBOOK.md"
   metadata="$WORK_ROOT/$RUN_ID/$id/metadata.json"
+  prepare_log="$WORK_ROOT/$RUN_ID/$id/prepare-commands.log"
   env_base="$(task_env_base "$id")"
 
   mkdir -p "$(dirname "$task_workdir")"
   ensure_task_env "$id"
   if [[ ! -d "$task_workdir/.git" && ! -f "$task_workdir/.git" ]]; then
     git worktree add --force --detach "$task_workdir" "$resolved_ref" >/dev/null
+  fi
+
+  if ! python3 - "$file" "$task_workdir" "$prepare_log" <<'PY'
+import subprocess
+import sys
+import yaml
+
+sample_path, workdir, log_path = sys.argv[1:4]
+with open(sample_path, encoding="utf-8") as fh:
+    sample = yaml.safe_load(fh) or {}
+commands = (sample.get("repo") or {}).get("prepare_commands") or []
+with open(log_path, "w", encoding="utf-8") as log:
+    for command in commands:
+        if not str(command).strip():
+            continue
+        log.write(f"$ {command}\n")
+        log.flush()
+        result = subprocess.run(
+            str(command),
+            cwd=workdir,
+            shell=True,
+            executable="/bin/bash",
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        log.write(f"[exit status: {result.returncode}]\n\n")
+        log.flush()
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+PY
+  then
+    echo "Prepare command failed for $id. See $prepare_log" >&2
+    exit 1
+  fi
+
+  if [[ -n "$(git -C "$task_workdir" status --short)" ]]; then
+    git -C "$task_workdir" add -A
+    git -C "$task_workdir" \
+      -c user.name="Priority Agent Live Eval" \
+      -c user.email="priority-agent-live-eval@example.invalid" \
+      commit -m "live eval fixture setup: $id" >>"$prepare_log" 2>&1
   fi
 
   write_agent_prompt "$file" "$prompt_file"
@@ -355,6 +410,9 @@ PY
     echo "- Worktree: $task_workdir"
     echo "- Isolated env: $env_base"
     echo "- MiniMax model: ${MINIMAX_MODEL:-MiniMax-M2.7}"
+    if [[ -s "$prepare_log" ]]; then
+      echo "- Prepare log: $prepare_log"
+    fi
     echo
     echo "## Prompt"
     echo
@@ -549,9 +607,178 @@ PY
   echo "$plan_file"
 }
 
+agent_run_task() {
+  local file="$1" task_workdir="$2"
+  local id report_dir agent_stdout agent_stderr agent_output agent_events exit_file prompt_file env_base
+  id="$(yaml_get "$file" id)"
+  report_dir="$REPORT_DIR/live-$RUN_ID/$id"
+  mkdir -p "$report_dir"
+  agent_stdout="$report_dir/agent-stdout.log"
+  agent_stderr="$report_dir/agent-stderr.log"
+  agent_output="$ROOT_DIR/$report_dir/agent-output.md"
+  agent_events="$ROOT_DIR/$report_dir/agent-events.jsonl"
+  exit_file="$report_dir/agent-exit-status.txt"
+  prompt_file="$ROOT_DIR/$WORK_ROOT/$RUN_ID/$id/prompt.txt"
+  env_base="$(task_env_base "$id")"
+
+  if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
+    echo "MINIMAX_API_KEY is required for agent-run mode." >&2
+    return 1
+  fi
+
+  build_binary
+  ensure_task_env "$id"
+
+  python3 - \
+    "$AGENT_TIMEOUT_SECS" \
+    "$AGENT_IDLE_SECS" \
+    "$task_workdir" \
+    "$agent_stdout" \
+    "$agent_stderr" \
+    "$ROOT_DIR/target/release/priority-agent" \
+    "$prompt_file" \
+    "$agent_output" \
+    "$agent_events" \
+    "$env_base" \
+    "$ROOT_DIR/target/live-eval-cargo" <<'PY' >"$exit_file"
+import os
+import subprocess
+import sys
+import time
+
+timeout = int(sys.argv[1])
+idle_timeout = int(sys.argv[2])
+workdir = sys.argv[3]
+stdout_path = sys.argv[4]
+stderr_path = sys.argv[5]
+binary = sys.argv[6]
+prompt_file = sys.argv[7]
+output_file = sys.argv[8]
+events_file = sys.argv[9]
+env_base = sys.argv[10]
+cargo_target_dir = sys.argv[11]
+
+env = os.environ.copy()
+real_home = env.get("HOME", "")
+env.update({
+    "HOME": os.path.join(env_base, "home"),
+    "XDG_CONFIG_HOME": os.path.join(env_base, "xdg-config"),
+    "XDG_DATA_HOME": os.path.join(env_base, "xdg-data"),
+    "XDG_STATE_HOME": os.path.join(env_base, "xdg-state"),
+    "CARGO_HOME": os.environ.get("CARGO_HOME") or os.path.join(real_home, ".cargo"),
+    "RUSTUP_HOME": os.environ.get("RUSTUP_HOME") or os.path.join(real_home, ".rustup"),
+    "CARGO_TARGET_DIR": cargo_target_dir,
+    "PRIORITY_AGENT_A2A_TRANSCRIPT_PATH": os.path.join(env_base, "a2a-transcript.jsonl"),
+    "PRIORITY_AGENT_EVAL_EVENTS": events_file,
+    "PRIORITY_AGENT_WORKFLOW_ENABLED": os.environ.get("PRIORITY_AGENT_WORKFLOW_ENABLED", "1"),
+    "PRIORITY_AGENT_WORKFLOW_CONTRACT": os.environ.get("PRIORITY_AGENT_WORKFLOW_CONTRACT", "1"),
+    "PRIORITY_AGENT_AUTO_TEST": os.environ.get("PRIORITY_AGENT_AUTO_TEST", "check_then_test"),
+    "PRIORITY_AGENT_LLM_MEMORY_EXTRACTION": os.environ.get("PRIORITY_AGENT_LLM_MEMORY_EXTRACTION", "0"),
+    "MINIMAX_API_KEY": os.environ.get("MINIMAX_API_KEY", ""),
+    "MINIMAX_BASE_URL": os.environ.get("MINIMAX_BASE_URL", ""),
+    "MINIMAX_MODEL": os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7"),
+    "OPENAI_API_KEY": "",
+    "MOONSHOT_API_KEY": "",
+})
+
+cmd = [
+    binary,
+    "--eval-run",
+    "--prompt-file",
+    prompt_file,
+    "--output",
+    output_file,
+    "--events",
+    events_file,
+]
+
+def file_signature(path):
+    try:
+        stat = os.stat(path)
+        return (stat.st_size, int(stat.st_mtime_ns))
+    except FileNotFoundError:
+        return (0, 0)
+
+def activity_signature():
+    return (
+        file_signature(stdout_path),
+        file_signature(stderr_path),
+        file_signature(output_file),
+        file_signature(events_file),
+    )
+
+started_at = time.monotonic()
+last_activity_at = started_at
+last_signature = activity_signature()
+
+with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+    proc = subprocess.Popen(
+        cmd,
+        cwd=workdir,
+        env=env,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    status = None
+    while status is None:
+        status = proc.poll()
+        now = time.monotonic()
+        current_signature = activity_signature()
+        if current_signature != last_signature:
+            last_signature = current_signature
+            last_activity_at = now
+
+        if status is not None:
+            break
+
+        if now - started_at > timeout:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            stderr.write(f"\n[timeout after {timeout}s]\n".encode())
+            status = 124
+            break
+
+        if idle_timeout > 0 and now - last_activity_at > idle_timeout:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            stderr.write(f"\n[idle timeout after {idle_timeout}s without stdout/stderr/output/event growth]\n".encode())
+            status = 125
+            break
+
+        time.sleep(5)
+
+print(status)
+PY
+
+  local status
+  status="$(cat "$exit_file" 2>/dev/null || echo 1)"
+  if [[ "$status" != "0" ]]; then
+    echo "Agent run failed for $id with exit status $status. See $agent_stderr" >&2
+    return 1
+  fi
+  if [[ ! -f "$agent_events" ]]; then
+    echo "Agent run for $id did not produce events: $agent_events" >&2
+    return 1
+  fi
+  if [[ ! -f "$agent_output" ]]; then
+    echo "Agent run for $id did not produce output: $agent_output" >&2
+    return 1
+  fi
+}
+
 collect_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir report diff_stat diff_patch cmd_log test_status env_base
+  local id report_dir report diff_stat diff_patch cmd_log status_file quality_status_file test_status env_base
+  local required_cmd_count effective_run_tests
   id="$(yaml_get "$file" id)"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
@@ -559,15 +786,22 @@ collect_task() {
   diff_stat="$report_dir/diff-stat.txt"
   diff_patch="$report_dir/diff.patch"
   cmd_log="$report_dir/required-commands.log"
+  status_file="$report_dir/test-status.txt"
+  quality_status_file="$report_dir/agent-quality-status.txt"
   test_status="skipped"
   env_base="$(task_env_base "$id")"
+  required_cmd_count="$(yaml_list "$file" acceptance.required_commands | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+  effective_run_tests="$RUN_TESTS"
+  if [[ "$required_cmd_count" -gt 0 && ( "$MODE" == "agent-run" || "$MODE" == "full" ) ]]; then
+    effective_run_tests=1
+  fi
 
   git -C "$task_workdir" status --short >"$report_dir/git-status.txt" || true
   git -C "$task_workdir" diff --stat >"$diff_stat" || true
   git -C "$task_workdir" diff >"$diff_patch" || true
 
   : >"$cmd_log"
-  if [[ "$RUN_TESTS" -eq 1 ]]; then
+  if [[ "$effective_run_tests" -eq 1 ]]; then
     test_status="ok"
     local cmd
     while IFS= read -r cmd; do
@@ -575,7 +809,13 @@ collect_task() {
       (
         set +e
         echo "\$ $cmd"
-        (cd "$task_workdir" && bash -lc "$cmd")
+        (
+          cd "$task_workdir" && env \
+            CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" \
+            RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
+            CARGO_TARGET_DIR="$ROOT_DIR/target/live-eval-cargo" \
+            bash -lc "$cmd"
+        )
         status=$?
         echo "[exit status: $status]"
         echo
@@ -583,6 +823,7 @@ collect_task() {
       ) >>"$cmd_log" 2>&1 || test_status="failed"
     done < <(yaml_list "$file" acceptance.required_commands)
   fi
+  echo "$test_status" >"$status_file"
 
   {
     echo "# Live Eval Report: $id"
@@ -612,6 +853,161 @@ collect_task() {
     cat "$cmd_log"
     echo '```'
     echo
+    if [[ -f "$report_dir/agent-output.md" || -f "$report_dir/agent-events.jsonl" ]]; then
+      echo "## Agent Run"
+      echo
+      if [[ -f "$report_dir/agent-exit-status.txt" ]]; then
+        echo "- Exit status: \`$(cat "$report_dir/agent-exit-status.txt")\`"
+      fi
+      if [[ -f "$report_dir/agent-output.md" ]]; then
+        echo "- Output: \`$report_dir/agent-output.md\`"
+      fi
+      if [[ -f "$report_dir/agent-events.jsonl" ]]; then
+        echo "- Events: \`$report_dir/agent-events.jsonl\`"
+        echo
+        echo "Event counts:"
+        echo
+        echo '```text'
+        python3 - "$report_dir/agent-events.jsonl" <<'PY'
+import collections
+import json
+import sys
+
+counts = collections.Counter()
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        counts[json.loads(line).get("event", "unknown")] += 1
+    except Exception:
+        counts["invalid_json"] += 1
+for key, value in sorted(counts.items()):
+    print(f"{key}: {value}")
+PY
+        echo '```'
+      fi
+      echo
+      echo "Quality signals:"
+      echo
+      echo '```text'
+      python3 - "$report_dir/agent-output.md" "$report_dir/agent-events.jsonl" "$diff_patch" "$quality_status_file" "$file" "$status_file" <<'PY'
+import json
+import pathlib
+import sys
+import yaml
+
+output_path = pathlib.Path(sys.argv[1])
+events_path = pathlib.Path(sys.argv[2])
+diff_path = pathlib.Path(sys.argv[3])
+status_path = pathlib.Path(sys.argv[4])
+sample_path = pathlib.Path(sys.argv[5])
+test_status_path = pathlib.Path(sys.argv[6])
+output = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
+diff = diff_path.read_text(encoding="utf-8") if diff_path.exists() else ""
+sample = yaml.safe_load(sample_path.read_text(encoding="utf-8")) or {}
+test_status = test_status_path.read_text(encoding="utf-8").strip() if test_status_path.exists() else "missing"
+events = []
+if events_path.exists():
+    for line in events_path.read_text(encoding="utf-8").splitlines():
+        try:
+            events.append(json.loads(line))
+        except Exception:
+            pass
+trace = next((event for event in reversed(events) if event.get("event") == "trace_summary"), {})
+trace_types = trace.get("event_types") or []
+trace_events = (trace.get("trace") or {}).get("events") or []
+tool_done = sum(1 for event in events if event.get("event") == "tool_execution_complete")
+tool_errors = sum(
+    1
+    for event in events
+    if event.get("event") == "tool_execution_complete"
+    and "Result: ERROR" in str(event.get("result_preview", ""))
+)
+tool_failures = sum(1 for event in trace_events if event.get("type") == "tool_completed" and event.get("success") is False)
+verification_events = [event for event in trace_events if event.get("type") == "verification_completed"]
+stage_validation_events = [event for event in trace_events if event.get("type") == "stage_validation_completed"]
+acceptance_events = [event for event in trace_events if event.get("type") == "acceptance_review_completed"]
+closeout_events = [event for event in trace_events if event.get("type") == "final_closeout_prepared"]
+latest_closeout = closeout_events[-1] if closeout_events else {}
+latest_acceptance = acceptance_events[-1] if acceptance_events else {}
+verification_passed = bool(verification_events) and all(event.get("passed") is True for event in verification_events)
+stage_validation_passed = bool(stage_validation_events) and all(str(event.get("status", "")).lower() in {"passed", "ok", "success"} for event in stage_validation_events)
+closeout_status = str(latest_closeout.get("status", "missing")).lower()
+accepted = latest_acceptance.get("accepted")
+print(f"output_chars: {len(output)}")
+print(f"diff_chars: {len(diff)}")
+print(f"tool_executions: {tool_done}")
+print(f"tool_errors: {tool_errors}")
+print(f"tool_failures: {tool_failures}")
+print(f"has_closeout: {str('Closeout:' in output).lower()}")
+print(f"has_validation_claim: {str(any(marker in output.lower() for marker in ['validation', 'verified', 'cargo test', '测试', '验证'])).lower()}")
+print(f"trace_status: {trace.get('status', 'missing')}")
+print(f"trace_events: {len(trace_types)}")
+print(f"test_status: {test_status}")
+print(f"verification_passed: {str(verification_passed).lower()}")
+print(f"stage_validation_passed: {str(stage_validation_passed).lower()}")
+print(f"acceptance_accepted: {accepted}")
+print(f"closeout_status: {closeout_status}")
+if trace_types:
+    print("trace_event_types: " + ",".join(trace_types[-12:]))
+
+failures = []
+warnings = []
+required_commands = ((sample.get("acceptance") or {}).get("required_commands") or [])
+if not output.strip():
+    print("warning: empty_agent_output")
+    failures.append("empty_agent_output")
+if tool_done and "Closeout:" not in output:
+    print("warning: tool_run_without_closeout")
+    failures.append("tool_run_without_closeout")
+if not diff.strip():
+    print("warning: no_code_diff")
+    warnings.append("no_code_diff")
+if tool_errors:
+    print("warning: tool_errors_seen")
+    warnings.append("tool_errors_seen")
+if not trace:
+    print("warning: missing_trace_summary")
+    failures.append("missing_trace_summary")
+if required_commands and test_status != "ok":
+    print("warning: required_commands_not_passing")
+    failures.append("required_commands_not_passing")
+if closeout_status in {"failed", "not_verified", "blocked", "missing"}:
+    print("warning: closeout_not_successful")
+    failures.append("closeout_not_successful")
+if accepted is False:
+    print("warning: acceptance_review_rejected")
+    failures.append("acceptance_review_rejected")
+if stage_validation_events and not stage_validation_passed:
+    print("warning: stage_validation_failed")
+    failures.append("stage_validation_failed")
+if verification_events and not verification_passed:
+    print("warning: verification_failed")
+    failures.append("verification_failed")
+
+base_ref = str((sample.get("repo") or {}).get("base_ref", "HEAD")).strip()
+task_type = str(sample.get("type", "")).strip()
+diff_required = task_type in {"bug_fix", "feature", "refactor"} and base_ref not in {"", "HEAD", "head"}
+if diff_required and not diff.strip():
+    failures.append("expected_code_diff_missing")
+
+status = "failed" if failures else "ok"
+with status_path.open("w", encoding="utf-8") as fh:
+    fh.write(f"status={status}\n")
+    for item in failures:
+        fh.write(f"failure={item}\n")
+    for item in warnings:
+        fh.write(f"warning={item}\n")
+PY
+      echo '```'
+      if [[ -f "$report_dir/agent-stderr.log" && -s "$report_dir/agent-stderr.log" ]]; then
+        echo
+        echo "Agent stderr tail:"
+        echo
+        echo '```text'
+        tail -80 "$report_dir/agent-stderr.log"
+        echo '```'
+      fi
+      echo
+    fi
     echo "## Human Review"
     echo
     echo "- accepted: TODO"
@@ -642,6 +1038,27 @@ run_one() {
         return 1
       fi
       echo "MiniMax plan for $id: $plan_path"
+      ;;
+    agent-run)
+      task_workdir="$(prepare_task "$file")"
+      local agent_status=0 test_status_file quality_status_file
+      agent_run_task "$file" "$task_workdir" || agent_status=$?
+      report_path="$(collect_task "$file" "$task_workdir")"
+      echo "Agent run for $id: $REPORT_DIR/live-$RUN_ID/$id/agent-output.md"
+      echo "Collected $id: $report_path"
+      test_status_file="$REPORT_DIR/live-$RUN_ID/$id/test-status.txt"
+      quality_status_file="$REPORT_DIR/live-$RUN_ID/$id/agent-quality-status.txt"
+      if [[ "$agent_status" -ne 0 ]]; then
+        return "$agent_status"
+      fi
+      if [[ -f "$quality_status_file" ]] && grep -q '^status=failed' "$quality_status_file"; then
+        echo "Agent quality gates failed for $id. See $quality_status_file and $report_path" >&2
+        return 1
+      fi
+      if [[ -f "$test_status_file" && "$(cat "$test_status_file")" == "failed" ]]; then
+        echo "Required commands failed for $id. See $REPORT_DIR/live-$RUN_ID/$id/required-commands.log" >&2
+        return 1
+      fi
       ;;
     collect)
       if [[ -z "$WORKDIR" ]]; then

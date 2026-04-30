@@ -54,6 +54,7 @@ enum StartupMode {
     Api,
     Cli,
     Tui,
+    EvalRun,
 }
 
 fn detect_startup_mode(args: &[String]) -> StartupMode {
@@ -63,6 +64,7 @@ fn detect_startup_mode(args: &[String]) -> StartupMode {
         Some("--api") => StartupMode::Api,
         Some("--cli") => StartupMode::Cli,
         Some("--tui") => StartupMode::Tui,
+        Some("--eval-run") => StartupMode::EvalRun,
         _ => StartupMode::Cli,
     }
 }
@@ -83,6 +85,8 @@ fn print_help() {
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
     println!("  --cli    Start Priority Agent (default)");
     println!("  --tui    Start the full-screen terminal interface");
+    println!("  --eval-run --prompt-file <PATH> [--output <PATH>] [--events <PATH>]");
+    println!("           Run one non-interactive evaluation task");
     println!("  (none)   Default: start Priority Agent");
     println!();
     println!("Examples:");
@@ -90,6 +94,250 @@ fn print_help() {
     println!("  {bin} --api --port 8787 # HTTP API server");
     println!("  {bin} --cli            # Same as default");
     println!("  {bin} --tui            # Full-screen interface");
+}
+
+fn arg_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == flag)
+        .and_then(|idx| args.get(idx + 1))
+        .cloned()
+}
+
+fn write_eval_event(
+    writer: &mut Option<std::io::BufWriter<std::fs::File>>,
+    event: serde_json::Value,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    if let Some(writer) = writer.as_mut() {
+        serde_json::to_writer(&mut *writer, &event)?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+    }
+    Ok(())
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+async fn answer_pending_approval(
+    engine: &std::sync::Arc<crate::engine::streaming::StreamingQueryEngine>,
+    approved: bool,
+) -> bool {
+    let Some(channel) = engine.approval_channel() else {
+        return false;
+    };
+
+    for _ in 0..20 {
+        if let Some((_request, tx)) = channel.take_pending().await {
+            let _ = tx.send(approved);
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    false
+}
+
+async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
+    use crate::engine::streaming::StreamEvent;
+    use futures::StreamExt;
+    use serde_json::json;
+
+    let prompt_file = arg_value(args, "--prompt-file")
+        .ok_or_else(|| anyhow::anyhow!("--prompt-file is required for --eval-run"))?;
+    let output_file = arg_value(args, "--output");
+    let events_file =
+        arg_value(args, "--events").or_else(|| std::env::var("PRIORITY_AGENT_EVAL_EVENTS").ok());
+
+    let prompt = std::fs::read_to_string(&prompt_file)
+        .map_err(|e| anyhow::anyhow!("failed to read prompt file '{}': {}", prompt_file, e))?;
+
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let (provider, model) = bootstrap::init_provider()?;
+    let tool_registry = bootstrap::init_tool_registry(&working_dir);
+    let components =
+        bootstrap::init_components(provider, model, tool_registry, &working_dir).await?;
+
+    let mut event_writer = if let Some(path) = events_file.as_ref() {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        Some(std::io::BufWriter::new(std::fs::File::create(path)?))
+    } else {
+        None
+    };
+
+    write_eval_event(
+        &mut event_writer,
+        json!({
+            "event": "eval_started",
+            "prompt_file": prompt_file,
+            "cwd": working_dir,
+            "model": components.model.clone(),
+        }),
+    )?;
+
+    let mut stream = components.streaming_engine.query_stream(prompt).await;
+    let mut final_response = String::new();
+    let mut error: Option<String> = None;
+
+    while let Some(event) = stream.next().await {
+        match event {
+            StreamEvent::Start => write_eval_event(&mut event_writer, json!({"event": "start"}))?,
+            StreamEvent::TextChunk(text) => {
+                final_response.push_str(&text);
+                write_eval_event(
+                    &mut event_writer,
+                    json!({"event": "text_chunk", "chars": text.chars().count()}),
+                )?;
+            }
+            StreamEvent::ToolCallStart { id, name } => write_eval_event(
+                &mut event_writer,
+                json!({"event": "tool_call_start", "id": id, "name": name}),
+            )?,
+            StreamEvent::ToolCallArgs { id, args_delta } => write_eval_event(
+                &mut event_writer,
+                json!({"event": "tool_call_args", "id": id, "args_delta": args_delta}),
+            )?,
+            StreamEvent::ToolCallComplete { id } => write_eval_event(
+                &mut event_writer,
+                json!({"event": "tool_call_complete", "id": id}),
+            )?,
+            StreamEvent::ToolExecutionStart { id, name } => write_eval_event(
+                &mut event_writer,
+                json!({"event": "tool_execution_start", "id": id, "name": name}),
+            )?,
+            StreamEvent::ToolExecutionProgress { id, progress } => write_eval_event(
+                &mut event_writer,
+                json!({"event": "tool_execution_progress", "id": id, "progress": progress}),
+            )?,
+            StreamEvent::ToolExecutionComplete { id, result } => write_eval_event(
+                &mut event_writer,
+                json!({
+                    "event": "tool_execution_complete",
+                    "id": id,
+                    "result_chars": result.chars().count(),
+                    "result_preview": truncate_chars(&result, 2000),
+                }),
+            )?,
+            StreamEvent::ThinkingStart => {
+                write_eval_event(&mut event_writer, json!({"event": "thinking_start"}))?
+            }
+            StreamEvent::ThinkingChunk(text) => write_eval_event(
+                &mut event_writer,
+                json!({"event": "thinking_chunk", "chars": text.chars().count()}),
+            )?,
+            StreamEvent::ThinkingComplete => {
+                write_eval_event(&mut event_writer, json!({"event": "thinking_complete"}))?
+            }
+            StreamEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+                reasoning_tokens,
+                cached_tokens,
+            } => write_eval_event(
+                &mut event_writer,
+                json!({
+                    "event": "usage",
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "reasoning_tokens": reasoning_tokens,
+                    "cached_tokens": cached_tokens,
+                }),
+            )?,
+            StreamEvent::Complete => {
+                write_eval_event(&mut event_writer, json!({"event": "complete"}))?;
+                break;
+            }
+            StreamEvent::OutputTruncated => {
+                write_eval_event(&mut event_writer, json!({"event": "output_truncated"}))?
+            }
+            StreamEvent::Error(message) => {
+                write_eval_event(
+                    &mut event_writer,
+                    json!({"event": "error", "message": message}),
+                )?;
+                error = Some(message);
+                break;
+            }
+            StreamEvent::PermissionRequest {
+                id,
+                tool_name,
+                arguments,
+                prompt,
+            } => {
+                let answered = answer_pending_approval(&components.streaming_engine, false).await;
+                write_eval_event(
+                    &mut event_writer,
+                    json!({
+                        "event": "permission_request",
+                        "id": id,
+                        "tool_name": tool_name,
+                        "arguments": arguments,
+                        "prompt": prompt,
+                        "auto_response": "deny",
+                        "answered": answered,
+                    }),
+                )?;
+            }
+        }
+    }
+
+    let mut latest_trace = components.streaming_engine.trace_store().latest();
+    for _ in 0..20 {
+        if latest_trace.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        latest_trace = components.streaming_engine.trace_store().latest();
+    }
+
+    if let Some(trace) = latest_trace {
+        let trace_id = trace.trace_id.clone();
+        let status = format!("{:?}", trace.status);
+        let turn_index = trace.turn_index;
+        let duration_ms = trace.duration_ms();
+        let event_types = trace
+            .events
+            .iter()
+            .map(|event| event.label().to_string())
+            .collect::<Vec<_>>();
+        write_eval_event(
+            &mut event_writer,
+            json!({
+                "event": "trace_summary",
+                "trace_id": trace_id,
+                "status": status,
+                "turn_index": turn_index,
+                "duration_ms": duration_ms,
+                "event_count": trace.events.len(),
+                "event_types": event_types,
+                "trace": trace,
+            }),
+        )?;
+    }
+
+    if let Some(path) = output_file {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, &final_response)?;
+    } else {
+        print!("{final_response}");
+    }
+
+    if let Some(message) = error {
+        anyhow::bail!(message);
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -101,7 +349,7 @@ async fn main() {
     // 初始化日志（交互模式默认降噪，仍可通过 RUST_LOG 覆盖）
     let default_level = match startup_mode {
         StartupMode::Api => "info",
-        StartupMode::Help | StartupMode::Cli | StartupMode::Tui => "warn",
+        StartupMode::Help | StartupMode::Cli | StartupMode::Tui | StartupMode::EvalRun => "warn",
     };
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -248,6 +496,13 @@ async fn main() {
                 }
             }
         }
+        StartupMode::EvalRun => {
+            if let Err(e) = run_eval_task(&args).await {
+                error!("Evaluation run failed: {}", e);
+                eprintln!("Evaluation run failed: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     info!("Priority Agent exiting.");
@@ -286,6 +541,10 @@ mod tests {
         assert_eq!(
             detect_startup_mode(&["priority-agent".into(), "--tui".into()]),
             StartupMode::Tui
+        );
+        assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "--eval-run".into()]),
+            StartupMode::EvalRun
         );
         assert_eq!(
             detect_startup_mode(&["priority-agent".into()]),

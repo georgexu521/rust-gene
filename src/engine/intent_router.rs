@@ -94,9 +94,16 @@ impl IntentRouter {
             return self.direct("empty prompt", 0.3);
         }
 
-        if contains_any(&lower, &["/memory", "remember", "memory", "recall"])
-            || contains_any(zh, &["记忆", "记住", "回忆"])
-        {
+        let has_memory_signal = contains_any(&lower, &["/memory", "remember", "memory", "recall"])
+            || contains_any(zh, &["记忆", "记住", "回忆"]);
+        let has_code_change_signal = is_code_change_request(&lower, zh);
+        let has_debug_signal = is_debug_request(&lower, zh);
+
+        // Memory-related coding tasks, such as fixing memory_save or memory
+        // scoring, must not be routed as direct memory lookup/save turns. Treat
+        // the domain word "memory" as the subject of the code-change request
+        // when there are explicit bug-fix or edit signals.
+        if has_memory_signal && !has_code_change_signal {
             return IntentRoute {
                 intent: IntentKind::Memory,
                 confidence: 0.82,
@@ -105,7 +112,20 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::Medium,
                 risk: RiskLevel::Low,
                 recommended_tools: vec!["memory_load".into(), "memory_save".into()],
-                reason: "prompt explicitly references memory".into(),
+                reason: "prompt explicitly references memory without code-change intent".into(),
+            };
+        }
+
+        if has_debug_signal {
+            return IntentRoute {
+                intent: IntentKind::Debugging,
+                confidence: 0.8,
+                workflow: WorkflowKind::BugFix,
+                retrieval: RetrievalPolicy::Project,
+                reasoning: ReasoningPolicy::High,
+                risk: RiskLevel::Medium,
+                recommended_tools: vec!["grep".into(), "file_read".into(), "bash".into()],
+                reason: "prompt describes a failure or debugging task".into(),
             };
         }
 
@@ -179,23 +199,6 @@ impl IntentRouter {
                 risk: RiskLevel::Medium,
                 recommended_tools: vec!["project_list".into(), "grep".into(), "plan".into()],
                 reason: "prompt asks for planning or architecture work".into(),
-            };
-        }
-
-        if contains_any(
-            &lower,
-            &["fix", "bug", "error", "panic", "fail", "failing", "debug"],
-        ) || contains_any(zh, &["报错", "错误", "修复", "失败", "调试", "bug"])
-        {
-            return IntentRoute {
-                intent: IntentKind::Debugging,
-                confidence: 0.8,
-                workflow: WorkflowKind::BugFix,
-                retrieval: RetrievalPolicy::Project,
-                reasoning: ReasoningPolicy::High,
-                risk: RiskLevel::Medium,
-                recommended_tools: vec!["grep".into(), "file_read".into(), "bash".into()],
-                reason: "prompt describes a failure or debugging task".into(),
             };
         }
 
@@ -389,6 +392,46 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
+fn is_debug_request(lower: &str, zh: &str) -> bool {
+    contains_any(
+        lower,
+        &[
+            "live coding regression task",
+            "type: `bug_fix`",
+            "type: bug_fix",
+            "bug_fix",
+            "fix",
+            "bug",
+            "error",
+            "panic",
+            "fail",
+            "failing",
+            "debug",
+        ],
+    ) || contains_any(zh, &["报错", "错误", "修复", "失败", "调试", "bug"])
+}
+
+fn is_code_change_request(lower: &str, zh: &str) -> bool {
+    is_debug_request(lower, zh)
+        || contains_any(
+            lower,
+            &[
+                "implement",
+                "add ",
+                "change",
+                "update",
+                "edit",
+                "build",
+                "optimize",
+                "refactor",
+            ],
+        )
+        || contains_any(
+            zh,
+            &["实现", "新增", "修改", "优化", "完善", "开发", "重构"],
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +456,14 @@ mod tests {
         let route = IntentRouter::new().route("记住我喜欢 compact 状态栏");
         assert_eq!(route.intent, IntentKind::Memory);
         assert_eq!(route.retrieval, RetrievalPolicy::Memory);
+    }
+
+    #[test]
+    fn routes_memory_domain_bugfix_as_code_workflow() {
+        let route = IntentRouter::new().route("修复 memory_save 绕过记忆质量门控的问题，新增测试");
+        assert_eq!(route.intent, IntentKind::Debugging);
+        assert_eq!(route.workflow, WorkflowKind::BugFix);
+        assert_eq!(route.retrieval, RetrievalPolicy::Project);
     }
 
     #[test]

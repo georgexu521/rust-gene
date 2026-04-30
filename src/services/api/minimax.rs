@@ -129,14 +129,17 @@ impl LlmProvider for MiniMaxClient {
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatCompletionResponseStream> {
         use super::openai_compat::convert_request;
-        use async_openai::types::ChatCompletionStreamOptions;
         let mut request = request;
         request.messages = Self::normalize_messages_for_minimax(request.messages);
         let mut req = convert_request(request, &self.model);
         req.stream = Some(true);
-        req.stream_options = Some(ChatCompletionStreamOptions {
-            include_usage: true,
-        });
+        // MiniMax's OpenAI-compatible streaming usage chunks can omit
+        // prompt_tokens/completion_tokens and include MiniMax-specific fields
+        // such as total_characters. async-openai treats that as a hard
+        // deserialization error, interrupting otherwise valid tool streams.
+        // Do not request stream usage for MiniMax; non-streaming fallback still
+        // records usage when needed.
+        req.stream_options = None;
         match self.client.chat().create_stream(req.clone()).await {
             Ok(stream) => Ok(stream),
             Err(e) => {

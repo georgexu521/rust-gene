@@ -3992,6 +3992,9 @@ mod tests {
             .push(crate::engine::trace::TraceEvent::VerificationCompleted {
                 changed_files: 2,
                 passed: true,
+                check_passed: true,
+                tests_passed: true,
+                review_passed: true,
             });
         trace.events.push(
             crate::engine::trace::TraceEvent::AcceptanceReviewCompleted {
@@ -4020,6 +4023,9 @@ mod tests {
             .push(crate::engine::trace::TraceEvent::VerificationCompleted {
                 changed_files: 2,
                 passed: true,
+                check_passed: true,
+                tests_passed: true,
+                review_passed: true,
             });
         trace.events.push(
             crate::engine::trace::TraceEvent::AcceptanceReviewCompleted {

@@ -109,7 +109,7 @@ impl RiskSensitiveWorkflowPolicy {
                 require_stage_validation: true,
                 require_final_closeout: true,
                 reflection_blocks: true,
-                max_repair_attempts: 1,
+                max_repair_attempts: 3,
                 expose_weight_details: true,
                 reason: "high-risk programming workflow requires strict validation".to_string(),
             },
@@ -315,7 +315,7 @@ impl CodeChangeWorkflowRunner {
             return None;
         }
 
-        let status = self.closeout_status();
+        let status = self.closeout_status(bundle);
         let mut validation = self
             .step_states
             .iter()
@@ -323,7 +323,13 @@ impl CodeChangeWorkflowRunner {
             .map(|step| format!("{}: {}", step.description, step.status.label()))
             .collect::<Vec<_>>();
         if validation.is_empty() {
-            validation.push("No file-change validation was required or recorded".to_string());
+            if self.policy.require_stage_validation {
+                validation.push(
+                    "No required file-change validation was recorded for this workflow".to_string(),
+                );
+            } else {
+                validation.push("No file-change validation was required or recorded".to_string());
+            }
         }
 
         let mut acceptance = Vec::new();
@@ -345,9 +351,29 @@ impl CodeChangeWorkflowRunner {
         }
 
         let mut residual = self.residual_risks.clone();
+        if is_programming_workflow(bundle.route.workflow) && self.changed_files.is_empty() {
+            push_unique(
+                &mut residual,
+                "No changed files were recorded for this code-change workflow".to_string(),
+            );
+        }
+        if self.policy.require_stage_validation && self.validations.is_empty() {
+            push_unique(
+                &mut residual,
+                "Required validation was not run or not recorded".to_string(),
+            );
+        }
+        if !bundle.acceptance_checks.is_empty() && self.acceptance_reviews.is_empty() {
+            push_unique(
+                &mut residual,
+                "Acceptance criteria were generated but not reviewed".to_string(),
+            );
+        }
         if matches!(
             status,
-            StageValidationStatus::Failed | StageValidationStatus::Partial
+            StageValidationStatus::Failed
+                | StageValidationStatus::Partial
+                | StageValidationStatus::NotVerified
         ) {
             push_unique(
                 &mut residual,
@@ -367,27 +393,70 @@ impl CodeChangeWorkflowRunner {
         })
     }
 
-    fn closeout_status(&self) -> StageValidationStatus {
-        if self.validations.iter().any(|record| {
-            matches!(
-                record.status,
-                StageValidationStatus::Failed | StageValidationStatus::NotVerified
-            )
-        }) || self
+    fn closeout_status(&self, bundle: &TaskContextBundle) -> StageValidationStatus {
+        let has_failed_validation = self
+            .validations
+            .iter()
+            .any(|record| matches!(record.status, StageValidationStatus::Failed));
+        let has_unverified_validation = self
+            .validations
+            .iter()
+            .any(|record| matches!(record.status, StageValidationStatus::NotVerified));
+        let has_partial_validation = self
+            .validations
+            .iter()
+            .any(|record| matches!(record.status, StageValidationStatus::Partial));
+        let has_rejected_acceptance = self
             .acceptance_reviews
             .iter()
-            .any(|review| !review.accepted)
+            .any(|review| !review.accepted);
+        let has_unresolved_acceptance = self
+            .acceptance_reviews
+            .iter()
+            .any(|review| review.unresolved_count() > 0);
+
+        if has_failed_validation || has_rejected_acceptance {
+            return StageValidationStatus::Failed;
+        }
+
+        if has_unverified_validation {
+            return StageValidationStatus::NotVerified;
+        }
+
+        if self.policy.require_stage_validation && self.validations.is_empty() {
+            return StageValidationStatus::NotVerified;
+        }
+
+        if !bundle.acceptance_checks.is_empty() && self.acceptance_reviews.is_empty() {
+            return StageValidationStatus::NotVerified;
+        }
+
+        if is_programming_workflow(bundle.route.workflow)
+            && self.changed_files.is_empty()
+            && !self.has_clean_accepted_review()
         {
-            StageValidationStatus::Failed
-        } else if self
-            .acceptance_reviews
-            .iter()
-            .any(|review| review.unresolved_count() > 0)
+            return StageValidationStatus::NotVerified;
+        }
+
+        if has_partial_validation
+            || has_unresolved_acceptance
+            || self.step_states.iter().any(|step| {
+                matches!(
+                    step.status,
+                    PlanStepRuntimeStatus::Pending | PlanStepRuntimeStatus::Active
+                )
+            })
         {
             StageValidationStatus::Partial
         } else {
             StageValidationStatus::Passed
         }
+    }
+
+    fn has_clean_accepted_review(&self) -> bool {
+        self.acceptance_reviews
+            .iter()
+            .any(|review| review.accepted && review.unresolved_count() == 0)
     }
 
     pub fn step_states(&self) -> &[PlanStepRuntimeState] {
@@ -504,6 +573,20 @@ mod tests {
     use crate::engine::intent_router::{
         IntentKind, ReasoningPolicy, RetrievalPolicy, WorkflowKind,
     };
+    use crate::engine::workflow_contract::{AcceptanceConfidence, AcceptanceNextAction};
+
+    fn code_change_route(risk: RiskLevel) -> IntentRoute {
+        IntentRoute {
+            intent: IntentKind::CodeChange,
+            confidence: 0.90,
+            workflow: WorkflowKind::CodeChange,
+            retrieval: RetrievalPolicy::Project,
+            reasoning: ReasoningPolicy::Medium,
+            risk,
+            recommended_tools: Vec::new(),
+            reason: "test route".into(),
+        }
+    }
 
     #[test]
     fn policy_is_strict_for_high_risk_code() {
@@ -522,21 +605,12 @@ mod tests {
         assert_eq!(policy.depth, WorkflowDepth::Strict);
         assert!(policy.require_stage_validation);
         assert!(policy.reflection_blocks);
-        assert_eq!(policy.max_repair_attempts, 1);
+        assert_eq!(policy.max_repair_attempts, 3);
     }
 
     #[test]
     fn runner_builds_failed_closeout_from_stage_validation() {
-        let route = IntentRoute {
-            intent: IntentKind::CodeChange,
-            confidence: 0.90,
-            workflow: WorkflowKind::CodeChange,
-            retrieval: RetrievalPolicy::Project,
-            reasoning: ReasoningPolicy::Medium,
-            risk: RiskLevel::Medium,
-            recommended_tools: Vec::new(),
-            reason: "test route".into(),
-        };
+        let route = code_change_route(RiskLevel::Medium);
         let bundle = TaskContextBundle::new("修改 CLI 状态栏", ".", route, None);
         let mut runner = CodeChangeWorkflowRunner::new(&bundle);
         runner.record_stage_validation(
@@ -558,5 +632,64 @@ mod tests {
             .step_states()
             .iter()
             .any(|step| step.status == PlanStepRuntimeStatus::Failed));
+    }
+
+    #[test]
+    fn closeout_is_not_verified_without_required_validation_or_acceptance() {
+        let route = code_change_route(RiskLevel::Medium);
+        let mut bundle = TaskContextBundle::new("修复 memory_save 质量门控", ".", route, None);
+        bundle.add_acceptance_check("memory_save respects quality gates");
+        let runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+
+        assert_eq!(closeout.status, StageValidationStatus::NotVerified);
+        assert!(closeout
+            .validation
+            .iter()
+            .any(|item| item.contains("No required file-change validation")));
+        assert!(closeout
+            .acceptance
+            .iter()
+            .any(|item| item.contains("pending: memory_save respects quality gates")));
+        assert!(closeout
+            .residual_risks
+            .iter()
+            .any(|item| item.contains("No changed files")));
+    }
+
+    #[test]
+    fn closeout_passes_only_with_change_validation_and_clean_acceptance() {
+        let route = code_change_route(RiskLevel::Medium);
+        let mut bundle = TaskContextBundle::new("修复 memory_save 质量门控", ".", route, None);
+        bundle.add_acceptance_check("memory_save respects quality gates");
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        runner.record_stage_validation(
+            &bundle,
+            &[PathBuf::from("src/tools/memory_tool/mod.rs")],
+            true,
+            &["cargo test -q memory -- --test-threads=1 passed".to_string()],
+        );
+        runner.record_acceptance_review(AcceptanceReview {
+            accepted: true,
+            confidence: AcceptanceConfidence::High,
+            criteria: Vec::new(),
+            unresolved_items: Vec::new(),
+            residual_risks: Vec::new(),
+            next_action: AcceptanceNextAction::Finish,
+        });
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert_eq!(
+            closeout.changed_files,
+            vec!["src/tools/memory_tool/mod.rs".to_string()]
+        );
+        assert!(closeout
+            .residual_risks
+            .iter()
+            .any(|item| item == "none recorded"));
     }
 }

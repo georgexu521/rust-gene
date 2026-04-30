@@ -119,15 +119,40 @@ const LOW_RISK_KEYWORDS: &[&str] = &[
     "修改",
 ];
 
+const CODE_WORKFLOW_KEYWORDS: &[&str] = &[
+    "bug_fix",
+    "regression",
+    "回归",
+    "测试失败",
+    "test failed",
+    "cargo test",
+    "required_commands",
+    "diff_constraints",
+    "acceptance",
+    "验收",
+    "绕过",
+    "质量门控",
+    "quality gate",
+    "src/",
+];
+
 fn heuristic_scan(input: &str) -> Option<GateDecision> {
     let lower = input.to_lowercase();
     let has_high = HIGH_RISK_KEYWORDS.iter().any(|w| lower.contains(w));
     let has_low = LOW_RISK_KEYWORDS.iter().any(|w| lower.contains(w));
+    let has_code_workflow = CODE_WORKFLOW_KEYWORDS.iter().any(|w| lower.contains(w));
 
     if has_high {
         return Some(GateDecision::Workflow {
             reason: "Heuristic: high-risk keywords detected".into(),
             confidence: 0.8,
+        });
+    }
+
+    if has_low && has_code_workflow {
+        return Some(GateDecision::Workflow {
+            reason: "Heuristic: code regression/test signals require workflow".into(),
+            confidence: 0.72,
         });
     }
 
@@ -356,6 +381,21 @@ mod tests {
         let d = gate.decide("修复一个 typo");
         assert!(matches!(d, GateDecision::Direct { .. }));
         assert!(d.reason().contains("low-risk"));
+    }
+
+    #[test]
+    fn test_code_regression_bugfix_routes_to_workflow() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
+        let gate = Gate::new();
+        let d =
+            gate.decide("修复 memory_save 绕过记忆质量门控的问题，必须通过 cargo test -q memory");
+        assert!(
+            matches!(d, GateDecision::Workflow { .. }),
+            "expected workflow for code regression, got {:?}",
+            d
+        );
+        assert!(d.reason().contains("code regression"));
     }
 
     #[test]

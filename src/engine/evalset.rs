@@ -592,6 +592,9 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
         trace.events.push(TraceEvent::VerificationCompleted {
             changed_files: scenario.replay.changed_files.len(),
             passed,
+            check_passed: passed,
+            tests_passed: passed,
+            review_passed: passed,
         });
         let changed_files = scenario
             .replay

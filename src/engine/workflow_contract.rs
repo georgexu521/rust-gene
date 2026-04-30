@@ -20,9 +20,13 @@ pub enum TaskComplexity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PriorityLabel {
+    #[serde(alias = "P0")]
     P0,
+    #[serde(alias = "P1")]
     P1,
+    #[serde(alias = "P2")]
     P2,
+    #[serde(alias = "P3", alias = "p4", alias = "P4")]
     P3,
 }
 
@@ -1144,7 +1148,9 @@ impl<'a> WorkflowContractAnalyzer<'a> {
 pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkflowJudgment> {
     let json = extract_json_object(content)
         .ok_or_else(|| anyhow::anyhow!("workflow judgment response did not contain JSON"))?;
-    let mut judgment: ProgrammingWorkflowJudgment = serde_json::from_str(json)?;
+    let mut value: serde_json::Value = serde_json::from_str(json)?;
+    sanitize_workflow_judgment_value(&mut value);
+    let mut judgment: ProgrammingWorkflowJudgment = serde_json::from_value(value)?;
     normalize_judgment(&mut judgment);
     Ok(judgment)
 }
@@ -1196,6 +1202,69 @@ fn normalize_judgment(judgment: &mut ProgrammingWorkflowJudgment) {
                 evidence: None,
             })
             .collect();
+    }
+}
+
+fn sanitize_workflow_judgment_value(value: &mut serde_json::Value) {
+    let Some(triggers) = value
+        .get_mut("guided_reasoning_triggers")
+        .and_then(|value| value.as_array_mut())
+    else {
+        return;
+    };
+
+    let mut normalized = Vec::new();
+    for trigger in triggers.iter() {
+        let raw = trigger.as_str().unwrap_or_default();
+        let mapped = normalize_guided_reasoning_trigger(raw);
+        if !normalized.iter().any(|existing| existing == mapped) {
+            normalized.push(mapped.to_string());
+        }
+    }
+
+    *triggers = normalized
+        .into_iter()
+        .map(serde_json::Value::String)
+        .collect();
+}
+
+fn normalize_guided_reasoning_trigger(raw: &str) -> &'static str {
+    let normalized = raw.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+
+    match normalized.as_str() {
+        "ambiguous_requirement" => "ambiguous_requirement",
+        "competing_approaches" => "competing_approaches",
+        "high_risk_area" => "high_risk_area",
+        "unfamiliar_code_path" => "unfamiliar_code_path",
+        "tool_failure" => "tool_failure",
+        "test_failure" => "test_failure",
+        "unexpected_diff" => "unexpected_diff",
+        "repeated_repair" => "repeated_repair",
+        "goal_drift" => "goal_drift",
+        "context_conflict" => "context_conflict",
+        "broad_product_request" => "broad_product_request",
+        _ => {
+            if normalized.contains("test") {
+                "test_failure"
+            } else if normalized.contains("tool") {
+                "tool_failure"
+            } else if normalized.contains("risk") || normalized.contains("danger") {
+                "high_risk_area"
+            } else if normalized.contains("approach") || normalized.contains("alternative") {
+                "competing_approaches"
+            } else if normalized.contains("ambiguous")
+                || normalized.contains("unclear")
+                || normalized.contains("requirement")
+            {
+                "ambiguous_requirement"
+            } else if normalized.contains("drift") {
+                "goal_drift"
+            } else if normalized.contains("context") || normalized.contains("conflict") {
+                "context_conflict"
+            } else {
+                "unfamiliar_code_path"
+            }
+        }
     }
 }
 
@@ -1557,6 +1626,59 @@ mod tests {
         );
 
         assert_eq!(contract.incomplete_count(), 1);
+    }
+
+    #[test]
+    fn parse_workflow_judgment_maps_freeform_guided_triggers() {
+        let content = r#"{
+  "task_type": "bug_fix",
+  "complexity": "medium",
+  "risk": "medium",
+  "requirement_complete_enough": true,
+  "needs_user_questions": false,
+  "question_reason": null,
+  "questions": [],
+  "assumptions": [],
+  "guided_reasoning_required": true,
+  "guided_reasoning_triggers": [
+    "Need to understand how memory_save currently bypasses gates",
+    "test_failure"
+  ],
+  "plan": [
+    {
+      "id": "inspect",
+      "description": "Inspect memory_save",
+      "priority": "p0",
+      "importance_score": 0.8,
+      "weight_share": 1.0,
+      "reason": "Entry point blocks the fix",
+      "acceptance_criteria": ["tests pass"]
+    }
+  ],
+  "acceptance": {
+    "original_user_goal": "Fix memory_save quality gates",
+    "assumptions": [],
+    "criteria": [
+      {
+        "criterion": "memory_save uses quality gates",
+        "status": "pending",
+        "evidence": null
+      }
+    ],
+    "unresolved_items": [],
+    "residual_risks": []
+  }
+}"#;
+
+        let judgment = parse_workflow_judgment(content).unwrap();
+
+        assert_eq!(judgment.guided_reasoning_triggers.len(), 2);
+        assert!(judgment
+            .guided_reasoning_triggers
+            .contains(&GuidedReasoningTrigger::UnfamiliarCodePath));
+        assert!(judgment
+            .guided_reasoning_triggers
+            .contains(&GuidedReasoningTrigger::TestFailure));
     }
 
     #[test]

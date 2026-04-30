@@ -7,6 +7,27 @@ risk: high
 repo:
   fixture: priority-agent
   base_ref: "818f3a7"
+  prepare_commands:
+    - |
+      python3 - <<'PY'
+      from pathlib import Path
+
+      memory_tool = Path("src/tools/memory_tool/mod.rs")
+      text = memory_tool.read_text()
+      text = text.replace(
+          "assess_memory_candidate(content, category, &existing, false)",
+          "assess_memory_candidate(content, category, &existing, true)",
+      )
+      memory_tool.write_text(text)
+
+      quality = Path("src/memory/quality.rs")
+      text = quality.read_text()
+      text = text.replace(
+          "let write_decision = score_memory_write(write_factors, sensitivity, duplication, explicit);\n    let score = write_decision.score;\n    let status = write_decision.status;",
+          "let write_decision = score_memory_write(write_factors, sensitivity, duplication, explicit);\n    let score = write_decision.score;\n    let status = if explicit || score >= 0.65 { MemoryStatus::Accepted } else { write_decision.status };",
+      )
+      quality.write_text(text)
+      PY
   setup:
     - cargo test -q memory -- --test-threads=1
 
@@ -18,6 +39,7 @@ prompt: |
   - 只有用户显式 /save 才能走 explicit override。
   - explicit override 也不能绕过 sensitivity、volatility、duplication 这类硬性限制。
   - 保存结果必须能告诉用户真实 outcome，而不是无条件显示 Saved。
+  - /save 的修复目标是 src/tui/app.rs 的斜杠命令处理逻辑，不要通过修改 src/tui/tool_view.rs 的工具展示文案来满足。
 
 allowed_tools:
   - grep
@@ -38,12 +60,16 @@ expected_behavior:
 acceptance:
   required_commands:
     - cargo test -q memory -- --test-threads=1
+    - "! rg 'assess_memory_candidate\\(content, category, &existing, true\\)' src/tools/memory_tool/mod.rs"
+    - "! rg 'let status = if explicit \\|\\| score >= 0\\.65' src/memory/quality.rs"
+    - "! rg 'format!\\(\"Saved: \\{\\}' src/tui/app.rs"
     - cargo test -q -- --test-threads=1
   diff_constraints:
     max_files_changed: 8
     forbidden_paths:
       - target/
       - .git/
+      - src/tui/tool_view.rs
   human_review:
     - 是否区分了模型工具保存和用户显式保存？
     - 数学门控是否真的参与写入决策？

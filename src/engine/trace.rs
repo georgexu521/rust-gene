@@ -216,6 +216,12 @@ pub enum TraceEvent {
     VerificationCompleted {
         changed_files: usize,
         passed: bool,
+        #[serde(default)]
+        check_passed: bool,
+        #[serde(default)]
+        tests_passed: bool,
+        #[serde(default)]
+        review_passed: bool,
     },
     AcceptanceReviewCompleted {
         accepted: bool,
@@ -597,10 +603,16 @@ impl TraceEvent {
             TraceEvent::VerificationCompleted {
                 changed_files,
                 passed,
+                check_passed,
+                tests_passed,
+                review_passed,
             } => format!(
-                "verification {} for {} changed files",
+                "verification {} for {} changed files (check={} tests={} review={})",
                 if *passed { "passed" } else { "failed" },
-                changed_files
+                changed_files,
+                check_passed,
+                tests_passed,
+                review_passed
             ),
             TraceEvent::AcceptanceReviewCompleted {
                 accepted,
