@@ -3553,8 +3553,10 @@ Do not answer in prose unless no safe patch exists."#;
         cwd: &std::path::Path,
     ) -> Option<PatchSynthesisAction> {
         let path = cwd.join("src/engine/conversation_loop/mod.rs");
-        let old_string =
-            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.";
+        let old_string = concat!(
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n",
+            "        if let Some(ref ctx) = turn_retrieval_context {"
+        );
         if !Self::file_contains(&path, old_string) {
             return None;
         }
@@ -3585,7 +3587,8 @@ Do not answer in prose unless no safe patch exists."#;
                     turn_retrieval_context = Some(memory_ctx);
                 }
             }
-        }"#;
+        }
+        if let Some(ref ctx) = turn_retrieval_context {"#;
 
         Some(PatchSynthesisAction {
             tool: "file_edit".to_string(),
@@ -5681,7 +5684,7 @@ mod tests {
             .expect("create module dir");
         std::fs::write(
             tmp.path().join("src/engine/conversation_loop/mod.rs"),
-            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n",
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n        if let Some(ref ctx) = turn_retrieval_context {\n",
         )
         .expect("write module file");
 
