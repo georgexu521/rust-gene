@@ -3336,10 +3336,22 @@ Rules:
 
             if let Some(plan) = Self::parse_patch_synthesis_plan(&content) {
                 if !plan.can_patch {
-                    return Err(anyhow::anyhow!(
-                        "patch synthesis declined: {}",
-                        plan.reason.trim()
-                    ));
+                    let reason = plan.reason.trim();
+                    last_validation_errors.push(if reason.is_empty() {
+                        "patch synthesis declined without a reason".to_string()
+                    } else {
+                        format!("patch synthesis declined: {}", reason)
+                    });
+                    if attempt == 0 {
+                        synthesis_messages
+                            .push(Message::assistant(safe_prefix_by_bytes(&content, 1200)));
+                        synthesis_messages.push(Message::user(format!(
+                            "The previous patch plan declined instead of editing: {}. If the evidence names a concrete missing code block, compile error, assertion failure, or regression marker, return corrected JSON with the smallest file_edit action. Return can_patch=false only when there is no concrete editable file or old_string evidence.",
+                            last_validation_errors.join("; ")
+                        )));
+                        continue;
+                    }
+                    break;
                 }
 
                 let mut calls = Vec::new();
