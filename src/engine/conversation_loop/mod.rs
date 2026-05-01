@@ -1062,6 +1062,8 @@ impl ConversationLoop {
             })
             .unwrap_or("")
             .to_string();
+        let required_validation_commands =
+            Self::extract_required_validation_commands(&last_user_preview);
         let turn_index = self
             .trace_store
             .as_ref()
@@ -2417,6 +2419,37 @@ impl ConversationLoop {
                     post_edit_evidence.push(manual_text.clone());
                     debug!("{}", manual_text);
                 }
+                let mut required_validation_passed = true;
+                if !required_validation_commands.is_empty() {
+                    let already_ran = successful_validation_commands
+                        .iter()
+                        .map(|cmd| cmd.trim().to_string())
+                        .collect::<HashSet<_>>();
+                    let required_to_run = required_validation_commands
+                        .iter()
+                        .filter(|cmd| !already_ran.contains(cmd.trim()))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !required_to_run.is_empty() {
+                        let required_results =
+                            Self::run_required_validation_commands(&working_dir, &required_to_run)
+                                .await;
+                        for result in required_results {
+                            let text = result.to_dialog_text();
+                            acceptance_evidence.push(text.clone());
+                            if result.success {
+                                debug!("{}", text);
+                            } else {
+                                required_validation_passed = false;
+                                failed_commands.push(result.command.clone());
+                                post_edit_evidence.push(text.clone());
+                                tool_results_text.push('\n');
+                                tool_results_text.push_str(&text);
+                                messages.push(Message::system(text));
+                            }
+                        }
+                    }
+                }
 
                 if let Some(diff_text) =
                     changed_files_diff_evidence(&working_dir, &changed_files).await
@@ -2439,7 +2472,10 @@ impl ConversationLoop {
                 }
 
                 // ── 编程质量可观测性 ───────────────────────
-                let verify_passed = check_passed && tests_passed && review_result.success;
+                let verify_passed = check_passed
+                    && tests_passed
+                    && required_validation_passed
+                    && review_result.success;
                 should_closeout_after_verified_change = verify_passed;
                 trace.record(TraceEvent::VerificationCompleted {
                     changed_files: changed_files.len(),
@@ -4484,6 +4520,10 @@ Do not answer in prose unless no safe patch exists."#;
         let Some(command) = tool_call.arguments["command"].as_str() else {
             return false;
         };
+        Self::is_safe_validation_command(command)
+    }
+
+    fn is_safe_validation_command(command: &str) -> bool {
         let command = command.trim();
         command.contains("cargo test")
             || command.contains("cargo check")
@@ -4493,6 +4533,109 @@ Do not answer in prose unless no safe patch exists."#;
             || command.contains("pytest")
             || command.contains("python -m pytest")
             || command.contains("go test")
+    }
+
+    fn extract_required_validation_commands(prompt: &str) -> Vec<String> {
+        let mut commands = Vec::new();
+        for line in prompt.lines() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with("- `") {
+                continue;
+            }
+            let rest = &trimmed[3..];
+            let Some(end) = rest.find('`') else {
+                continue;
+            };
+            let command = rest[..end].trim();
+            if command.is_empty() || command == "(none)" {
+                continue;
+            }
+            if Self::is_safe_validation_command(command)
+                || command.starts_with("python3 -c ")
+                || command.starts_with("python -c ")
+            {
+                if !commands.iter().any(|existing| existing == command) {
+                    commands.push(command.to_string());
+                }
+            }
+        }
+        commands
+    }
+
+    async fn run_required_validation_commands(
+        working_dir: &std::path::Path,
+        commands: &[String],
+    ) -> Vec<super::auto_verify::VerificationResult> {
+        let mut results = Vec::new();
+        for command in commands.iter().take(8) {
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                tokio::process::Command::new("sh")
+                    .arg("-lc")
+                    .arg(command)
+                    .current_dir(working_dir)
+                    .output(),
+            )
+            .await;
+            let result = match output {
+                Ok(Ok(output)) => {
+                    let raw_output = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    super::auto_verify::VerificationResult {
+                        language: "required".to_string(),
+                        command: command.clone(),
+                        success: output.status.success(),
+                        issues: if output.status.success() {
+                            Vec::new()
+                        } else {
+                            vec![super::auto_verify::VerificationIssue {
+                                severity: "error".to_string(),
+                                file: None,
+                                line: None,
+                                message: safe_prefix_by_bytes(&raw_output, 1200).to_string(),
+                            }]
+                        },
+                        raw_output,
+                        summary: if output.status.success() {
+                            format!("required command passed: {}", command)
+                        } else {
+                            format!("required command failed: {}", command)
+                        },
+                    }
+                }
+                Ok(Err(err)) => super::auto_verify::VerificationResult {
+                    language: "required".to_string(),
+                    command: command.clone(),
+                    success: false,
+                    issues: vec![super::auto_verify::VerificationIssue {
+                        severity: "error".to_string(),
+                        file: None,
+                        line: None,
+                        message: format!("failed to run required command: {}", err),
+                    }],
+                    raw_output: err.to_string(),
+                    summary: format!("required command failed to run: {}", command),
+                },
+                Err(_) => super::auto_verify::VerificationResult {
+                    language: "required".to_string(),
+                    command: command.clone(),
+                    success: false,
+                    issues: vec![super::auto_verify::VerificationIssue {
+                        severity: "error".to_string(),
+                        file: None,
+                        line: None,
+                        message: "required command timed out after 300s".to_string(),
+                    }],
+                    raw_output: String::new(),
+                    summary: format!("required command timed out: {}", command),
+                },
+            };
+            results.push(result);
+        }
+        results
     }
 
     fn git_status_files() -> HashSet<std::path::PathBuf> {
@@ -5908,6 +6051,27 @@ mod tests {
         assert!(ConversationLoop::is_validation_tool_call(&cargo_test));
         assert!(!ConversationLoop::is_validation_tool_call(&ls));
         assert!(!ConversationLoop::is_validation_tool_call(&file_read));
+    }
+
+    #[test]
+    fn test_extract_required_validation_commands_from_live_eval_prompt() {
+        let prompt = r#"
+## Acceptance checks
+- `cargo test -q learning_planning -- --test-threads=1`
+- `python3 -c "p='src/lib.rs'; assert True"`
+- `rm -rf /tmp/nope`
+- `(none)`
+"#;
+
+        let commands = ConversationLoop::extract_required_validation_commands(prompt);
+
+        assert_eq!(
+            commands,
+            vec![
+                "cargo test -q learning_planning -- --test-threads=1".to_string(),
+                "python3 -c \"p='src/lib.rs'; assert True\"".to_string()
+            ]
+        );
     }
 
     #[test]
