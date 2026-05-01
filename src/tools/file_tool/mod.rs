@@ -49,6 +49,42 @@ fn max_file_edit_replacements() -> usize {
         .unwrap_or(DEFAULT_MAX_FILE_EDIT_REPLACEMENTS)
 }
 
+fn allow_bulk_code_edit() -> bool {
+    std::env::var("PRIORITY_AGENT_ALLOW_BULK_CODE_EDIT").as_deref() == Ok("1")
+}
+
+fn is_code_like_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            matches!(
+                ext,
+                "rs" | "ts"
+                    | "tsx"
+                    | "js"
+                    | "jsx"
+                    | "py"
+                    | "go"
+                    | "java"
+                    | "kt"
+                    | "swift"
+                    | "c"
+                    | "cc"
+                    | "cpp"
+                    | "h"
+                    | "hpp"
+                    | "cs"
+                    | "rb"
+                    | "php"
+                    | "scala"
+                    | "sh"
+                    | "zsh"
+                    | "fish"
+            )
+        })
+        .unwrap_or(false)
+}
+
 /// 智能引号归一化（Claude Code 模式）
 /// 处理文件中的智能引号 vs 模型输出的直引号差异
 fn normalize_quotes(input: &str) -> String {
@@ -853,6 +889,10 @@ impl Tool for FileEditTool {
         }
 
         // 确定操作模式
+        let using_exact_replace = line_start.is_none()
+            && line_end.is_none()
+            && insert_after.is_none()
+            && insert_before.is_none();
         let result = if let (Some(start), Some(end)) = (line_start, line_end) {
             Self::do_replace_lines(content, start, end, &new_string)
         } else if let Some(after) = insert_after {
@@ -877,6 +917,16 @@ impl Tool for FileEditTool {
 
         match result {
             Ok((new_content, replacements)) => {
+                if using_exact_replace
+                    && replacements > 1
+                    && is_code_like_path(&path)
+                    && !allow_bulk_code_edit()
+                {
+                    return ToolResult::error(format!(
+                        "Refusing multi-occurrence file_edit on code file '{}' ({} replacement(s)). Use a unique old_string, line_start/line_end, or set PRIORITY_AGENT_ALLOW_BULK_CODE_EDIT=1 for an intentional bulk code edit.",
+                        path_str, replacements
+                    ));
+                }
                 match tokio::fs::write(&path, &new_content).await {
                     Ok(_) => {
                         // 使文件缓存失效
@@ -1402,6 +1452,32 @@ mod tests {
         assert!(result.success, "edit failed: {:?}", result.error);
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert_eq!(content.matches("bbb").count(), 2);
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_bulk_exact_replace_on_code_file() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_expected.rs";
+        tokio::fs::write(path, "let x = 1;\nlet x = 1;\n")
+            .await
+            .unwrap();
+
+        let params = json!({
+            "path": path,
+            "old_string": "let x = 1;",
+            "new_string": "let x = 2;",
+            "expected_replacements": 2
+        });
+        let context = ToolContext::new(".", "test-session-edit-code-bulk");
+        let result = tool.execute(params, context).await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("Refusing multi-occurrence file_edit on code file"));
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(content.matches("let x = 1;").count(), 2);
 
         let _ = tokio::fs::remove_file(path).await;
     }
