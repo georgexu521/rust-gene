@@ -438,6 +438,18 @@ impl CodeChangeWorkflowRunner {
             return StageValidationStatus::NotVerified;
         }
 
+        let all_recorded_validations_passed = !self.validations.is_empty()
+            && self
+                .validations
+                .iter()
+                .all(|record| matches!(record.status, StageValidationStatus::Passed));
+        if all_recorded_validations_passed
+            && self.has_clean_accepted_review()
+            && (!is_programming_workflow(bundle.route.workflow) || !self.changed_files.is_empty())
+        {
+            return StageValidationStatus::Passed;
+        }
+
         if has_partial_validation
             || has_unresolved_acceptance
             || self.step_states.iter().any(|step| {

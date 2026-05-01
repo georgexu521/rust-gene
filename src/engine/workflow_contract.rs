@@ -1158,7 +1158,21 @@ pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkf
 pub fn parse_acceptance_review(content: &str) -> anyhow::Result<AcceptanceReview> {
     let json = extract_json_object(content)
         .ok_or_else(|| anyhow::anyhow!("acceptance review response did not contain JSON"))?;
-    Ok(serde_json::from_str(json)?)
+    let mut review: AcceptanceReview = serde_json::from_str(json)?;
+    normalize_acceptance_review(&mut review);
+    Ok(review)
+}
+
+fn normalize_acceptance_review(review: &mut AcceptanceReview) {
+    let unresolved = review.unresolved_count();
+    if unresolved == 0 {
+        return;
+    }
+
+    review.accepted = false;
+    if matches!(review.next_action, AcceptanceNextAction::Finish) {
+        review.next_action = AcceptanceNextAction::ContinueRepair;
+    }
 }
 
 pub fn parse_guided_debugging_analysis(content: &str) -> anyhow::Result<GuidedDebuggingAnalysis> {
@@ -1699,6 +1713,30 @@ mod tests {
   "next_action": "continue_repair"
 }
 ```"#;
+
+        let review = parse_acceptance_review(content).unwrap();
+
+        assert!(!review.accepted);
+        assert_eq!(review.unresolved_count(), 2);
+        assert_eq!(review.next_action, AcceptanceNextAction::ContinueRepair);
+    }
+
+    #[test]
+    fn parse_acceptance_review_rejects_accepted_with_unresolved_items() {
+        let content = r#"{
+  "accepted": true,
+  "confidence": "low",
+  "criteria": [
+    {
+      "criterion": "Required commands passed",
+      "status": "not_verified",
+      "evidence": "No command output was provided"
+    }
+  ],
+  "unresolved_items": ["Run required commands"],
+  "residual_risks": [],
+  "next_action": "finish"
+}"#;
 
         let review = parse_acceptance_review(content).unwrap();
 

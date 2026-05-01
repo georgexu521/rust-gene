@@ -3995,6 +3995,7 @@ mod tests {
                 check_passed: true,
                 tests_passed: true,
                 review_passed: true,
+                failed_commands: Vec::new(),
             });
         trace.events.push(
             crate::engine::trace::TraceEvent::AcceptanceReviewCompleted {
@@ -4026,6 +4027,7 @@ mod tests {
                 check_passed: true,
                 tests_passed: true,
                 review_passed: true,
+                failed_commands: Vec::new(),
             });
         trace.events.push(
             crate::engine::trace::TraceEvent::AcceptanceReviewCompleted {

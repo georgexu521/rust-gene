@@ -34,6 +34,22 @@ pub struct ReflectionFinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationFailure {
+    pub command: String,
+    pub summary: String,
+    pub exit_code: Option<i32>,
+    pub output_snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepairAction {
+    pub attempt: usize,
+    pub action: String,
+    pub target_file: Option<String>,
+    pub verification_command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReflectionPass {
     pub pass_id: String,
     pub task_id: String,
@@ -41,6 +57,10 @@ pub struct ReflectionPass {
     pub findings: Vec<ReflectionFinding>,
     pub checks: Vec<String>,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub verification_failures: Vec<VerificationFailure>,
+    #[serde(default)]
+    pub repair_history: Vec<RepairAction>,
 }
 
 impl ReflectionPass {
@@ -52,6 +72,8 @@ impl ReflectionPass {
             findings: Vec::new(),
             checks: Vec::new(),
             created_at: Utc::now(),
+            verification_failures: Vec::new(),
+            repair_history: Vec::new(),
         }
     }
 
@@ -126,6 +148,12 @@ impl ReflectionPass {
             return pass;
         }
 
+        pass.record_verification_failure(
+            "post-edit verification",
+            "post-edit verification failed",
+            None,
+            summarize_evidence(evidence),
+        );
         pass.add_finding(ReflectionFinding {
             severity: ReflectionSeverity::Error,
             issue: "post-edit verification failed".to_string(),
@@ -137,6 +165,43 @@ impl ReflectionPass {
             fixed: false,
         });
         pass
+    }
+
+    pub fn record_verification_failure(
+        &mut self,
+        command: impl Into<String>,
+        summary: impl Into<String>,
+        exit_code: Option<i32>,
+        output_snippet: impl Into<String>,
+    ) {
+        self.verification_failures.push(VerificationFailure {
+            command: command.into(),
+            summary: summary.into(),
+            exit_code,
+            output_snippet: output_snippet.into(),
+        });
+        if self.status == ReflectionStatus::Passed {
+            self.status = ReflectionStatus::Blocked;
+        }
+    }
+
+    pub fn record_repair_action(
+        &mut self,
+        attempt: usize,
+        action: impl Into<String>,
+        target_file: Option<impl Into<String>>,
+        verification_command: impl Into<String>,
+    ) {
+        self.repair_history.push(RepairAction {
+            attempt,
+            action: action.into(),
+            target_file: target_file.map(Into::into),
+            verification_command: verification_command.into(),
+        });
+    }
+
+    pub fn repair_exhausted(&self, max_attempts: usize) -> bool {
+        self.repair_history.len() >= max_attempts
     }
 
     pub fn add_finding(&mut self, finding: ReflectionFinding) {
@@ -151,10 +216,12 @@ impl ReflectionPass {
     }
 
     pub fn unresolved_count(&self) -> usize {
-        self.findings
+        let findings = self
+            .findings
             .iter()
             .filter(|finding| !finding.fixed)
-            .count()
+            .count();
+        findings + self.verification_failures.len()
     }
 
     pub fn format_for_prompt(&self) -> String {
@@ -179,8 +246,45 @@ impl ReflectionPass {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        let verification_failures = if self.verification_failures.is_empty() {
+            "none".to_string()
+        } else {
+            self.verification_failures
+                .iter()
+                .map(|failure| {
+                    format!(
+                        "- command: {} | summary: {} | exit: {} | output: {}",
+                        failure.command,
+                        failure.summary,
+                        failure
+                            .exit_code
+                            .map(|code| code.to_string())
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        failure.output_snippet
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let repair_history = if self.repair_history.is_empty() {
+            "none".to_string()
+        } else {
+            self.repair_history
+                .iter()
+                .map(|repair| {
+                    format!(
+                        "- attempt {}: {} | target: {} | verify: {}",
+                        repair.attempt,
+                        repair.action,
+                        repair.target_file.as_deref().unwrap_or("unknown"),
+                        repair.verification_command
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         format!(
-            "<reflection-pass id=\"{}\" status=\"{:?}\" unresolved=\"{}\">\nchecks:\n{}\nfindings:\n{}\n</reflection-pass>",
+            "<reflection-pass id=\"{}\" status=\"{:?}\" unresolved=\"{}\">\nchecks:\n{}\nfindings:\n{}\nverification_failures:\n{}\nrepair_history:\n{}\n</reflection-pass>",
             self.pass_id,
             self.status,
             self.unresolved_count(),
@@ -189,7 +293,9 @@ impl ReflectionPass {
                 .map(|check| format!("- {}", check))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            findings
+            findings,
+            verification_failures,
+            repair_history
         )
     }
 }
@@ -254,7 +360,7 @@ mod tests {
             &["cargo test failed".to_string()],
         );
         assert_eq!(pass.status, ReflectionStatus::Blocked);
-        assert_eq!(pass.unresolved_count(), 1);
+        assert_eq!(pass.unresolved_count(), 2);
         assert!(pass
             .format_for_prompt()
             .contains("post-edit verification failed"));
@@ -266,5 +372,32 @@ mod tests {
             ReflectionPass::from_post_edit("task-1", &[PathBuf::from("src/main.rs")], true, &[]);
         assert_eq!(pass.status, ReflectionStatus::Passed);
         assert_eq!(pass.unresolved_count(), 0);
+    }
+
+    #[test]
+    fn repair_tracking_is_visible_in_prompt() {
+        let mut pass = ReflectionPass::new("task-1");
+        pass.record_verification_failure(
+            "cargo test -q reflection_pass",
+            "test result: FAILED",
+            Some(101),
+            "thread 'tests::case' panicked",
+        );
+        pass.record_repair_action(
+            1,
+            "fixed reflection prompt evidence",
+            Some("src/engine/reflection_pass.rs"),
+            "cargo test -q reflection_pass",
+        );
+
+        assert_eq!(pass.status, ReflectionStatus::Blocked);
+        assert_eq!(pass.unresolved_count(), 1);
+        assert!(!pass.repair_exhausted(2));
+        assert!(pass.repair_exhausted(1));
+
+        let prompt = pass.format_for_prompt();
+        assert!(prompt.contains("test result: FAILED"));
+        assert!(prompt.contains("fixed reflection prompt evidence"));
+        assert!(prompt.contains("src/engine/reflection_pass.rs"));
     }
 }

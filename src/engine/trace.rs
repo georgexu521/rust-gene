@@ -222,6 +222,8 @@ pub enum TraceEvent {
         tests_passed: bool,
         #[serde(default)]
         review_passed: bool,
+        #[serde(default)]
+        failed_commands: Vec<String>,
     },
     AcceptanceReviewCompleted {
         accepted: bool,
@@ -606,13 +608,15 @@ impl TraceEvent {
                 check_passed,
                 tests_passed,
                 review_passed,
+                failed_commands,
             } => format!(
-                "verification {} for {} changed files (check={} tests={} review={})",
+                "verification {} for {} changed files (check={} tests={} review={} failed={})",
                 if *passed { "passed" } else { "failed" },
                 changed_files,
                 check_passed,
                 tests_passed,
-                review_passed
+                review_passed,
+                failed_commands.len()
             ),
             TraceEvent::AcceptanceReviewCompleted {
                 accepted,

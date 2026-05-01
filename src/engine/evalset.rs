@@ -78,6 +78,8 @@ pub struct EvalReplay {
     pub verification_passed: Option<bool>,
     #[serde(default)]
     pub changed_files: Vec<String>,
+    #[serde(default)]
+    pub failed_commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -595,6 +597,11 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
             check_passed: passed,
             tests_passed: passed,
             review_passed: passed,
+            failed_commands: if passed {
+                Vec::new()
+            } else {
+                scenario.replay.failed_commands.clone()
+            },
         });
         let changed_files = scenario
             .replay
