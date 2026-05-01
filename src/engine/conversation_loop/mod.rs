@@ -4705,7 +4705,9 @@ Do not answer in prose unless no safe patch exists."#;
         !command.contains('\n')
             && !command.contains(';')
             && !command.contains('|')
-            && !command.contains('&')
+            && !command.contains("&&")
+            && !command.ends_with('&')
+            && !command.contains(" & ")
             && !command.contains('`')
             && !command.contains("$(")
             && !command.contains('>')
@@ -6105,8 +6107,7 @@ mod tests {
         let tmp = tempdir().expect("create temp dir");
         std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
             .expect("create module dir");
-        std::fs::write(
-            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+        let damaged_call = concat!(
             r#"fn repair() {
                 if !verify_passed {
                     let verification_command = failed_commands
@@ -6115,12 +6116,17 @@ mod tests {
                         .unwrap_or_else(|| "post-edit verification".to_string());
                     post_edit_reflection.record_repair_action(
                   acceptance_repair_attempts + 1,
-                  &format!("retry: {}", verification_command),
+                  &format!("retry: {"#,
+            r#"}", verification_command),
                   changed_files.first().map(|path| path.display().to_string()),
               );
                 }
 }
-"#,
+"#
+        );
+        std::fs::write(
+            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+            damaged_call,
         )
         .expect("write module file");
 
@@ -6291,10 +6297,20 @@ mod tests {
                 "command": "! rg 'bad_pattern' src/lib.rs"
             }),
         };
+        let rg_assertion_with_ampersand_pattern = ToolCall {
+            id: "rg_amp".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs"
+            }),
+        };
 
         assert!(ConversationLoop::is_validation_tool_call(&cargo_test));
         assert!(ConversationLoop::is_validation_tool_call(&python_assertion));
         assert!(ConversationLoop::is_validation_tool_call(&rg_assertion));
+        assert!(ConversationLoop::is_validation_tool_call(
+            &rg_assertion_with_ampersand_pattern
+        ));
         assert!(!ConversationLoop::is_validation_tool_call(&ls));
         assert!(!ConversationLoop::is_validation_tool_call(&file_read));
     }
@@ -6306,6 +6322,7 @@ mod tests {
 - `cargo test -q learning_planning -- --test-threads=1`
 - `python3 -c "p='src/lib.rs'; assert True"`
 - `! rg 'bad_pattern' src/lib.rs`
+- `! rg '&format!\("retry: \{\}", verification_command\)' src/engine/conversation_loop/mod.rs`
 - `rg 'good_pattern' src/lib.rs`
 - `rm -rf /tmp/nope`
 - `(none)`
@@ -6319,6 +6336,7 @@ mod tests {
                 "cargo test -q learning_planning -- --test-threads=1".to_string(),
                 "python3 -c \"p='src/lib.rs'; assert True\"".to_string(),
                 "! rg 'bad_pattern' src/lib.rs".to_string(),
+                "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs".to_string(),
                 "rg 'good_pattern' src/lib.rs".to_string()
             ]
         );
