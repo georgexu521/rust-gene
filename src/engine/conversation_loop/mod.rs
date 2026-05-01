@@ -3549,20 +3549,13 @@ Do not answer in prose unless no safe patch exists."#;
     }
 
     fn deterministic_persistent_memory_planning_action(
-        lower_evidence: &str,
+        _lower_evidence: &str,
         cwd: &std::path::Path,
     ) -> Option<PatchSynthesisAction> {
         let path = cwd.join("src/engine/conversation_loop/mod.rs");
         let old_string =
             "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.";
         if !Self::file_contains(&path, old_string) {
-            return None;
-        }
-        if !(lower_evidence.contains("persistent memory")
-            || lower_evidence.contains("prefetch_retrieval_context_with_llm_rerank")
-            || lower_evidence.contains("workflow judgment")
-            || lower_evidence.contains("retrieval context"))
-        {
             return None;
         }
 
@@ -3932,6 +3925,11 @@ Do not answer in prose unless no safe patch exists."#;
             if new_string.contains("self.provider.as_ref().and_then") {
                 return Err(anyhow::anyhow!(
                     "persistent memory prefetch in conversation_loop must pass the existing model string directly, not derive a preferred model from provider"
+                ));
+            }
+            if new_string.contains("self.provider.as_ref().map") {
+                return Err(anyhow::anyhow!(
+                    "persistent memory prefetch in conversation_loop must pass self.provider.as_ref() directly, not treat it as an Option"
                 ));
             }
             if !new_string.contains(".lock().await") {
@@ -5688,7 +5686,7 @@ mod tests {
         .expect("write module file");
 
         let calls = loop_instance.deterministic_patch_tool_calls(
-            "persistent memory should affect workflow planning before apply_learning_to_workflow_judgment",
+            "the regression marker identifies the missing planning prefetch block",
             tmp.path(),
         );
 
@@ -5769,6 +5767,62 @@ mod tests {
             .to_string();
 
         assert!(err.contains("block_on"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_rejects_provider_option_style_in_memory_prefetch() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
+            .expect("create module dir");
+        std::fs::write(
+            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n",
+        )
+        .expect("write file");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/engine/conversation_loop/mod.rs".to_string(),
+            old_string: Some(
+                "        // Regression fixture: persistent memory prefetch was missing before workflow judgment."
+                    .to_string(),
+            ),
+            new_string: r#"        if let Some(ref mem_mutex) = self.memory_manager {
+            let mut mem = mem_mutex.lock().await;
+            if let Some(mem_ctx) = mem
+                .prefetch_retrieval_context_with_llm_rerank(
+                    &last_user_preview,
+                    self.provider.as_ref().map(|p| p.as_ref()).unwrap(),
+                    &self.model,
+                    route.retrieval,
+                )
+                .await
+            {
+                turn_retrieval_context = Some(mem_ctx);
+            }
+        }"#
+            .to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        };
+
+        let err = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect_err("provider option-style call should be rejected")
+            .to_string();
+
+        assert!(err.contains("Option"));
     }
 
     #[test]
