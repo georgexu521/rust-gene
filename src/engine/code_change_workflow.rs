@@ -303,6 +303,16 @@ impl CodeChangeWorkflowRunner {
     pub fn record_acceptance_review(&mut self, review: AcceptanceReview) {
         if review.accepted && review.unresolved_count() == 0 {
             self.residual_risks.clear();
+            for step in &mut self.step_states {
+                if matches!(
+                    step.status,
+                    PlanStepRuntimeStatus::Pending | PlanStepRuntimeStatus::Active
+                ) {
+                    step.status = PlanStepRuntimeStatus::Passed;
+                    step.last_evidence =
+                        Some("clean acceptance review completed the remaining plan".to_string());
+                }
+            }
         }
         for item in &review.unresolved_items {
             push_unique(&mut self.residual_risks, item.clone());
@@ -598,7 +608,11 @@ mod tests {
     use crate::engine::intent_router::{
         IntentKind, ReasoningPolicy, RetrievalPolicy, WorkflowKind,
     };
-    use crate::engine::workflow_contract::{AcceptanceConfidence, AcceptanceNextAction};
+    use crate::engine::workflow_contract::{
+        AcceptanceConfidence, AcceptanceContract, AcceptanceCriterion, AcceptanceNextAction,
+        AcceptanceStatus, PriorityLabel, ProgrammingWorkflowJudgment, TaskComplexity,
+        WorkflowPlanStep,
+    };
 
     fn code_change_route(risk: RiskLevel) -> IntentRoute {
         IntentRoute {
@@ -760,5 +774,87 @@ mod tests {
             .iter()
             .any(|item| item.contains("accepted=true")));
         assert_eq!(closeout.residual_risks, vec!["none recorded".to_string()]);
+    }
+
+    #[test]
+    fn clean_acceptance_completes_remaining_plan_steps() {
+        let route = code_change_route(RiskLevel::Medium);
+        let mut bundle = TaskContextBundle::new("接入持久记忆到规划", ".", route, None);
+        bundle.workflow_judgment = Some(ProgrammingWorkflowJudgment {
+            task_type: "bug_fix".to_string(),
+            complexity: TaskComplexity::Medium,
+            risk: RiskLevel::Medium,
+            requirement_complete_enough: true,
+            needs_user_questions: false,
+            question_reason: None,
+            questions: Vec::new(),
+            assumptions: Vec::new(),
+            guided_reasoning_required: false,
+            guided_reasoning_triggers: Vec::new(),
+            plan: vec![
+                WorkflowPlanStep {
+                    id: Some("inspect".to_string()),
+                    description: "Inspect memory retrieval integration".to_string(),
+                    priority: PriorityLabel::P0,
+                    weight: None,
+                    importance_score: None,
+                    weight_share: None,
+                    factors: None,
+                    override_adjustment: None,
+                    computation: None,
+                    reason: "Find current call order".to_string(),
+                    acceptance_criteria: Vec::new(),
+                },
+                WorkflowPlanStep {
+                    id: Some("wire".to_string()),
+                    description: "Add persistent memory prefetch before workflow judgment"
+                        .to_string(),
+                    priority: PriorityLabel::P1,
+                    weight: None,
+                    importance_score: None,
+                    weight_share: None,
+                    factors: None,
+                    override_adjustment: None,
+                    computation: None,
+                    reason: "Planning must see memory signals".to_string(),
+                    acceptance_criteria: Vec::new(),
+                },
+            ],
+            acceptance: AcceptanceContract {
+                original_user_goal: "接入持久记忆到规划".to_string(),
+                assumptions: Vec::new(),
+                criteria: vec![AcceptanceCriterion {
+                    criterion: "required validation passes".to_string(),
+                    status: AcceptanceStatus::Passed,
+                    evidence: Some("cargo test passed".to_string()),
+                }],
+                unresolved_items: Vec::new(),
+                residual_risks: Vec::new(),
+            },
+        });
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        runner.record_stage_validation(
+            &bundle,
+            &[PathBuf::from("src/engine/conversation_loop/mod.rs")],
+            true,
+            &["required validation passed".to_string()],
+        );
+        runner.record_acceptance_review(AcceptanceReview {
+            accepted: true,
+            confidence: AcceptanceConfidence::High,
+            criteria: Vec::new(),
+            unresolved_items: Vec::new(),
+            residual_risks: Vec::new(),
+            next_action: AcceptanceNextAction::Finish,
+        });
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert!(runner
+            .step_states()
+            .iter()
+            .all(|step| step.status == PlanStepRuntimeStatus::Passed));
     }
 }
