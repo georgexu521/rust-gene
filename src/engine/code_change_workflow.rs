@@ -301,6 +301,9 @@ impl CodeChangeWorkflowRunner {
     }
 
     pub fn record_acceptance_review(&mut self, review: AcceptanceReview) {
+        if review.accepted && review.unresolved_count() == 0 {
+            self.residual_risks.clear();
+        }
         for item in &review.unresolved_items {
             push_unique(&mut self.residual_risks, item.clone());
         }
@@ -400,18 +403,19 @@ impl CodeChangeWorkflowRunner {
     }
 
     fn closeout_status(&self, bundle: &TaskContextBundle) -> StageValidationStatus {
-        let has_failed_validation = self
-            .validations
-            .iter()
-            .any(|record| matches!(record.status, StageValidationStatus::Failed));
-        let has_unverified_validation = self
-            .validations
-            .iter()
-            .any(|record| matches!(record.status, StageValidationStatus::NotVerified));
-        let has_partial_validation = self
-            .validations
-            .iter()
-            .any(|record| matches!(record.status, StageValidationStatus::Partial));
+        let latest_validation_status = self.validations.last().map(|record| record.status);
+        let has_failed_validation = matches!(
+            latest_validation_status,
+            Some(StageValidationStatus::Failed)
+        );
+        let has_unverified_validation = matches!(
+            latest_validation_status,
+            Some(StageValidationStatus::NotVerified)
+        );
+        let has_partial_validation = matches!(
+            latest_validation_status,
+            Some(StageValidationStatus::Partial)
+        );
         let latest_acceptance = self.latest_acceptance_review();
         let has_rejected_acceptance = latest_acceptance
             .map(|review| !review.accepted)

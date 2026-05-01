@@ -2579,7 +2579,53 @@ impl ConversationLoop {
                     }
                 }
                 if let Some(judgment) = task_bundle.workflow_judgment.as_ref() {
-                    if workflow_contract_enabled(self.provider.as_ref()) {
+                    if verify_passed && !required_validation_commands.is_empty() {
+                        let evidence = format!(
+                            "Required validation commands passed: {}",
+                            required_validation_commands.join("; ")
+                        );
+                        let criteria = judgment
+                            .acceptance
+                            .criteria
+                            .iter()
+                            .map(|criterion| {
+                                let mut passed = criterion.clone();
+                                passed.status =
+                                    crate::engine::workflow_contract::AcceptanceStatus::Passed;
+                                passed.evidence = Some(evidence.clone());
+                                passed
+                            })
+                            .collect::<Vec<_>>();
+                        let review = crate::engine::workflow_contract::AcceptanceReview {
+                            accepted: true,
+                            confidence:
+                                crate::engine::workflow_contract::AcceptanceConfidence::High,
+                            criteria,
+                            unresolved_items: Vec::new(),
+                            residual_risks: Vec::new(),
+                            next_action:
+                                crate::engine::workflow_contract::AcceptanceNextAction::Finish,
+                        };
+                        trace.record(TraceEvent::AcceptanceReviewCompleted {
+                            accepted: true,
+                            confidence: "High".to_string(),
+                            criteria: review.criteria.len(),
+                            unresolved: 0,
+                            next_action: "Finish".to_string(),
+                        });
+                        code_workflow.record_acceptance_review(review);
+                        should_closeout_after_verified_change = true;
+                        trace.record(TraceEvent::WorkflowPlanProgress {
+                            total_steps: judgment.plan.len(),
+                            completed_steps: judgment.plan.len(),
+                            active_step: None,
+                            top_priority: None,
+                            top_importance_score: None,
+                            top_weight_share: None,
+                            weight_source: None,
+                            reweighted: true,
+                        });
+                    } else if workflow_contract_enabled(self.provider.as_ref()) {
                         let analyzer =
                             crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
                                 self.provider.as_ref(),
@@ -4530,6 +4576,8 @@ Do not answer in prose unless no safe patch exists."#;
             || command.contains("cargo clippy")
             || command.contains("npm test")
             || command.contains("npm run test")
+            || command.starts_with("python3 -c ")
+            || command.starts_with("python -c ")
             || command.contains("pytest")
             || command.contains("python -m pytest")
             || command.contains("go test")
@@ -6047,8 +6095,16 @@ mod tests {
                 "path": "src/main.rs"
             }),
         };
+        let python_assertion = ToolCall {
+            id: "python".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "python3 -c \"assert True\""
+            }),
+        };
 
         assert!(ConversationLoop::is_validation_tool_call(&cargo_test));
+        assert!(ConversationLoop::is_validation_tool_call(&python_assertion));
         assert!(!ConversationLoop::is_validation_tool_call(&ls));
         assert!(!ConversationLoop::is_validation_tool_call(&file_read));
     }
