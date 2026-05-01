@@ -3569,6 +3569,11 @@ Do not answer in prose unless no safe patch exists."#;
         {
             actions.push(action);
         }
+        if let Some(action) =
+            Self::deterministic_record_repair_action_arity_fix(&lower_evidence, cwd)
+        {
+            actions.push(action);
+        }
 
         if !(lower_evidence.contains("memorywrite")
             || lower_evidence.contains("memory_save")
@@ -3715,6 +3720,74 @@ Do not answer in prose unless no safe patch exists."#;
             line_start: None,
             line_end: None,
             expected_replacements: Some(1),
+        })
+    }
+
+    fn deterministic_record_repair_action_arity_fix(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Option<PatchSynthesisAction> {
+        if !(lower_evidence.contains("record_repair_action")
+            || lower_evidence
+                .contains("this method takes 4 arguments but 3 arguments were supplied")
+            || lower_evidence.contains("argument #4")
+            || lower_evidence.contains("retry: {}"))
+        {
+            return None;
+        }
+
+        let path = cwd.join("src/engine/conversation_loop/mod.rs");
+        let content = std::fs::read_to_string(path).ok()?;
+        if !content.contains("post_edit_reflection.record_repair_action(")
+            || content.contains(
+                "post_edit_reflection.record_repair_action(\n                        acceptance_repair_attempts + 1,\n                        \"repair failed verification before closeout\",\n                        changed_files.first().map(|path| path.display().to_string()),\n                        verification_command,\n                    );",
+            )
+        {
+            return None;
+        }
+
+        let lines: Vec<&str> = content.lines().collect();
+        let start_idx = lines
+            .iter()
+            .position(|line| line.contains("post_edit_reflection.record_repair_action("))?;
+        let mut end_idx = None;
+        for (offset, line) in lines.iter().enumerate().skip(start_idx) {
+            if line.trim() == ");" {
+                end_idx = Some(offset);
+                break;
+            }
+            if offset.saturating_sub(start_idx) > 16 {
+                break;
+            }
+        }
+        let end_idx = end_idx?;
+        let call_block = lines[start_idx..=end_idx].join("\n");
+        if !call_block.contains("record_repair_action(") {
+            return None;
+        }
+        if !call_block.contains("&format!(\"retry: {}\", verification_command)")
+            && !call_block.contains("verification_command")
+            && !lower_evidence.contains("argument #4")
+            && !lower_evidence
+                .contains("this method takes 4 arguments but 3 arguments were supplied")
+        {
+            return None;
+        }
+
+        Some(PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/engine/conversation_loop/mod.rs".to_string(),
+            old_string: None,
+            new_string: r#"                    post_edit_reflection.record_repair_action(
+                        acceptance_repair_attempts + 1,
+                        "repair failed verification before closeout",
+                        changed_files.first().map(|path| path.display().to_string()),
+                        verification_command,
+                    );"#
+            .to_string(),
+            line_start: Some(start_idx + 1),
+            line_end: Some(end_idx + 1),
+            expected_replacements: None,
         })
     }
 
@@ -3965,9 +4038,48 @@ Do not answer in prose unless no safe patch exists."#;
             "path": tool_path,
         });
         if action.line_start.is_some() || action.line_end.is_some() {
-            return Err(anyhow::anyhow!(
-                "synthesized patch line ranges are disabled; use a unique exact old_string from evidence"
-            ));
+            let (Some(line_start), Some(line_end)) = (action.line_start, action.line_end) else {
+                return Err(anyhow::anyhow!(
+                    "synthesized patch line_start and line_end must be provided together"
+                ));
+            };
+            if action.old_string.is_some() {
+                return Err(anyhow::anyhow!(
+                    "synthesized patch line ranges must not also include old_string"
+                ));
+            }
+            if line_start == 0 || line_end == 0 || line_start > line_end {
+                return Err(anyhow::anyhow!(
+                    "synthesized patch line range is invalid: {}..={}",
+                    line_start,
+                    line_end
+                ));
+            }
+            let line_count = std::fs::read_to_string(&canonical_candidate)
+                .map(|content| content.lines().count())
+                .unwrap_or(0);
+            if line_start > line_count || line_end > line_count {
+                return Err(anyhow::anyhow!(
+                    "synthesized patch line range {}..={} is outside {} line file",
+                    line_start,
+                    line_end,
+                    line_count
+                ));
+            }
+            if line_end - line_start > 24 {
+                return Err(anyhow::anyhow!(
+                    "synthesized patch line range is too broad: {}..={}",
+                    line_start,
+                    line_end
+                ));
+            }
+            if !Self::balanced_delimiters_rough(&normalized_new_string) {
+                return Err(anyhow::anyhow!(
+                    "synthesized patch replacement has unbalanced delimiters"
+                ));
+            }
+            params["line_start"] = serde_json::json!(line_start);
+            params["line_end"] = serde_json::json!(line_end);
         } else if let Some(old_string) = action.old_string.as_ref() {
             if old_string.trim().is_empty() {
                 return Err(anyhow::anyhow!(
@@ -5975,6 +6087,59 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("futures::executor::block_on"));
+    }
+
+    #[test]
+    fn test_deterministic_patch_synthesis_repairs_record_repair_action_arity() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
+            .expect("create module dir");
+        std::fs::write(
+            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+            r#"fn repair() {
+                if !verify_passed {
+                    let verification_command = failed_commands
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "post-edit verification".to_string());
+                    post_edit_reflection.record_repair_action(
+                  acceptance_repair_attempts + 1,
+                  &format!("retry: {}", verification_command),
+                  changed_files.first().map(|path| path.display().to_string()),
+              );
+                }
+}
+"#,
+        )
+        .expect("write module file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "error[E0061]: this method takes 4 arguments but 3 arguments were supplied\nargument #4 is missing\nrecord_repair_action",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments["path"],
+            "src/engine/conversation_loop/mod.rs"
+        );
+        assert_eq!(calls[0].arguments["line_start"], 7);
+        assert_eq!(calls[0].arguments["line_end"], 11);
+        let replacement = calls[0].arguments["new_string"].as_str().unwrap();
+        assert!(replacement.contains("\"repair failed verification before closeout\""));
+        assert!(replacement.contains("verification_command,"));
+        assert!(!replacement.contains("&format!(\"retry: {}\", verification_command)"));
     }
 
     #[test]
