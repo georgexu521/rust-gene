@@ -926,10 +926,12 @@ verification_events = [event for event in trace_events if event.get("type") == "
 stage_validation_events = [event for event in trace_events if event.get("type") == "stage_validation_completed"]
 acceptance_events = [event for event in trace_events if event.get("type") == "acceptance_review_completed"]
 closeout_events = [event for event in trace_events if event.get("type") == "final_closeout_prepared"]
+latest_verification = verification_events[-1] if verification_events else {}
+latest_stage_validation = stage_validation_events[-1] if stage_validation_events else {}
 latest_closeout = closeout_events[-1] if closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
-verification_passed = bool(verification_events) and all(event.get("passed") is True for event in verification_events)
-stage_validation_passed = bool(stage_validation_events) and all(str(event.get("status", "")).lower() in {"passed", "ok", "success"} for event in stage_validation_events)
+verification_passed = bool(verification_events) and latest_verification.get("passed") is True
+stage_validation_passed = bool(stage_validation_events) and str(latest_stage_validation.get("status", "")).lower() in {"passed", "ok", "success"}
 closeout_status = str(latest_closeout.get("status", "missing")).lower()
 accepted = latest_acceptance.get("accepted")
 print(f"output_chars: {len(output)}")
@@ -964,6 +966,12 @@ if not diff.strip():
 if tool_errors:
     print("warning: tool_errors_seen")
     warnings.append("tool_errors_seen")
+if verification_events and any(event.get("passed") is not True for event in verification_events[:-1]):
+    print("warning: earlier_verification_failed_before_repair")
+    warnings.append("earlier_verification_failed_before_repair")
+if stage_validation_events and any(str(event.get("status", "")).lower() not in {"passed", "ok", "success"} for event in stage_validation_events[:-1]):
+    print("warning: earlier_stage_validation_failed_before_repair")
+    warnings.append("earlier_stage_validation_failed_before_repair")
 if not trace:
     print("warning: missing_trace_summary")
     failures.append("missing_trace_summary")
