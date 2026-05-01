@@ -3752,11 +3752,7 @@ Do not answer in prose unless no safe patch exists."#;
 
         let path = cwd.join("src/engine/conversation_loop/mod.rs");
         let content = std::fs::read_to_string(path).ok()?;
-        if !content.contains("post_edit_reflection.record_repair_action(")
-            || content.contains(
-                "post_edit_reflection.record_repair_action(\n                        acceptance_repair_attempts + 1,\n                        \"repair failed verification before closeout\",\n                        changed_files.first().map(|path| path.display().to_string()),\n                        verification_command,\n                    );",
-            )
-        {
+        if !content.contains("post_edit_reflection.record_repair_action(") {
             return None;
         }
 
@@ -3779,7 +3775,13 @@ Do not answer in prose unless no safe patch exists."#;
         if !call_block.contains("record_repair_action(") {
             return None;
         }
-        if !call_block.contains("&format!(\"retry: {}\", verification_command)")
+        if call_block.contains("\"repair failed verification before closeout\"")
+            && call_block.contains("verification_command,")
+            && !call_block.contains(Self::retry_format_marker().as_str())
+        {
+            return None;
+        }
+        if !call_block.contains(Self::retry_format_marker().as_str())
             && !call_block.contains("verification_command")
             && !lower_evidence.contains("argument #4")
             && !lower_evidence
@@ -3803,6 +3805,10 @@ Do not answer in prose unless no safe patch exists."#;
             line_end: Some(end_idx + 1),
             expected_replacements: None,
         })
+    }
+
+    fn retry_format_marker() -> String {
+        concat!("&format!(\"retry: {", "}\", verification_command)").to_string()
     }
 
     fn deterministic_save_outcome_actions(
@@ -6159,7 +6165,7 @@ mod tests {
         let replacement = calls[0].arguments["new_string"].as_str().unwrap();
         assert!(replacement.contains("\"repair failed verification before closeout\""));
         assert!(replacement.contains("verification_command,"));
-        assert!(!replacement.contains("&format!(\"retry: {}\", verification_command)"));
+        assert!(!replacement.contains(ConversationLoop::retry_format_marker().as_str()));
     }
 
     #[test]
