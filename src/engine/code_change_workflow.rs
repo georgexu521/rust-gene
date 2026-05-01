@@ -350,7 +350,13 @@ impl CodeChangeWorkflowRunner {
             acceptance.push("No explicit acceptance criteria were recorded".to_string());
         }
 
-        let mut residual = self.residual_risks.clone();
+        let mut residual = if self.has_clean_accepted_review() {
+            self.latest_acceptance_review()
+                .map(|review| review.residual_risks.clone())
+                .unwrap_or_default()
+        } else {
+            self.residual_risks.clone()
+        };
         if is_programming_workflow(bundle.route.workflow) && self.changed_files.is_empty() {
             push_unique(
                 &mut residual,
@@ -406,14 +412,13 @@ impl CodeChangeWorkflowRunner {
             .validations
             .iter()
             .any(|record| matches!(record.status, StageValidationStatus::Partial));
-        let has_rejected_acceptance = self
-            .acceptance_reviews
-            .iter()
-            .any(|review| !review.accepted);
-        let has_unresolved_acceptance = self
-            .acceptance_reviews
-            .iter()
-            .any(|review| review.unresolved_count() > 0);
+        let latest_acceptance = self.latest_acceptance_review();
+        let has_rejected_acceptance = latest_acceptance
+            .map(|review| !review.accepted)
+            .unwrap_or(false);
+        let has_unresolved_acceptance = latest_acceptance
+            .map(|review| review.unresolved_count() > 0)
+            .unwrap_or(false);
 
         if has_failed_validation || has_rejected_acceptance {
             return StageValidationStatus::Failed;
@@ -466,9 +471,13 @@ impl CodeChangeWorkflowRunner {
     }
 
     fn has_clean_accepted_review(&self) -> bool {
-        self.acceptance_reviews
-            .iter()
-            .any(|review| review.accepted && review.unresolved_count() == 0)
+        self.latest_acceptance_review()
+            .map(|review| review.accepted && review.unresolved_count() == 0)
+            .unwrap_or(false)
+    }
+
+    fn latest_acceptance_review(&self) -> Option<&AcceptanceReview> {
+        self.acceptance_reviews.last()
     }
 
     pub fn step_states(&self) -> &[PlanStepRuntimeState] {
@@ -703,5 +712,49 @@ mod tests {
             .residual_risks
             .iter()
             .any(|item| item == "none recorded"));
+    }
+
+    #[test]
+    fn closeout_uses_latest_acceptance_review_for_current_status() {
+        let route = code_change_route(RiskLevel::Medium);
+        let mut bundle = TaskContextBundle::new("修复 memory_save 质量门控", ".", route, None);
+        bundle.add_acceptance_check("memory_save respects quality gates");
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        runner.record_stage_validation(
+            &bundle,
+            &[PathBuf::from("src/tools/memory_tool/mod.rs")],
+            true,
+            &["cargo test -q memory -- --test-threads=1 passed".to_string()],
+        );
+        runner.record_acceptance_review(AcceptanceReview {
+            accepted: false,
+            confidence: AcceptanceConfidence::Medium,
+            criteria: Vec::new(),
+            unresolved_items: vec!["initial review missed runtime save outcome".to_string()],
+            residual_risks: vec!["format_memory_write_outcome not verified".to_string()],
+            next_action: AcceptanceNextAction::ContinueRepair,
+        });
+        runner.record_acceptance_review(AcceptanceReview {
+            accepted: true,
+            confidence: AcceptanceConfidence::High,
+            criteria: Vec::new(),
+            unresolved_items: Vec::new(),
+            residual_risks: Vec::new(),
+            next_action: AcceptanceNextAction::Finish,
+        });
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert!(closeout
+            .acceptance
+            .iter()
+            .any(|item| item.contains("accepted=false")));
+        assert!(closeout
+            .acceptance
+            .iter()
+            .any(|item| item.contains("accepted=true")));
+        assert_eq!(closeout.residual_risks, vec!["none recorded".to_string()]);
     }
 }

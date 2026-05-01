@@ -2414,13 +2414,25 @@ impl ConversationLoop {
                     review_passed: review_result.success,
                     failed_commands: failed_commands.clone(),
                 });
-                let post_edit_reflection =
+                let mut post_edit_reflection =
                     crate::engine::reflection_pass::ReflectionPass::from_post_edit(
                         task_bundle.task_id.clone(),
                         &changed_files,
                         verify_passed,
                         &post_edit_evidence,
                     );
+                if !verify_passed {
+                    let verification_command = failed_commands
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "post-edit verification".to_string());
+                    post_edit_reflection.record_repair_action(
+                        acceptance_repair_attempts + 1,
+                        "repair failed verification before closeout",
+                        changed_files.first().map(|path| path.display().to_string()),
+                        verification_command,
+                    );
+                }
                 trace.record(TraceEvent::ReflectionPassCompleted {
                     pass_id: post_edit_reflection.pass_id.clone(),
                     task_id: post_edit_reflection.task_id.clone(),

@@ -24,6 +24,9 @@ The memory quality gate task is now a passing calibrated regression. The repair-
 | `113555` | code-change-verification-repair-loop | failed | No diff; patch synthesis timed out after large evidence prompt. |
 | `114921` | code-change-verification-repair-loop | failed | No diff; patch synthesis declined due to insufficient evidence and stopped too early. |
 | `120124` | code-change-verification-repair-loop | failed | Recovery allowed a real diff; new failure was a focused test failure in `ReflectionPass` prompt evidence. |
+| `131452` | memory-save-quality-gate | failed | Code and required commands passed, but an earlier rejected acceptance review permanently poisoned final closeout. |
+| `133125` | memory-save-quality-gate | passed | Latest-acceptance closeout semantics fixed the canary; final closeout is passed with no residual risk. |
+| `134029` | code-change-verification-repair-loop | failed | No diff; model identified relevant APIs but did not patch, patch synthesis declined, then bash timed out. |
 
 ## Improvements Made
 
@@ -39,6 +42,8 @@ The following fixes were applied from the live results:
 8. Reduced patch synthesis evidence size and skipped cached unchanged-file messages to avoid MiniMax timeouts.
 9. Added `failed_commands` to `TraceEvent::VerificationCompleted`.
 10. Added structured `VerificationFailure` and `RepairAction` fields to `ReflectionPass`, including prompt rendering and tests.
+11. Fixed closeout aggregation so the latest clean acceptance review can supersede earlier rejected reviews while preserving history.
+12. Wired failed post-edit verification into `ReflectionPass::record_repair_action` so repair intent is visible before closeout.
 
 ## Current Status
 
@@ -52,13 +57,13 @@ cargo test -q -- --test-threads=1
 The best passing evidence is:
 
 ```text
-docs/benchmarks/live-live-eval-20260501-105409/memory-save-quality-gate/report.md
+docs/benchmarks/live-live-eval-20260501-133125/memory-save-quality-gate/report.md
 ```
 
 The most useful remaining failure evidence is:
 
 ```text
-docs/benchmarks/live-live-eval-20260501-120124/code-change-verification-repair-loop/report.md
+docs/benchmarks/live-live-eval-20260501-134029/code-change-verification-repair-loop/report.md
 ```
 
 ## Remaining Issues
@@ -68,10 +73,18 @@ The repair-loop task still needs more product work:
 1. The agent can now avoid false success, but it still struggles to design the complete repair-loop architecture from a broad prompt.
 2. Patch synthesis should be used for narrow repair, not as the main implementation strategy for larger feature tasks.
 3. The action checkpoint needs a better transition from "read-only loop" to "make a plan patch" before forcing a synthesized edit.
-4. `ReflectionPass` now stores verification and repair facts, but `conversation_loop` does not yet populate detailed `RepairAction` records for each repair attempt.
+4. `ReflectionPass` now stores verification and repair facts, and `conversation_loop` records a repair action for failed post-edit verification; the next gap is improving first-edit behavior for broad feature tasks.
 5. Eval samples based on old refs should be refreshed or split into stable fixture regressions and current-head capability tests.
 
 ## Next Testing Plan
+
+The next loop should be test-led. Each run must produce one of three outcomes:
+
+1. **Regression passed** - keep the evidence and move to the next layer.
+2. **Product bug found** - patch the code, add focused local coverage, rerun the same case.
+3. **Eval fixture bug found** - fix the fixture or base ref, rerun before changing production code.
+
+Do not treat a live-eval failure as a code bug until the report shows a clear mismatch between expected behavior and current implementation. Stale `base_ref`, missing prepare scripts, or unrealistic prompts should be fixed in the eval first.
 
 ### Layer 1: Calibrated Regression
 
@@ -93,6 +106,17 @@ Expected:
 - closeout passed
 - no stale `/save` success messaging
 
+Pass condition:
+
+- The report says `PASSED`.
+- `required-commands.log` contains no failing command.
+- The final diff touches only the expected target files.
+- Closeout evidence includes the exact verification commands.
+
+Failure handling:
+
+- If this case fails again, stop broader testing and fix it first. This is now the canary for memory gate, acceptance, closeout, and deterministic repair behavior.
+
 ### Layer 2: Current-Head Capability
 
 Goal: test current agent behavior without stale architecture drift.
@@ -106,6 +130,26 @@ scripts/run_live_eval.sh --case skill-promotion-gate --mode agent-run
 ```
 
 Before relying on these as regressions, update samples that still use stale `base_ref` values or turn them into explicit fixture reintroduction scripts.
+
+Recommended order:
+
+1. `code-change-verification-repair-loop` - this is the current known weak point and should be rerun first.
+2. `persistent-memory-planning-context` - checks whether persistent memory actually affects planning, not only prompt text.
+3. `skill-promotion-gate` - checks whether self-evolution gates are enforced during real apply flows.
+
+Pass condition:
+
+- The agent makes a real, bounded diff.
+- Failed validation blocks closeout.
+- Repair attempts are visible in trace or report.
+- The final response names the exact files and commands.
+
+Failure handling:
+
+- If the agent never edits, inspect action checkpoint and planning prompt.
+- If the agent edits but breaks compilation, improve diagnostics routing and patch planning.
+- If the agent fixes code but closeout is partial or wrong, improve acceptance evidence and closeout mapping.
+- If the agent succeeds only through deterministic patch synthesis, add a follow-up task to make the normal planning path produce the same fix.
 
 ### Layer 3: Real Task Benchmarks
 
@@ -128,6 +172,56 @@ For each task, score:
 - whether final closeout names exact commands run
 - whether repair attempts are bounded and visible in trace
 
+Pass condition:
+
+- At least 3 of 5 tasks pass on first or bounded repair attempt.
+- No false-success closeout is allowed.
+- No unrelated broad refactor is allowed.
+- For failures, reports must clearly identify whether the problem was planning, retrieval, tool use, verification, repair, or closeout.
+
+Promotion rule:
+
+- A live task graduates into a regression only after it fails once for a meaningful product reason, is fixed, then passes twice on the fixed implementation.
+- Once promoted, it should get either deterministic eval replay coverage or a stable live fixture with an explicit prepare script.
+
+## Test-Repair Cadence
+
+Use this loop for the next round:
+
+1. Run Layer 1 once.
+2. Run the known weak Layer 2 case: `code-change-verification-repair-loop`.
+3. If it fails, classify the failure before editing:
+   - planning failure
+   - context/retrieval failure
+   - tool-use failure
+   - verification failure
+   - repair-loop failure
+   - closeout/acceptance failure
+   - fixture/base-ref failure
+4. Patch only the smallest product or fixture issue that explains the failure.
+5. Add a focused unit or replay test when the bug is deterministic.
+6. Rerun the same case.
+7. Record the result in this document before moving to another case.
+
+Stop the loop after one substantial product fix or after two live runs without a new actionable signal. This keeps the cycle tight and prevents chasing noisy LLM variance.
+
+## Metrics To Track
+
+Every report should be summarized with these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `case` | Live task name |
+| `mode` | `api-plan`, `agent-run`, or replay |
+| `result` | passed / failed / fixture-invalid |
+| `first_edit_turn` | how many tool/model turns before first write |
+| `changed_files` | count and names |
+| `verification_commands` | exact commands attempted |
+| `repair_attempts` | number and whether bounded |
+| `false_success` | whether closeout claimed success despite failed criteria |
+| `root_cause` | planning / retrieval / tool / verification / repair / closeout / fixture |
+| `follow_up` | product fix, fixture fix, or no action |
+
 ## Optimization Recommendations
 
 Priority order:
@@ -138,4 +232,3 @@ Priority order:
 4. Add quality gates for "too many read-only rounds before first edit" and "synthesis timeout".
 5. Convert the best live-eval failures into deterministic evalset replay tests so CI can catch them without calling MiniMax.
 6. Refresh old live task `base_ref` values or document why they intentionally point at a historical fixture.
-
