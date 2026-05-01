@@ -3552,16 +3552,17 @@ Do not answer in prose unless no safe patch exists."#;
         lower_evidence: &str,
         cwd: &std::path::Path,
     ) -> Option<PatchSynthesisAction> {
-        if !(lower_evidence.contains("persistent memory")
-            || lower_evidence.contains("prefetch_retrieval_context_with_llm_rerank"))
-        {
-            return None;
-        }
-
         let path = cwd.join("src/engine/conversation_loop/mod.rs");
         let old_string =
             "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.";
         if !Self::file_contains(&path, old_string) {
+            return None;
+        }
+        if !(lower_evidence.contains("persistent memory")
+            || lower_evidence.contains("prefetch_retrieval_context_with_llm_rerank")
+            || lower_evidence.contains("workflow judgment")
+            || lower_evidence.contains("retrieval context"))
+        {
             return None;
         }
 
@@ -3905,6 +3906,7 @@ Do not answer in prose unless no safe patch exists."#;
             }
         }
         if canonical_candidate.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            Self::validate_rust_patch_semantics(&canonical_candidate, &action.new_string)?;
             if let Some(err) = Self::unknown_rust_enum_variant_in_patch(&action.new_string, cwd) {
                 return Err(anyhow::anyhow!("{}", err));
             }
@@ -3915,6 +3917,35 @@ Do not answer in prose unless no safe patch exists."#;
             name: "file_edit".to_string(),
             arguments: params,
         })
+    }
+
+    fn validate_rust_patch_semantics(path: &std::path::Path, new_string: &str) -> Result<()> {
+        let normalized_path = path.to_string_lossy();
+        if normalized_path.ends_with("src/engine/conversation_loop/mod.rs")
+            && new_string.contains("prefetch_retrieval_context_with_llm_rerank")
+        {
+            if new_string.contains("futures::executor::block_on") {
+                return Err(anyhow::anyhow!(
+                    "persistent memory prefetch in conversation_loop must use async lock().await, not futures::executor::block_on"
+                ));
+            }
+            if new_string.contains("self.provider.as_ref().and_then") {
+                return Err(anyhow::anyhow!(
+                    "persistent memory prefetch in conversation_loop must pass the existing model string directly, not derive a preferred model from provider"
+                ));
+            }
+            if !new_string.contains(".lock().await") {
+                return Err(anyhow::anyhow!(
+                    "persistent memory prefetch in conversation_loop must lock the Arc<Mutex<MemoryManager>> before calling prefetch"
+                ));
+            }
+            if !new_string.contains("&self.model") {
+                return Err(anyhow::anyhow!(
+                    "persistent memory prefetch in conversation_loop must pass &self.model"
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn normalize_synthesized_replacement_anchor(
@@ -5670,6 +5701,74 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("if let Some(ref mem_mutex) = self.memory_manager"));
+        assert!(calls[0].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains(".lock().await"));
+        assert!(calls[0].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains("&self.model"));
+        assert!(!calls[0].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains("futures::executor::block_on"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_rejects_bad_persistent_memory_async_shape() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
+            .expect("create module dir");
+        std::fs::write(
+            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n",
+        )
+        .expect("write file");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/engine/conversation_loop/mod.rs".to_string(),
+            old_string: Some(
+                "        // Regression fixture: persistent memory prefetch was missing before workflow judgment."
+                    .to_string(),
+            ),
+            new_string: r#"        if let Some(memory_ctx) = self
+            .memory_manager
+            .as_mut()
+            .and_then(|m| {
+                futures::executor::block_on(m.prefetch_retrieval_context_with_llm_rerank(
+                    &last_user_preview,
+                    self.provider.as_ref(),
+                    self.provider.as_ref().and_then(|p| p.preferred_model()).unwrap_or("default"),
+                    route.retrieval,
+                ))
+            })
+        {
+            turn_retrieval_context = Some(memory_ctx);
+        }"#
+            .to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        };
+
+        let err = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect_err("bad async memory block should be rejected")
+            .to_string();
+
+        assert!(err.contains("block_on"));
     }
 
     #[test]
