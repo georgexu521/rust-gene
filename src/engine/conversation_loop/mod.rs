@@ -1880,6 +1880,7 @@ impl ConversationLoop {
             let mut repeated_failed_tools = Vec::new();
             let mut failed_tool_names_this_round = Vec::new();
             let mut failed_tool_evidence = Vec::new();
+            let mut successful_validation_commands = Vec::new();
             let mut should_closeout_after_verified_change = false;
             for (tc, result) in results.iter_mut() {
                 truncate_tool_result(result, &tc.name, &tc.id).await;
@@ -1919,6 +1920,11 @@ impl ConversationLoop {
                         changed_files.push(std::path::PathBuf::from(path));
                     }
                 }
+                if result.success && Self::is_validation_tool_call(tc) {
+                    if let Some(command) = tc.arguments["command"].as_str() {
+                        successful_validation_commands.push(command.to_string());
+                    }
+                }
             }
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                 for path in Self::git_status_files_since(&baseline_git_status_files) {
@@ -1937,8 +1943,15 @@ impl ConversationLoop {
                     action_checkpoint_no_change_rounds = 0;
                     action_checkpoint_active = false;
                 } else if any_tool_success && !used_write_tool {
-                    no_code_progress_rounds += 1;
+                    if has_worktree_changes && !successful_validation_commands.is_empty() {
+                        no_code_progress_rounds = 0;
+                        action_checkpoint_active = false;
+                        action_checkpoint_no_change_rounds = 0;
+                    } else {
+                        no_code_progress_rounds += 1;
+                    }
                     if has_worktree_changes
+                        && successful_validation_commands.is_empty()
                         && no_code_progress_rounds >= 2
                         && !action_checkpoint_active
                     {
@@ -2358,7 +2371,9 @@ impl ConversationLoop {
                 // ── 自动测试闭环 ──────────────────────────────
                 let test_results =
                     super::auto_verify::run_tests(&working_dir, &changed_files, check_passed).await;
-                let tests_passed = test_results.iter().all(|r| r.success);
+                let manual_validation_after_changes = !successful_validation_commands.is_empty();
+                let tests_passed = test_results.iter().all(|r| r.success)
+                    || (manual_validation_after_changes && check_passed);
                 if !tests_passed {
                     if let Some(source_context) =
                         verification_source_context(&working_dir, &test_results)
@@ -2373,14 +2388,34 @@ impl ConversationLoop {
                     let test_text = result.to_dialog_text();
                     acceptance_evidence.push(test_text.clone());
                     if !result.success {
-                        failed_commands.push(result.command.clone());
-                        post_edit_evidence.push(test_text.clone());
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&test_text);
-                        messages.push(Message::system(test_text));
+                        if manual_validation_after_changes {
+                            debug!(
+                                "Ignoring stale automatic test failure after successful manual validation command: {}",
+                                result.command
+                            );
+                        } else {
+                            failed_commands.push(result.command.clone());
+                            post_edit_evidence.push(test_text.clone());
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&test_text);
+                            messages.push(Message::system(test_text));
+                        }
                     } else {
                         debug!("{}", test_text);
                     }
+                }
+                if manual_validation_after_changes {
+                    let manual_text = format!(
+                        "[Manual validation passed after code changes]\n{}",
+                        successful_validation_commands
+                            .iter()
+                            .map(|cmd| format!("  $ {}", cmd))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                    acceptance_evidence.push(manual_text.clone());
+                    post_edit_evidence.push(manual_text.clone());
+                    debug!("{}", manual_text);
                 }
 
                 if let Some(diff_text) =
@@ -4442,6 +4477,24 @@ Do not answer in prose unless no safe patch exists."#;
         matches!(name, "file_edit" | "file_write")
     }
 
+    fn is_validation_tool_call(tool_call: &ToolCall) -> bool {
+        if tool_call.name != "bash" {
+            return false;
+        }
+        let Some(command) = tool_call.arguments["command"].as_str() else {
+            return false;
+        };
+        let command = command.trim();
+        command.contains("cargo test")
+            || command.contains("cargo check")
+            || command.contains("cargo clippy")
+            || command.contains("npm test")
+            || command.contains("npm run test")
+            || command.contains("pytest")
+            || command.contains("python -m pytest")
+            || command.contains("go test")
+    }
+
     fn git_status_files() -> HashSet<std::path::PathBuf> {
         let output = std::process::Command::new("git")
             .args(["status", "--short", "--untracked-files=all"])
@@ -5826,6 +5879,35 @@ mod tests {
             .to_string();
 
         assert!(err.contains("Option"));
+    }
+
+    #[test]
+    fn test_validation_tool_call_detects_success_gate_commands() {
+        let cargo_test = ToolCall {
+            id: "test".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "cargo test -q -- --test-threads=1"
+            }),
+        };
+        let ls = ToolCall {
+            id: "ls".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "ls -la"
+            }),
+        };
+        let file_read = ToolCall {
+            id: "read".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({
+                "path": "src/main.rs"
+            }),
+        };
+
+        assert!(ConversationLoop::is_validation_tool_call(&cargo_test));
+        assert!(!ConversationLoop::is_validation_tool_call(&ls));
+        assert!(!ConversationLoop::is_validation_tool_call(&file_read));
     }
 
     #[test]
