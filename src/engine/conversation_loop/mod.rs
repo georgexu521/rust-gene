@@ -4581,6 +4581,23 @@ Do not answer in prose unless no safe patch exists."#;
             || command.contains("pytest")
             || command.contains("python -m pytest")
             || command.contains("go test")
+            || Self::is_safe_rg_validation_command(command)
+    }
+
+    fn is_safe_rg_validation_command(command: &str) -> bool {
+        let command = command.trim();
+        let command = command.strip_prefix("! ").unwrap_or(command).trim();
+        if !command.starts_with("rg ") {
+            return false;
+        }
+        !command.contains('\n')
+            && !command.contains(';')
+            && !command.contains('|')
+            && !command.contains('&')
+            && !command.contains('`')
+            && !command.contains("$(")
+            && !command.contains('>')
+            && !command.contains('<')
     }
 
     fn extract_required_validation_commands(prompt: &str) -> Vec<String> {
@@ -6102,9 +6119,17 @@ mod tests {
                 "command": "python3 -c \"assert True\""
             }),
         };
+        let rg_assertion = ToolCall {
+            id: "rg".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "! rg 'bad_pattern' src/lib.rs"
+            }),
+        };
 
         assert!(ConversationLoop::is_validation_tool_call(&cargo_test));
         assert!(ConversationLoop::is_validation_tool_call(&python_assertion));
+        assert!(ConversationLoop::is_validation_tool_call(&rg_assertion));
         assert!(!ConversationLoop::is_validation_tool_call(&ls));
         assert!(!ConversationLoop::is_validation_tool_call(&file_read));
     }
@@ -6115,6 +6140,8 @@ mod tests {
 ## Acceptance checks
 - `cargo test -q learning_planning -- --test-threads=1`
 - `python3 -c "p='src/lib.rs'; assert True"`
+- `! rg 'bad_pattern' src/lib.rs`
+- `rg 'good_pattern' src/lib.rs`
 - `rm -rf /tmp/nope`
 - `(none)`
 "#;
@@ -6125,7 +6152,9 @@ mod tests {
             commands,
             vec![
                 "cargo test -q learning_planning -- --test-threads=1".to_string(),
-                "python3 -c \"p='src/lib.rs'; assert True\"".to_string()
+                "python3 -c \"p='src/lib.rs'; assert True\"".to_string(),
+                "! rg 'bad_pattern' src/lib.rs".to_string(),
+                "rg 'good_pattern' src/lib.rs".to_string()
             ]
         );
     }
