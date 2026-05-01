@@ -3431,15 +3431,23 @@ Do not answer in prose unless no safe patch exists."#;
         cwd: &std::path::Path,
     ) -> Vec<ToolCall> {
         let lower_evidence = evidence.to_lowercase();
+        let mut actions = Vec::new();
+        if let Some(action) = Self::deterministic_rust_e0596_action(&lower_evidence, cwd) {
+            actions.push(action);
+        }
+
         if !(lower_evidence.contains("memorywrite")
             || lower_evidence.contains("memory_save")
             || lower_evidence.contains("quality gate")
             || lower_evidence.contains("quality gates"))
         {
-            return Vec::new();
+            return actions
+                .iter()
+                .filter_map(|action| self.validate_patch_synthesis_action(action, cwd).ok())
+                .take(6)
+                .collect();
         }
 
-        let mut actions = Vec::new();
         let memory_tool = cwd.join("src/tools/memory_tool/mod.rs");
         if Self::file_contains(
             &memory_tool,
@@ -3494,6 +3502,33 @@ Do not answer in prose unless no safe patch exists."#;
         std::fs::read_to_string(path)
             .map(|content| content.contains(needle))
             .unwrap_or(false)
+    }
+
+    fn deterministic_rust_e0596_action(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Option<PatchSynthesisAction> {
+        if !(lower_evidence.contains("error[e0596]")
+            || (lower_evidence.contains("cannot borrow") && lower_evidence.contains("as mutable")))
+        {
+            return None;
+        }
+
+        let path = cwd.join("src/engine/conversation_loop/mod.rs");
+        let old_string = "if let Some(ref mut mem_mutex) = self.memory_manager {";
+        if !Self::file_contains(&path, old_string) {
+            return None;
+        }
+
+        Some(PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/engine/conversation_loop/mod.rs".to_string(),
+            old_string: Some(old_string.to_string()),
+            new_string: "if let Some(ref mem_mutex) = self.memory_manager {".to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        })
     }
 
     fn deterministic_save_outcome_actions(
@@ -3590,13 +3625,24 @@ Do not answer in prose unless no safe patch exists."#;
                     format!("USER:\n{}", safe_prefix_by_bytes(content, 3000))
                 }
                 Message::Tool { content, .. } => {
-                    if !content.starts_with("Result: OK") {
-                        continue;
-                    }
                     if content.contains("[File unchanged since last read:") {
                         continue;
                     }
-                    format!("TOOL RESULT:\n{}", safe_prefix_by_bytes(content, 3500))
+                    let relevant_failure = !content.starts_with("Result: OK")
+                        && (content.contains("error[")
+                            || content.contains("could not compile")
+                            || content.contains("AssertionError")
+                            || content.contains("[exit status:")
+                            || content.contains("failed_commands"));
+                    if !content.starts_with("Result: OK") && !relevant_failure {
+                        continue;
+                    }
+                    let label = if content.starts_with("Result: OK") {
+                        "TOOL RESULT"
+                    } else {
+                        "FAILED TOOL RESULT"
+                    };
+                    format!("{}:\n{}", label, safe_prefix_by_bytes(content, 3500))
                 }
                 Message::Assistant { content, .. } if !content.trim().is_empty() => {
                     format!("ASSISTANT:\n{}", safe_prefix_by_bytes(content, 1200))
@@ -5462,6 +5508,57 @@ mod tests {
             .expect("unique old_string should recover the real file path");
 
         assert_eq!(call.arguments["path"], "src/memory/quality.rs");
+    }
+
+    #[test]
+    fn test_patch_synthesis_keeps_failed_compiler_evidence() {
+        let messages = vec![Message::tool(
+            "cargo_check",
+            "Result: ERROR\nerror[E0596]: cannot borrow `self.memory_manager.0` as mutable\n[exit status: 101]",
+        )];
+
+        let evidence = ConversationLoop::patch_synthesis_evidence(&messages);
+
+        assert!(evidence.contains("FAILED TOOL RESULT"));
+        assert!(evidence.contains("error[E0596]"));
+    }
+
+    #[test]
+    fn test_deterministic_patch_synthesis_repairs_ref_mut_e0596() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
+            .expect("create module dir");
+        std::fs::write(
+            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+            "if let Some(ref mut mem_mutex) = self.memory_manager {\n    let mut mem = mem_mutex.lock().await;\n}\n",
+        )
+        .expect("write module file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "error[E0596]: cannot borrow `self.memory_manager.0` as mutable, as it is behind a `&` reference",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments["old_string"],
+            "if let Some(ref mut mem_mutex) = self.memory_manager {"
+        );
+        assert_eq!(
+            calls[0].arguments["new_string"],
+            "if let Some(ref mem_mutex) = self.memory_manager {"
+        );
     }
 
     #[test]
