@@ -1534,6 +1534,7 @@ impl ConversationLoop {
         let mut patch_synthesis_recovery_used = false;
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
+        let mut successful_required_validation_commands: HashSet<String> = HashSet::new();
 
         // ── 记忆围栏注入：先注入，再让 preflight 统计真实请求大小 ──
         if let Some(ref mem_mutex) = self.memory_manager {
@@ -1884,6 +1885,9 @@ impl ConversationLoop {
             let mut failed_tool_evidence = Vec::new();
             let mut successful_validation_commands = Vec::new();
             let mut should_closeout_after_verified_change = false;
+            if used_write_tool && !required_validation_commands.is_empty() {
+                successful_required_validation_commands.clear();
+            }
             for (tc, result) in results.iter_mut() {
                 truncate_tool_result(result, &tc.name, &tc.id).await;
                 let result_content = format!(
@@ -1924,7 +1928,14 @@ impl ConversationLoop {
                 }
                 if result.success && Self::is_validation_tool_call(tc) {
                     if let Some(command) = tc.arguments["command"].as_str() {
-                        successful_validation_commands.push(command.to_string());
+                        let command = command.trim().to_string();
+                        if required_validation_commands
+                            .iter()
+                            .any(|required| required.trim() == command)
+                        {
+                            successful_required_validation_commands.insert(command.clone());
+                        }
+                        successful_validation_commands.push(command);
                     }
                 }
             }
@@ -2424,6 +2435,7 @@ impl ConversationLoop {
                     let already_ran = successful_validation_commands
                         .iter()
                         .map(|cmd| cmd.trim().to_string())
+                        .chain(successful_required_validation_commands.iter().cloned())
                         .collect::<HashSet<_>>();
                     let required_to_run = required_validation_commands
                         .iter()
@@ -2438,6 +2450,8 @@ impl ConversationLoop {
                             let text = result.to_dialog_text();
                             acceptance_evidence.push(text.clone());
                             if result.success {
+                                successful_required_validation_commands
+                                    .insert(result.command.trim().to_string());
                                 debug!("{}", text);
                             } else {
                                 required_validation_passed = false;
