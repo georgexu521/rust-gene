@@ -3447,6 +3447,11 @@ Do not answer in prose unless no safe patch exists."#;
         if let Some(action) = Self::deterministic_rust_e0596_action(&lower_evidence, cwd) {
             actions.push(action);
         }
+        if let Some(action) =
+            Self::deterministic_persistent_memory_planning_action(&lower_evidence, cwd)
+        {
+            actions.push(action);
+        }
 
         if !(lower_evidence.contains("memorywrite")
             || lower_evidence.contains("memory_save")
@@ -3537,6 +3542,62 @@ Do not answer in prose unless no safe patch exists."#;
             path: "src/engine/conversation_loop/mod.rs".to_string(),
             old_string: Some(old_string.to_string()),
             new_string: "if let Some(ref mem_mutex) = self.memory_manager {".to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        })
+    }
+
+    fn deterministic_persistent_memory_planning_action(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Option<PatchSynthesisAction> {
+        if !(lower_evidence.contains("persistent memory")
+            || lower_evidence.contains("prefetch_retrieval_context_with_llm_rerank"))
+        {
+            return None;
+        }
+
+        let path = cwd.join("src/engine/conversation_loop/mod.rs");
+        let old_string =
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.";
+        if !Self::file_contains(&path, old_string) {
+            return None;
+        }
+
+        let new_string = r#"        // Prefetch memory context and merge into turn_retrieval_context for planning.
+        if let Some(ref mem_mutex) = self.memory_manager {
+            let mut mem = mem_mutex.lock().await;
+            mem.reset_turn();
+            if let Some(memory_ctx) = mem
+                .prefetch_retrieval_context_with_llm_rerank(
+                    &last_user_preview,
+                    self.provider.as_ref(),
+                    &self.model,
+                    route.retrieval,
+                )
+                .await
+            {
+                trace.record(TraceEvent::MemoryPrefetch {
+                    chars: memory_ctx
+                        .items
+                        .iter()
+                        .map(|item| item.content_preview.chars().count())
+                        .sum(),
+                });
+                if let Some(ref mut ctx) = turn_retrieval_context {
+                    ctx.extend(memory_ctx);
+                } else {
+                    turn_retrieval_context = Some(memory_ctx);
+                }
+            }
+        }"#;
+
+        Some(PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/engine/conversation_loop/mod.rs".to_string(),
+            old_string: Some(old_string.to_string()),
+            new_string: new_string.to_string(),
             line_start: None,
             line_end: None,
             expected_replacements: Some(1),
@@ -5571,6 +5632,44 @@ mod tests {
             calls[0].arguments["new_string"],
             "if let Some(ref mem_mutex) = self.memory_manager {"
         );
+    }
+
+    #[test]
+    fn test_deterministic_patch_synthesis_repairs_persistent_memory_marker() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
+            .expect("create module dir");
+        std::fs::write(
+            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n",
+        )
+        .expect("write module file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "persistent memory should affect workflow planning before apply_learning_to_workflow_judgment",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains("prefetch_retrieval_context_with_llm_rerank"));
+        assert!(calls[0].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains("if let Some(ref mem_mutex) = self.memory_manager"));
     }
 
     #[test]
