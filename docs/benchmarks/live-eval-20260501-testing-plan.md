@@ -27,6 +27,8 @@ The memory quality gate task is now a passing calibrated regression. The repair-
 | `131452` | memory-save-quality-gate | failed | Code and required commands passed, but an earlier rejected acceptance review permanently poisoned final closeout. |
 | `133125` | memory-save-quality-gate | passed | Latest-acceptance closeout semantics fixed the canary; final closeout is passed with no residual risk. |
 | `134029` | code-change-verification-repair-loop | failed | No diff; model identified relevant APIs but did not patch, patch synthesis declined, then bash timed out. |
+| `135628` | code-change-verification-repair-loop | failed | Real diff and bounded repair appeared, but the eval prompt was stale enough that the agent regressed an already-correct `record_repair_action` call. |
+| `141749` | code-change-verification-repair-loop | passed | Fixture was narrowed to a concrete missing-argument regression; agent repaired it and closeout passed. |
 
 ## Improvements Made
 
@@ -44,6 +46,7 @@ The following fixes were applied from the live results:
 10. Added structured `VerificationFailure` and `RepairAction` fields to `ReflectionPass`, including prompt rendering and tests.
 11. Fixed closeout aggregation so the latest clean acceptance review can supersede earlier rejected reviews while preserving history.
 12. Wired failed post-edit verification into `ReflectionPass::record_repair_action` so repair intent is visible before closeout.
+13. Converted `code-change-verification-repair-loop` from a stale broad current-head task into a stable fixture regression with `prepare_commands`.
 
 ## Current Status
 
@@ -63,18 +66,24 @@ docs/benchmarks/live-live-eval-20260501-133125/memory-save-quality-gate/report.m
 The most useful remaining failure evidence is:
 
 ```text
-docs/benchmarks/live-live-eval-20260501-134029/code-change-verification-repair-loop/report.md
+docs/benchmarks/live-live-eval-20260501-135628/code-change-verification-repair-loop/report.md
+```
+
+The best passing repair-loop evidence is:
+
+```text
+docs/benchmarks/live-live-eval-20260501-141749/code-change-verification-repair-loop/report.md
 ```
 
 ## Remaining Issues
 
 The repair-loop task still needs more product work:
 
-1. The agent can now avoid false success, but it still struggles to design the complete repair-loop architecture from a broad prompt.
-2. Patch synthesis should be used for narrow repair, not as the main implementation strategy for larger feature tasks.
-3. The action checkpoint needs a better transition from "read-only loop" to "make a plan patch" before forcing a synthesized edit.
-4. `ReflectionPass` now stores verification and repair facts, and `conversation_loop` records a repair action for failed post-edit verification; the next gap is improving first-edit behavior for broad feature tasks.
-5. Eval samples based on old refs should be refreshed or split into stable fixture regressions and current-head capability tests.
+1. The stable fixture regression now passes, but the broader current-head behavior still needs separate real-task benchmarks.
+2. Patch synthesis is useful for narrow repair, but broad "improve this subsystem" prompts still need a better implementation-intent step before editing.
+3. The action checkpoint can force edits, but it can still over-trust stale or broad task prompts.
+4. `ReflectionPass` now stores verification and repair facts, and `conversation_loop` records a repair action for failed post-edit verification.
+5. Remaining old live tasks should be refreshed or split into stable fixture regressions and current-head capability tests.
 
 ## Next Testing Plan
 

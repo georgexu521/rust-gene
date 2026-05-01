@@ -7,11 +7,41 @@ risk: high
 repo:
   fixture: priority-agent
   base_ref: "HEAD"
+  prepare_commands:
+    - |
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
+
+      path = Path("src/engine/conversation_loop/mod.rs")
+      text = path.read_text()
+      pattern = re.compile(
+          r'post_edit_reflection\.record_repair_action\(\s*'
+          r'acceptance_repair_attempts \+ 1,\s*'
+          r'"repair failed verification before closeout",\s*'
+          r'changed_files\.first\(\)\.map\(\|path\| path\.display\(\)\.to_string\(\)\),\s*'
+          r'verification_command,\s*'
+          r'\);',
+          re.MULTILINE,
+      )
+      new = '''post_edit_reflection.record_repair_action(
+                        acceptance_repair_attempts + 1,
+                        &format!("retry: {}", verification_command),
+                        changed_files.first().map(|path| path.display().to_string()),
+                    );'''
+      text, count = pattern.subn(new, text, count=1)
+      if count != 1:
+          raise SystemExit("expected record_repair_action call shape was not found")
+      path.write_text(text)
+      PY
   setup:
     - cargo test -q reflection_pass -- --test-threads=1
 
 prompt: |
-  完善真实 code-change workflow 的验证-修复闭环。
+  修复真实 code-change workflow 的验证-修复闭环回归。
+
+  当前 fixture 故意引入了一个编译错误：`record_repair_action` 调用缺少 verification command 参数。
+  请先修复这个回归，再确认验证失败会被记录为 repair action，且不会在失败时给出成功 closeout。
 
   要求：
   - 如果代码修改后的 required command 失败，agent 不应直接 closeout。
@@ -37,6 +67,8 @@ acceptance:
   required_commands:
     - cargo test -q reflection_pass -- --test-threads=1
     - cargo test -q evalset -- --test-threads=1
+    - "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs"
+    - "rg 'record_repair_action\\(' src/engine/conversation_loop/mod.rs"
     - cargo test -q -- --test-threads=1
   diff_constraints:
     max_files_changed: 12
