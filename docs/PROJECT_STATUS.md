@@ -22,7 +22,7 @@ Latest verified baseline observed after the 2026-05-03 Claude-gap implementation
 batch:
 
 ```text
-1050 passed; 0 failed
+1053 passed; 0 failed
 ```
 
 Verified with:
@@ -44,6 +44,8 @@ cargo test --quiet -- --test-threads=1
   events.
 - Code-change turns record implementation intent before edits, and env-prefixed
   validation commands are classified as validation evidence.
+- Final closeout now includes an evidence summary with changed-file,
+  validation-status, and acceptance-status counts.
 - Core coding tools now attach structured execution summaries; file edits refuse
   stale-read writes by default; bash command classification covers shell/env
   wrappers and common validation families; git tool execution now honors the
@@ -53,6 +55,9 @@ cargo test --quiet -- --test-threads=1
 - MCP status and tool/resource visibility are health-aware and approval-aware.
 - Hook execution uses typed lifecycle events, records structured run results,
   and is visible through TurnTrace and `/hooks`.
+- Tool execution progress labels are classifier-aware for bash validation
+  commands, so cargo test/check/clippy and similar commands show specific
+  progress instead of generic shell execution text.
 - Subagents have explicit profile contracts, independent tool scopes, lifecycle
   trace events, durable result artifacts, and manager tests for timeout, failure,
   cancellation, and resumable results.
@@ -127,8 +132,8 @@ not missing foundations:
 
 1. Continue measuring broad code-change first-pass success and repair count
    against the replay matrix and live eval tasks.
-2. Deepen remaining high-use tool semantics for validation closeout and
-   long-running command progress.
+2. Continue hardening long-running command progress around cancellation,
+   timeout, and streamed partial output.
 3. Expand rendered command-level smoke tests beyond core panels into broader
    settings and history surfaces.
 4. Populate persisted eval reports with real external Claude/Codex baseline

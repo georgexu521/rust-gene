@@ -170,9 +170,59 @@ pub struct WorkflowCloseout {
 }
 
 impl WorkflowCloseout {
+    pub fn evidence_summary(&self) -> String {
+        let passed = self
+            .validation
+            .iter()
+            .filter(|item| item.contains(": passed"))
+            .count();
+        let failed = self
+            .validation
+            .iter()
+            .filter(|item| item.contains(": failed"))
+            .count();
+        let partial = self
+            .validation
+            .iter()
+            .filter(|item| item.contains(": partial"))
+            .count();
+        let not_verified = self
+            .validation
+            .iter()
+            .filter(|item| item.contains(": not_verified"))
+            .count();
+        let accepted = self
+            .acceptance
+            .iter()
+            .filter(|item| item.contains("accepted=true"))
+            .count();
+        let rejected = self
+            .acceptance
+            .iter()
+            .filter(|item| item.contains("accepted=false"))
+            .count();
+        let pending_acceptance = self
+            .acceptance
+            .iter()
+            .filter(|item| item.starts_with("pending:"))
+            .count();
+        format!(
+            "changed_files={} validation_passed={} validation_failed={} validation_partial={} validation_not_verified={} acceptance_passed={} acceptance_rejected={} acceptance_pending={}",
+            self.changed_files.len(),
+            passed,
+            failed,
+            partial,
+            not_verified,
+            accepted,
+            rejected,
+            pending_acceptance
+        )
+    }
+
     pub fn format_for_final_response(&self) -> String {
         let mut out = String::from("\n\nCloseout:\n");
         out.push_str(&format!("- Status: {}\n", self.status.label()));
+        out.push_str(&format!("- Evidence: {}\n", self.evidence_summary()));
         out.push_str(&format!(
             "- Changed: {}\n",
             if self.changed_files.is_empty() {
@@ -674,6 +724,40 @@ mod tests {
     }
 
     #[test]
+    fn closeout_evidence_summary_counts_validation_and_acceptance_states() {
+        let closeout = WorkflowCloseout {
+            status: StageValidationStatus::Partial,
+            changed_files: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
+            validation: vec![
+                "compile: passed".to_string(),
+                "unit tests: failed".to_string(),
+                "lint: partial".to_string(),
+                "docs: not_verified".to_string(),
+            ],
+            acceptance: vec![
+                "accepted=true confidence=High unresolved=0".to_string(),
+                "accepted=false confidence=Low unresolved=1".to_string(),
+                "pending: user-facing behavior reviewed".to_string(),
+            ],
+            residual_risks: vec!["test failure unresolved".to_string()],
+        };
+
+        let summary = closeout.evidence_summary();
+
+        assert!(summary.contains("changed_files=2"));
+        assert!(summary.contains("validation_passed=1"));
+        assert!(summary.contains("validation_failed=1"));
+        assert!(summary.contains("validation_partial=1"));
+        assert!(summary.contains("validation_not_verified=1"));
+        assert!(summary.contains("acceptance_passed=1"));
+        assert!(summary.contains("acceptance_rejected=1"));
+        assert!(summary.contains("acceptance_pending=1"));
+        assert!(closeout
+            .format_for_final_response()
+            .contains("- Evidence: changed_files=2"));
+    }
+
+    #[test]
     fn closeout_is_not_verified_without_required_validation_or_acceptance() {
         let route = code_change_route(RiskLevel::Medium);
         let mut bundle = TaskContextBundle::new("修复 memory_save 质量门控", ".", route, None);
@@ -695,6 +779,9 @@ mod tests {
             .residual_risks
             .iter()
             .any(|item| item.contains("No changed files")));
+        assert!(closeout
+            .format_for_final_response()
+            .contains("acceptance_pending=1"));
     }
 
     #[test]

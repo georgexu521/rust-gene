@@ -857,6 +857,60 @@ fn build_tool_execution_summary(tool_call: &ToolCall, result: &ToolResult) -> se
     summary
 }
 
+fn tool_execution_start_progress(tool_name: &str, arguments: &serde_json::Value) -> String {
+    if tool_name == "bash" {
+        let Some(command) = arguments["command"].as_str() else {
+            return "Executing bash...".to_string();
+        };
+        let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
+        let prefix = match classification.validation_family {
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoTest) => {
+                "Running Rust tests"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoCheck) => {
+                "Running cargo check"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoClippy) => {
+                "Running cargo clippy"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NpmTest)
+            | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PnpmTest)
+            | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::YarnTest) => {
+                "Running JS tests"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::Pytest)
+            | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PythonUnittest) => {
+                "Running Python tests"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::GoTest) => {
+                "Running Go tests"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::RgAssertion) => {
+                "Running search assertion"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NodeScript) => {
+                "Running Node validation"
+            }
+            None => match classification.command_kind {
+                crate::tools::bash_tool::command_classifier::CommandKind::Inspection => {
+                    "Inspecting with shell"
+                }
+                crate::tools::bash_tool::command_classifier::CommandKind::Mutation => {
+                    "Running shell mutation"
+                }
+                crate::tools::bash_tool::command_classifier::CommandKind::Dangerous => {
+                    "Reviewing dangerous shell command"
+                }
+                _ => "Executing shell command",
+            },
+        };
+        let command = safe_prefix_by_bytes(command, 80);
+        return format!("{}: {}", prefix, command);
+    }
+
+    format!("Executing {}...", tool_name)
+}
+
 fn attach_tool_execution_metadata(tool_call: &ToolCall, result: &mut ToolResult) {
     let summary = build_tool_execution_summary(tool_call, result);
     merge_tool_result_metadata(result, "tool_summary", summary);
@@ -6567,7 +6621,10 @@ Do not answer in prose unless no safe patch exists."#;
                             let _ = tx
                                 .send(StreamEvent::ToolExecutionProgress {
                                     id: tool_id.clone(),
-                                    progress: format!("Executing {}...", tool_name),
+                                    progress: tool_execution_start_progress(
+                                        &tool_name,
+                                        &tc.arguments,
+                                    ),
                                 })
                                 .await;
                         }
@@ -6583,7 +6640,7 @@ Do not answer in prose unless no safe patch exists."#;
                         let _ = tx
                             .send(StreamEvent::ToolExecutionProgress {
                                 id: tool_id.clone(),
-                                progress: format!("Executing {}...", tool_name),
+                                progress: tool_execution_start_progress(&tool_name, &tc.arguments),
                             })
                             .await;
                     }
@@ -6815,6 +6872,50 @@ mod tests {
             .as_ref()
             .and_then(|data| data.get("recovery"))
             .is_none());
+    }
+
+    #[test]
+    fn test_tool_execution_start_progress_uses_validation_labels() {
+        assert_eq!(
+            tool_execution_start_progress(
+                "bash",
+                &serde_json::json!({"command": "cargo test -q -- --test-threads=1"})
+            ),
+            "Running Rust tests: cargo test -q -- --test-threads=1"
+        );
+        assert_eq!(
+            tool_execution_start_progress(
+                "bash",
+                &serde_json::json!({"command": "env PRIORITY_AGENT=1 cargo check -q"})
+            ),
+            "Running cargo check: env PRIORITY_AGENT=1 cargo check -q"
+        );
+        assert_eq!(
+            tool_execution_start_progress(
+                "bash",
+                &serde_json::json!({"command": "cargo clippy -q -- -D warnings"})
+            ),
+            "Running cargo clippy: cargo clippy -q -- -D warnings"
+        );
+    }
+
+    #[test]
+    fn test_tool_execution_start_progress_handles_generic_shell_and_tools() {
+        assert_eq!(
+            tool_execution_start_progress("bash", &serde_json::json!({"command": "ls src"})),
+            "Inspecting with shell: ls src"
+        );
+        assert_eq!(
+            tool_execution_start_progress(
+                "bash",
+                &serde_json::json!({"command": "python scripts/update.py"})
+            ),
+            "Executing shell command: python scripts/update.py"
+        );
+        assert_eq!(
+            tool_execution_start_progress("grep", &serde_json::json!({"pattern": "Closeout"})),
+            "Executing grep..."
+        );
     }
 
     #[test]

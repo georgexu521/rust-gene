@@ -202,7 +202,10 @@ Status: initial matrix landed.
   external baseline metadata for Claude/Codex-style comparisons.
 - Git tool execution now honors `ToolContext.working_dir` and returns
   structured summary/recovery metadata for closeout and trace consumers.
-- Current full local baseline after this batch: `1050 passed; 0 failed`.
+- Final closeout includes structured evidence counts, and bash progress labels
+  now use validation command classification for cargo test/check/clippy and
+  similar long-running validation commands.
+- Current full local baseline after this batch: `1053 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 
