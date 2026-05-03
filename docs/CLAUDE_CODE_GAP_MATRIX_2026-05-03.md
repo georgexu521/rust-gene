@@ -83,15 +83,15 @@ evidence.
 
 Deliverables:
 
-- Add an implementation-intent checkpoint before the first edit on code-change
+- [x] Add an implementation-intent checkpoint before the first edit on code-change
   tasks: target files, intended behavior change, validation commands, and risk.
-- Track first-pass edit success, repair count, validation count, and final
+- [x] Track first-pass edit success, repair count, validation count, and final
   evidence quality in `TurnTrace`.
-- Treat env-prefixed validation commands such as
+- [x] Treat env-prefixed validation commands such as
   `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test ...` as first-class
   validation commands.
-- Keep required validation evidence separate from opportunistic auto-tests.
-- Add regression tasks for broad edits, stale validation evidence, and empty
+- [x] Keep required validation evidence separate from opportunistic auto-tests.
+- [x] Add regression tasks for broad edits, stale validation evidence, and empty
   closeout output.
 
 Acceptance:
@@ -108,13 +108,13 @@ product-grade coding tools, not generic JSON executors.
 
 Deliverables:
 
-- Add per-tool execution summaries suitable for final closeout and trace views.
-- Add stale-read detection for file edits when the file changed after read.
-- Expand bash command classification around destructive commands, validation
+- [x] Add per-tool execution summaries suitable for final closeout and trace views.
+- [x] Add stale-read detection for file edits when the file changed after read.
+- [x] Expand bash command classification around destructive commands, validation
   commands, long-running commands, and environment-prefixed commands.
-- Improve grep/project search no-result recovery so the agent changes search
+- [x] Improve grep/project search no-result recovery so the agent changes search
   strategy instead of looping.
-- Add tests that assert tool summaries and recovery metadata, not only success
+- [x] Add tests that assert tool summaries and recovery metadata, not only success
   booleans.
 
 Acceptance:
@@ -130,12 +130,12 @@ Goal: subagents should be dependable enough for real parallel code work.
 
 Deliverables:
 
-- Define explicit `AgentProfile` records: role, allowed tools, context mode,
+- [x] Define explicit `AgentProfile` records: role, allowed tools, context mode,
   timeout, output contract, and risk policy.
-- Support forked context, inherited context, and minimal-context modes.
-- Persist subagent status and result artifacts in the session store.
-- Show subagent progress in CLI status/trace views.
-- Add tests for agent timeout, failure, cancellation, and resumable result
+- [x] Support forked context, inherited context, and minimal-context modes.
+- [x] Persist subagent status and result artifacts in the session store.
+- [x] Show subagent progress in CLI status/trace views.
+- [x] Add tests for agent timeout, failure, cancellation, and resumable result
   retrieval.
 
 Acceptance:
@@ -150,12 +150,12 @@ Goal: hooks should become a real lifecycle API instead of scattered callbacks.
 
 Deliverables:
 
-- Define typed events for prompt submit, pre/post tool, permission request,
+- [x] Define typed events for prompt submit, pre/post tool, permission request,
   validation start/end, subagent start/end, file change, compaction, and session
   end.
-- Route all hook execution through one manager with timeout, redaction,
+- [x] Route all hook execution through one manager with timeout, redaction,
   blocking/non-blocking modes, and structured results.
-- Expose hook status through CLI and trace.
+- [x] Expose hook status through CLI and trace.
 
 Acceptance:
 
@@ -171,15 +171,25 @@ Deliverables:
 
 - Prioritize diff review, approval panels, status line, history search,
   context visualization, and tool expansion views.
-- Categorize all slash commands as `production`, `usable`, or `placeholder`.
-- Hide or clearly label placeholders in help/model-visible surfaces.
-- Add command-level smoke tests.
+- [x] Categorize all slash commands as `production`, `usable`, or `placeholder`.
+- [x] Hide or clearly label placeholders in help/model-visible surfaces.
+- [ ] Add broader rendered command-level smoke tests.
 
 Acceptance:
 
 - `/help` does not imply placeholder commands are production features.
 - A code-change turn shows concise progress, tool results, validation, and
   final evidence without digging through raw logs.
+
+### P0: Evaluation Replay Matrix
+
+Status: initial matrix landed.
+
+- `evalsets/coding_replay_matrix.yaml` now covers 20 deterministic coding
+  replay scenarios.
+- `/eval json <name|all>` emits machine-readable pass/fail reports for trend
+  collection.
+- Current full local baseline after this batch: `1030 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 
@@ -202,4 +212,3 @@ Deliverables:
 - Do not optimize exotic integrations before the P0 coding loop metrics are
   stable.
 - Do not claim Claude Code parity without replay evidence on broad real tasks.
-

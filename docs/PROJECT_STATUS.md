@@ -18,18 +18,18 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest verified baseline observed after the 2026-05-03 required-validation
-closeout hardening:
+Latest verified baseline observed after the 2026-05-03 Claude-gap implementation
+batch:
 
 ```text
-1006 passed; 0 failed
+1030 passed; 0 failed
 ```
 
 Verified with:
 
 ```bash
 cargo check --quiet
-env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
+cargo test --quiet -- --test-threads=1
 ```
 
 ## Completed Runtime Spine
@@ -42,9 +42,23 @@ env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
   medium drift is visible in `/goal drift` and `/quick`.
 - Tool failures attach recovery metadata and persist `tool_outcome` learning
   events.
+- Code-change turns record implementation intent before edits, and env-prefixed
+  validation commands are classified as validation evidence.
+- Core coding tools now attach structured execution summaries; file edits refuse
+  stale-read writes by default; bash command classification covers shell/env
+  wrappers and common validation families.
 - Memory search spans project, user, topic, and agent namespaces with simple
   conflict detection.
 - MCP status and tool/resource visibility are health-aware and approval-aware.
+- Hook execution uses typed lifecycle events, records structured run results,
+  and is visible through TurnTrace and `/hooks`.
+- Subagents have explicit profile contracts, independent tool scopes, lifecycle
+  trace events, durable result artifacts, and manager tests for timeout, failure,
+  cancellation, and resumable results.
+- Slash commands are labeled as `production`, `usable`, or `placeholder` in help
+  and command-palette surfaces.
+- Evalsets include a 20-scenario deterministic coding replay matrix plus JSON
+  report output for pass/fail trend collection.
 - CLI panels are increasingly backed by actual runtime state, not decoration.
 - `karpathy-guidelines` is bundled as a coding behavior skill and exposed
   through `/skills`, `/karpathy <task>`, and code-change reflection checks.
@@ -100,18 +114,18 @@ than useful.
 
 ## Remaining Work
 
-The latest 5-item closure plan is complete. The remaining work is now product
-maturity, not missing foundations:
+The latest 5-item closure plan is complete, and the first Claude-gap P0/P1
+implementation batch is now landed. The remaining work is now product maturity,
+not missing foundations:
 
-1. Make the coding loop decisive: implementation intent before edits, fewer
-   repair rounds, stronger validation classification, and deterministic final
-   evidence.
-2. Deepen core tool semantics for file edit, bash, search, git, and validation
-   commands.
-3. Keep command maturity honest: distinguish production-ready, usable, and
-   scaffold commands with tests.
-4. Expand evalsets and replay scenarios around broad code changes, permissions,
-   goal drift, recovery, memory retrieval, MCP resources, and long sessions.
+1. Continue measuring broad code-change first-pass success and repair count
+   against the replay matrix and live eval tasks.
+2. Deepen remaining high-use tool semantics for git, validation closeout, and
+   long-running command progress.
+3. Expand command-level smoke tests beyond registry/help coverage into rendered
+   command-palette and approval-panel behavior.
+4. Add persisted eval trend history and compare replay results across baseline
+   runs.
 5. Continue CLI polish based on trace-backed state: command palette, statusline,
    approval panels, tool expansion, and settings visibility.
 6. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
