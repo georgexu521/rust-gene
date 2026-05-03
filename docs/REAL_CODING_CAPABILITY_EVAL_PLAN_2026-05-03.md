@@ -193,6 +193,29 @@ For each run, record:
   task-specific patch synthesis by default and keep it only as explicit opt-in
   research behavior.
 
+### `memory-recall-conflict-precision` no-synth rerun
+
+- Report path:
+  `docs/benchmarks/live-capability-memory-conflict-nosynth-20260503-183836/memory-recall-conflict-precision/report.md`
+- Status: failed.
+- Failure owner: agent_flow.
+- Required commands: ok on unchanged baseline.
+- Files changed: none.
+- Specialty signals: 5/6 active.
+  - `memory_active=true`
+  - `automation_active=true`
+  - `guided_debugging_active=true`
+  - `guided_reasoning_active=true`
+  - `weighted_planning_active=true`
+  - `closeout_active=false`
+- Acceptance gaps: no acceptance review ran because no code diff or validation
+  event was recorded by the agent workflow.
+- False-success behavior: good; quality gates again rejected an unchanged
+  code-change run.
+- Improvement type: generic workflow/tool-surface fix. In focused repair mode,
+  hide `bash` until a file change exists so the model is steered toward
+  `file_edit`/`file_write` first and then validation.
+
 ## Stop Conditions
 
 - Stop and fix the harness if reports are missing trace, output, or required

@@ -2006,7 +2006,7 @@ impl ConversationLoop {
                 let mut exposed_names = exposed_tool_names.iter().cloned().collect::<Vec<_>>();
                 exposed_names.sort();
                 request_messages.push(Message::system(format!(
-                    "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Use file_edit/file_write to patch files as soon as the target line is known. file_read/grep are allowed only for one targeted lookup of a specific symbol, test, or call site; do not repeat broad inspection. If bash is exposed, use it only to run validation after a patch or to apply a patch. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
+                    "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Use file_edit/file_write to patch files as soon as the target line is known. file_read/grep are allowed only for one targeted lookup of a specific symbol, test, or call site; do not repeat broad inspection. If bash is exposed, use it only to run validation after a patch. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
                     exposed_names.join(", ")
                 )));
             }
@@ -2338,7 +2338,7 @@ impl ConversationLoop {
                         tool_results_text.push_str(&checkpoint);
                     } else if no_code_progress_rounds >= 3 && !action_checkpoint_active {
                         let checkpoint = format!(
-                            "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit, file_write, or bash to apply the smallest safe patch, then run validation. If prior grep/file_read results include line numbers, prefer file_edit line_start/line_end to replace the specific lines instead of asking to inspect again. Do not call grep/glob/file_read/project_list or other inspection-only tools. If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
+                            "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit line_start/line_end to replace the specific lines instead of asking to inspect again. Do not call grep/glob/file_read/project_list or other inspection-only tools. If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
                             route.workflow, no_code_progress_rounds
                         );
                         trace.record(TraceEvent::WorkflowFallback {
@@ -5820,13 +5820,14 @@ Do not answer in prose unless no safe patch exists."#;
 
     fn code_action_tools(
         tools: &[crate::services::api::Tool],
-        _has_changes_before_request: bool,
+        has_changes_before_request: bool,
     ) -> Vec<crate::services::api::Tool> {
         tools
             .iter()
             .filter(|tool| {
                 Self::is_code_write_tool_name(&tool.name)
-                    || matches!(tool.name.as_str(), "bash" | "file_read" | "grep")
+                    || matches!(tool.name.as_str(), "file_read" | "grep")
+                    || (has_changes_before_request && tool.name == "bash")
             })
             .cloned()
             .collect()
@@ -7129,6 +7130,47 @@ mod tests {
             &serde_json::json!({"command": "cargo test -q"}),
             true,
         ));
+    }
+
+    #[test]
+    fn test_code_action_tools_hide_bash_until_files_change() {
+        let tools = vec![
+            crate::services::api::Tool {
+                name: "file_edit".to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            },
+            crate::services::api::Tool {
+                name: "file_read".to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            },
+            crate::services::api::Tool {
+                name: "grep".to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            },
+            crate::services::api::Tool {
+                name: "bash".to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            },
+        ];
+
+        let before_change = ConversationLoop::code_action_tools(&tools, false)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<HashSet<_>>();
+        assert!(before_change.contains("file_edit"));
+        assert!(before_change.contains("file_read"));
+        assert!(before_change.contains("grep"));
+        assert!(!before_change.contains("bash"));
+
+        let after_change = ConversationLoop::code_action_tools(&tools, true)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<HashSet<_>>();
+        assert!(after_change.contains("bash"));
     }
 
     #[test]
