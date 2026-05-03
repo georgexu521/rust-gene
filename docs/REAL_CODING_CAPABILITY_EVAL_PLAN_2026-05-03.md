@@ -85,6 +85,14 @@ Each run gets a compact score:
 
 ### Batch C: Product Surface
 
+- [x] `live-eval-dashboard-summary`
+  - Type: feature.
+  - Result: failed in `capability-dashboard-summary-20260503-213148`.
+  - Key learning: seeded code-change intent worked as a gate; the agent
+    inspected but produced no diff, action checkpoint prevented false success,
+    and required commands exposed a PyYAML dependency in isolated eval
+    worktrees.
+
 - [ ] `resume-session-picker`
   - Type: feature.
   - Why: tests Claude-like daily CLI workflow.

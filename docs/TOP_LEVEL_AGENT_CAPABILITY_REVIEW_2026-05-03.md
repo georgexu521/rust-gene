@@ -170,3 +170,33 @@ Current classification:
 
 The runner now prints `eval_intent`, includes it in generated agent prompts, and
 uses it for no-diff quality decisions instead of relying only on `base_ref`.
+
+## Dashboard Summary Run
+
+Run:
+
+`docs/benchmarks/live-capability-dashboard-summary-20260503-213148/live-eval-dashboard-summary/report.md`
+
+Result:
+
+- Status: failed.
+- Failure owner: `llm_reasoning`.
+- Eval intent: `seeded_code_change`.
+- Files changed: none.
+- Closeout: `not_verified`.
+- Specialty signals: 4/6 active.
+- Required commands: failed because `scripts/run_live_eval.sh --list` could not
+  import PyYAML inside the isolated worktree; full Rust tests still passed.
+
+Interpretation:
+
+- The eval taxonomy did its job: this was a seeded code-change case, so no diff
+  was correctly treated as failure.
+- The action checkpoint did its job: it blocked false success instead of
+  claiming the dashboard feature was complete.
+- The model did not do the implementation. It repeatedly inspected
+  `scripts/run_live_eval.sh` and task metadata, then stalled without a
+  `file_edit`.
+- The next concrete project improvement should be a human-led implementation of
+  summary generation plus removal or vendoring of the PyYAML dependency for
+  `--list`, not a hidden runtime patch.
