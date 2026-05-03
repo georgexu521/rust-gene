@@ -1,0 +1,1 @@
+ M fixtures/live_frontend/book_notes/app.js

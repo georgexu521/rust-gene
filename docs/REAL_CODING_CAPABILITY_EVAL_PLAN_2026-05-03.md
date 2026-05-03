@@ -43,10 +43,14 @@ Each run gets a compact score:
     validation/acceptance iterations; tool errors were visible but did not cause
     false success.
 
-- [ ] `frontend-book-notes-localstorage`
+- [x] `frontend-book-notes-localstorage`
   - Type: feature.
   - Why: tests frontend/product behavior and persistence.
   - Expected pressure: UX completeness, browser-like user flow, validation.
+  - Result: passed in `capability-frontend-20260503-180633`.
+  - Key learning: agent completed the product behavior in one relevant frontend
+    file with clean validation; repeated acceptance rejections show useful
+    false-success resistance but measurable rework cost.
 
 ### Batch B: Core Agent Features
 
@@ -138,6 +142,28 @@ For each run, record:
   the final closeout only passed after required commands succeeded.
 - Improvement type: no immediate runtime change. Keep watching tool errors and
   whether medium feature tasks should expose more useful plan priorities.
+
+### `frontend-book-notes-localstorage`
+
+- Report path:
+  `docs/benchmarks/live-capability-frontend-20260503-180633/frontend-book-notes-localstorage/report.md`
+- Status: passed.
+- Failure owner: none.
+- Required commands: ok.
+- Files changed: `fixtures/live_frontend/book_notes/app.js`.
+- Specialty signals: 5/6 active.
+  - `memory_active=true`
+  - `automation_active=true`
+  - `guided_debugging_active=true`
+  - `guided_reasoning_active=false`
+  - `weighted_planning_active=true`
+  - `closeout_active=true`
+- Acceptance gaps: five earlier acceptance reviews rejected the result, then
+  final acceptance passed with zero unresolved items.
+- False-success behavior: good; required commands and acceptance were both
+  green before closeout.
+- Improvement type: no immediate runtime change. Track repeated acceptance
+  loops as a prompt/review calibration signal before considering runtime logic.
 
 ## Stop Conditions
 

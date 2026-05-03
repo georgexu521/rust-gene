@@ -1,0 +1,7 @@
+$ node fixtures/live_frontend/book_notes/test-book-notes.cjs
+book notes behavior ok
+[exit status: 0]
+
+$ ! rg 'TODO' fixtures/live_frontend/book_notes/app.js
+[exit status: 0]
+
