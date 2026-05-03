@@ -117,6 +117,30 @@ Flow notes:
 - Guided debugging still needs a dedicated failing/blocking run; successful
   repair paths do not necessarily trigger it.
 
+## Follow-Up Fix
+
+The `P3 / 0.05` weight observation was traced to model-supplied high-risk
+workflow factors that can be all zero. Since factors take precedence over the
+model priority label, all-zero factors collapse the computed importance to the
+minimum clamp.
+
+Fix applied:
+
+- Treat all-zero high-risk factors as invalid and fall back to the model's
+  priority label.
+- If a high-risk plan still has no step at `P2` or above, promote the first
+  step to a conservative `P2` floor.
+- Add a regression test:
+  `high_risk_zero_factor_plan_gets_actionable_priority_floor`.
+
+Validated with:
+
+```bash
+cargo test -q workflow_contract -- --test-threads=1
+scripts/coding-workflow-gates.sh quick
+scripts/coding-workflow-gates.sh standard
+```
+
 ## Validation
 
 Required local checks:

@@ -458,6 +458,16 @@ fn sanitize_factors(factors: WeightFactors) -> WeightFactors {
     }
 }
 
+fn factors_have_signal(factors: WeightFactors) -> bool {
+    factors.dependency
+        + factors.user_value
+        + factors.risk_reduction
+        + factors.uncertainty_reduction
+        + factors.blocking
+        + factors.cost
+        > 0.01
+}
+
 fn sanitize_score_opt(value: Option<f32>) -> Option<f32> {
     value.and_then(sanitize_score)
 }
@@ -1207,6 +1217,7 @@ pub fn parse_guided_debugging_analysis(content: &str) -> anyhow::Result<GuidedDe
 }
 
 fn normalize_judgment(judgment: &mut ProgrammingWorkflowJudgment) {
+    let high_risk = matches!(judgment.risk, RiskLevel::High);
     for (index, step) in judgment.plan.iter_mut().enumerate() {
         if step.id.as_deref().unwrap_or_default().trim().is_empty() {
             step.id = Some(format!("step-{}", index + 1));
@@ -1216,6 +1227,9 @@ fn normalize_judgment(judgment: &mut ProgrammingWorkflowJudgment) {
         step.weight_share = sanitize_score_opt(step.weight_share);
         if let Some(factors) = step.factors.as_mut() {
             *factors = sanitize_factors(*factors);
+            if high_risk && !factors_have_signal(*factors) {
+                step.factors = None;
+            }
         }
         if let Some(override_adjustment) = step.override_adjustment.as_mut() {
             override_adjustment.adjusted_importance_score =
@@ -1224,6 +1238,22 @@ fn normalize_judgment(judgment: &mut ProgrammingWorkflowJudgment) {
                 sanitize_score(override_adjustment.confidence).unwrap_or(0.0);
         }
         recompute_step_weight(step);
+    }
+    if high_risk
+        && !judgment.plan.is_empty()
+        && judgment
+            .plan
+            .iter()
+            .all(|step| step.normalized_weight() < 0.40)
+    {
+        if let Some(first_step) = judgment.plan.first_mut() {
+            first_step.priority = PriorityLabel::P2;
+            first_step.weight = None;
+            first_step.importance_score = None;
+            first_step.factors = Some(WeightFactors::from_priority(PriorityLabel::P2));
+            first_step.override_adjustment = None;
+            recompute_step_weight(first_step);
+        }
     }
     normalize_weight_shares(&mut judgment.plan);
     if judgment.acceptance.original_user_goal.trim().is_empty() {
@@ -1468,6 +1498,71 @@ mod tests {
             .map(WorkflowPlanStep::computed_weight_share)
             .sum::<f32>();
         assert!((total_share - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn high_risk_zero_factor_plan_gets_actionable_priority_floor() {
+        let content = r#"{
+  "task_type": "bug_fix",
+  "complexity": "medium",
+  "risk": "high",
+  "requirement_complete_enough": true,
+  "needs_user_questions": false,
+  "question_reason": null,
+  "questions": [],
+  "assumptions": [],
+  "guided_reasoning_required": true,
+  "guided_reasoning_triggers": ["high_risk_area"],
+  "plan": [
+    {
+      "id": "inspect",
+      "description": "Inspect memory planning integration",
+      "priority": "p3",
+      "factors": {
+        "dependency": 0.0,
+        "user_value": 0.0,
+        "risk_reduction": 0.0,
+        "uncertainty_reduction": 0.0,
+        "blocking": 0.0,
+        "cost": 0.0
+      },
+      "reason": "Model supplied empty factors",
+      "acceptance_criteria": ["Relevant path identified"]
+    },
+    {
+      "id": "validate",
+      "description": "Run memory planning tests",
+      "priority": "p3",
+      "factors": {
+        "dependency": 0.0,
+        "user_value": 0.0,
+        "risk_reduction": 0.0,
+        "uncertainty_reduction": 0.0,
+        "blocking": 0.0,
+        "cost": 0.0
+      },
+      "reason": "Model supplied empty factors",
+      "acceptance_criteria": ["Tests pass"]
+    }
+  ],
+  "acceptance": {
+    "original_user_goal": "Repair memory planning",
+    "assumptions": [],
+    "criteria": [],
+    "unresolved_items": [],
+    "residual_risks": []
+  }
+}"#;
+
+        let judgment = parse_workflow_judgment(content).unwrap();
+        let top = judgment.top_plan_step().unwrap();
+
+        assert_eq!(top.id.as_deref(), Some("inspect"));
+        assert!(matches!(
+            top.priority,
+            PriorityLabel::P0 | PriorityLabel::P1 | PriorityLabel::P2
+        ));
+        assert!(top.normalized_weight() >= 0.40);
     }
 
     #[test]
