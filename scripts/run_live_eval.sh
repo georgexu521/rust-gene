@@ -23,6 +23,7 @@ usage() {
 Usage:
   scripts/run_live_eval.sh --list
   scripts/run_live_eval.sh --case <id|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
+  scripts/run_live_eval.sh --mode summary --run-id <id>
 
 Modes:
   list      List live task samples.
@@ -31,6 +32,7 @@ Modes:
   agent-run Prepare a worktree, run Priority Agent non-interactively, then collect.
   collect   Collect diff/test output from an existing worktree.
   full      prepare + api-plan + optional collect.
+  summary   Generate docs/benchmarks/live-<run-id>/summary.md.
 
 Options:
   --case ID          Live task id, or "all".
@@ -316,18 +318,38 @@ find_task_file() {
 }
 
 list_tasks() {
-  need_yaml
-  printf '%-36s %-12s %-26s %-10s %s\n' "id" "type" "eval_intent" "risk" "title"
-  printf '%-36s %-12s %-26s %-10s %s\n' "--" "----" "-----------" "----" "-----"
-  local file
-  for file in $(task_files); do
-    printf '%-36s %-12s %-26s %-10s %s\n' \
-      "$(yaml_get "$file" id)" \
-      "$(yaml_get "$file" type)" \
-      "$(yaml_get "$file" eval_intent seeded_code_change)" \
-      "$(yaml_get "$file" risk)" \
-      "$(yaml_get "$file" title)"
-  done
+  python3 - "$TASK_DIR" <<'PY'
+import pathlib
+import re
+import sys
+
+task_dir = pathlib.Path(sys.argv[1])
+print(f"{'id':<36} {'type':<12} {'eval_intent':<26} {'risk':<10} title")
+print(f"{'--':<36} {'----':<12} {'-----------':<26} {'----':<10} -----")
+
+def scalar(lines, key, default=""):
+    pattern = re.compile(rf"^{re.escape(key)}:\s*(.*)$")
+    for line in lines:
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+        return value or default
+    return default
+
+for path in sorted(task_dir.glob("*.yaml")):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    task_id = scalar(lines, "id", path.stem)
+    task_type = scalar(lines, "type", "unknown")
+    intent = scalar(lines, "eval_intent", "seeded_code_change")
+    risk = scalar(lines, "risk", "unknown")
+    title = scalar(lines, "title", task_id)
+    print(f"{task_id:<36} {task_type:<12} {intent:<26} {risk:<10} {title}")
+PY
 }
 
 resolve_ref() {
@@ -1303,6 +1325,133 @@ PY
   echo "$report"
 }
 
+summary_task() {
+  local run_report_dir="$REPORT_DIR/live-$RUN_ID"
+  local summary="$run_report_dir/summary.md"
+  mkdir -p "$run_report_dir"
+  python3 - "$run_report_dir" "$summary" "$RUN_ID" <<'PY'
+import pathlib
+import re
+import sys
+
+run_dir = pathlib.Path(sys.argv[1])
+summary_path = pathlib.Path(sys.argv[2])
+run_id = sys.argv[3]
+
+def read(path):
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+def status_value(text, key, default="missing"):
+    match = re.search(rf"^{re.escape(key)}=(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else default
+
+def report_value(text, key, default="missing"):
+    match = re.search(rf"^{re.escape(key)}:\s*(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else default
+
+def has_warning(text, warning):
+    return bool(re.search(rf"^warning={re.escape(warning)}$", text, re.MULTILINE))
+
+rows = []
+for report in sorted(run_dir.glob("*/report.md")):
+    task_dir = report.parent
+    task_id = task_dir.name
+    report_text = read(report)
+    quality_text = read(task_dir / "agent-quality-status.txt")
+    test_status = read(task_dir / "test-status.txt").strip() or "missing"
+    diff_stat = read(task_dir / "diff-stat.txt").strip()
+    agent_output = read(task_dir / "agent-output.md")
+    plan_file = task_dir / "minimax-plan.md"
+    plan_lint = task_dir / "plan-lint.txt"
+    api_response = task_dir / "api-response.json"
+    agent_events = task_dir / "agent-events.jsonl"
+    quality_status = status_value(quality_text, "status", "missing")
+    failure_owner = status_value(quality_text, "failure_owner", "missing")
+    eval_intent = report_value(report_text, "eval_intent", "missing")
+    closeout = report_value(report_text, "closeout_status", "missing")
+    first_write = report_value(report_text, "first_write_tool_index", "missing")
+    required = report_value(report_text, "required_command_status", test_status)
+    if plan_file.exists():
+        plan_quality = status_value(read(plan_lint), "status", "missing")
+    elif api_response.exists():
+        plan_quality = "api_response"
+    else:
+        plan_quality = "none"
+    tool_boundary = "agent-run" if agent_events.exists() else ("plan-only" if plan_file.exists() or api_response.exists() else "collect-only")
+    verification_status = "passed" if closeout == "passed" and required == "ok" else ("failed" if quality_status == "failed" or test_status == "failed" else "unknown")
+    run_status = "passed" if quality_status in {"ok", "missing"} and test_status in {"ok", "skipped", "missing"} else "failed"
+    warnings = []
+    for warning in ("no_code_diff", "audit_no_code_diff", "current_head_no_fixture_already_satisfied", "tool_errors_seen"):
+        if has_warning(quality_text, warning):
+            warnings.append(warning)
+    rows.append({
+        "task": task_id,
+        "status": run_status,
+        "intent": eval_intent,
+        "owner": failure_owner,
+        "required": required,
+        "plan": plan_quality,
+        "boundary": tool_boundary,
+        "verification": verification_status,
+        "closeout": closeout,
+        "first_write": first_write,
+        "diff": "yes" if diff_stat else "no",
+        "warnings": ",".join(warnings) if warnings else "none",
+        "has_output": bool(agent_output.strip()),
+    })
+
+totals = {}
+for row in rows:
+    totals[row["status"]] = totals.get(row["status"], 0) + 1
+owners = {}
+for row in rows:
+    owners[row["owner"]] = owners.get(row["owner"], 0) + 1
+intents = {}
+for row in rows:
+    intents[row["intent"]] = intents.get(row["intent"], 0) + 1
+
+lines = [
+    f"# Live Eval Summary: {run_id}",
+    "",
+    f"- Run directory: `{run_dir}`",
+    f"- Tasks found: `{len(rows)}`",
+    "- Status counts: "
+    + (", ".join(f"{key}={value}" for key, value in sorted(totals.items())) if totals else "none"),
+    "- Failure owners: "
+    + (", ".join(f"{key}={value}" for key, value in sorted(owners.items())) if owners else "none"),
+    "- Eval intents: "
+    + (", ".join(f"{key}={value}" for key, value in sorted(intents.items())) if intents else "none"),
+    "",
+    "## Task Matrix",
+    "",
+    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | first_write | diff | warnings |",
+    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|-------------|------|----------|",
+]
+
+if rows:
+    for row in rows:
+        lines.append(
+            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {first_write} | {diff} | {warnings} |".format(
+                **row
+            )
+        )
+else:
+    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | missing | no | none |")
+
+lines.extend([
+    "",
+    "## Notes",
+    "",
+    "- `plan_quality` describes plan-only/API artifacts when present.",
+    "- `tool_boundary` separates plan-only, collect-only, and real agent-run reports.",
+    "- `verification_status` combines closeout and required-command evidence; it is not a human-quality score.",
+])
+
+summary_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+print(summary_path)
+PY
+}
+
 run_one() {
   local file="$1" id task_workdir plan_path report_path
   id="$(yaml_get "$file" id)"
@@ -1364,11 +1513,19 @@ run_one() {
 }
 
 main() {
-  need_yaml
   if [[ "$MODE" == "list" ]]; then
     list_tasks
     exit 0
   fi
+  if [[ "$MODE" == "summary" ]]; then
+    if [[ -z "$RUN_ID" ]]; then
+      echo "--run-id is required for summary mode" >&2
+      exit 1
+    fi
+    summary_task
+    exit 0
+  fi
+  need_yaml
   if [[ -z "$CASE_ID" ]]; then
     echo "--case is required unless --list is used." >&2
     usage

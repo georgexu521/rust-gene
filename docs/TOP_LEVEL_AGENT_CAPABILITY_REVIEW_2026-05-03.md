@@ -200,3 +200,16 @@ Interpretation:
 - The next concrete project improvement should be a human-led implementation of
   summary generation plus removal or vendoring of the PyYAML dependency for
   `--list`, not a hidden runtime patch.
+
+Follow-up implemented:
+
+- `scripts/run_live_eval.sh --list` now uses a lightweight stdlib parser for
+  top-level task metadata and no longer requires PyYAML.
+- `scripts/run_live_eval.sh --mode summary --run-id <id>` writes
+  `docs/benchmarks/live-<run-id>/summary.md`.
+- Summary rows include pass/fail status, `eval_intent`, `failure_owner`,
+  required-command status, plan/tool boundary, verification status, closeout,
+  first write index, diff presence, and warnings.
+- The dashboard summary live task now has `prepare_commands` that remove summary
+  support from the fixture worktree, so it remains a true seeded code-change
+  eval after the feature lands.

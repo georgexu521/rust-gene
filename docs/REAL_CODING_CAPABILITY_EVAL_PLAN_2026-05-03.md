@@ -92,6 +92,9 @@ Each run gets a compact score:
     inspected but produced no diff, action checkpoint prevented false success,
     and required commands exposed a PyYAML dependency in isolated eval
     worktrees.
+  - Follow-up implemented: `scripts/run_live_eval.sh --list` no longer requires
+    PyYAML, `--mode summary --run-id <id>` writes `summary.md`, and the live
+    task now seeds the summary gap with `prepare_commands`.
 
 - [ ] `resume-session-picker`
   - Type: feature.
