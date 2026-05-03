@@ -1,12 +1,12 @@
 # Project Status
 
-Last updated: 2026-04-25
+Last updated: 2026-05-03
 
 ## Summary
 
 Priority Agent is now an interactive coding CLI with a stateful runtime spine:
 intent routing, turn traces, session goals, memory, permissions, recovery plans,
-MCP health, and CLI observability panels.
+MCP health, CLI observability panels, and required validation closeout.
 
 The recent closure plan is complete:
 
@@ -18,10 +18,11 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest verified baseline:
+Latest verified baseline observed after the 2026-05-03 required-validation
+closeout hardening:
 
 ```text
-862 passed; 0 failed
+1006 passed; 0 failed
 ```
 
 Verified with:
@@ -76,6 +77,7 @@ Canonical current docs:
 
 - `README.md`
 - `docs/PROJECT_STATUS.md`
+- `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`
 - `docs/CLAUDE_CODE_ALIGNMENT_PLAN.md`
 - `docs/REMAINING_CLOSURE_PLAN.md`
 - `AGENTS.md`
@@ -101,12 +103,17 @@ than useful.
 The latest 5-item closure plan is complete. The remaining work is now product
 maturity, not missing foundations:
 
-1. Keep command maturity honest: distinguish production-ready, usable, and
+1. Make the coding loop decisive: implementation intent before edits, fewer
+   repair rounds, stronger validation classification, and deterministic final
+   evidence.
+2. Deepen core tool semantics for file edit, bash, search, git, and validation
+   commands.
+3. Keep command maturity honest: distinguish production-ready, usable, and
    scaffold commands with tests.
-2. Expand evalsets and replay scenarios around permissions, goal drift,
-   recovery, memory retrieval, MCP resources, and long sessions.
-3. Continue CLI polish based on trace-backed state: command palette, statusline,
+4. Expand evalsets and replay scenarios around broad code changes, permissions,
+   goal drift, recovery, memory retrieval, MCP resources, and long sessions.
+5. Continue CLI polish based on trace-backed state: command palette, statusline,
    approval panels, tool expansion, and settings visibility.
-4. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
+6. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
    Discord/Slack adapters if they become product priorities.
-5. Keep docs synchronized with tests and current behavior.
+7. Keep docs synchronized with tests and current behavior.

@@ -167,6 +167,12 @@ Unit tests are embedded under `#[cfg(test)]` in each module. Run with `cargo tes
 
 Compared to the real Claude Code (`~/Desktop/claude/`), this reimplementation is architecturally aligned but missing substantial product-depth features. Do not assume parity exists unless verified.
 
+Current gap source of truth: `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`.
+Older checklist items below are useful historical context, but the current
+assessment is maturity-based: tool and command counts do not prove Claude Code
+parity unless the behavior is connected to runtime state, validation, tests,
+traceability, recovery, and product UX.
+
 ### Recently Closed Gaps (Phases 6–12 Complete)
 - **LSP Integration** — `LSPTool` with diagnostics, hover, definition, references, symbols; `LspManager` auto-detects rust-analyzer, ts-server, gopls, pylsp.
 - **IDE Integrations** — `WorkbenchTool` + `src/ide/` supports VS Code / Cursor (`open_file`, `reveal`, `terminal`).
