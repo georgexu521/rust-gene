@@ -5,6 +5,32 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// Slash command maturity shown in help and command-palette surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandMaturity {
+    Production,
+    Usable,
+    Placeholder,
+}
+
+impl CommandMaturity {
+    pub const fn label(self) -> &'static str {
+        match self {
+            CommandMaturity::Production => "production",
+            CommandMaturity::Usable => "usable",
+            CommandMaturity::Placeholder => "placeholder",
+        }
+    }
+
+    pub const fn badge(self) -> &'static str {
+        match self {
+            CommandMaturity::Production => "[production]",
+            CommandMaturity::Usable => "[usable]",
+            CommandMaturity::Placeholder => "[placeholder]",
+        }
+    }
+}
+
 /// 命令定义
 #[derive(Clone)]
 pub struct CommandDef {
@@ -22,6 +48,8 @@ pub struct CommandDef {
     pub experimental: bool,
     /// 是否为占位命令（功能尚未完全实现）
     pub placeholder: bool,
+    /// 用户可见成熟度分类
+    pub maturity: CommandMaturity,
 }
 
 impl CommandDef {
@@ -40,6 +68,7 @@ impl CommandDef {
             description,
             experimental: false,
             placeholder: false,
+            maturity: CommandMaturity::Production,
         }
     }
 
@@ -61,6 +90,13 @@ impl CommandDef {
             description,
             experimental,
             placeholder,
+            maturity: if placeholder {
+                CommandMaturity::Placeholder
+            } else if experimental {
+                CommandMaturity::Usable
+            } else {
+                CommandMaturity::Production
+            },
         }
     }
 }
@@ -130,16 +166,12 @@ impl CommandRegistry {
                         } else {
                             format!(" ({})", cmd.aliases.join(", "))
                         };
-                        let flag_str = if cmd.experimental {
-                            " [experimental]".to_string()
-                        } else if cmd.placeholder {
-                            " [placeholder]".to_string()
-                        } else {
-                            String::new()
-                        };
                         result.push_str(&format!(
                             "    {:<24} {}{}{}\n",
-                            cmd.usage, cmd.description, alias_str, flag_str
+                            cmd.usage,
+                            cmd.description,
+                            alias_str,
+                            format!(" {}", cmd.maturity.badge())
                         ));
                     }
                 }
@@ -165,16 +197,12 @@ impl CommandRegistry {
                         } else {
                             format!(" ({})", cmd.aliases.join(", "))
                         };
-                        let flag_str = if cmd.experimental {
-                            " [experimental]".to_string()
-                        } else if cmd.placeholder {
-                            " [placeholder]".to_string()
-                        } else {
-                            String::new()
-                        };
                         result.push_str(&format!(
                             "    {:<24} {}{}{}\n",
-                            cmd.usage, cmd.description, alias_str, flag_str
+                            cmd.usage,
+                            cmd.description,
+                            alias_str,
+                            format!(" {}", cmd.maturity.badge())
                         ));
                     }
                 }
@@ -185,15 +213,49 @@ impl CommandRegistry {
 
     /// 标记命令为占位符
     pub fn mark_placeholder(&mut self, name: &str) {
-        if let Some(cmd) = self.commands.get_mut(name) {
+        let Some(canonical_name) = self.commands.get(name).map(|cmd| cmd.name) else {
+            return;
+        };
+        for cmd in self
+            .commands
+            .values_mut()
+            .filter(|cmd| cmd.name == canonical_name)
+        {
             cmd.placeholder = true;
+            cmd.maturity = CommandMaturity::Placeholder;
         }
     }
 
     /// 标记命令为实验性
     pub fn mark_experimental(&mut self, name: &str) {
-        if let Some(cmd) = self.commands.get_mut(name) {
+        let Some(canonical_name) = self.commands.get(name).map(|cmd| cmd.name) else {
+            return;
+        };
+        for cmd in self
+            .commands
+            .values_mut()
+            .filter(|cmd| cmd.name == canonical_name)
+        {
             cmd.experimental = true;
+            if cmd.maturity != CommandMaturity::Placeholder {
+                cmd.maturity = CommandMaturity::Usable;
+            }
+        }
+    }
+
+    /// 标记命令为可用但尚未达到日常生产成熟度
+    pub fn mark_usable(&mut self, name: &str) {
+        let Some(canonical_name) = self.commands.get(name).map(|cmd| cmd.name) else {
+            return;
+        };
+        for cmd in self
+            .commands
+            .values_mut()
+            .filter(|cmd| cmd.name == canonical_name)
+        {
+            if cmd.maturity != CommandMaturity::Placeholder {
+                cmd.maturity = CommandMaturity::Usable;
+            }
         }
     }
 
@@ -224,6 +286,16 @@ impl CommandRegistry {
         self.commands
             .values()
             .filter(|cmd| cmd.placeholder)
+            .collect()
+    }
+
+    /// 获取指定成熟度命令
+    pub fn maturity_commands(&self, maturity: CommandMaturity) -> Vec<&CommandDef> {
+        let mut seen = HashSet::new();
+        self.commands
+            .values()
+            .filter(|cmd| seen.insert(cmd.name))
+            .filter(|cmd| cmd.maturity == maturity)
             .collect()
     }
 
@@ -1521,8 +1593,42 @@ pub fn default_command_registry() -> CommandRegistry {
 
     // Keep partially implemented commands visible but honest. Mature CLIs should
     // not make unavailable integrations look production-ready in help/palette UI.
+    for name in [
+        "/agents",
+        "/tasks",
+        "/teammate",
+        "/critic",
+        "/assistant",
+        "/dream",
+        "/custom",
+        "/orchestrate",
+        "/remote",
+        "/lsp",
+        "/npm",
+        "/profiling",
+        "/migrate",
+        "/install",
+        "/skeleton",
+        "/branch",
+        "/webhook",
+        "/wizard",
+        "/workspace",
+        "/stealth",
+        "/shadow",
+        "/subscribe",
+        "/ticker",
+        "/eval",
+        "/resource",
+        "/evolution",
+        "/skill-proposals",
+    ] {
+        registry.mark_usable(name);
+    }
+
     registry.mark_placeholder("/desktop");
     registry.mark_placeholder("/reset");
+    registry.mark_placeholder("/slack");
+    registry.mark_placeholder("/chrome");
 
     registry
 }
@@ -1682,6 +1788,34 @@ mod tests {
         assert!(help.contains("/cost"));
         assert!(help.contains("General:"));
         assert!(help.contains("Memory:"));
+        assert!(help.contains("[production]"));
+        assert!(help.contains("[usable]"));
+        assert!(help.contains("[placeholder]"));
+        assert!(help.contains("/desktop"));
+    }
+
+    #[test]
+    fn test_command_maturity_labels_are_explicit() {
+        let registry = default_command_registry();
+        assert_eq!(
+            registry.get("/help").map(|cmd| cmd.maturity),
+            Some(CommandMaturity::Production)
+        );
+        assert_eq!(
+            registry.get("/agents").map(|cmd| cmd.maturity),
+            Some(CommandMaturity::Usable)
+        );
+        assert_eq!(
+            registry.get("/desktop").map(|cmd| cmd.maturity),
+            Some(CommandMaturity::Placeholder)
+        );
+        assert_eq!(
+            registry.get("/desktop").map(|cmd| cmd.placeholder),
+            Some(true)
+        );
+        assert!(!registry
+            .maturity_commands(CommandMaturity::Placeholder)
+            .is_empty());
     }
 
     #[test]

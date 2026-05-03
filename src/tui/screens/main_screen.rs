@@ -1022,11 +1022,17 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
             } else {
                 format!(" ({})", cmd.aliases.join(", "))
             };
+            let maturity = if cmd.maturity == crate::tui::commands::CommandMaturity::Production {
+                String::new()
+            } else {
+                format!(" {}", cmd.maturity.badge())
+            };
             lines.push(Line::from(vec![
                 Span::styled(marker, Style::default().fg(app.theme.info)),
                 Span::styled(format!("{:<18}", cmd.name), style),
                 Span::styled(cmd.description, Style::default().fg(app.theme.text_dim)),
                 Span::styled(alias, Style::default().fg(app.theme.text_dim)),
+                Span::styled(maturity, Style::default().fg(app.theme.warning)),
             ]));
         }
     }
@@ -1057,6 +1063,17 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
             Span::styled(
                 selected.description,
                 Style::default().fg(app.theme.text_dim),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Maturity: ", Style::default().fg(app.theme.text_dim)),
+            Span::styled(
+                selected.maturity.label(),
+                Style::default().fg(match selected.maturity {
+                    crate::tui::commands::CommandMaturity::Production => app.theme.success,
+                    crate::tui::commands::CommandMaturity::Usable => app.theme.warning,
+                    crate::tui::commands::CommandMaturity::Placeholder => app.theme.error,
+                }),
             ),
         ]));
         if !selected.aliases.is_empty() {
