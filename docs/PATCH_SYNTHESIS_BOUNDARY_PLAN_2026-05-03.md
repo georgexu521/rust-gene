@@ -86,3 +86,9 @@ code diff after patch synthesis was disabled. This run reached a model-led
 `file_edit` attempt, but the visible tool output did not include the concrete
 failure reason. The next boundary-safe improvement is observability: failed
 tool results must surface their error text in visible content.
+
+`capability-memory-conflict-visible-errors-20260503-204111` still failed with
+no code diff, but it also exposed eval staleness: the unchanged baseline already
+contains the generic-token conflict guard and related tests, and all required
+commands pass. This case should not be used as a clean editing-capability signal
+again until its fixture or acceptance target is refreshed.
