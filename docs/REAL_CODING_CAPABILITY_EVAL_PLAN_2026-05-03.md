@@ -95,6 +95,10 @@ Each run gets a compact score:
   - Follow-up implemented: `scripts/run_live_eval.sh --list` no longer requires
     PyYAML, `--mode summary --run-id <id>` writes `summary.md`, and the live
     task now seeds the summary gap with `prepare_commands`.
+  - Rerun after follow-up: failed in
+    `capability-dashboard-summary-rerun-20260503-235256`; the seeded fixture
+    worked and required `--mode summary` failed, but the model again produced no
+    `file_edit`.
 
 - [ ] `resume-session-picker`
   - Type: feature.

@@ -213,3 +213,15 @@ Follow-up implemented:
 - The dashboard summary live task now has `prepare_commands` that remove summary
   support from the fixture worktree, so it remains a true seeded code-change
   eval after the feature lands.
+
+Rerun:
+
+`docs/benchmarks/live-capability-dashboard-summary-rerun-20260503-235256/live-eval-dashboard-summary/report.md`
+
+- Status: failed.
+- Failure owner: `llm_reasoning`.
+- The seeded fixture worked: `--mode summary` was absent in the worktree and the
+  required summary command failed.
+- The model again produced no `file_edit`.
+- This confirms the current weakness is not stale eval design for this case; it
+  is the model-led edit transition on a medium script feature.
