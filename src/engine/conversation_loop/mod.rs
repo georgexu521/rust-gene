@@ -2384,6 +2384,39 @@ impl ConversationLoop {
                                 .to_string()
                         },
                     });
+                    if !Self::patch_synthesis_enabled() {
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error: "patch synthesis disabled by default; returning control to model-led repair"
+                                .to_string(),
+                        });
+                        if !patch_synthesis_recovery_used {
+                            patch_synthesis_recovery_used = true;
+                            action_checkpoint_no_change_rounds = 0;
+                            let recovery = format!(
+                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe file_edit/file_write patch from the evidence already gathered. If the evidence is insufficient, perform exactly one targeted file_read/grep, then patch. Do not call tools that are not exposed.",
+                                exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", ")
+                            );
+                            messages.push(Message::system(recovery.clone()));
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&recovery);
+                            continue;
+                        }
+                        let stop_msg =
+                            "[Stopped action checkpoint without patch synthesis; no model-led file change was produced]";
+                        debug!("{}", stop_msg);
+                        if let Some(tx) = tx {
+                            let _ = tx
+                                .send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg)))
+                                .await;
+                        }
+                        if final_content.trim().is_empty() {
+                            final_content = stop_msg.to_string();
+                        } else {
+                            final_content.push('\n');
+                            final_content.push_str(stop_msg);
+                        }
+                        break;
+                    }
                     match self
                         .synthesize_patch_tool_calls(&messages, last_user_preview.as_str())
                         .await
@@ -3811,7 +3844,7 @@ impl ConversationLoop {
         }
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        if Self::deterministic_patch_synthesis_enabled() {
+        if Self::patch_synthesis_enabled() && Self::deterministic_patch_synthesis_enabled() {
             let deterministic_calls =
                 self.deterministic_patch_tool_calls(&deterministic_seed, &cwd);
             if !deterministic_calls.is_empty() {
@@ -4091,6 +4124,15 @@ Do not answer in prose unless no safe patch exists."#;
             .filter_map(|action| self.validate_patch_synthesis_action(action, cwd).ok())
             .take(6)
             .collect()
+    }
+
+    fn patch_synthesis_enabled() -> bool {
+        matches!(
+            std::env::var("PRIORITY_AGENT_PATCH_SYNTHESIS")
+                .ok()
+                .as_deref(),
+            Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+        )
     }
 
     fn deterministic_patch_synthesis_enabled() -> bool {
@@ -7171,6 +7213,16 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
         assert!(after_change.contains("bash"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_is_explicit_opt_in() {
+        let mut guard = EnvVarGuard::acquire_blocking();
+        guard.remove("PRIORITY_AGENT_PATCH_SYNTHESIS");
+        assert!(!ConversationLoop::patch_synthesis_enabled());
+
+        guard.set("PRIORITY_AGENT_PATCH_SYNTHESIS", "1");
+        assert!(ConversationLoop::patch_synthesis_enabled());
     }
 
     #[test]

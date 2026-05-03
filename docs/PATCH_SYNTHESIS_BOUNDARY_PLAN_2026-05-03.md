@@ -12,18 +12,20 @@ task-specific answers for real coding tasks.
 
 ## Decision
 
-Default runtime behavior should not use deterministic task-specific patch
-synthesis.
+Default runtime behavior should not use patch synthesis. Deterministic
+task-specific patch synthesis is especially risky and must require a second
+explicit opt-in.
 
 Allowed by default:
 
 - focused workflow reminders
 - validation requirements
 - closeout/acceptance gates
-- generic evidence-backed LLM repair prompts
+- model-led repair prompts
 
 Not allowed by default:
 
+- generic patch synthesis that asks another model call to generate edits
 - hard-coded patches for specific benchmark tasks
 - hidden source edits based on task id or benchmark phrase
 
@@ -39,6 +41,8 @@ Not allowed by default:
   synthesis disabled by default.
 - [x] Tighten focused repair tool exposure so bash is available for validation
   only after a file change exists.
+- [x] Disable generic patch synthesis by default as explicit opt-in
+  research/diagnostic behavior.
 - [ ] Commit the evidence and boundary change.
 
 ## Validation
@@ -47,6 +51,7 @@ Not allowed by default:
 cargo test -q patch_synthesis -- --test-threads=1
 cargo test -q code_action_tools -- --test-threads=1
 cargo test -q action_checkpoint -- --test-threads=1
+cargo test -q patch_synthesis_is_explicit_opt_in -- --test-threads=1
 ```
 
 Result:
@@ -54,6 +59,7 @@ Result:
 - patch synthesis: passed, 19 tests.
 - code action tools: passed, 1 test.
 - action checkpoint: passed, 5 tests.
+- patch synthesis opt-in: passed, 1 test.
 
 ## Follow-up Run
 
@@ -66,3 +72,9 @@ change and then failed a file_edit call.
 Decision: keep deterministic patch synthesis off by default, and reduce the
 tool-surface mismatch in focused repair mode by hiding bash until there is a
 file change to validate.
+
+`capability-memory-conflict-focused-20260503-185437` still failed with no code
+diff. The focused repair bash issue was reduced, but generic patch synthesis
+still activated after invalid focused-repair attempts. This is also outside the
+desired runtime boundary, so generic patch synthesis is now disabled by default
+behind `PRIORITY_AGENT_PATCH_SYNTHESIS=1`.

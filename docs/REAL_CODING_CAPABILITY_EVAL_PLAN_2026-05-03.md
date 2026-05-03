@@ -216,6 +216,29 @@ For each run, record:
   hide `bash` until a file change exists so the model is steered toward
   `file_edit`/`file_write` first and then validation.
 
+### `memory-recall-conflict-precision` focused-repair rerun
+
+- Report path:
+  `docs/benchmarks/live-capability-memory-conflict-focused-20260503-185437/memory-recall-conflict-precision/report.md`
+- Status: failed.
+- Failure owner: agent_flow.
+- Required commands: ok on unchanged baseline.
+- Files changed: none.
+- Specialty signals: 4/6 active.
+  - `memory_active=true`
+  - `automation_active=true`
+  - `guided_debugging_active=false`
+  - `guided_reasoning_active=true`
+  - `weighted_planning_active=true`
+  - `closeout_active=false`
+- Acceptance gaps: no acceptance review ran because no code diff or validation
+  event was recorded by the agent workflow.
+- False-success behavior: good; quality gates rejected another unchanged
+  code-change run.
+- Improvement type: runtime boundary reduction. Generic patch synthesis still
+  activated after focused repair attempts, so disable all patch synthesis by
+  default behind explicit opt-in.
+
 ## Stop Conditions
 
 - Stop and fix the harness if reports are missing trace, output, or required
