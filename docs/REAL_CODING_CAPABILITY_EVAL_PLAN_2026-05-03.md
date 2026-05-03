@@ -74,10 +74,14 @@ Each run gets a compact score:
     code diff and hidden deterministic patch synthesis failed; this is a
     workflow-boundary issue, not a product pass.
 
-- [ ] `permission-default-open-dangerous-guard`
+- [x] `permission-default-open-dangerous-guard`
   - Type: bug_fix.
   - Why: tests safety boundaries while preserving smooth developer flow.
   - Expected pressure: avoid both over-blocking and dangerous permissiveness.
+  - Result: failed/stale in `capability-permission-guard-20260503-205410`.
+  - Key learning: unchanged baseline already passes required permission and bash
+    tests with default-open safety coverage; the quality gate correctly rejected
+    a no-diff code-change run.
 
 ### Batch C: Product Surface
 
@@ -285,6 +289,30 @@ For each run, record:
   generic conflict-token guards and related tests, so this case is no longer a
   clean editing-capability test. Keep it as evidence that stale eval cases need
   a baseline freshness check before repeated reruns.
+
+### `permission-default-open-dangerous-guard`
+
+- Report path:
+  `docs/benchmarks/live-capability-permission-guard-20260503-205410/permission-default-open-dangerous-guard/report.md`
+- Status: failed/stale.
+- Failure owner: agent_flow / stale_eval.
+- Required commands: ok on unchanged baseline.
+- Files changed: none.
+- Specialty signals: 4/6 active.
+  - `memory_active=true`
+  - `automation_active=true`
+  - `guided_debugging_active=false`
+  - `guided_reasoning_active=true`
+  - `weighted_planning_active=true`
+  - `closeout_active=false`
+- Acceptance gaps: no acceptance review ran because no code diff or validation
+  event was recorded by the agent workflow.
+- False-success behavior: good; quality gates rejected an unchanged code-change
+  run.
+- Improvement type: eval maintenance. The branch already has AutoAll
+  default-open safety tests for safe operations versus dangerous bash, external
+  network, unsafe writes, git push, and memory_clear. Refresh this case before
+  using it again as an editing-capability signal.
 
 ## Stop Conditions
 
