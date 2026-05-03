@@ -20,6 +20,10 @@ Use this file as the source of truth for what is on the critical path.
 - `run_live_eval.sh`: semi-automatic live coding task regression harness. It can
   prepare task worktrees, ask MiniMax for a planning response, and collect
   diff/test/report artifacts.
+- `coding-workflow-gates.sh`: layered coding-agent workflow gates. Use `quick`
+  for focused deterministic edit/validation/repair/closeout contracts,
+  `standard` before workflow/tool commits, `full` for docs/build/full-test
+  closeout, and `live-smoke` only when the real agent path needs a live check.
 
 ## Manual Dev/Ops Utilities
 
