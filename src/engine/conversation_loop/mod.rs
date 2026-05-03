@@ -35,7 +35,7 @@ use tracing::{debug, error, warn};
 use super::context_compressor::{
     estimate_messages_tokens, estimate_tool_schemas_tokens, ContextCompressor,
 };
-use super::hooks::{HookDecision, ToolHookManager};
+use super::hooks::{HookDecision, HookRunRecord, ToolHookManager};
 use super::streaming::StreamEvent;
 
 const THINK_OPEN_TAG: &str = "<think>";
@@ -542,6 +542,25 @@ fn record_mcp_resource_trace(
         provenance: vec![format!("mcp.resource:{}:{}", server, uri)],
         conflicts: 0,
     });
+}
+
+fn record_hook_traces(trace: &Option<TraceCollector>, records: &[HookRunRecord]) {
+    let Some(trace) = trace else {
+        return;
+    };
+    for record in records {
+        trace.record(TraceEvent::HookCompleted {
+            event: record.event.to_string(),
+            hook_name: record.hook_name.clone(),
+            call_id: record.tool_call_id.clone(),
+            tool: record.tool_name.clone(),
+            success: record.success,
+            blocked: record.blocked,
+            duration_ms: record.duration_ms,
+            error: record.error.clone(),
+            output_preview: record.output_preview.clone(),
+        });
+    }
 }
 
 fn record_web_retrieval_trace(
@@ -3368,6 +3387,7 @@ impl ConversationLoop {
                                                 let tid2 = tid.clone();
                                                 let tool_n = tool_name.clone();
                                                 let tool_n2 = tool_name.clone();
+                                                let trace_for_task = Some(trace.clone());
 
                                                 read_only_tasks.insert(
                                                     idx,
@@ -3382,7 +3402,20 @@ impl ConversationLoop {
                                                                 name: tool_n.clone(),
                                                                 arguments: parsed_args.clone(),
                                                             };
-                                                            h.run_pre_tool(&t, &context).await
+                                                            let hook_start =
+                                                                h.current_record_sequence();
+                                                            let decision =
+                                                                h.run_pre_tool(&t, &context).await;
+                                                            let hook_records = h
+                                                                .recent_records_after_for(
+                                                                    hook_start,
+                                                                    &t.id,
+                                                                );
+                                                            record_hook_traces(
+                                                                &trace_for_task,
+                                                                &hook_records,
+                                                            );
+                                                            decision
                                                         } else {
                                                             HookDecision {
                                                                 allow: true,
@@ -3425,8 +3458,23 @@ impl ConversationLoop {
                                                                 name: tool_n2.clone(),
                                                                 arguments: parsed_args.clone(),
                                                             };
-                                                            h.run_post_tool(&tc_for_hook, &result, &ctx_clone)
+                                                            let hook_start =
+                                                                h.current_record_sequence();
+                                                            h.run_post_tool(
+                                                                &tc_for_hook,
+                                                                &result,
+                                                                &ctx_clone,
+                                                            )
                                                                 .await;
+                                                            let hook_records = h
+                                                                .recent_records_after_for(
+                                                                    hook_start,
+                                                                    &tc_for_hook.id,
+                                                                );
+                                                            record_hook_traces(
+                                                                &trace_for_task,
+                                                                &hook_records,
+                                                            );
                                                         }
                                                         {
                                                             let mut tracker = ct.lock().await;
@@ -6254,7 +6302,11 @@ Do not answer in prose unless no safe patch exists."#;
                         });
                     }
                     let pre_decision = if let Some(ref hooks) = hook_manager {
-                        hooks.run_pre_tool(&tc_clone, &context).await
+                        let hook_start = hooks.current_record_sequence();
+                        let decision = hooks.run_pre_tool(&tc_clone, &context).await;
+                        let hook_records = hooks.recent_records_after_for(hook_start, &tc_clone.id);
+                        record_hook_traces(&trace, &hook_records);
+                        decision
                     } else {
                         HookDecision {
                             allow: true,
@@ -6279,7 +6331,10 @@ Do not answer in prose unless no safe patch exists."#;
                     }
 
                     if let Some(ref hooks) = hook_manager {
+                        let hook_start = hooks.current_record_sequence();
                         hooks.run_post_tool(&tc_clone, &result, &context).await;
+                        let hook_records = hooks.recent_records_after_for(hook_start, &tc_clone.id);
+                        record_hook_traces(&trace, &hook_records);
                     };
                     attach_tool_execution_metadata(&tc_clone, &mut result);
                     {
@@ -6388,7 +6443,11 @@ Do not answer in prose unless no safe patch exists."#;
                     .unwrap_or_else(crate::engine::goal_drift::DriftCheck::ok);
                 let drift_requires_approval = drift_check.requires_approval();
                 let pre_decision = if let Some(ref hooks) = self.hook_manager {
-                    hooks.run_pre_tool(&tc, &context).await
+                    let hook_start = hooks.current_record_sequence();
+                    let decision = hooks.run_pre_tool(&tc, &context).await;
+                    let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
+                    record_hook_traces(&trace, &hook_records);
+                    decision
                 } else {
                     HookDecision {
                         allow: true,
@@ -6576,7 +6635,10 @@ Do not answer in prose unless no safe patch exists."#;
             };
 
             if let (Some(hooks), Some(context)) = (&self.hook_manager, &hook_context) {
+                let hook_start = hooks.current_record_sequence();
                 hooks.run_post_tool(&tc, &result, context).await;
+                let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
+                record_hook_traces(&trace, &hook_records);
             }
 
             if let Some(tx) = tx {

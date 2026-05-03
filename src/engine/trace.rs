@@ -221,6 +221,17 @@ pub enum TraceEvent {
         duration_ms: Option<u64>,
         output_chars: usize,
     },
+    HookCompleted {
+        event: String,
+        hook_name: String,
+        call_id: String,
+        tool: Option<String>,
+        success: bool,
+        blocked: bool,
+        duration_ms: u64,
+        error: Option<String>,
+        output_preview: Option<String>,
+    },
     VerificationCompleted {
         changed_files: usize,
         passed: bool,
@@ -313,6 +324,7 @@ impl TraceEvent {
             TraceEvent::PermissionRequested { .. } => "permission.request",
             TraceEvent::PermissionResolved { .. } => "permission.resolve",
             TraceEvent::ToolCompleted { .. } => "tool.done",
+            TraceEvent::HookCompleted { .. } => "hook.done",
             TraceEvent::VerificationCompleted { .. } => "verify.done",
             TraceEvent::AcceptanceReviewCompleted { .. } => "acceptance.review",
             TraceEvent::GuidedDebuggingCompleted { .. } => "guided.debug",
@@ -627,6 +639,33 @@ impl TraceEvent {
                 duration_ms.unwrap_or_default(),
                 output_chars
             ),
+            TraceEvent::HookCompleted {
+                event,
+                hook_name,
+                call_id,
+                tool,
+                success,
+                blocked,
+                duration_ms,
+                error,
+                output_preview,
+            } => {
+                let detail = error
+                    .as_deref()
+                    .or(output_preview.as_deref())
+                    .map(preview)
+                    .unwrap_or_else(|| "no output".to_string());
+                format!(
+                    "{} hook '{}' for {} {}{} in {}ms: {}",
+                    event,
+                    hook_name,
+                    tool.as_deref().unwrap_or(call_id),
+                    if *success { "ok" } else { "failed" },
+                    if *blocked { " blocked" } else { "" },
+                    duration_ms,
+                    detail
+                )
+            }
             TraceEvent::VerificationCompleted {
                 changed_files,
                 passed,

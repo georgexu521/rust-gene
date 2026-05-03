@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -55,8 +56,10 @@ impl std::fmt::Display for HookEventKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookRunRecord {
+    pub sequence: u64,
     pub event: HookEventKind,
     pub hook_name: String,
+    pub tool_call_id: String,
     pub tool_name: Option<String>,
     pub success: bool,
     pub blocked: bool,
@@ -85,6 +88,8 @@ pub struct ToolHookManager {
     tool_specific_post_hooks: HashMap<String, Vec<CommandHook>>,
     /// 最近 hook 执行记录
     recent_records: Arc<Mutex<VecDeque<HookRunRecord>>>,
+    /// 单调递增的 hook 执行序号，用于 trace 增量消费
+    next_record_sequence: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,7 +142,38 @@ impl ToolHookManager {
             .collect()
     }
 
-    fn push_record(&self, record: HookRunRecord) {
+    pub fn current_record_sequence(&self) -> u64 {
+        self.next_record_sequence.load(Ordering::SeqCst)
+    }
+
+    pub fn recent_records_after(&self, sequence: u64) -> Vec<HookRunRecord> {
+        self.recent_records
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .iter()
+            .filter(|record| record.sequence > sequence)
+            .cloned()
+            .collect()
+    }
+
+    pub fn recent_records_after_for(
+        &self,
+        sequence: u64,
+        tool_call_id: &str,
+    ) -> Vec<HookRunRecord> {
+        self.recent_records
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .iter()
+            .filter(|record| {
+                record.sequence > sequence && record.tool_call_id.as_str() == tool_call_id
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn push_record(&self, mut record: HookRunRecord) {
+        record.sequence = self.next_record_sequence.fetch_add(1, Ordering::SeqCst) + 1;
         let mut records = self
             .recent_records
             .lock()
@@ -391,8 +427,10 @@ impl ToolHookManager {
                              error: Option<String>,
                              output_preview: Option<String>| {
             manager.push_record(HookRunRecord {
+                sequence: 0,
                 event: payload.event,
                 hook_name: hook.name.clone(),
+                tool_call_id: payload.tool_call_id.to_string(),
                 tool_name: Some(payload.tool_name.to_string()),
                 success,
                 blocked,
@@ -549,6 +587,7 @@ mod tests {
             tool_specific_pre_hooks: HashMap::new(),
             tool_specific_post_hooks: HashMap::new(),
             recent_records: Arc::new(Mutex::new(VecDeque::new())),
+            next_record_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -588,8 +627,14 @@ mod tests {
         let records = manager.recent_records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].event, HookEventKind::PreToolUse);
+        assert_eq!(records[0].sequence, 1);
+        assert_eq!(records[0].tool_call_id, "1");
         assert_eq!(records[0].tool_name.as_deref(), Some("file_write"));
         assert!(records[0].blocked);
+        assert!(manager.recent_records_after(0).len() == 1);
+        assert!(manager.recent_records_after(1).is_empty());
+        assert!(manager.recent_records_after_for(0, "1").len() == 1);
+        assert!(manager.recent_records_after_for(0, "other").is_empty());
     }
 
     #[tokio::test]
