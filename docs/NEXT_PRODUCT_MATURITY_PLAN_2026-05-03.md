@@ -44,20 +44,20 @@ Claude/Codex-style baselines when those reports are available.
 Goal: git-related tool output should be easier to trust in final closeout and
 trace views.
 
-- [ ] Audit `src/tools/git_tool/mod.rs` summaries and errors.
-- [ ] Add tests for `status`, `diff`, `add`, `commit`, and failure summaries
+- [x] Audit `src/tools/git_tool/mod.rs` summaries and errors.
+- [x] Add tests for `status`, `diff`, `add`, `commit`, and failure summaries
   where they can run deterministically.
-- [ ] Ensure unsafe or invalid git inputs return actionable recovery text.
+- [x] Ensure unsafe or invalid git inputs return actionable recovery text.
 
 ### 4. Documentation And Verification
 
 Goal: keep project status accurate and avoid stale claims.
 
-- [ ] Update `docs/PROJECT_STATUS.md` with the latest completed batch and test
+- [x] Update `docs/PROJECT_STATUS.md` with the latest completed batch and test
   baseline.
-- [ ] Update `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md` if a gap item changes.
-- [ ] Run `bash scripts/validate_docs.sh`.
-- [ ] Commit the docs with the implementation batch.
+- [x] Update `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md` if a gap item changes.
+- [x] Run `bash scripts/validate_docs.sh`.
+- [x] Commit the docs with the implementation batch.
 
 ## Stop Conditions
 

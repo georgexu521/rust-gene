@@ -173,15 +173,17 @@ impl Tool for GitTool {
         }
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let action = params["action"].as_str().unwrap_or("");
         let path = params["path"].as_str().unwrap_or("");
         let stat = params["stat"].as_bool().unwrap_or(false);
+        let cwd = context.working_dir;
 
         let result = match action {
             // ── 只读操作 ───────────────────────────────
             "status" => {
                 let mut cmd = Command::new("git");
+                cmd.current_dir(&cwd);
                 cmd.arg("status").arg("--short");
                 if !path.is_empty() {
                     cmd.arg("--").arg(path);
@@ -191,6 +193,7 @@ impl Tool for GitTool {
             "diff" => {
                 let cached = params["cached"].as_bool().unwrap_or(false);
                 let mut cmd = Command::new("git");
+                cmd.current_dir(&cwd);
                 if stat {
                     cmd.arg("diff").arg("--stat");
                 } else if cached {
@@ -200,7 +203,11 @@ impl Tool for GitTool {
                 }
                 if let Some(range) = params["range"].as_str() {
                     if !is_valid_git_range(range) {
-                        return ToolResult::error(format!("Invalid git diff range: '{}'", range));
+                        return git_error(
+                            action,
+                            format!("Invalid git diff range: '{}'", range),
+                            "Use a plain git ref or range such as HEAD~1..HEAD; flags and shell metacharacters are blocked.",
+                        );
                     }
                     cmd.arg(range);
                 }
@@ -212,6 +219,7 @@ impl Tool for GitTool {
             "log" => {
                 let n = params["n"].as_u64().unwrap_or(10) as usize;
                 let mut cmd = Command::new("git");
+                cmd.current_dir(&cwd);
                 cmd.args(["log", "--oneline", "-n", &n.to_string()]);
                 if !path.is_empty() {
                     cmd.arg("--").arg(path);
@@ -221,6 +229,7 @@ impl Tool for GitTool {
             "show" => {
                 let commit = params["commit"].as_str().unwrap_or("HEAD");
                 let mut cmd = Command::new("git");
+                cmd.current_dir(&cwd);
                 cmd.arg("show").arg("--stat").arg(commit);
                 if !path.is_empty() {
                     cmd.arg("--").arg(path);
@@ -231,6 +240,7 @@ impl Tool for GitTool {
             "add" => {
                 if let Some(paths) = params["paths"].as_array() {
                     let mut cmd = Command::new("git");
+                    cmd.current_dir(&cwd);
                     cmd.arg("add");
                     for p in paths {
                         if let Some(s) = p.as_str() {
@@ -239,18 +249,27 @@ impl Tool for GitTool {
                     }
                     cmd.output().await
                 } else if !path.is_empty() {
-                    Command::new("git").arg("add").arg(path).output().await
+                    let mut cmd = Command::new("git");
+                    cmd.current_dir(&cwd);
+                    cmd.arg("add").arg(path).output().await
                 } else {
-                    Command::new("git").arg("add").arg("-A").output().await
+                    let mut cmd = Command::new("git");
+                    cmd.current_dir(&cwd);
+                    cmd.arg("add").arg("-A").output().await
                 }
             }
             "commit" => {
                 let message = params["commit"].as_str().unwrap_or("");
                 if message.is_empty() {
-                    return ToolResult::error("Commit message cannot be empty");
+                    return git_error(
+                        action,
+                        "Commit message cannot be empty",
+                        "Pass a non-empty 'commit' message before retrying git commit.",
+                    );
                 }
                 let all = params["all"].as_bool().unwrap_or(false);
                 let mut cmd = Command::new("git");
+                cmd.current_dir(&cwd);
                 cmd.arg("commit").arg("-m").arg(message);
                 if all {
                     cmd.arg("-a");
@@ -261,11 +280,14 @@ impl Tool for GitTool {
                 let remote = params["remote"].as_str().unwrap_or("origin");
                 let force = params["force"].as_bool().unwrap_or(false);
                 if force && !is_safe_force_push(remote) {
-                    return ToolResult::error(
-                        "Force push to this remote is blocked for safety.".to_string(),
+                    return git_error(
+                        action,
+                        "Force push to this remote is blocked for safety.",
+                        "Use a non-protected fork remote or retry without force.",
                     );
                 }
                 let mut cmd = Command::new("git");
+                cmd.current_dir(&cwd);
                 cmd.arg("push").arg(remote);
                 if force {
                     cmd.arg("--force-with-lease");
@@ -277,10 +299,15 @@ impl Tool for GitTool {
             "checkout" => {
                 let branch = params["branch"].as_str().unwrap_or("");
                 if branch.is_empty() {
-                    return ToolResult::error("Branch name required for checkout");
+                    return git_error(
+                        action,
+                        "Branch name required for checkout",
+                        "Pass the 'branch' parameter before retrying checkout.",
+                    );
                 }
                 let create = params["create_branch"].as_bool().unwrap_or(false);
                 let mut cmd = Command::new("git");
+                cmd.current_dir(&cwd);
                 cmd.arg("checkout");
                 if create {
                     cmd.arg("-b");
@@ -291,12 +318,22 @@ impl Tool for GitTool {
             "branch" => {
                 let branch = params["branch"].as_str().unwrap_or("");
                 if branch.is_empty() {
-                    return ToolResult::error("Branch name required");
+                    return git_error(
+                        action,
+                        "Branch name required",
+                        "Pass the 'branch' parameter before retrying branch creation.",
+                    );
                 }
-                Command::new("git").arg("branch").arg(branch).output().await
+                let mut cmd = Command::new("git");
+                cmd.current_dir(&cwd);
+                cmd.arg("branch").arg(branch).output().await
             }
             _ => {
-                return ToolResult::error(format!("Unknown git action: {}", action));
+                return git_error(
+                    action,
+                    format!("Unknown git action: {}", action),
+                    "Use one of: status, diff, log, show, add, commit, push, checkout, branch.",
+                );
             }
         };
 
@@ -309,15 +346,106 @@ impl Tool for GitTool {
                 } else {
                     text.to_string()
                 };
-                ToolResult::success(output)
+                git_success(action, output)
             }
-            Ok(out) => ToolResult::error(format!(
-                "git {} failed: {}",
+            Ok(out) => git_error(
                 action,
-                String::from_utf8_lossy(&out.stderr)
-            )),
-            Err(e) => ToolResult::error(format!("Failed to run git: {}", e)),
+                format!(
+                    "git {} failed: {}",
+                    action,
+                    String::from_utf8_lossy(&out.stderr)
+                ),
+                git_recovery(action),
+            ),
+            Err(e) => git_error(
+                action,
+                format!("Failed to run git: {}", e),
+                "Verify git is installed and the working directory is accessible.",
+            ),
         }
+    }
+}
+
+fn git_success(action: &str, output: String) -> ToolResult {
+    ToolResult::success_with_data(
+        output.clone(),
+        json!({
+            "action": action,
+            "summary": git_success_summary(action, &output),
+        }),
+    )
+}
+
+fn git_error(action: &str, error: impl Into<String>, recovery: impl Into<String>) -> ToolResult {
+    let recovery = recovery.into();
+    let mut result = ToolResult::error(error);
+    result.data = Some(json!({
+        "action": action,
+        "summary": format!("git {} failed", action),
+        "recovery": recovery,
+    }));
+    result
+}
+
+fn git_success_summary(action: &str, output: &str) -> String {
+    match action {
+        "status" => {
+            let changed = output
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count();
+            if changed == 0 {
+                "git status: clean working tree".to_string()
+            } else {
+                format!("git status: {} changed paths", changed)
+            }
+        }
+        "diff" => {
+            if output.trim().is_empty() {
+                "git diff: no changes".to_string()
+            } else {
+                "git diff: changes displayed".to_string()
+            }
+        }
+        "log" => {
+            let commits = output
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count();
+            format!("git log: {} commits", commits)
+        }
+        "show" => "git show: commit details displayed".to_string(),
+        "add" => "git add: staged requested paths".to_string(),
+        "commit" => first_nonempty_line(output)
+            .unwrap_or("git commit: created commit")
+            .to_string(),
+        "push" => "git push: pushed current HEAD".to_string(),
+        "checkout" => first_nonempty_line(output)
+            .unwrap_or("git checkout: switched branch")
+            .to_string(),
+        "branch" => "git branch: branch created".to_string(),
+        _ => format!("git {}: completed", action),
+    }
+}
+
+fn first_nonempty_line(output: &str) -> Option<&str> {
+    output.lines().find(|line| !line.trim().is_empty())
+}
+
+fn git_recovery(action: &str) -> &'static str {
+    match action {
+        "status" | "diff" | "log" | "show" => {
+            "Confirm the working directory is a git repository and retry with a valid path/ref."
+        }
+        "add" => "Confirm the path exists and is inside the repository, then retry git add.",
+        "commit" => {
+            "Check staged changes with git status, provide a non-empty message, then retry commit."
+        }
+        "push" => "Check the remote name, branch permissions, and network access before retrying.",
+        "checkout" | "branch" => {
+            "Check the branch name and current working tree state before retrying."
+        }
+        _ => "Use a supported git action and valid arguments.",
     }
 }
 
@@ -359,6 +487,33 @@ fn is_safe_force_push(remote: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command as StdCommand;
+
+    fn init_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(StdCommand::new("git")
+            .arg("init")
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(StdCommand::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(StdCommand::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+            .status
+            .success());
+        dir
+    }
 
     #[tokio::test]
     async fn test_git_status() {
@@ -385,17 +540,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_git_branch_list_implicit() {
-        // branch action without branch name should fail gracefully
         let tool = GitTool;
         let result = tool
-            .execute(
-                json!({ "action": "branch", "branch": "test-branch-42" }),
-                ToolContext::new(".", "test"),
-            )
+            .execute(json!({ "action": "branch" }), ToolContext::new(".", "test"))
             .await;
-        // May succeed or fail depending on git state; either is fine for this test
-        // Just verify it doesn't panic
-        let _ = result.success;
+        assert!(!result.success);
+        assert!(result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("recovery"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .contains("branch"));
     }
 
     #[test]
@@ -447,5 +603,126 @@ mod tests {
             tool.to_classifier_input(&json!({ "action": "add", "path": "src/main.rs" })),
             "git add: src/main.rs"
         );
+    }
+
+    #[test]
+    fn test_git_success_summaries_cover_diff_log_and_commit() {
+        assert_eq!(git_success_summary("diff", ""), "git diff: no changes");
+        assert_eq!(
+            git_success_summary("diff", "diff --git a/a b/a\n+new\n"),
+            "git diff: changes displayed"
+        );
+        assert_eq!(
+            git_success_summary("log", "abc123 first\nabc124 second\n"),
+            "git log: 2 commits"
+        );
+        assert_eq!(
+            git_success_summary("commit", "[main abc123] fix bug\n 1 file changed"),
+            "[main abc123] fix bug"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_git_status_uses_context_working_dir_and_summary() {
+        let dir = init_git_repo();
+        std::fs::write(dir.path().join("only-here.txt"), "hello\n").unwrap();
+        let tool = GitTool;
+
+        let result = tool
+            .execute(
+                json!({ "action": "status" }),
+                ToolContext::new(dir.path(), "test"),
+            )
+            .await;
+
+        assert!(result.success);
+        assert!(result.content.contains("?? only-here.txt"));
+        assert_eq!(
+            result
+                .data
+                .as_ref()
+                .and_then(|data| data.get("summary"))
+                .and_then(|value| value.as_str()),
+            Some("git status: 1 changed paths")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_git_add_uses_context_working_dir_and_summary() {
+        let dir = init_git_repo();
+        std::fs::write(dir.path().join("staged.txt"), "hello\n").unwrap();
+        let tool = GitTool;
+
+        let result = tool
+            .execute(
+                json!({ "action": "add", "path": "staged.txt" }),
+                ToolContext::new(dir.path(), "test"),
+            )
+            .await;
+
+        assert!(result.success);
+        assert_eq!(
+            result
+                .data
+                .as_ref()
+                .and_then(|data| data.get("summary"))
+                .and_then(|value| value.as_str()),
+            Some("git add: staged requested paths")
+        );
+        let status = StdCommand::new("git")
+            .args(["status", "--short"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let status_text = String::from_utf8_lossy(&status.stdout);
+        assert!(status_text.contains("A  staged.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_git_invalid_diff_range_returns_recovery_metadata() {
+        let tool = GitTool;
+        let result = tool
+            .execute(
+                json!({ "action": "diff", "range": "--help" }),
+                ToolContext::new(".", "test"),
+            )
+            .await;
+
+        assert!(!result.success);
+        assert!(result
+            .error
+            .unwrap_or_default()
+            .contains("Invalid git diff range"));
+        assert!(result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("recovery"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .contains("HEAD~1..HEAD"));
+    }
+
+    #[tokio::test]
+    async fn test_git_commit_empty_message_returns_recovery_metadata() {
+        let tool = GitTool;
+        let result = tool
+            .execute(
+                json!({ "action": "commit", "commit": "" }),
+                ToolContext::new(".", "test"),
+            )
+            .await;
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Commit message cannot be empty")
+        );
+        assert!(result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("recovery"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .contains("non-empty"));
     }
 }

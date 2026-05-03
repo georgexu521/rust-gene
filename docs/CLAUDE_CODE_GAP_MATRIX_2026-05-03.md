@@ -200,7 +200,9 @@ Status: initial matrix landed.
   deltas against the previous run.
 - Persisted eval report JSON is backward compatible and can carry optional
   external baseline metadata for Claude/Codex-style comparisons.
-- Current full local baseline after this batch: `1045 passed; 0 failed`.
+- Git tool execution now honors `ToolContext.working_dir` and returns
+  structured summary/recovery metadata for closeout and trace consumers.
+- Current full local baseline after this batch: `1050 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 

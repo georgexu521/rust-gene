@@ -22,7 +22,7 @@ Latest verified baseline observed after the 2026-05-03 Claude-gap implementation
 batch:
 
 ```text
-1045 passed; 0 failed
+1050 passed; 0 failed
 ```
 
 Verified with:
@@ -46,7 +46,8 @@ cargo test --quiet -- --test-threads=1
   validation commands are classified as validation evidence.
 - Core coding tools now attach structured execution summaries; file edits refuse
   stale-read writes by default; bash command classification covers shell/env
-  wrappers and common validation families.
+  wrappers and common validation families; git tool execution now honors the
+  tool working directory and returns structured summary/recovery metadata.
 - Memory search spans project, user, topic, and agent namespaces with simple
   conflict detection.
 - MCP status and tool/resource visibility are health-aware and approval-aware.
@@ -126,7 +127,7 @@ not missing foundations:
 
 1. Continue measuring broad code-change first-pass success and repair count
    against the replay matrix and live eval tasks.
-2. Deepen remaining high-use tool semantics for git, validation closeout, and
+2. Deepen remaining high-use tool semantics for validation closeout and
    long-running command progress.
 3. Expand rendered command-level smoke tests beyond core panels into broader
    settings and history surfaces.
