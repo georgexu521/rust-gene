@@ -2180,7 +2180,15 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Eval run failed: {}", e),
             }
         }
-        _ => "Usage: /eval [list|run <name|all>]".to_string(),
+        "json" => {
+            let target = parts.next().unwrap_or("all");
+            match crate::engine::evalset::run_evalsets_from_dir(&eval_dir, Some(target)) {
+                Ok(reports) => crate::engine::evalset::format_reports_json(&reports)
+                    .unwrap_or_else(|e| format!("Eval JSON failed: {}", e)),
+                Err(e) => format!("Eval run failed: {}", e),
+            }
+        }
+        _ => "Usage: /eval [list|run <name|all>|json <name|all>]".to_string(),
     }
 }
 

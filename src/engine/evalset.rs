@@ -475,6 +475,34 @@ pub fn format_reports(reports: &[EvalReport]) -> String {
     out
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalReportBundle {
+    pub generated_at: String,
+    pub sets: usize,
+    pub scenarios: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub reports: Vec<EvalReport>,
+}
+
+impl EvalReportBundle {
+    pub fn from_reports(reports: &[EvalReport]) -> Self {
+        Self {
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            sets: reports.len(),
+            scenarios: reports.iter().map(|r| r.total).sum(),
+            passed: reports.iter().map(|r| r.passed).sum(),
+            failed: reports.iter().map(|r| r.failed).sum(),
+            reports: reports.to_vec(),
+        }
+    }
+}
+
+pub fn format_reports_json(reports: &[EvalReport]) -> Result<String> {
+    serde_json::to_string_pretty(&EvalReportBundle::from_reports(reports))
+        .context("failed to serialize eval report bundle")
+}
+
 fn check_eq<T>(
     failures: &mut Vec<EvalFailure>,
     scenario_id: &str,
@@ -941,5 +969,27 @@ scenarios:
         );
         let report = EvalRunner::new().run_set(&set);
         assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_reports_json_contains_trend_fields() {
+        let reports = vec![EvalReport {
+            set_name: "sample".to_string(),
+            total: 2,
+            passed: 1,
+            failed: 1,
+            failures: vec![EvalFailure {
+                scenario_id: "case-1".to_string(),
+                message: "expected trace event".to_string(),
+            }],
+        }];
+        let json = format_reports_json(&reports).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["sets"], 1);
+        assert_eq!(value["scenarios"], 2);
+        assert_eq!(value["passed"], 1);
+        assert_eq!(value["failed"], 1);
+        assert!(value["generated_at"].as_str().unwrap_or("").contains('T'));
+        assert_eq!(value["reports"][0]["failures"][0]["scenario_id"], "case-1");
     }
 }
