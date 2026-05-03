@@ -57,6 +57,16 @@ fn default_backend() -> BashExecutionBackend {
     }
 }
 
+fn effective_timeout_secs(requested: Option<u64>) -> u64 {
+    let requested = requested.unwrap_or(60).min(3600);
+    let floor = std::env::var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        .min(3600);
+    requested.max(floor).min(3600)
+}
+
 fn restricted_command(command: &str) -> String {
     // 受限后端说明：
     // - 仅应用软资源限制和最小化环境变量
@@ -249,7 +259,7 @@ impl Tool for BashTool {
         }
 
         let description = params["description"].as_str().unwrap_or(command);
-        let timeout = params["timeout"].as_u64().unwrap_or(60).min(3600);
+        let timeout = effective_timeout_secs(params["timeout"].as_u64());
 
         // working_dir 安全校验
         let working_dir = if let Some(wd_str) = params["working_dir"].as_str() {
@@ -552,6 +562,22 @@ mod tests {
             Some(BashExecutionBackend::External)
         );
         assert_eq!(parse_backend("unknown"), None);
+    }
+
+    #[test]
+    fn test_effective_timeout_floor_env_is_bounded() {
+        let previous = std::env::var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS").ok();
+        std::env::set_var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", "600");
+        assert_eq!(effective_timeout_secs(Some(180)), 600);
+        assert_eq!(effective_timeout_secs(Some(900)), 900);
+
+        std::env::set_var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", "7200");
+        assert_eq!(effective_timeout_secs(Some(180)), 3600);
+
+        match previous {
+            Some(value) => std::env::set_var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", value),
+            None => std::env::remove_var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS"),
+        }
     }
 
     #[test]

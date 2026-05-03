@@ -9,8 +9,77 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
+
+fn auto_verify_timeout() -> std::time::Duration {
+    let secs = std::env::var("PRIORITY_AGENT_AUTO_VERIFY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(300)
+        .clamp(30, 900);
+    std::time::Duration::from_secs(secs)
+}
+
+async fn command_output_with_timeout(
+    mut cmd: Command,
+    label: &str,
+) -> std::io::Result<std::process::Output> {
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd.kill_on_drop(true);
+    let timeout = auto_verify_timeout();
+    let mut child = cmd.spawn()?;
+    let child_pid = child.id();
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let stdout_task = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        if let Some(ref mut stream) = stdout {
+            stream.read_to_end(&mut buffer).await?;
+        }
+        Ok::<Vec<u8>, std::io::Error>(buffer)
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        if let Some(ref mut stream) = stderr {
+            stream.read_to_end(&mut buffer).await?;
+        }
+        Ok::<Vec<u8>, std::io::Error>(buffer)
+    });
+
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(result) => result?,
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(pid) = child_pid {
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("{} timed out after {}s", label, timeout.as_secs()),
+            ));
+        }
+    };
+
+    let stdout = stdout_task
+        .await
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))??;
+    let stderr = stderr_task
+        .await
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))??;
+
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
 
 /// 单条验证问题
 #[derive(Debug, Clone)]
@@ -329,7 +398,7 @@ async fn run_cargo_check(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let output = match cmd.output().await {
+    let output = match command_output_with_timeout(cmd, "cargo check").await {
         Ok(o) => o,
         Err(e) => {
             warn!("Failed to run cargo check: {}", e);
@@ -436,7 +505,7 @@ async fn run_cargo_test(working_dir: &Path, manifest: Option<&Path>) -> Option<V
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let output = match cmd.output().await {
+    let output = match command_output_with_timeout(cmd, "cargo test").await {
         Ok(o) => o,
         Err(e) => {
             warn!("Failed to run cargo test: {}", e);
@@ -1048,7 +1117,7 @@ async fn run_typescript_tests(working_dir: &Path) -> Option<VerificationResult> 
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let output = match cmd.output().await {
+    let output = match command_output_with_timeout(cmd, cmd_str).await {
         Ok(o) => o,
         Err(e) => {
             warn!("Failed to run TypeScript tests: {}", e);

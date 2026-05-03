@@ -1,0 +1,1 @@
+2026-05-01T11:40:04.817585Z  WARN priority_agent::engine::conversation_loop: Guided validation debugging failed: key must be a string at line 1 column 2

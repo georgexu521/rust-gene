@@ -1,0 +1,246 @@
+id: backend-todo-api-crud
+title: implement a tiny stdlib todo API backend
+type: feature
+complexity: medium
+risk: medium
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/live_backend/todo_api
+      cat > fixtures/live_backend/todo_api/todo_api.py <<'PY'
+      from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+      import json
+      import re
+      import time
+
+
+      class TodoStore:
+          def __init__(self):
+              self._items = []
+              self._next_id = 1
+
+          def list(self, completed=None):
+              # TODO: return all todos, optionally filtered by completed.
+              return list(self._items)
+
+          def create(self, title):
+              # TODO: validate non-empty title, create an incomplete todo.
+              return None
+
+          def update(self, item_id, patch):
+              # TODO: support title and completed updates. Return None when missing.
+              return None
+
+          def delete(self, item_id):
+              # TODO: delete by id. Return True when an item was removed.
+              return False
+
+
+      STORE = TodoStore()
+
+
+      def json_response(handler, status, payload):
+          body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+          handler.send_response(status)
+          handler.send_header("Content-Type", "application/json; charset=utf-8")
+          handler.send_header("Content-Length", str(len(body)))
+          handler.end_headers()
+          handler.wfile.write(body)
+
+
+      def read_json(handler):
+          length = int(handler.headers.get("Content-Length", "0") or "0")
+          if length == 0:
+              return {}
+          raw = handler.rfile.read(length)
+          try:
+              return json.loads(raw.decode("utf-8"))
+          except json.JSONDecodeError:
+              return None
+
+
+      class TodoHandler(BaseHTTPRequestHandler):
+          def log_message(self, fmt, *args):
+              return
+
+          def do_GET(self):
+              # TODO: implement GET /todos and optional ?completed=true|false.
+              json_response(self, 404, {"error": "not found"})
+
+          def do_POST(self):
+              # TODO: implement POST /todos with {"title": "..."}.
+              json_response(self, 404, {"error": "not found"})
+
+          def do_PATCH(self):
+              # TODO: implement PATCH /todos/<id>.
+              json_response(self, 404, {"error": "not found"})
+
+          def do_DELETE(self):
+              # TODO: implement DELETE /todos/<id>.
+              json_response(self, 404, {"error": "not found"})
+
+
+      def make_server(host="127.0.0.1", port=0):
+          return ThreadingHTTPServer((host, port), TodoHandler)
+
+
+      if __name__ == "__main__":
+          server = make_server(port=8080)
+          print("listening on http://127.0.0.1:8080", flush=True)
+          server.serve_forever()
+      PY
+      cat > fixtures/live_backend/todo_api/test_todo_api.py <<'PY'
+      import json
+      import threading
+      import unittest
+      import urllib.error
+      import urllib.parse
+      import urllib.request
+
+      import todo_api
+
+
+      class TodoApiTest(unittest.TestCase):
+          @classmethod
+          def setUpClass(cls):
+              todo_api.STORE = todo_api.TodoStore()
+              cls.server = todo_api.make_server()
+              cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
+              cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+              cls.thread.start()
+
+          @classmethod
+          def tearDownClass(cls):
+              cls.server.shutdown()
+              cls.thread.join(timeout=2)
+
+          def request(self, method, path, payload=None):
+              body = None
+              headers = {}
+              if payload is not None:
+                  body = json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(self.base + path, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=3) as response:
+                      data = response.read().decode("utf-8")
+                      return response.status, json.loads(data) if data else None
+              except urllib.error.HTTPError as exc:
+                  data = exc.read().decode("utf-8")
+                  return exc.code, json.loads(data) if data else None
+
+          def test_crud_and_filtering(self):
+              status, payload = self.request("GET", "/todos")
+              self.assertEqual(status, 200)
+              self.assertEqual(payload, [])
+
+              status, payload = self.request("POST", "/todos", {"title": "Write tests"})
+              self.assertEqual(status, 201)
+              self.assertEqual(payload["title"], "Write tests")
+              self.assertEqual(payload["completed"], False)
+              item_id = payload["id"]
+
+              status, payload = self.request("POST", "/todos", {"title": "   "})
+              self.assertEqual(status, 400)
+              self.assertIn("error", payload)
+
+              status, payload = self.request("PATCH", f"/todos/{item_id}", {"completed": True})
+              self.assertEqual(status, 200)
+              self.assertEqual(payload["completed"], True)
+
+              status, payload = self.request("GET", "/todos?completed=true")
+              self.assertEqual(status, 200)
+              self.assertEqual(len(payload), 1)
+              self.assertEqual(payload[0]["id"], item_id)
+
+              status, payload = self.request("GET", "/todos?completed=false")
+              self.assertEqual(status, 200)
+              self.assertEqual(payload, [])
+
+              status, payload = self.request("PATCH", "/todos/999", {"title": "missing"})
+              self.assertEqual(status, 404)
+
+              status, payload = self.request("DELETE", f"/todos/{item_id}")
+              self.assertEqual(status, 204)
+              self.assertIsNone(payload)
+
+              status, payload = self.request("DELETE", f"/todos/{item_id}")
+              self.assertEqual(status, 404)
+
+          def test_bad_json_and_unknown_route(self):
+              req = urllib.request.Request(
+                  self.base + "/todos",
+                  data=b"{bad json",
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with self.assertRaises(urllib.error.HTTPError) as ctx:
+                  urllib.request.urlopen(req, timeout=3)
+              self.assertEqual(ctx.exception.code, 400)
+
+              status, payload = self.request("GET", "/missing")
+              self.assertEqual(status, 404)
+              self.assertIn("error", payload)
+
+
+      if __name__ == "__main__":
+          unittest.main()
+      PY
+      cat > fixtures/live_backend/todo_api/.gitignore <<'EOF'
+      __pycache__/
+      *.pyc
+      EOF
+
+prompt: |
+  请实现 `fixtures/live_backend/todo_api/todo_api.py` 里的最小 Todo HTTP API。
+
+  要求：
+  - 只使用 Python 标准库，不引入第三方依赖。
+  - 实现 `GET /todos`，支持 `?completed=true|false` 过滤。
+  - 实现 `POST /todos`，请求体为 `{"title": "..."}`，空标题返回 400。
+  - 实现 `PATCH /todos/<id>`，支持更新 `title` 和 `completed`。
+  - 实现 `DELETE /todos/<id>`，成功返回 204，不存在返回 404。
+  - JSON 解析错误、未知路由和缺失资源都要返回明确错误。
+
+  这是一个真实后端小任务，请先看测试和现有代码，再做最小实现。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+  - memory_clear
+
+expected_behavior:
+  - agent 应通过测试理解 API 契约。
+  - 不应改测试来绕过验收。
+  - 失败测试应触发修复，而不是直接 closeout。
+
+acceptance:
+  required_commands:
+    - "python3 -m unittest discover -s fixtures/live_backend/todo_api -p 'test_*.py'"
+    - "! rg 'TODO' fixtures/live_backend/todo_api/todo_api.py"
+  diff_constraints:
+    max_files_changed: 4
+    forbidden_paths:
+      - target/
+      - .git/
+      - fixtures/live_backend/todo_api/test_todo_api.py
+  human_review:
+    - API 行为是否符合测试和用户要求？
+    - 是否保持标准库实现？
+    - closeout 是否准确列出测试命令？
+
+scoring:
+  success: 0.35
+  test_pass: 0.25
+  api_contract: 0.20
+  diff_discipline: 0.10
+  repair_loop: 0.05
+  closeout_quality: 0.05

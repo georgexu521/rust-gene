@@ -6,7 +6,7 @@ risk: high
 
 repo:
   fixture: priority-agent
-  base_ref: "ccbbdad"
+  base_ref: "HEAD"
   prepare_commands:
     - |
       python3 - <<'PY'

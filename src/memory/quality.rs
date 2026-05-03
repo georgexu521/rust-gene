@@ -218,7 +218,7 @@ fn duplicate_score(existing: &str, candidate: &str) -> f32 {
         .iter()
         .filter(|word| normalized_existing.contains(**word))
         .count();
-    (hits as f32 / words.len() as f32).min(0.8)
+    (hits as f32 / words.len() as f32).min(0.95)
 }
 
 fn normalize(text: &str) -> String {
@@ -286,6 +286,19 @@ mod tests {
             false,
         )
         .unwrap_err();
+        assert_eq!(err.sensitivity, SensitivityLevel::SecretLike);
+    }
+
+    #[test]
+    fn explicit_save_cannot_override_secret_candidate() {
+        let err = assess_memory_candidate(
+            "password = sk-123456789012345678901234",
+            "preference",
+            "",
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "secret_like_content");
         assert_eq!(err.sensitivity, SensitivityLevel::SecretLike);
     }
 }

@@ -1,0 +1,309 @@
+id: frontend-book-notes-localstorage
+title: build a small book notes frontend with search, tags, and persistence
+type: feature
+complexity: medium
+risk: medium
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/live_frontend/book_notes
+      cat > fixtures/live_frontend/book_notes/index.html <<'HTML'
+      <!doctype html>
+      <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Book Notes</title>
+        <link rel="stylesheet" href="./styles.css" />
+      </head>
+      <body>
+        <main class="app-shell">
+          <header>
+            <h1>Book Notes</h1>
+            <p>Capture useful notes and find them again quickly.</p>
+          </header>
+          <section class="composer" aria-label="Add note">
+            <input id="title" placeholder="Title" />
+            <textarea id="body" placeholder="Note"></textarea>
+            <input id="tags" placeholder="tags, comma separated" />
+            <button id="add-note" type="button">Add note</button>
+          </section>
+          <section class="filters" aria-label="Filters">
+            <input id="search" placeholder="Search notes" />
+            <input id="tag-filter" placeholder="Filter by tag" />
+          </section>
+          <section id="notes" class="notes" aria-live="polite"></section>
+        </main>
+        <script src="./app.js"></script>
+      </body>
+      </html>
+      HTML
+      cat > fixtures/live_frontend/book_notes/styles.css <<'CSS'
+      :root {
+        color: #171717;
+        background: #fafafa;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body {
+        margin: 0;
+      }
+      .app-shell {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 32px 20px;
+      }
+      header {
+        margin-bottom: 24px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 32px;
+      }
+      p {
+        color: #6b7280;
+        margin: 0;
+      }
+      .composer,
+      .filters {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      input,
+      textarea,
+      button {
+        border: 1px solid #d4d4d4;
+        border-radius: 6px;
+        font: inherit;
+        padding: 10px 12px;
+      }
+      textarea {
+        min-height: 96px;
+      }
+      button {
+        background: #111827;
+        color: white;
+        cursor: pointer;
+      }
+      .notes {
+        display: grid;
+        gap: 12px;
+      }
+      CSS
+      cat > fixtures/live_frontend/book_notes/app.js <<'JS'
+      const STORAGE_KEY = "priority-agent.book-notes";
+
+      function normalizeTags(input) {
+        return String(input || "")
+          .split(",")
+          .map((tag) => tag.trim().toLowerCase())
+          .filter(Boolean);
+      }
+
+      function createStore(storage = window.localStorage) {
+        let notes = [];
+
+        function load() {
+          // TODO: restore notes from storage, tolerate malformed JSON.
+          notes = [];
+          return notes;
+        }
+
+        function save() {
+          // TODO: persist notes to storage.
+        }
+
+        function addNote({ title, body, tags }) {
+          // TODO: create a note with id, title, body, tags, createdAt.
+          return null;
+        }
+
+        function deleteNote(id) {
+          // TODO: remove a note by id and persist.
+          return false;
+        }
+
+        function listNotes({ search = "", tag = "" } = {}) {
+          // TODO: return newest-first notes filtered by title/body search and tag.
+          return notes;
+        }
+
+        return { load, save, addNote, deleteNote, listNotes, _all: () => notes };
+      }
+
+      function renderNotes(store, root, filters = {}) {
+        const notes = store.listNotes(filters);
+        root.innerHTML = "";
+        if (notes.length === 0) {
+          root.innerHTML = '<p class="empty">No notes yet.</p>';
+          return;
+        }
+        for (const note of notes) {
+          const article = document.createElement("article");
+          article.className = "note-card";
+          article.innerHTML = `
+            <h2></h2>
+            <p class="note-body"></p>
+            <p class="note-tags"></p>
+            <button type="button" data-delete="${note.id}">Delete</button>
+          `;
+          article.querySelector("h2").textContent = note.title;
+          article.querySelector(".note-body").textContent = note.body;
+          article.querySelector(".note-tags").textContent = note.tags.map((tag) => `#${tag}`).join(" ");
+          root.appendChild(article);
+        }
+      }
+
+      function init() {
+        if (typeof document === "undefined") return;
+        const store = createStore(window.localStorage);
+        const root = document.getElementById("notes");
+        const title = document.getElementById("title");
+        const body = document.getElementById("body");
+        const tags = document.getElementById("tags");
+        const search = document.getElementById("search");
+        const tagFilter = document.getElementById("tag-filter");
+        store.load();
+        const refresh = () => renderNotes(store, root, { search: search.value, tag: tagFilter.value });
+        document.getElementById("add-note").addEventListener("click", () => {
+          store.addNote({ title: title.value, body: body.value, tags: tags.value });
+          title.value = "";
+          body.value = "";
+          tags.value = "";
+          refresh();
+        });
+        root.addEventListener("click", (event) => {
+          const id = event.target && event.target.dataset ? event.target.dataset.delete : "";
+          if (id) {
+            store.deleteNote(id);
+            refresh();
+          }
+        });
+        search.addEventListener("input", refresh);
+        tagFilter.addEventListener("input", refresh);
+        refresh();
+      }
+
+      if (typeof module !== "undefined") {
+        module.exports = { STORAGE_KEY, normalizeTags, createStore };
+      }
+      init();
+      JS
+      cat > fixtures/live_frontend/book_notes/test-book-notes.cjs <<'JS'
+      const assert = require("assert");
+      const { STORAGE_KEY, normalizeTags, createStore } = require("./app.js");
+
+      function fakeStorage(seed = {}) {
+        const data = { ...seed };
+        return {
+          getItem(key) {
+            return Object.prototype.hasOwnProperty.call(data, key) ? data[key] : null;
+          },
+          setItem(key, value) {
+            data[key] = String(value);
+          },
+          removeItem(key) {
+            delete data[key];
+          },
+          _data: data,
+        };
+      }
+
+      assert.deepStrictEqual(normalizeTags(" Rust, UI ,, rust "), ["rust", "ui", "rust"]);
+
+      const storage = fakeStorage();
+      const store = createStore(storage);
+      assert.deepStrictEqual(store.load(), []);
+
+      const originalNow = Date.now;
+      Date.now = () => 1700000000000;
+      const first = store.addNote({
+        title: "Rust ownership",
+        body: "Borrowing prevents data races",
+        tags: "rust, systems",
+      });
+      const second = store.addNote({
+        title: "Design notes",
+        body: "Keep the interface calm and searchable",
+        tags: ["ui", "product"],
+      });
+      Date.now = originalNow;
+
+      assert.ok(first.id && second.id && first.id !== second.id, "notes need stable unique ids");
+      assert.deepStrictEqual(first.tags, ["rust", "systems"]);
+      assert.deepStrictEqual(second.tags, ["ui", "product"]);
+      assert.strictEqual(store.listNotes().length, 2);
+      assert.strictEqual(store.listNotes()[0].id, second.id, "newest note should be first even when two notes share the same timestamp");
+      assert.strictEqual(store.listNotes({ search: "borrow" }).length, 1);
+      assert.strictEqual(store.listNotes({ search: "DESIGN" })[0].id, second.id);
+      assert.strictEqual(store.listNotes({ tag: "Rust" })[0].id, first.id);
+      assert.strictEqual(store.listNotes({ tag: "missing" }).length, 0);
+
+      const saved = JSON.parse(storage.getItem(STORAGE_KEY));
+      assert.strictEqual(saved.length, 2, "notes should persist to localStorage");
+
+      const restored = createStore(fakeStorage({ [STORAGE_KEY]: storage.getItem(STORAGE_KEY) }));
+      assert.strictEqual(restored.load().length, 2, "load should restore persisted notes");
+
+      assert.strictEqual(restored.deleteNote(first.id), true);
+      assert.strictEqual(restored.deleteNote("not-found"), false);
+      assert.strictEqual(restored.listNotes().length, 1);
+
+      const malformed = createStore(fakeStorage({ [STORAGE_KEY]: "{bad json" }));
+      assert.deepStrictEqual(malformed.load(), [], "malformed storage should not crash");
+      console.log("book notes behavior ok");
+      JS
+
+prompt: |
+  请完成 `fixtures/live_frontend/book_notes` 里的本地书摘记录网站。
+
+  目标：
+  - 支持新增笔记，字段包括 title、body、tags。
+  - 支持删除笔记。
+  - 支持按标题/正文搜索，大小写不敏感。
+  - 支持按 tag 过滤，tag 大小写不敏感。
+  - 使用 localStorage 持久化，刷新后能恢复。
+  - 新增列表必须稳定 newest-first；即使两条笔记在同一毫秒创建，后新增的也应排在前面。
+  - 保持实现简单，不引入 npm 依赖。
+
+  重点不是做大范围重构，而是让现有 `index.html`、`styles.css`、`app.js` 变成一个可用的小前端。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+  - memory_clear
+
+expected_behavior:
+  - agent 应先检查 fixture 文件和测试，再做小范围实现。
+  - 失败测试应阻止成功 closeout。
+  - 最终 closeout 应列出真实运行过的命令。
+
+acceptance:
+  required_commands:
+    - "node fixtures/live_frontend/book_notes/test-book-notes.cjs"
+    - "! rg 'TODO' fixtures/live_frontend/book_notes/app.js"
+  diff_constraints:
+    max_files_changed: 5
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - 是否真的实现了搜索、tag 过滤和 localStorage？
+    - 是否避免引入不必要依赖？
+    - closeout 是否准确说明验证结果？
+
+scoring:
+  success: 0.35
+  test_pass: 0.25
+  first_edit_efficiency: 0.10
+  frontend_completeness: 0.15
+  diff_discipline: 0.10
+  closeout_quality: 0.05

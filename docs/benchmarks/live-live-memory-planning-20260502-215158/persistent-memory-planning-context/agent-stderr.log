@@ -1,0 +1,1 @@
+2026-05-02T13:58:08.205680Z  WARN priority_agent::engine::auto_verify: Failed to run cargo test: cargo test timed out after 180s

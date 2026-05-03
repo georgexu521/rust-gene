@@ -6,7 +6,41 @@ risk: medium
 
 repo:
   fixture: priority-agent
-  base_ref: "818f3a7"
+  base_ref: HEAD
+  prepare_commands:
+    - |
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
+
+      path = Path("src/tui/slash_handler/config.rs")
+      text = path.read_text()
+
+      gate_pattern = re.compile(
+          r'\n            if let Err\(report\) = validate_skill_promotion_for_apply\(&store, &current, bound_report\.as_ref\(\)\) \{\n'
+          r'                return format!\(\n'
+          r'                    "Skill proposal \{\} was not applied by promotion gate\.\\n\{\}",\n'
+          r'                    current\.id, report\n'
+          r'                \);\n'
+          r'            \}\n',
+          re.MULTILINE,
+      )
+      text, gate_count = gate_pattern.subn("\n", text, count=1)
+      if gate_count != 1:
+          raise SystemExit("expected promotion gate block not found")
+
+      cooldown_pattern = re.compile(
+          r'\n                        record_evolution_update\(\n'
+          r'                            crate::engine::evolution_controller::EvolutionTarget::Skill,\n'
+          r'                        \);\n',
+          re.MULTILINE,
+      )
+      text, cooldown_count = cooldown_pattern.subn("\n", text, count=1)
+      if cooldown_count != 1:
+          raise SystemExit("expected skill cooldown update block not found")
+
+      path.write_text(text)
+      PY
   setup:
     - cargo test -q skill_evolution -- --test-threads=1
 
@@ -38,6 +72,8 @@ acceptance:
   required_commands:
     - cargo test -q skill_evolution -- --test-threads=1
     - cargo test -q slash_handler -- --test-threads=1
+    - python3 -c "import re; p='src/tui/slash_handler/config.rs'; s=open(p).read(); h=s.find('pub fn handle_skill_proposals'); a=s.find('\"apply\" =>', h); b=s.find('let root = user_skill_root()', a); m=re.search(r'validate_skill_promotion_for_apply\\(\\s*&store,\\s*&current,\\s*bound_report\\.as_ref\\(\\)\\s*\\)', s[a:b]); assert h >= 0 and a >= 0 and b >= 0 and m"
+    - python3 -c "p='src/tui/slash_handler/config.rs'; s=open(p).read(); h=s.find('pub fn handle_skill_proposals'); a=s.find('\"apply\" =>', h); r=s.find('store.record_applied_version(id, &path)', a); b=s.find('let loaded = app.skill_runtime.reload()', r); c=s.find('record_evolution_update(', r); assert h >= 0 and a >= 0 and r >= 0 and b >= 0 and c >= 0 and c < b"
     - cargo test -q -- --test-threads=1
   diff_constraints:
     max_files_changed: 8

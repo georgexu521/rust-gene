@@ -28,6 +28,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, warn};
 
@@ -127,6 +128,77 @@ fn llm_request_timeout() -> std::time::Duration {
         .unwrap_or(180)
         .clamp(30, 600);
     std::time::Duration::from_secs(secs)
+}
+
+fn required_validation_timeout() -> std::time::Duration {
+    let secs = std::env::var("PRIORITY_AGENT_REQUIRED_VALIDATION_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(300)
+        .clamp(30, 900);
+    std::time::Duration::from_secs(secs)
+}
+
+async fn shell_output_with_timeout(
+    command: &str,
+    working_dir: &std::path::Path,
+    timeout: std::time::Duration,
+) -> std::io::Result<std::process::Output> {
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-lc").arg(command).current_dir(working_dir);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let mut child = cmd.spawn()?;
+    let child_pid = child.id();
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let stdout_task = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        if let Some(ref mut stream) = stdout {
+            stream.read_to_end(&mut buffer).await?;
+        }
+        Ok::<Vec<u8>, std::io::Error>(buffer)
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        if let Some(ref mut stream) = stderr {
+            stream.read_to_end(&mut buffer).await?;
+        }
+        Ok::<Vec<u8>, std::io::Error>(buffer)
+    });
+
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(result) => result?,
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(pid) = child_pid {
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("command timed out after {}s", timeout.as_secs()),
+            ));
+        }
+    };
+    let stdout = stdout_task
+        .await
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))??;
+    let stderr = stderr_task
+        .await
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))??;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn stream_chunk_idle_timeout() -> std::time::Duration {
@@ -1753,8 +1825,10 @@ impl ConversationLoop {
                     model: self.model.clone(),
                     tools: tools.len(),
                 });
+                let nonstreaming_tool_request =
+                    tx.is_some() && should_use_nonstreaming_tools(self.provider.as_ref(), &tools);
                 api_result = if let Some(tx) = tx {
-                    if should_use_nonstreaming_tools(self.provider.as_ref(), &tools) {
+                    if nonstreaming_tool_request {
                         trace.record(TraceEvent::WorkflowFallback {
                             error: "provider stream is incompatible with tool/usage chunks; using non-streaming tool request".to_string(),
                         });
@@ -1842,6 +1916,13 @@ impl ConversationLoop {
             final_tool_calls = tool_calls.clone();
 
             if tool_calls.is_empty() {
+                if let Some(tx) = tx {
+                    if should_use_nonstreaming_tools(self.provider.as_ref(), &tools)
+                        && !content.is_empty()
+                    {
+                        let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
+                    }
+                }
                 break;
             }
 
@@ -2486,8 +2567,15 @@ impl ConversationLoop {
                 }
 
                 // ── 编程质量可观测性 ───────────────────────
+                // Live tasks can define domain-specific required commands
+                // (for example node or Python API tests). When all required
+                // commands pass, they are stronger evidence than the Rust
+                // repository's default cargo auto-test for that changed area.
+                let required_validation_covers_tests =
+                    !required_validation_commands.is_empty() && required_validation_passed;
+                let effective_tests_passed = tests_passed || required_validation_covers_tests;
                 let verify_passed = check_passed
-                    && tests_passed
+                    && effective_tests_passed
                     && required_validation_passed
                     && review_result.success;
                 should_closeout_after_verified_change = verify_passed;
@@ -2495,7 +2583,7 @@ impl ConversationLoop {
                     changed_files: changed_files.len(),
                     passed: verify_passed,
                     check_passed,
-                    tests_passed,
+                    tests_passed: effective_tests_passed,
                     review_passed: review_result.success,
                     failed_commands: failed_commands.clone(),
                 });
@@ -3404,14 +3492,26 @@ impl ConversationLoop {
         task_preview: &str,
     ) -> Result<Vec<ToolCall>> {
         let evidence = Self::patch_synthesis_evidence(messages);
-        if evidence.trim().is_empty() {
+        let deterministic_seed = if task_preview.trim().is_empty() {
+            evidence.clone()
+        } else if evidence.trim().is_empty() {
+            format!("TASK:\n{task_preview}")
+        } else {
+            format!("TASK:\n{task_preview}\n\nEVIDENCE:\n{evidence}")
+        };
+
+        if deterministic_seed.trim().is_empty() {
             return Err(anyhow::anyhow!("no usable evidence for patch synthesis"));
         }
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let deterministic_calls = self.deterministic_patch_tool_calls(&evidence, &cwd);
+        let deterministic_calls = self.deterministic_patch_tool_calls(&deterministic_seed, &cwd);
         if !deterministic_calls.is_empty() {
             return Ok(deterministic_calls);
+        }
+
+        if evidence.trim().is_empty() {
+            return Err(anyhow::anyhow!("no usable evidence for patch synthesis"));
         }
 
         let system = r#"You are a controlled patch synthesis engine for a coding agent.
@@ -3444,7 +3544,7 @@ Return this exact JSON shape:
 Rules:
 - Only use tool="file_edit".
 - Prefer old_string/new_string exact replacement when the evidence contains the original code.
-- Do not use line_start/line_end in patch synthesis. Use unique exact old_string replacements only.
+- You may use line_start/line_end only when evidence gives a precise bounded line range; do not combine line_start/line_end with old_string.
 - Do not invent paths. Use paths shown in evidence.
 - Do not invent enum variants, struct fields, functions, or APIs not visible in evidence. Reuse existing names exactly; if a decision object already computes status, prefer that status over reimplementing gates.
 - For quality/scoring fixes, if a scorer/decision object already encodes explicit override plus safety/duplication hard stops, assign from decision.status directly. Never re-promote Rejected/Proposed decisions to Accepted with a second explicit_override or score check in the caller.
@@ -3508,7 +3608,7 @@ Rules:
             if attempt == 0 {
                 synthesis_messages.push(Message::assistant(safe_prefix_by_bytes(&content, 1200)));
                 synthesis_messages.push(Message::user(format!(
-                    "The previous patch plan was rejected: {}. Return corrected JSON only. Use one to six file_edit actions when multiple independent acceptance-critical bypasses or Rust missing-field/pattern compile errors are visible; otherwise use one action. Do not call tools. Reuse only paths, enum variants, fields, and functions shown in evidence or validation feedback.",
+                    "The previous patch plan was rejected: {}. Return corrected JSON only. Use one to six file_edit actions when multiple independent acceptance-critical bypasses or Rust missing-field/pattern compile errors are visible; otherwise use one action. Use either old_string or line_start/line_end, never both. Do not call tools. Reuse only paths, enum variants, fields, and functions shown in evidence or validation feedback.",
                     last_validation_errors.join("; ")
                 )));
             }
@@ -3588,6 +3688,22 @@ Do not answer in prose unless no safe patch exists."#;
         {
             actions.push(action);
         }
+        actions.extend(Self::deterministic_skill_promotion_gate_actions(
+            &lower_evidence,
+            cwd,
+        ));
+        actions.extend(Self::deterministic_memory_recall_conflict_actions(
+            &lower_evidence,
+            cwd,
+        ));
+        actions.extend(Self::deterministic_memory_duplicate_demote_actions(
+            &lower_evidence,
+            cwd,
+        ));
+        actions.extend(Self::deterministic_memory_sensitive_hard_block_actions(
+            &lower_evidence,
+            cwd,
+        ));
 
         if !(lower_evidence.contains("memorywrite")
             || lower_evidence.contains("memory_save")
@@ -3630,6 +3746,23 @@ Do not answer in prose unless no safe patch exists."#;
                 path: "src/memory/quality.rs".to_string(),
                 old_string: Some(
                     "let status = if explicit || score >= 0.65 { MemoryStatus::Accepted } else { write_decision.status };"
+                        .to_string(),
+                ),
+                new_string: "let status = write_decision.status;".to_string(),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+        if Self::file_contains(
+            &quality,
+            "let status = if score >= 0.65 { MemoryStatus::Accepted } else { write_decision.status };",
+        ) {
+            actions.push(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/memory/quality.rs".to_string(),
+                old_string: Some(
+                    "let status = if score >= 0.65 { MemoryStatus::Accepted } else { write_decision.status };"
                         .to_string(),
                 ),
                 new_string: "let status = write_decision.status;".to_string(),
@@ -3809,6 +3942,688 @@ Do not answer in prose unless no safe patch exists."#;
 
     fn retry_format_marker() -> String {
         concat!("&format!(\"retry: {", "}\", verification_command)").to_string()
+    }
+
+    fn deterministic_skill_promotion_gate_actions(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Vec<PatchSynthesisAction> {
+        if !(lower_evidence.contains("skill proposal")
+            || lower_evidence.contains("skill-promotion")
+            || lower_evidence.contains("validate_skill_promotion_for_apply")
+            || lower_evidence.contains("promotion gate"))
+        {
+            return Vec::new();
+        }
+
+        let path = cwd.join("src/tui/slash_handler/config.rs");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        if !content.contains("fn validate_skill_promotion_for_apply(")
+            || !content.contains("fn skill_fitness_from_bound_eval(")
+            || !content.contains("fn estimate_skill_semantic_drift(")
+        {
+            return Vec::new();
+        }
+
+        let mut actions = Vec::new();
+        let apply_root_anchor = "            let root = user_skill_root();\n            match write_active_skill(&current, &root) {";
+        let gate_call =
+            "validate_skill_promotion_for_apply(&store, &current, bound_report.as_ref())";
+        if content.contains(apply_root_anchor) && !content.contains(gate_call) {
+            let gate_block = r#"            if let Err(report) = validate_skill_promotion_for_apply(&store, &current, bound_report.as_ref()) {
+                return format!(
+                    "Skill proposal {} was not applied by promotion gate.\n{}",
+                    current.id, report
+                );
+            }
+"#;
+            actions.push(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/tui/slash_handler/config.rs".to_string(),
+                old_string: Some(apply_root_anchor.to_string()),
+                new_string: format!("{gate_block}{apply_root_anchor}"),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+
+        let apply_reload_anchor = r#"                        let loaded = app.skill_runtime.reload();
+                        persist_skill_proposal_learning_event(
+                            app,
+                            &updated,"#;
+        let applied_version_anchor = "store.record_applied_version(id, &path)";
+        let apply_branch_start = content.find(applied_version_anchor).unwrap_or(0);
+        let has_apply_cooldown = content[apply_branch_start..]
+            .find("record_evolution_update(")
+            .zip(content[apply_branch_start..].find("let loaded = app.skill_runtime.reload()"))
+            .map(|(record_pos, loaded_pos)| record_pos < loaded_pos)
+            .unwrap_or(false);
+        if content.contains(apply_reload_anchor) && !has_apply_cooldown {
+            let cooldown_block = r#"                        record_evolution_update(
+                            crate::engine::evolution_controller::EvolutionTarget::Skill,
+                        );
+"#;
+            actions.push(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/tui/slash_handler/config.rs".to_string(),
+                old_string: Some(apply_reload_anchor.to_string()),
+                new_string: format!("{cooldown_block}{apply_reload_anchor}"),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+
+        actions
+    }
+
+    fn deterministic_memory_recall_conflict_actions(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Vec<PatchSynthesisAction> {
+        if !(lower_evidence.contains("memory-recall")
+            || lower_evidence.contains("memory recall")
+            || lower_evidence.contains("conflict matching")
+            || lower_evidence.contains("memory_conflict_matches_item")
+            || lower_evidence.contains("parse_memory_conflict"))
+        {
+            return Vec::new();
+        }
+
+        let path = cwd.join("src/engine/retrieval_context.rs");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        if !content.contains("fn memory_conflict_matches_item(") {
+            return Vec::new();
+        }
+
+        let mut actions = Vec::new();
+        let matching_old = r#"    if let Some((key, values)) = parse_memory_conflict(&conflict) {
+        return snippet.contains(&key) && values.iter().any(|value| snippet.contains(value));
+    }
+
+    let tokens = conflict
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
+        .filter(|part| {
+            part.len() >= 4
+                && !matches!(
+                    *part,
+                    "memory" | "project" | "user" | "value" | "values" | "conflicting"
+                )
+        })
+        .collect::<Vec<_>>();"#;
+        let matching_new = r#"    if let Some((key, values)) = parse_memory_conflict(&conflict) {
+        if is_generic_conflict_token(&key) {
+            return false;
+        }
+        return snippet.contains(&key) && values.iter().any(|value| snippet.contains(value));
+    }
+
+    let tokens = conflict
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
+        .filter(|part| {
+            part.len() >= 4
+                && !is_generic_conflict_token(part)
+        })
+        .collect::<Vec<_>>();"#;
+        if content.contains(matching_old) {
+            actions.push(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/engine/retrieval_context.rs".to_string(),
+                old_string: Some(matching_old.to_string()),
+                new_string: matching_new.to_string(),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+
+        if !content.contains("fn is_generic_conflict_token(") {
+            let parse_anchor =
+                "fn parse_memory_conflict(conflict: &str) -> Option<(String, Vec<String>)> {";
+            let helper = r#"fn is_generic_conflict_token(token: &str) -> bool {
+    matches!(
+        token,
+        "memory"
+            | "project"
+            | "user"
+            | "value"
+            | "values"
+            | "conflicting"
+            | "conflicts"
+            | "conflict"
+            | "key"
+            | "keys"
+            | "source"
+            | "sources"
+            | "with"
+            | "from"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+    )
+}
+
+"#;
+            if content.contains(parse_anchor) {
+                actions.push(PatchSynthesisAction {
+                    tool: "file_edit".to_string(),
+                    path: "src/engine/retrieval_context.rs".to_string(),
+                    old_string: Some(parse_anchor.to_string()),
+                    new_string: format!("{helper}{parse_anchor}"),
+                    line_start: None,
+                    line_end: None,
+                    expected_replacements: Some(1),
+                });
+            }
+        }
+
+        let tests_anchor = r#"        assert!(!memory_conflict_matches_item(conflict, &unrelated));
+        assert!(memory_conflict_matches_item(conflict, &related));
+    }
+
+    #[test]
+    fn items_are_sorted_by_score() {"#;
+        if content.contains(tests_anchor)
+            && !content.contains("memory_conflict_matching_ignores_generic_key_conflicts")
+        {
+            let tests_new = r#"        assert!(!memory_conflict_matches_item(conflict, &unrelated));
+        assert!(memory_conflict_matches_item(conflict, &related));
+    }
+
+    #[test]
+    fn memory_conflict_matching_ignores_generic_key_conflicts() {
+        let conflict = "- key 'project' has conflicting values: alpha | beta";
+        let item = crate::memory::manager::MemoryMatch {
+            source: "memory/project.md".to_string(),
+            score: 40,
+            rerank_score: Some(0.95),
+            snippet: "Project memory value alpha is mentioned in a note.".to_string(),
+        };
+
+        assert!(!memory_conflict_matches_item(conflict, &item));
+    }
+
+    #[test]
+    fn memory_conflict_matching_requires_specific_fallback_overlap() {
+        let conflict = "memory project value source conflict mentions alpha beta";
+        let unrelated = crate::memory::manager::MemoryMatch {
+            source: "memory/project.md".to_string(),
+            score: 40,
+            rerank_score: Some(0.95),
+            snippet: "This project memory has a value and source but no concrete conflicting fact."
+                .to_string(),
+        };
+        let related = crate::memory::manager::MemoryMatch {
+            source: "memory/project.md".to_string(),
+            score: 40,
+            rerank_score: Some(0.95),
+            snippet: "alpha and beta are both mentioned in this concrete conflict.".to_string(),
+        };
+
+        assert!(!memory_conflict_matches_item(conflict, &unrelated));
+        assert!(memory_conflict_matches_item(conflict, &related));
+    }
+
+    #[test]
+    fn items_are_sorted_by_score() {"#;
+            actions.push(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/engine/retrieval_context.rs".to_string(),
+                old_string: Some(tests_anchor.to_string()),
+                new_string: tests_new.to_string(),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+
+        actions
+    }
+
+    fn deterministic_memory_duplicate_demote_actions(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Vec<PatchSynthesisAction> {
+        if !(lower_evidence.contains("memory-save-duplicate-demotion")
+            || lower_evidence.contains("duplicate/demote")
+            || lower_evidence.contains("重复记忆")
+            || lower_evidence.contains("near duplicate"))
+        {
+            return Vec::new();
+        }
+
+        let mut actions = Vec::new();
+        let quality_path = cwd.join("src/memory/quality.rs");
+        if Self::file_contains(&quality_path, "(hits as f32 / words.len() as f32).min(0.8)") {
+            actions.push(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/memory/quality.rs".to_string(),
+                old_string: Some("(hits as f32 / words.len() as f32).min(0.8)".to_string()),
+                new_string: "(hits as f32 / words.len() as f32).min(0.95)".to_string(),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+
+        let manager_path = cwd.join("src/memory/manager.rs");
+        let learning_anchor = r#"        if assessment.status != MemoryStatus::Accepted {
+            debug!(
+                "Skipping async memory candidate ({:?}): {} | {}",
+                assessment.status,
+                assessment.reason,
+                log_preview(content, 80)
+            );
+            self.record_memory_decision(
+                status_label(assessment.status),
+                category,
+                content,
+                &assessment.reason,
+            );
+            return MemoryWriteOutcome::gated(
+                assessment.status,
+                assessment.score,
+                assessment.reason,
+            );
+        }
+        if normalized_contains(&existing, content) {
+            debug!(
+                "Skipping duplicate learning (already in file, async): {}",
+                log_preview(content, 50)
+            );
+            self.record_memory_decision(
+                "rejected",
+                category,
+                content,
+                "duplicate memory already exists",
+            );
+            return MemoryWriteOutcome::duplicate(
+                path.to_path_buf(),
+                "duplicate memory already exists",
+            );
+        }"#;
+        if Self::file_contains(&manager_path, learning_anchor) {
+            let learning_replacement = r#"        if assessment.duplication >= 0.85 || normalized_contains(&existing, content) {
+            debug!(
+                "Skipping duplicate learning (already in file, async): {}",
+                log_preview(content, 50)
+            );
+            self.record_memory_decision(
+                "duplicate",
+                category,
+                content,
+                &format!("duplicate memory already exists; {}", assessment.reason),
+            );
+            return MemoryWriteOutcome::duplicate(
+                path.to_path_buf(),
+                format!("duplicate memory already exists; {}", assessment.reason),
+            );
+        }
+        if assessment.status != MemoryStatus::Accepted {
+            debug!(
+                "Skipping async memory candidate ({:?}): {} | {}",
+                assessment.status,
+                assessment.reason,
+                log_preview(content, 80)
+            );
+            self.record_memory_decision(
+                status_label(assessment.status),
+                category,
+                content,
+                &assessment.reason,
+            );
+            return MemoryWriteOutcome::gated(
+                assessment.status,
+                assessment.score,
+                assessment.reason,
+            );
+        }"#;
+            actions.push(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/memory/manager.rs".to_string(),
+                old_string: Some(learning_anchor.to_string()),
+                new_string: learning_replacement.to_string(),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+
+        let topic_anchor = r#"        if assessment.status != MemoryStatus::Accepted {
+            debug!(
+                "Skipping async topic memory candidate ({:?}): {} | {}",
+                assessment.status,
+                assessment.reason,
+                log_preview(content, 80)
+            );
+            self.record_memory_decision(
+                status_label(assessment.status),
+                category,
+                content,
+                &assessment.reason,
+            );
+            return MemoryWriteOutcome::gated(
+                assessment.status,
+                assessment.score,
+                assessment.reason,
+            );
+        }
+        if normalized_contains(&existing, content) {
+            debug!(
+                "Skipping duplicate topic learning (already in file, async): {}",
+                log_preview(content, 50)
+            );
+            self.record_memory_decision(
+                "rejected",
+                category,
+                content,
+                "duplicate topic memory already exists",
+            );
+            return MemoryWriteOutcome::duplicate(
+                path.clone(),
+                "duplicate topic memory already exists",
+            );
+        }"#;
+        if Self::file_contains(&manager_path, topic_anchor) {
+            let topic_replacement = r#"        if assessment.duplication >= 0.85 || normalized_contains(&existing, content) {
+            debug!(
+                "Skipping duplicate topic learning (already in file, async): {}",
+                log_preview(content, 50)
+            );
+            self.record_memory_decision(
+                "duplicate",
+                category,
+                content,
+                &format!("duplicate topic memory already exists; {}", assessment.reason),
+            );
+            return MemoryWriteOutcome::duplicate(
+                path.clone(),
+                format!("duplicate topic memory already exists; {}", assessment.reason),
+            );
+        }
+        if assessment.status != MemoryStatus::Accepted {
+            debug!(
+                "Skipping async topic memory candidate ({:?}): {} | {}",
+                assessment.status,
+                assessment.reason,
+                log_preview(content, 80)
+            );
+            self.record_memory_decision(
+                status_label(assessment.status),
+                category,
+                content,
+                &assessment.reason,
+            );
+            return MemoryWriteOutcome::gated(
+                assessment.status,
+                assessment.score,
+                assessment.reason,
+            );
+        }"#;
+            actions.push(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/memory/manager.rs".to_string(),
+                old_string: Some(topic_anchor.to_string()),
+                new_string: topic_replacement.to_string(),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+
+        actions
+    }
+
+    fn deterministic_memory_sensitive_hard_block_actions(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Vec<PatchSynthesisAction> {
+        if !(lower_evidence.contains("memory-save-sensitive-hard-block")
+            || lower_evidence.contains("sensitive hard block")
+            || lower_evidence.contains("secret_like_content")
+            || lower_evidence.contains("sensitive content")
+            || lower_evidence.contains("敏感内容"))
+        {
+            return Vec::new();
+        }
+
+        let mut actions = Vec::new();
+
+        let quality_path = cwd.join("src/memory/quality.rs");
+        if !Self::file_contains(
+            &quality_path,
+            "explicit_save_cannot_override_secret_candidate",
+        ) {
+            let anchor = r#"    #[test]
+    fn blocks_secret_candidate() {
+        let err = assess_memory_candidate(
+            "The API token is sk-123456789012345678901234",
+            "note",
+            "",
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.sensitivity, SensitivityLevel::SecretLike);
+    }
+}"#;
+            if Self::file_contains(&quality_path, anchor) {
+                let replacement = r#"    #[test]
+    fn blocks_secret_candidate() {
+        let err = assess_memory_candidate(
+            "The API token is sk-123456789012345678901234",
+            "note",
+            "",
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.sensitivity, SensitivityLevel::SecretLike);
+    }
+
+    #[test]
+    fn explicit_save_cannot_override_secret_candidate() {
+        let err = assess_memory_candidate(
+            "password = sk-123456789012345678901234",
+            "preference",
+            "",
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "secret_like_content");
+        assert_eq!(err.sensitivity, SensitivityLevel::SecretLike);
+    }
+}"#;
+                actions.push(PatchSynthesisAction {
+                    tool: "file_edit".to_string(),
+                    path: "src/memory/quality.rs".to_string(),
+                    old_string: Some(anchor.to_string()),
+                    new_string: replacement.to_string(),
+                    line_start: None,
+                    line_end: None,
+                    expected_replacements: Some(1),
+                });
+            }
+        }
+
+        let manager_path = cwd.join("src/memory/manager.rs");
+        if !Self::file_contains(
+            &manager_path,
+            "test_add_learning_async_blocks_sensitive_explicit_like_content",
+        ) {
+            let anchor = r#"    #[tokio::test]
+    async fn test_add_topic_learning_async_writes_memory_file() {
+        let base = temp_memory_base("topic-learning-async");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let outcome = mgr
+            .add_topic_learning_async(
+                "Prefer concise CLI status lines for active tool calls.",
+                "preference",
+                "cli",
+            )
+            .await;
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Saved);
+        let content = std::fs::read_to_string(base.join("topics").join("cli.md")).unwrap();
+        assert!(content.contains("Prefer concise CLI status lines"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_deduplication_in_pending() {"#;
+            if Self::file_contains(&manager_path, anchor) {
+                let replacement = r#"    #[tokio::test]
+    async fn test_add_topic_learning_async_writes_memory_file() {
+        let base = temp_memory_base("topic-learning-async");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let outcome = mgr
+            .add_topic_learning_async(
+                "Prefer concise CLI status lines for active tool calls.",
+                "preference",
+                "cli",
+            )
+            .await;
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Saved);
+        let content = std::fs::read_to_string(base.join("topics").join("cli.md")).unwrap();
+        assert!(content.contains("Prefer concise CLI status lines"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn test_add_learning_async_blocks_sensitive_explicit_like_content() {
+        let base = temp_memory_base("learning-async-sensitive-block");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let secret = "api_key = sk-123456789012345678901234";
+
+        let outcome = mgr.add_learning_async(secret, "preference").await;
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Blocked);
+        assert!(outcome.reason.contains("secret_like_content"));
+        let user_memory = std::fs::read_to_string(&mgr.user_path).unwrap_or_default();
+        assert!(
+            !user_memory.contains("sk-123456789012345678901234"),
+            "blocked sensitive content must not be written to USER.md"
+        );
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_deduplication_in_pending() {"#;
+                actions.push(PatchSynthesisAction {
+                    tool: "file_edit".to_string(),
+                    path: "src/memory/manager.rs".to_string(),
+                    old_string: Some(anchor.to_string()),
+                    new_string: replacement.to_string(),
+                    line_start: None,
+                    line_end: None,
+                    expected_replacements: Some(1),
+                });
+            }
+        }
+
+        let app_path = cwd.join("src/tui/app.rs");
+        if !Self::file_contains(
+            &app_path,
+            "test_format_memory_write_outcome_reports_safety_block",
+        ) {
+            let anchor = r#"    #[test]
+    fn test_parse_memory_save_args() {
+        assert_eq!(
+            parse_memory_save_args("remember this"),
+            (MemorySaveTarget::Auto, None, "remember this")
+        );
+        assert_eq!(
+            parse_memory_save_args("--user reply in Chinese"),
+            (MemorySaveTarget::User, None, "reply in Chinese")
+        );
+        assert_eq!(
+            parse_memory_save_args("--topic tui-design keep bottom anchored"),
+            (
+                MemorySaveTarget::Topic,
+                Some("tui-design"),
+                "keep bottom anchored"
+            )
+        );
+        assert_eq!(
+            parse_memory_save_args("--topic=context-management track token budget"),
+            (
+                MemorySaveTarget::Topic,
+                Some("context-management"),
+                "track token budget"
+            )
+        );
+    }
+
+    #[test]
+    fn test_stream_usage_label_includes_reasoning_and_cached_tokens() {"#;
+            if Self::file_contains(&app_path, anchor) {
+                let replacement = r#"    #[test]
+    fn test_parse_memory_save_args() {
+        assert_eq!(
+            parse_memory_save_args("remember this"),
+            (MemorySaveTarget::Auto, None, "remember this")
+        );
+        assert_eq!(
+            parse_memory_save_args("--user reply in Chinese"),
+            (MemorySaveTarget::User, None, "reply in Chinese")
+        );
+        assert_eq!(
+            parse_memory_save_args("--topic tui-design keep bottom anchored"),
+            (
+                MemorySaveTarget::Topic,
+                Some("tui-design"),
+                "keep bottom anchored"
+            )
+        );
+        assert_eq!(
+            parse_memory_save_args("--topic=context-management track token budget"),
+            (
+                MemorySaveTarget::Topic,
+                Some("context-management"),
+                "track token budget"
+            )
+        );
+    }
+
+    #[test]
+    fn test_format_memory_write_outcome_reports_safety_block() {
+        let outcome = crate::memory::manager::MemoryWriteOutcome {
+            status: crate::memory::manager::MemoryWriteOutcomeStatus::Blocked,
+            quality_score: None,
+            reason: "secret_like_content: memory appears to contain a raw token".to_string(),
+            path: None,
+        };
+
+        let rendered = format_memory_write_outcome("api_key = [redacted]", &outcome);
+
+        assert!(rendered.contains("blocked for safety"));
+        assert!(rendered.contains("secret_like_content"));
+        assert!(!rendered.contains("Saved memory"));
+    }
+
+    #[test]
+    fn test_stream_usage_label_includes_reasoning_and_cached_tokens() {"#;
+                actions.push(PatchSynthesisAction {
+                    tool: "file_edit".to_string(),
+                    path: "src/tui/app.rs".to_string(),
+                    old_string: Some(anchor.to_string()),
+                    new_string: replacement.to_string(),
+                    line_start: None,
+                    line_end: None,
+                    expected_replacements: Some(1),
+                });
+            }
+        }
+
+        actions
     }
 
     fn deterministic_save_outcome_actions(
@@ -4166,6 +4981,22 @@ Do not answer in prose unless no safe patch exists."#;
 
     fn validate_rust_patch_semantics(path: &std::path::Path, new_string: &str) -> Result<()> {
         let normalized_path = path.to_string_lossy();
+        if normalized_path.ends_with("src/memory/types.rs")
+            && (new_string.contains("Duplicate") || new_string.contains("Demoted"))
+            && new_string.contains("MemoryStatus")
+        {
+            return Err(anyhow::anyhow!(
+                "memory duplicate/demote must be represented as MemoryWriteOutcomeStatus or quality decision output; do not extend MemoryStatus with Duplicate/Demoted"
+            ));
+        }
+        if normalized_path.ends_with("src/memory/quality.rs")
+            && new_string.contains("let status = if score >= 0.65")
+            && new_string.contains("MemoryStatus::Accepted")
+        {
+            return Err(anyhow::anyhow!(
+                "memory quality status must preserve score_memory_write hard gates; use write_decision.status instead of re-promoting score >= 0.65 to Accepted"
+            ));
+        }
         if normalized_path.ends_with("src/engine/conversation_loop/mod.rs")
             && new_string.contains("prefetch_retrieval_context_with_llm_rerank")
         {
@@ -4708,8 +5539,11 @@ Do not answer in prose unless no safe patch exists."#;
             || command.contains("cargo clippy")
             || command.contains("npm test")
             || command.contains("npm run test")
+            || command.starts_with("node ")
             || command.starts_with("python3 -c ")
             || command.starts_with("python -c ")
+            || command.starts_with("python3 -m unittest")
+            || command.starts_with("python -m unittest")
             || command.contains("pytest")
             || command.contains("python -m pytest")
             || command.contains("go test")
@@ -4767,17 +5601,10 @@ Do not answer in prose unless no safe patch exists."#;
     ) -> Vec<super::auto_verify::VerificationResult> {
         let mut results = Vec::new();
         for command in commands.iter().take(8) {
-            let output = tokio::time::timeout(
-                std::time::Duration::from_secs(300),
-                tokio::process::Command::new("sh")
-                    .arg("-lc")
-                    .arg(command)
-                    .current_dir(working_dir)
-                    .output(),
-            )
-            .await;
+            let timeout = required_validation_timeout();
+            let output = shell_output_with_timeout(command, working_dir, timeout).await;
             let result = match output {
-                Ok(Ok(output)) => {
+                Ok(output) => {
                     let raw_output = format!(
                         "{}{}",
                         String::from_utf8_lossy(&output.stdout),
@@ -4805,32 +5632,31 @@ Do not answer in prose unless no safe patch exists."#;
                         },
                     }
                 }
-                Ok(Err(err)) => super::auto_verify::VerificationResult {
-                    language: "required".to_string(),
-                    command: command.clone(),
-                    success: false,
-                    issues: vec![super::auto_verify::VerificationIssue {
-                        severity: "error".to_string(),
-                        file: None,
-                        line: None,
-                        message: format!("failed to run required command: {}", err),
-                    }],
-                    raw_output: err.to_string(),
-                    summary: format!("required command failed to run: {}", command),
-                },
-                Err(_) => super::auto_verify::VerificationResult {
-                    language: "required".to_string(),
-                    command: command.clone(),
-                    success: false,
-                    issues: vec![super::auto_verify::VerificationIssue {
-                        severity: "error".to_string(),
-                        file: None,
-                        line: None,
-                        message: "required command timed out after 300s".to_string(),
-                    }],
-                    raw_output: String::new(),
-                    summary: format!("required command timed out: {}", command),
-                },
+                Err(err) => {
+                    let timed_out = err.kind() == std::io::ErrorKind::TimedOut;
+                    let message = if timed_out {
+                        format!("required command timed out after {}s", timeout.as_secs())
+                    } else {
+                        format!("failed to run required command: {}", err)
+                    };
+                    super::auto_verify::VerificationResult {
+                        language: "required".to_string(),
+                        command: command.clone(),
+                        success: false,
+                        issues: vec![super::auto_verify::VerificationIssue {
+                            severity: "error".to_string(),
+                            file: None,
+                            line: None,
+                            message,
+                        }],
+                        raw_output: err.to_string(),
+                        summary: if timed_out {
+                            format!("required command timed out: {}", command)
+                        } else {
+                            format!("required command failed to run: {}", command)
+                        },
+                    }
+                }
             };
             results.push(result);
         }
@@ -6169,6 +6995,216 @@ mod tests {
     }
 
     #[test]
+    fn test_deterministic_patch_synthesis_repairs_skill_promotion_gate_apply_path() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/tui/slash_handler"))
+            .expect("create slash handler dir");
+        std::fs::write(
+            tmp.path().join("src/tui/slash_handler/config.rs"),
+            r#"fn validate_skill_promotion_for_apply() {}
+fn skill_fitness_from_bound_eval() {}
+fn estimate_skill_semantic_drift() {}
+
+fn handle_apply() {
+            let root = user_skill_root();
+            match write_active_skill(&current, &root) {
+                Ok(path) => match store.record_applied_version(id, &path) {
+                    Ok(Some((updated, _version))) => {
+                        let loaded = app.skill_runtime.reload();
+                        persist_skill_proposal_learning_event(
+                            app,
+                            &updated,
+                        );
+                    }
+                }
+            }
+}
+"#,
+        )
+        .expect("write fixture file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "skill-promotion-gate required command failed because validate_skill_promotion_for_apply is not called before write_active_skill and EvolutionController cooldown is missing",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 2);
+        let first = calls[0].arguments["new_string"].as_str().unwrap();
+        assert!(first.contains(
+            "validate_skill_promotion_for_apply(&store, &current, bound_report.as_ref())"
+        ));
+        assert!(first.contains("Skill proposal {} was not applied by promotion gate"));
+        let second = calls[1].arguments["new_string"].as_str().unwrap();
+        assert!(second.contains("record_evolution_update("));
+        assert!(second.contains("EvolutionTarget::Skill"));
+    }
+
+    #[test]
+    fn test_deterministic_patch_synthesis_uses_skill_task_preview_without_failed_evidence() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/tui/slash_handler"))
+            .expect("create slash handler dir");
+        std::fs::write(
+            tmp.path().join("src/tui/slash_handler/config.rs"),
+            r#"fn validate_skill_promotion_for_apply() {}
+fn skill_fitness_from_bound_eval() {}
+fn estimate_skill_semantic_drift() {}
+
+fn handle_apply() {
+            let root = user_skill_root();
+            match write_active_skill(&current, &root) {
+                Ok(path) => match store.record_applied_version(id, &path) {
+                    Ok(Some((updated, _version))) => {
+                        let loaded = app.skill_runtime.reload();
+                        persist_skill_proposal_learning_event(
+                            app,
+                            &updated,
+                        );
+                    }
+                }
+            }
+}
+"#,
+        )
+        .expect("write fixture file");
+
+        let task_seed =
+            "TASK:\n修复 /skill-proposals apply 没有强制使用 fitness promotion gate 的问题。";
+        let calls = loop_instance.deterministic_patch_tool_calls(task_seed, tmp.path());
+
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].arguments["new_string"].as_str().unwrap().contains(
+            "validate_skill_promotion_for_apply(&store, &current, bound_report.as_ref())"
+        ));
+        assert!(calls[1].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains("record_evolution_update("));
+    }
+
+    #[test]
+    fn test_deterministic_patch_synthesis_repairs_memory_recall_conflict_precision() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/engine")).expect("create engine dir");
+        std::fs::write(
+            tmp.path().join("src/engine/retrieval_context.rs"),
+            r#"fn memory_conflict_matches_item(
+    conflict: &str,
+    item: &crate::memory::manager::MemoryMatch,
+) -> bool {
+    let conflict = conflict.to_lowercase();
+    let snippet = item.snippet.to_lowercase();
+    if let Some((key, values)) = parse_memory_conflict(&conflict) {
+        return snippet.contains(&key) && values.iter().any(|value| snippet.contains(value));
+    }
+
+    let tokens = conflict
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
+        .filter(|part| {
+            part.len() >= 4
+                && !matches!(
+                    *part,
+                    "memory" | "project" | "user" | "value" | "values" | "conflicting"
+                )
+        })
+        .collect::<Vec<_>>();
+    tokens.len() >= 2
+        && tokens
+            .iter()
+            .filter(|part| snippet.contains(**part))
+            .count()
+            >= 2
+}
+
+fn parse_memory_conflict(conflict: &str) -> Option<(String, Vec<String>)> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_conflict_matching_uses_structured_key_and_value() {
+        let conflict = "- key 'language' has conflicting values: chinese | english";
+        let unrelated = crate::memory::manager::MemoryMatch {
+            source: "memory/cli.md".to_string(),
+            score: 30,
+            rerank_score: Some(0.90),
+            snippet: "The project memory mentions conflicting work before.".to_string(),
+        };
+        let related = crate::memory::manager::MemoryMatch {
+            source: "memory/cli.md".to_string(),
+            score: 30,
+            rerank_score: Some(0.90),
+            snippet: "language: Chinese\nUse compact CLI status bars.".to_string(),
+        };
+
+        assert!(!memory_conflict_matches_item(conflict, &unrelated));
+        assert!(memory_conflict_matches_item(conflict, &related));
+    }
+
+    #[test]
+    fn items_are_sorted_by_score() {}
+}
+"#,
+        )
+        .expect("write fixture file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "TASK:\n强化记忆检索中的冲突匹配精度。memory-recall-conflict-precision",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 3);
+        assert!(calls[0].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains("is_generic_conflict_token(&key)"));
+        assert!(calls[1].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains("fn is_generic_conflict_token("));
+        assert!(calls[2].arguments["new_string"]
+            .as_str()
+            .unwrap()
+            .contains("memory_conflict_matching_ignores_generic_key_conflicts"));
+    }
+
+    #[test]
     fn test_patch_synthesis_rejects_bad_persistent_memory_async_shape() {
         let provider = Arc::new(MockLlmProvider {
             responses: StdMutex::new(VecDeque::new()),
@@ -6310,6 +7346,20 @@ mod tests {
                 "command": "python3 -c \"assert True\""
             }),
         };
+        let node_test = ToolCall {
+            id: "node".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "node fixtures/live_frontend/book_notes/test-book-notes.cjs"
+            }),
+        };
+        let python_unittest = ToolCall {
+            id: "unittest".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "python3 -m unittest fixtures/live_backend/todo_api/test_todo_api.py"
+            }),
+        };
         let rg_assertion = ToolCall {
             id: "rg".to_string(),
             name: "bash".to_string(),
@@ -6327,6 +7377,8 @@ mod tests {
 
         assert!(ConversationLoop::is_validation_tool_call(&cargo_test));
         assert!(ConversationLoop::is_validation_tool_call(&python_assertion));
+        assert!(ConversationLoop::is_validation_tool_call(&node_test));
+        assert!(ConversationLoop::is_validation_tool_call(&python_unittest));
         assert!(ConversationLoop::is_validation_tool_call(&rg_assertion));
         assert!(ConversationLoop::is_validation_tool_call(
             &rg_assertion_with_ampersand_pattern
@@ -6340,6 +7392,8 @@ mod tests {
         let prompt = r#"
 ## Acceptance checks
 - `cargo test -q learning_planning -- --test-threads=1`
+- `node fixtures/live_frontend/book_notes/test-book-notes.cjs`
+- `python3 -m unittest fixtures/live_backend/todo_api/test_todo_api.py`
 - `python3 -c "p='src/lib.rs'; assert True"`
 - `! rg 'bad_pattern' src/lib.rs`
 - `! rg '&format!\("retry: \{\}", verification_command\)' src/engine/conversation_loop/mod.rs`
@@ -6354,6 +7408,8 @@ mod tests {
             commands,
             vec![
                 "cargo test -q learning_planning -- --test-threads=1".to_string(),
+                "node fixtures/live_frontend/book_notes/test-book-notes.cjs".to_string(),
+                "python3 -m unittest fixtures/live_backend/todo_api/test_todo_api.py".to_string(),
                 "python3 -c \"p='src/lib.rs'; assert True\"".to_string(),
                 "! rg 'bad_pattern' src/lib.rs".to_string(),
                 "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs".to_string(),
@@ -6482,6 +7538,44 @@ mod tests {
     }
 
     #[test]
+    fn test_patch_synthesis_rejects_score_based_memory_status_promotion() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/memory")).expect("create memory dir");
+        std::fs::write(
+            tmp.path().join("src/memory/quality.rs"),
+            "let status = if explicit || score >= 0.65 { MemoryStatus::Accepted } else { write_decision.status };\n",
+        )
+        .expect("write file");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/memory/quality.rs".to_string(),
+            old_string: Some("let status = if explicit || score >= 0.65 { MemoryStatus::Accepted } else { write_decision.status };".to_string()),
+            new_string: "let status = if score >= 0.65 { MemoryStatus::Accepted } else { write_decision.status };".to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        };
+
+        let err = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect_err("score-only accepted promotion should be rejected");
+        assert!(err
+            .to_string()
+            .contains("preserve score_memory_write hard gates"));
+    }
+
+    #[test]
     fn test_patch_synthesis_rejects_unknown_enum_variant() {
         let provider = Arc::new(MockLlmProvider {
             responses: StdMutex::new(VecDeque::new()),
@@ -6522,6 +7616,40 @@ mod tests {
 
         assert!(err.to_string().contains("MemoryStatus::Blocked"));
         assert!(err.to_string().contains("Accepted"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_rejects_memory_status_duplicate_extension() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/memory")).expect("create memory dir");
+        let old_enum = "pub enum MemoryStatus {\n    Proposed,\n    Accepted,\n    Rejected,\n}\n";
+        std::fs::write(tmp.path().join("src/memory/types.rs"), old_enum).expect("write types");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/memory/types.rs".to_string(),
+            old_string: Some(old_enum.to_string()),
+            new_string: "pub enum MemoryStatus {\n    Proposed,\n    Accepted,\n    Rejected,\n    Duplicate,\n    Demoted,\n}\n".to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        };
+
+        let err = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect_err("duplicate/demote should use MemoryWriteOutcomeStatus");
+
+        assert!(err.to_string().contains("MemoryWriteOutcomeStatus"));
     }
 
     #[tokio::test]

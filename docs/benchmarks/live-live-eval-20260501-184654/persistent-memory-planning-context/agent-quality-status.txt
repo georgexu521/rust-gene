@@ -1,0 +1,4 @@
+status=failed
+failure=stage_validation_failed
+failure=verification_failed
+warning=tool_errors_seen

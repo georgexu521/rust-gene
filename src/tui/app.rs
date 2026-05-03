@@ -3433,6 +3433,22 @@ mod tests {
     }
 
     #[test]
+    fn test_format_memory_write_outcome_reports_safety_block() {
+        let outcome = crate::memory::manager::MemoryWriteOutcome {
+            status: crate::memory::manager::MemoryWriteOutcomeStatus::Blocked,
+            quality_score: None,
+            reason: "secret_like_content: memory appears to contain a raw token".to_string(),
+            path: None,
+        };
+
+        let rendered = format_memory_write_outcome("api_key = [redacted]", &outcome);
+
+        assert!(rendered.contains("blocked for safety"));
+        assert!(rendered.contains("secret_like_content"));
+        assert!(!rendered.contains("Saved memory"));
+    }
+
+    #[test]
     fn test_stream_usage_label_includes_reasoning_and_cached_tokens() {
         let mut app = TuiApp::new();
         app.stream_usage_snapshot = Some(StreamUsageSnapshot {

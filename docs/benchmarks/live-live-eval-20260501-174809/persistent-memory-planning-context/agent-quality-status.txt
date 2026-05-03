@@ -1,0 +1,5 @@
+status=failed
+failure=empty_agent_output
+failure=tool_run_without_closeout
+failure=missing_trace_summary
+failure=closeout_not_successful

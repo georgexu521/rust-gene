@@ -16,6 +16,7 @@ SKIP_BUILD=0
 RUN_TESTS=0
 AGENT_TIMEOUT_SECS="${PRIORITY_AGENT_LIVE_EVAL_TIMEOUT_SECS:-1800}"
 AGENT_IDLE_SECS="${PRIORITY_AGENT_LIVE_EVAL_IDLE_SECS:-300}"
+OVERLAY_WORKTREE="${PRIORITY_AGENT_LIVE_EVAL_OVERLAY_WORKTREE:-0}"
 
 usage() {
   cat <<'EOF'
@@ -39,6 +40,9 @@ Options:
   --run-id ID        Stable run id (default: timestamp).
   --run-tests        Run acceptance.required_commands during collect/agent-run/full.
   --skip-build       Reuse target/release/priority-agent for api-plan.
+  --overlay-working-tree
+                     Apply tracked local working-tree changes to the isolated
+                     worktree and commit them as the task baseline.
   --timeout SECS     Timeout for agent-run mode (default: 1800).
   --idle-timeout SECS
                      Kill agent-run if output/events/stderr stay idle (default: 300).
@@ -61,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --run-id) RUN_ID="${2:-}"; shift 2 ;;
     --run-tests) RUN_TESTS=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
+    --overlay-working-tree) OVERLAY_WORKTREE=1; shift ;;
     --timeout) AGENT_TIMEOUT_SECS="${2:-}"; shift 2 ;;
     --idle-timeout) AGENT_IDLE_SECS="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -324,9 +329,35 @@ resolve_ref() {
   fi
 }
 
+overlay_working_tree_changes() {
+  local task_workdir="$1"
+  local patch_file="$2"
+
+  git diff --binary HEAD -- . >"$patch_file"
+  if [[ ! -s "$patch_file" ]]; then
+    return 0
+  fi
+
+  if ! git -C "$task_workdir" apply --whitespace=nowarn "$patch_file"; then
+    echo "Failed to apply working-tree overlay patch: $patch_file" >&2
+    return 1
+  fi
+  if [[ -n "$(git -C "$task_workdir" status --short)" ]]; then
+    git -C "$task_workdir" add -A
+    if ! git -C "$task_workdir" \
+      -c user.name="Priority Agent Live Eval" \
+      -c user.email="priority-agent-live-eval@example.invalid" \
+      commit -m "live eval working tree overlay" >/dev/null
+    then
+      echo "Failed to commit working-tree overlay baseline in $task_workdir" >&2
+      return 1
+    fi
+  fi
+}
+
 prepare_task() {
   local file="$1"
-  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base prepare_log
+  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base prepare_log overlay_patch
   id="$(yaml_get "$file" id)"
   title="$(yaml_get "$file" title)"
   base_ref="$(yaml_get "$file" repo.base_ref HEAD)"
@@ -336,12 +367,19 @@ prepare_task() {
   runbook="$WORK_ROOT/$RUN_ID/$id/RUNBOOK.md"
   metadata="$WORK_ROOT/$RUN_ID/$id/metadata.json"
   prepare_log="$WORK_ROOT/$RUN_ID/$id/prepare-commands.log"
+  overlay_patch="$ROOT_DIR/$WORK_ROOT/$RUN_ID/$id/working-tree-overlay.patch"
   env_base="$(task_env_base "$id")"
 
   mkdir -p "$(dirname "$task_workdir")"
   ensure_task_env "$id"
   if [[ ! -d "$task_workdir/.git" && ! -f "$task_workdir/.git" ]]; then
     git worktree add --force --detach "$task_workdir" "$resolved_ref" >/dev/null
+  fi
+
+  if [[ "$OVERLAY_WORKTREE" -eq 1 ]]; then
+    if ! overlay_working_tree_changes "$task_workdir" "$overlay_patch"; then
+      exit 1
+    fi
   fi
 
   if ! python3 - "$file" "$task_workdir" "$prepare_log" <<'PY'
@@ -673,6 +711,7 @@ env.update({
     "PRIORITY_AGENT_WORKFLOW_ENABLED": os.environ.get("PRIORITY_AGENT_WORKFLOW_ENABLED", "1"),
     "PRIORITY_AGENT_WORKFLOW_CONTRACT": os.environ.get("PRIORITY_AGENT_WORKFLOW_CONTRACT", "1"),
     "PRIORITY_AGENT_AUTO_TEST": os.environ.get("PRIORITY_AGENT_AUTO_TEST", "check_then_test"),
+    "PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS": os.environ.get("PRIORITY_AGENT_LIVE_EVAL_BASH_TIMEOUT_FLOOR_SECS", "600"),
     "PRIORITY_AGENT_LLM_MEMORY_EXTRACTION": os.environ.get("PRIORITY_AGENT_LLM_MEMORY_EXTRACTION", "0"),
     "MINIMAX_API_KEY": os.environ.get("MINIMAX_API_KEY", ""),
     "MINIMAX_BASE_URL": os.environ.get("MINIMAX_BASE_URL", ""),
@@ -680,6 +719,18 @@ env.update({
     "OPENAI_API_KEY": "",
     "MOONSHOT_API_KEY": "",
 })
+
+localhost_no_proxy = "127.0.0.1,localhost,::1"
+for key in ("NO_PROXY", "no_proxy"):
+    current = env.get(key, "")
+    if current:
+        parts = [part.strip() for part in current.split(",") if part.strip()]
+        for part in localhost_no_proxy.split(","):
+            if part not in parts:
+                parts.append(part)
+        env[key] = ",".join(parts)
+    else:
+        env[key] = localhost_no_proxy
 
 cmd = [
     binary,
@@ -814,6 +865,8 @@ collect_task() {
             CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" \
             RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
             CARGO_TARGET_DIR="$ROOT_DIR/target/live-eval-cargo" \
+            NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost,::1" \
+            no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost,::1" \
             bash -lc "$cmd"
         )
         status=$?
@@ -888,7 +941,7 @@ PY
       echo "Quality signals:"
       echo
       echo '```text'
-      python3 - "$report_dir/agent-output.md" "$report_dir/agent-events.jsonl" "$diff_patch" "$quality_status_file" "$file" "$status_file" <<'PY'
+      python3 - "$report_dir/agent-output.md" "$report_dir/agent-events.jsonl" "$diff_patch" "$quality_status_file" "$file" "$status_file" "$cmd_log" "$report_dir/agent-stderr.log" <<'PY'
 import json
 import pathlib
 import sys
@@ -900,10 +953,14 @@ diff_path = pathlib.Path(sys.argv[3])
 status_path = pathlib.Path(sys.argv[4])
 sample_path = pathlib.Path(sys.argv[5])
 test_status_path = pathlib.Path(sys.argv[6])
+cmd_log_path = pathlib.Path(sys.argv[7])
+stderr_path = pathlib.Path(sys.argv[8])
 output = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
 diff = diff_path.read_text(encoding="utf-8") if diff_path.exists() else ""
 sample = yaml.safe_load(sample_path.read_text(encoding="utf-8")) or {}
 test_status = test_status_path.read_text(encoding="utf-8").strip() if test_status_path.exists() else "missing"
+cmd_log_text = cmd_log_path.read_text(encoding="utf-8") if cmd_log_path.exists() else ""
+stderr_text = stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else ""
 events = []
 if events_path.exists():
     for line in events_path.read_text(encoding="utf-8").splitlines():
@@ -915,6 +972,15 @@ trace = next((event for event in reversed(events) if event.get("event") == "trac
 trace_types = trace.get("event_types") or []
 trace_events = (trace.get("trace") or {}).get("events") or []
 tool_done = sum(1 for event in events if event.get("event") == "tool_execution_complete")
+tool_starts = [event for event in events if event.get("event") == "tool_execution_start"]
+first_write_tool_index = next(
+    (
+        idx
+        for idx, event in enumerate(tool_starts, start=1)
+        if event.get("name") in {"file_edit", "file_write"}
+    ),
+    None,
+)
 tool_errors = sum(
     1
     for event in events
@@ -937,6 +1003,7 @@ accepted = latest_acceptance.get("accepted")
 print(f"output_chars: {len(output)}")
 print(f"diff_chars: {len(diff)}")
 print(f"tool_executions: {tool_done}")
+print(f"first_write_tool_index: {first_write_tool_index if first_write_tool_index is not None else 'none'}")
 print(f"tool_errors: {tool_errors}")
 print(f"tool_failures: {tool_failures}")
 print(f"has_closeout: {str('Closeout:' in output).lower()}")
@@ -950,6 +1017,8 @@ print(f"acceptance_accepted: {accepted}")
 print(f"closeout_status: {closeout_status}")
 if trace_types:
     print("trace_event_types: " + ",".join(trace_types[-12:]))
+stale_edit_warnings = stderr_text.count("was modified since it was read")
+print(f"stale_edit_warnings: {stale_edit_warnings}")
 
 failures = []
 warnings = []
@@ -966,6 +1035,9 @@ if not diff.strip():
 if tool_errors:
     print("warning: tool_errors_seen")
     warnings.append("tool_errors_seen")
+if stale_edit_warnings >= 2:
+    print("warning: repeated_stale_edit_warnings")
+    warnings.append("repeated_stale_edit_warnings")
 if verification_events and any(event.get("passed") is not True for event in verification_events[:-1]):
     print("warning: earlier_verification_failed_before_repair")
     warnings.append("earlier_verification_failed_before_repair")
@@ -998,8 +1070,49 @@ if diff_required and not diff.strip():
     failures.append("expected_code_diff_missing")
 
 status = "failed" if failures else "ok"
+
+def infer_failure_owner():
+    if not failures:
+        return "none"
+    lower_cmd = cmd_log_text.lower()
+    if "502" in lower_cmd or "proxy" in lower_cmd or "connection refused" in lower_cmd:
+        return "environment"
+    if "modulenotfounderror" in lower_cmd or "failed to import test module" in lower_cmd:
+        return "eval_harness"
+    if "empty_agent_output" in failures or "missing_trace_summary" in failures:
+        return "agent_flow"
+    if "tool_run_without_closeout" in failures:
+        return "agent_flow"
+    if "closeout_not_successful" in failures and test_status == "ok":
+        return "agent_flow"
+    if (
+        "required_commands_not_passing" in failures
+        and verification_passed
+        and stage_validation_passed
+        and closeout_status == "passed"
+    ):
+        return "eval_harness"
+    if (
+        "required_commands_not_passing" in failures
+        and closeout_status == "passed"
+        and accepted is True
+    ):
+        return "agent_flow"
+    if "verification_failed" in failures or "stage_validation_failed" in failures:
+        if closeout_status in {"failed", "not_verified", "blocked"}:
+            return "llm_reasoning"
+        return "agent_flow"
+    if "acceptance_review_rejected" in failures:
+        return "mixed"
+    if "expected_code_diff_missing" in failures:
+        return "llm_reasoning"
+    return "mixed"
+
+failure_owner = infer_failure_owner()
+print(f"failure_owner: {failure_owner}")
 with status_path.open("w", encoding="utf-8") as fh:
     fh.write(f"status={status}\n")
+    fh.write(f"failure_owner={failure_owner}\n")
     for item in failures:
         fh.write(f"failure={item}\n")
     for item in warnings:

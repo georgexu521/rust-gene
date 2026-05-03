@@ -1,0 +1,2 @@
+2026-05-02T13:30:56.295363Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: workflow judgment response did not contain JSON
+2026-05-02T13:35:19.163429Z  WARN priority_agent::engine::auto_verify: Failed to run cargo test: cargo test timed out after 180s

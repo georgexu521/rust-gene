@@ -462,18 +462,15 @@ fn memory_conflict_matches_item(
     let conflict = conflict.to_lowercase();
     let snippet = item.snippet.to_lowercase();
     if let Some((key, values)) = parse_memory_conflict(&conflict) {
+        if is_generic_conflict_token(&key) {
+            return false;
+        }
         return snippet.contains(&key) && values.iter().any(|value| snippet.contains(value));
     }
 
     let tokens = conflict
         .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
-        .filter(|part| {
-            part.len() >= 4
-                && !matches!(
-                    *part,
-                    "memory" | "project" | "user" | "value" | "values" | "conflicting"
-                )
-        })
+        .filter(|part| part.len() >= 4 && !is_generic_conflict_token(part))
         .collect::<Vec<_>>();
     tokens.len() >= 2
         && tokens
@@ -481,6 +478,30 @@ fn memory_conflict_matches_item(
             .filter(|part| snippet.contains(**part))
             .count()
             >= 2
+}
+
+fn is_generic_conflict_token(token: &str) -> bool {
+    matches!(
+        token,
+        "memory"
+            | "project"
+            | "user"
+            | "value"
+            | "values"
+            | "conflicting"
+            | "conflicts"
+            | "conflict"
+            | "key"
+            | "keys"
+            | "source"
+            | "sources"
+            | "with"
+            | "from"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+    )
 }
 
 fn parse_memory_conflict(conflict: &str) -> Option<(String, Vec<String>)> {
@@ -565,6 +586,40 @@ mod tests {
             score: 30,
             rerank_score: Some(0.90),
             snippet: "language: Chinese\nUse compact CLI status bars.".to_string(),
+        };
+
+        assert!(!memory_conflict_matches_item(conflict, &unrelated));
+        assert!(memory_conflict_matches_item(conflict, &related));
+    }
+
+    #[test]
+    fn memory_conflict_matching_ignores_generic_key_conflicts() {
+        let conflict = "- key 'project' has conflicting values: alpha | beta";
+        let item = crate::memory::manager::MemoryMatch {
+            source: "memory/project.md".to_string(),
+            score: 40,
+            rerank_score: Some(0.95),
+            snippet: "Project memory value alpha is mentioned in a note.".to_string(),
+        };
+
+        assert!(!memory_conflict_matches_item(conflict, &item));
+    }
+
+    #[test]
+    fn memory_conflict_matching_requires_specific_fallback_overlap() {
+        let conflict = "memory project value source conflict mentions alpha beta";
+        let unrelated = crate::memory::manager::MemoryMatch {
+            source: "memory/project.md".to_string(),
+            score: 40,
+            rerank_score: Some(0.95),
+            snippet: "This project memory has a value and source but no concrete conflicting fact."
+                .to_string(),
+        };
+        let related = crate::memory::manager::MemoryMatch {
+            source: "memory/project.md".to_string(),
+            score: 40,
+            rerank_score: Some(0.95),
+            snippet: "alpha and beta are both mentioned in this concrete conflict.".to_string(),
         };
 
         assert!(!memory_conflict_matches_item(conflict, &unrelated));

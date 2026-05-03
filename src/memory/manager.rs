@@ -29,6 +29,15 @@ const ACTIVE_MEMORY_CHAR_LIMIT: usize = 20_000;
 const MEMORY_FLUSH_LOG_FILE: &str = "flush_queue.jsonl";
 const MEMORY_FLUSH_MAX_ATTEMPTS: u8 = 3;
 
+fn memory_llm_timeout() -> std::time::Duration {
+    let secs = std::env::var("PRIORITY_AGENT_MEMORY_LLM_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(60)
+        .clamp(10, 300);
+    std::time::Duration::from_secs(secs)
+}
+
 fn log_preview(content: &str, max_chars: usize) -> String {
     content.chars().take(max_chars).collect()
 }
@@ -851,7 +860,9 @@ Return exactly the word NONE if there is nothing critical to remember.";
                     Message::user(&content),
                 ]);
 
-                if let Ok(response) = provider.chat(request).await {
+                if let Ok(Ok(response)) =
+                    tokio::time::timeout(memory_llm_timeout(), provider.chat(request)).await
+                {
                     let text = response.content.trim();
                     if !text.eq_ignore_ascii_case("NONE") && !text.is_empty() {
                         let bullets: Vec<String> = text
@@ -933,8 +944,8 @@ Return exactly the word NONE if there is nothing critical to remember.";
             crate::services::api::Message::user(&content),
         ]);
 
-        match provider.chat(request).await {
-            Ok(response) => {
+        match tokio::time::timeout(memory_llm_timeout(), provider.chat(request)).await {
+            Ok(Ok(response)) => {
                 let text = response.content.trim();
                 if text.eq_ignore_ascii_case("NONE") || text.is_empty() {
                     return Vec::new();
@@ -956,8 +967,15 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 debug!("LLM extracted {} memory bullets", bullets.len());
                 bullets
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 warn!("LLM memory extraction failed: {}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                warn!(
+                    "LLM memory extraction timed out after {}s",
+                    memory_llm_timeout().as_secs()
+                );
                 Vec::new()
             }
         }
@@ -1197,6 +1215,22 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 return MemoryWriteOutcome::blocked(format!("{}: {}", issue.code, issue.message));
             }
         };
+        if assessment.duplication >= 0.85 || normalized_contains(&existing, content) {
+            debug!(
+                "Skipping duplicate learning (already in file, async): {}",
+                log_preview(content, 50)
+            );
+            self.record_memory_decision(
+                "duplicate",
+                category,
+                content,
+                &format!("duplicate memory already exists; {}", assessment.reason),
+            );
+            return MemoryWriteOutcome::duplicate(
+                path.to_path_buf(),
+                format!("duplicate memory already exists; {}", assessment.reason),
+            );
+        }
         if assessment.status != MemoryStatus::Accepted {
             debug!(
                 "Skipping async memory candidate ({:?}): {} | {}",
@@ -1214,22 +1248,6 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 assessment.status,
                 assessment.score,
                 assessment.reason,
-            );
-        }
-        if normalized_contains(&existing, content) {
-            debug!(
-                "Skipping duplicate learning (already in file, async): {}",
-                log_preview(content, 50)
-            );
-            self.record_memory_decision(
-                "rejected",
-                category,
-                content,
-                "duplicate memory already exists",
-            );
-            return MemoryWriteOutcome::duplicate(
-                path.to_path_buf(),
-                "duplicate memory already exists",
             );
         }
 
@@ -1298,6 +1316,28 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 return MemoryWriteOutcome::blocked(format!("{}: {}", issue.code, issue.message));
             }
         };
+        if assessment.duplication >= 0.85 || normalized_contains(&existing, content) {
+            debug!(
+                "Skipping duplicate topic learning (already in file, async): {}",
+                log_preview(content, 50)
+            );
+            self.record_memory_decision(
+                "duplicate",
+                category,
+                content,
+                &format!(
+                    "duplicate topic memory already exists; {}",
+                    assessment.reason
+                ),
+            );
+            return MemoryWriteOutcome::duplicate(
+                path.clone(),
+                format!(
+                    "duplicate topic memory already exists; {}",
+                    assessment.reason
+                ),
+            );
+        }
         if assessment.status != MemoryStatus::Accepted {
             debug!(
                 "Skipping async topic memory candidate ({:?}): {} | {}",
@@ -1315,22 +1355,6 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 assessment.status,
                 assessment.score,
                 assessment.reason,
-            );
-        }
-        if normalized_contains(&existing, content) {
-            debug!(
-                "Skipping duplicate topic learning (already in file, async): {}",
-                log_preview(content, 50)
-            );
-            self.record_memory_decision(
-                "rejected",
-                category,
-                content,
-                "duplicate topic memory already exists",
-            );
-            return MemoryWriteOutcome::duplicate(
-                path.clone(),
-                "duplicate topic memory already exists",
             );
         }
 
@@ -1463,8 +1487,8 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 Message::user(&conversation_context),
             ]);
 
-            match p.chat(request).await {
-                Ok(response) => {
+            match tokio::time::timeout(memory_llm_timeout(), p.chat(request)).await {
+                Ok(Ok(response)) => {
                     let text = response.content.trim();
                     if !text.eq_ignore_ascii_case("NONE") && !text.is_empty() {
                         let bullets: Vec<String> = text
@@ -1480,8 +1504,14 @@ Return exactly the word NONE if there is nothing critical to remember.";
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     warn!("Trailing run LLM extraction failed: {}", e);
+                }
+                Err(_) => {
+                    warn!(
+                        "Trailing run LLM extraction timed out after {}s",
+                        memory_llm_timeout().as_secs()
+                    );
                 }
             }
         }
@@ -2271,13 +2301,21 @@ Select at most 5 ids. Do not explain.";
         Message::user(&user_prompt),
     ]);
 
-    let selected_ids = match provider.chat(request).await {
-        Ok(response) => parse_rerank_ids(&response.content, candidates.len()),
-        Err(e) => {
-            debug!("LLM memory rerank failed: {}", e);
-            Vec::new()
-        }
-    };
+    let selected_ids =
+        match tokio::time::timeout(memory_llm_timeout(), provider.chat(request)).await {
+            Ok(Ok(response)) => parse_rerank_ids(&response.content, candidates.len()),
+            Ok(Err(e)) => {
+                debug!("LLM memory rerank failed: {}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                debug!(
+                    "LLM memory rerank timed out after {}s",
+                    memory_llm_timeout().as_secs()
+                );
+                Vec::new()
+            }
+        };
 
     if selected_ids.is_empty() {
         return candidates.iter().take(max_results).cloned().collect();
@@ -3165,6 +3203,88 @@ Always check logs first.
         let content = std::fs::read_to_string(topic_path).unwrap_or_default();
         assert!(content.contains("[CONTEXT]"));
         assert!(content.contains("stable prefix fingerprints"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn test_add_learning_async_returns_duplicate_outcome_without_append() {
+        let base = temp_memory_base("learning-async-duplicate");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let content =
+            "Project convention: run cargo test --quiet before committing Rust workflow changes.";
+
+        let first = mgr.add_learning_async(content, "convention").await;
+        assert_eq!(first.status, MemoryWriteOutcomeStatus::Saved);
+        let before = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+
+        let second = mgr.add_learning_async(content, "convention").await;
+        assert_eq!(second.status, MemoryWriteOutcomeStatus::Duplicate);
+        assert!(second.reason.contains("duplicate memory"));
+        let after = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+        assert_eq!(before, after, "duplicate save should not append content");
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn test_add_learning_async_blocks_sensitive_explicit_like_content() {
+        let base = temp_memory_base("learning-async-sensitive-block");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let secret = "api_key = sk-123456789012345678901234";
+
+        let outcome = mgr.add_learning_async(secret, "preference").await;
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Blocked);
+        assert!(outcome.reason.contains("secret_like_content"));
+        let user_memory = std::fs::read_to_string(&mgr.user_path).unwrap_or_default();
+        assert!(
+            !user_memory.contains("sk-123456789012345678901234"),
+            "blocked sensitive content must not be written to USER.md"
+        );
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn test_add_learning_async_near_duplicate_is_gated() {
+        let base = temp_memory_base("learning-async-near-duplicate");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let first =
+            "Project convention: run cargo test --quiet before committing Rust workflow changes.";
+        let near =
+            "Project convention: run cargo test --quiet before committing Rust memory changes.";
+
+        let saved = mgr.add_learning_async(first, "convention").await;
+        assert_eq!(saved.status, MemoryWriteOutcomeStatus::Saved);
+        let before = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+
+        let duplicate = mgr.add_learning_async(near, "convention").await;
+        assert_eq!(duplicate.status, MemoryWriteOutcomeStatus::Duplicate);
+        let after = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+        assert_eq!(before, after, "near duplicate should not append content");
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn test_add_topic_learning_async_different_topics_do_not_cross_duplicate() {
+        let base = temp_memory_base("topic-learning-async-cross-scope");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let content =
+            "Project convention: run cargo test --quiet before committing Rust workflow changes.";
+
+        let first = mgr
+            .add_topic_learning_async(content, "convention", "Workflow")
+            .await;
+        let second = mgr
+            .add_topic_learning_async(content, "convention", "Release")
+            .await;
+
+        assert_eq!(first.status, MemoryWriteOutcomeStatus::Saved);
+        assert_eq!(second.status, MemoryWriteOutcomeStatus::Saved);
+        assert!(base.join(MEMORY_DIR_NAME).join("workflow.md").exists());
+        assert!(base.join(MEMORY_DIR_NAME).join("release.md").exists());
 
         let _ = std::fs::remove_dir_all(base);
     }

@@ -38,7 +38,7 @@ expected_behavior:
 acceptance:
   required_commands:
     - cargo test -q memory -- --test-threads=1
-    - cargo test -q tui::app::tests:: -- --test-threads=1
+    - "cargo test -q tui::app::tests:: -- --test-threads=1"
     - cargo test -q -- --test-threads=1
   diff_constraints:
     max_files_changed: 8

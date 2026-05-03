@@ -11,6 +11,15 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tracing::warn;
 
+fn turn_execution_timeout() -> std::time::Duration {
+    let secs = std::env::var("PRIORITY_AGENT_TURN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1800)
+        .clamp(60, 7200);
+    std::time::Duration::from_secs(secs)
+}
+
 /// 流式查询事件
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
@@ -664,9 +673,19 @@ impl StreamingQueryEngine {
             let mut assistant_content = String::new();
             let mut assistant_tool_calls = Vec::new();
 
-            let run_result = engine
-                .run_query_with_messages(messages_for_query.clone(), &tx)
-                .await;
+            let turn_timeout = turn_execution_timeout();
+            let run_result = match tokio::time::timeout(
+                turn_timeout,
+                engine.run_query_with_messages(messages_for_query.clone(), &tx),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!(
+                    "turn execution timed out after {}s",
+                    turn_timeout.as_secs()
+                )),
+            };
 
             match run_result {
                 Ok((content, tool_calls)) => {
@@ -757,16 +776,27 @@ impl StreamingQueryEngine {
                             fallback_model: None, // 防止无限 fallback
                             fallback_state: Some(fb_state),
                         };
-                        match fb_engine
-                            .run_query_with_messages(messages_for_query.clone(), &tx)
-                            .await
+                        let turn_timeout = turn_execution_timeout();
+                        match tokio::time::timeout(
+                            turn_timeout,
+                            fb_engine.run_query_with_messages(messages_for_query.clone(), &tx),
+                        )
+                        .await
                         {
-                            Ok((content, tool_calls)) => {
+                            Ok(Ok((content, tool_calls))) => {
                                 assistant_content = content;
                                 assistant_tool_calls = tool_calls;
                             }
-                            Err(fb_err) => {
+                            Ok(Err(fb_err)) => {
                                 let _ = tx.send(StreamEvent::Error(fb_err.to_string())).await;
+                            }
+                            Err(_) => {
+                                let _ = tx
+                                    .send(StreamEvent::Error(format!(
+                                        "fallback turn execution timed out after {}s",
+                                        turn_timeout.as_secs()
+                                    )))
+                                    .await;
                             }
                         }
                     } else {

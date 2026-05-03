@@ -1094,6 +1094,15 @@ pub struct WorkflowContractAnalyzer<'a> {
     model: String,
 }
 
+fn workflow_llm_request_timeout() -> std::time::Duration {
+    let secs = std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(180)
+        .clamp(30, 600);
+    std::time::Duration::from_secs(secs)
+}
+
 impl<'a> WorkflowContractAnalyzer<'a> {
     pub fn new(provider: &'a dyn LlmProvider, model: impl Into<String>) -> Self {
         Self {
@@ -1112,7 +1121,7 @@ impl<'a> WorkflowContractAnalyzer<'a> {
                 Message::system("Return only valid JSON. Do not include markdown fences."),
                 Message::user(prompt.render()),
             ]);
-        let response = self.provider.chat(request).await?;
+        let response = self.chat_with_timeout(request, "workflow judgment").await?;
         parse_workflow_judgment(&response.content)
     }
 
@@ -1126,7 +1135,7 @@ impl<'a> WorkflowContractAnalyzer<'a> {
                 Message::system("Return only valid JSON. Do not include markdown fences."),
                 Message::user(prompt.render()),
             ]);
-        let response = self.provider.chat(request).await?;
+        let response = self.chat_with_timeout(request, "acceptance review").await?;
         parse_acceptance_review(&response.content)
     }
 
@@ -1140,8 +1149,24 @@ impl<'a> WorkflowContractAnalyzer<'a> {
                 Message::system("Return only valid JSON. Do not include markdown fences."),
                 Message::user(prompt.render()),
             ]);
-        let response = self.provider.chat(request).await?;
+        let response = self.chat_with_timeout(request, "guided debugging").await?;
         parse_guided_debugging_analysis(&response.content)
+    }
+
+    async fn chat_with_timeout(
+        &self,
+        request: ChatRequest,
+        purpose: &str,
+    ) -> anyhow::Result<crate::services::api::ChatResponse> {
+        let timeout = workflow_llm_request_timeout();
+        match tokio::time::timeout(timeout, self.provider.chat(request)).await {
+            Ok(result) => result,
+            Err(_) => Err(anyhow::anyhow!(
+                "{} timed out after {}s",
+                purpose,
+                timeout.as_secs()
+            )),
+        }
     }
 }
 
