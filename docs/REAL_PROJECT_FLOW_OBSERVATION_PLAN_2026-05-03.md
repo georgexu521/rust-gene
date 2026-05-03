@@ -141,6 +141,54 @@ scripts/coding-workflow-gates.sh quick
 scripts/coding-workflow-gates.sh standard
 ```
 
+## Guided Debugging Run Observation
+
+Run:
+
+`docs/benchmarks/live-realflow-guided-20260503-170614/memory-save-quality-gate/report.md`
+
+Why this task was selected:
+
+- It is a high-risk memory quality-gate bug.
+- The task prompt explicitly tells the agent not to satisfy `/save` by changing
+  display text elsewhere; it must fix `src/tui/app.rs` slash-command behavior.
+- Historical runs showed this task can trigger guided debugging.
+
+Result:
+
+- Status: failed.
+- Failure owner: `llm_reasoning`.
+- Required command status: failed.
+- Full suite still passed: `1054 passed; 0 failed`.
+- Required acceptance grep failed because `src/tui/app.rs` still contained two
+  `format!("Saved: {}")` call sites.
+- Changed files: `src/memory/quality.rs`, `src/tools/memory_tool/mod.rs`.
+
+Specialty signals:
+
+- `memory_active=true`
+- `automation_active=true`
+- `guided_debugging_active=true`
+- `guided_reasoning_active=true`
+- `weighted_planning_active=true`
+- `closeout_active=true`
+- `active_specialty_signals=6/6`
+- `guided_debugging_events=4`
+- `latest_top_priority=P1`
+- `latest_top_importance_score=0.7150000333786011`
+
+Interpretation:
+
+- The workflow systems did their job: validation failed, guided debugging
+  triggered, acceptance rejected the result, and closeout stayed failed instead
+  of claiming success.
+- The model still failed to execute the full task surface: it repaired the
+  memory tool and quality scorer but missed the explicitly required TUI `/save`
+  path.
+- This should not be fixed by adding more hidden runtime tuning. The right next
+  improvement is to tell the AI more clearly how to enumerate and close every
+  acceptance target before editing and before final closeout.
+
 ## Validation
 
 Required local checks:
