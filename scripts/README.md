@@ -19,7 +19,10 @@ Use this file as the source of truth for what is on the critical path.
 - `workflow-real-devflow-round3.sh`: replay fixture wrapper.
 - `run_live_eval.sh`: semi-automatic live coding task regression harness. It can
   prepare task worktrees, ask MiniMax for a planning response, and collect
-  diff/test/report artifacts.
+  diff/test/report artifacts. Agent-run reports include a `Specialty signals`
+  section that summarizes memory, automation/validation, guided debugging,
+  guided reasoning, weighted planning, and closeout activity for real-task
+  review.
 - `coding-workflow-gates.sh`: layered coding-agent workflow gates. Use `quick`
   for focused deterministic edit/validation/repair/closeout contracts,
   `standard` before workflow/tool commits, `full` for docs/build/full-test

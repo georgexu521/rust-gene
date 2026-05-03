@@ -1119,6 +1119,126 @@ with status_path.open("w", encoding="utf-8") as fh:
         fh.write(f"warning={item}\n")
 PY
       echo '```'
+      echo
+      echo "Specialty signals:"
+      echo
+      echo '```text'
+      python3 - "$report_dir/agent-events.jsonl" "$file" "$status_file" "$cmd_log" <<'PY'
+import json
+import pathlib
+import sys
+import yaml
+
+events_path = pathlib.Path(sys.argv[1])
+sample_path = pathlib.Path(sys.argv[2])
+test_status_path = pathlib.Path(sys.argv[3])
+cmd_log_path = pathlib.Path(sys.argv[4])
+
+sample = yaml.safe_load(sample_path.read_text(encoding="utf-8")) or {}
+test_status = test_status_path.read_text(encoding="utf-8").strip() if test_status_path.exists() else "missing"
+cmd_log_text = cmd_log_path.read_text(encoding="utf-8") if cmd_log_path.exists() else ""
+events = []
+if events_path.exists():
+    for line in events_path.read_text(encoding="utf-8").splitlines():
+        try:
+            events.append(json.loads(line))
+        except Exception:
+            pass
+
+trace = next((event for event in reversed(events) if event.get("event") == "trace_summary"), {})
+trace_types = trace.get("event_types") or []
+trace_events = (trace.get("trace") or {}).get("events") or []
+required_commands = ((sample.get("acceptance") or {}).get("required_commands") or [])
+
+def trace_count(label):
+    return sum(1 for item in trace_types if item == label)
+
+def trace_events_of(kind):
+    return [event for event in trace_events if event.get("type") == kind]
+
+retrieval_events = trace_events_of("retrieval_context_built")
+workflow_plans = trace_events_of("workflow_plan_progress")
+workflow_judgments = trace_events_of("workflow_judgment_completed")
+guided_debugs = trace_events_of("guided_debugging_completed")
+verification_events = trace_events_of("verification_completed")
+stage_validation_events = trace_events_of("stage_validation_completed")
+acceptance_events = trace_events_of("acceptance_review_completed")
+closeout_events = trace_events_of("final_closeout_prepared")
+progress_events = [event for event in events if event.get("event") == "tool_execution_progress"]
+memory_tools = [
+    event
+    for event in events
+    if event.get("event") == "tool_execution_start"
+    and str(event.get("name", "")).startswith("memory")
+]
+
+memory_sources = []
+for event in retrieval_events:
+    for source in event.get("sources") or []:
+        if source not in memory_sources:
+            memory_sources.append(str(source))
+
+weighted_plan_events = [
+    event
+    for event in workflow_plans
+    if event.get("top_priority") is not None
+    or event.get("top_importance_score") is not None
+    or event.get("top_weight_share") is not None
+]
+reweighted_events = [event for event in workflow_plans if event.get("reweighted")]
+guided_reasoning_events = [
+    event for event in workflow_judgments if event.get("guided_reasoning") is True
+]
+automation_active = bool(required_commands or verification_events or stage_validation_events or progress_events)
+memory_active = bool(trace_count("memory.sync") or memory_tools or any(source == "Memory" for source in memory_sources))
+guided_debugging_active = bool(guided_debugs)
+guided_reasoning_active = bool(guided_reasoning_events)
+weighted_planning_active = bool(weighted_plan_events)
+closeout_active = bool(closeout_events and acceptance_events)
+
+signals = {
+    "memory_active": memory_active,
+    "automation_active": automation_active,
+    "guided_debugging_active": guided_debugging_active,
+    "guided_reasoning_active": guided_reasoning_active,
+    "weighted_planning_active": weighted_planning_active,
+    "closeout_active": closeout_active,
+}
+active_count = sum(1 for value in signals.values() if value)
+
+latest_plan = weighted_plan_events[-1] if weighted_plan_events else {}
+latest_closeout = closeout_events[-1] if closeout_events else {}
+latest_acceptance = acceptance_events[-1] if acceptance_events else {}
+
+for key, value in signals.items():
+    print(f"{key}: {str(value).lower()}")
+print(f"active_specialty_signals: {active_count}/{len(signals)}")
+print(f"memory_sync_events: {trace_count('memory.sync')}")
+print(f"memory_tool_calls: {len(memory_tools)}")
+print(f"retrieval_sources: {','.join(memory_sources) if memory_sources else 'none'}")
+print(f"required_commands: {len(required_commands)}")
+print(f"required_command_status: {test_status}")
+print(f"validation_events: {len(verification_events)}")
+print(f"stage_validation_events: {len(stage_validation_events)}")
+print(f"tool_progress_events: {len(progress_events)}")
+print(f"guided_debugging_events: {len(guided_debugs)}")
+print(f"guided_reasoning_events: {len(guided_reasoning_events)}")
+print(f"workflow_plan_events: {len(workflow_plans)}")
+print(f"weighted_plan_events: {len(weighted_plan_events)}")
+print(f"reweighted_plan_events: {len(reweighted_events)}")
+print(f"latest_top_priority: {latest_plan.get('top_priority', 'none')}")
+print(f"latest_top_importance_score: {latest_plan.get('top_importance_score', 'none')}")
+print(f"latest_top_weight_share: {latest_plan.get('top_weight_share', 'none')}")
+print(f"acceptance_accepted: {latest_acceptance.get('accepted', 'missing')}")
+print(f"closeout_status: {latest_closeout.get('status', 'missing')}")
+if required_commands and test_status != "ok":
+    print("attention: required commands did not pass in the harness")
+if "guided.debug" not in trace_types:
+    print("note: guided debugging is expected only after a blocker or failed validation")
+if cmd_log_text and "still running" in cmd_log_text.lower():
+    print("note: required command progress appeared in command log")
+PY
+      echo '```'
       if [[ -f "$report_dir/agent-stderr.log" && -s "$report_dir/agent-stderr.log" ]]; then
         echo
         echo "Agent stderr tail:"

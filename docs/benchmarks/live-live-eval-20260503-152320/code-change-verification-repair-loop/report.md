@@ -5,7 +5,7 @@
 - Worktree: `target/live-evals/live-eval-20260503-152320/code-change-verification-repair-loop/worktree`
 - Isolated env: `/Users/georgexu/Desktop/rust-agent/target/live-evals/live-eval-20260503-152320/code-change-verification-repair-loop/env`
 - Test status: `ok`
-- Generated: `2026-05-03 15:32:21 +0800`
+- Generated: `2026-05-03 16:31:11 +0800`
 
 ## Git Status
 
@@ -27,7 +27,7 @@ $ cargo test -q reflection_pass -- --test-threads=1
 
 running 5 tests
 .....
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1048 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1048 filtered out; finished in 0.01s
 
 [exit status: 0]
 
@@ -67,7 +67,7 @@ running 1053 tests
 ....................................................................................... 957/1053
 ....................................................................................... 1044/1053
 .........
-test result: ok. 1053 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.88s
+test result: ok. 1053 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.24s
 
 [exit status: 0]
 
@@ -115,6 +115,37 @@ stale_edit_warnings: 0
 failure_owner: none
 ```
 
+Specialty signals:
+
+```text
+memory_active: true
+automation_active: true
+guided_debugging_active: false
+guided_reasoning_active: true
+weighted_planning_active: true
+closeout_active: true
+active_specialty_signals: 5/6
+memory_sync_events: 6
+memory_tool_calls: 0
+retrieval_sources: Project,Session
+required_commands: 5
+required_command_status: ok
+validation_events: 1
+stage_validation_events: 1
+tool_progress_events: 1
+guided_debugging_events: 0
+guided_reasoning_events: 1
+workflow_plan_events: 2
+weighted_plan_events: 1
+reweighted_plan_events: 1
+latest_top_priority: P0
+latest_top_importance_score: 0.9025000333786011
+latest_top_weight_share: 0.2397078275680542
+acceptance_accepted: True
+closeout_status: passed
+note: guided debugging is expected only after a blocker or failed validation
+```
+
 Agent stderr tail:
 
 ```text
@@ -135,4 +166,4 @@ Agent stderr tail:
 - tool_efficiency: good
 - diff_discipline: good
 - closeout_accuracy: accurate
-- notes: Agent found and repaired the `record_repair_action` verification-command issue, ran the required focused tests and full suite, and produced a passed closeout with no tool failures.
+- notes: Agent found and repaired the `record_repair_action` verification-command issue, ran the required focused tests and full suite, and produced a passed closeout with no tool failures. Specialty signals show memory, automation, guided reasoning, weighted planning, and closeout activity; guided debugging was not expected on this successful path.
