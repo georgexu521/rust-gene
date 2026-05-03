@@ -175,6 +175,8 @@ Deliverables:
 - [x] Hide or clearly label placeholders in help/model-visible surfaces.
 - [x] Add rendered command-palette smoke tests for placeholder labels, usable
   labels, and contextual permission actions.
+- [x] Add rendered approval-panel smoke tests for bash risk review and
+  file-write scope/preview.
 
 Acceptance:
 
@@ -191,7 +193,7 @@ Status: initial matrix landed.
 - `/eval json <name|all>` emits machine-readable pass/fail reports, and
   `/eval record <name|all>` writes timestamped JSON reports under
   `target/eval-reports/` for trend collection.
-- Current full local baseline after this batch: `1035 passed; 0 failed`.
+- Current full local baseline after this batch: `1037 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 

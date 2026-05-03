@@ -2021,6 +2021,7 @@ pub fn render_onboarding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
     use std::{collections::HashMap, time::SystemTime};
 
     fn msg(role: MessageRole, content: &str) -> MessageItem {
@@ -2031,6 +2032,25 @@ mod tests {
             timestamp: SystemTime::UNIX_EPOCH,
             metadata: HashMap::new(),
         }
+    }
+
+    fn render_permission_approval_text(
+        req: &crate::engine::conversation_loop::ToolApprovalRequest,
+    ) -> String {
+        let backend = TestBackend::new(160, 70);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_permission_approval(frame, req, frame.area());
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
     }
 
     #[test]
@@ -2216,6 +2236,60 @@ mod tests {
             permission_preview("mcp_tool", &args),
             Some(("MCP", "filesystem / read_file".to_string()))
         );
+    }
+
+    #[test]
+    fn render_permission_approval_shows_bash_risk_and_decisions() {
+        let req = crate::engine::conversation_loop::ToolApprovalRequest {
+            tool_call: crate::services::api::ToolCall {
+                id: "tool_1".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({ "command": "rm -rf /tmp/demo" }),
+            },
+            prompt: "Permission explanation: decision=Ask, risk=high, reason=destructive command"
+                .to_string(),
+            review: None,
+        };
+
+        let rendered = render_permission_approval_text(&req);
+
+        assert!(rendered.contains("Tool approval"));
+        assert!(rendered.contains("Subject"));
+        assert!(rendered.contains("bash"));
+        assert!(rendered.contains("Risk"));
+        assert!(rendered.contains("high"));
+        assert!(rendered.contains("$ rm -rf /tmp/demo"));
+        assert!(rendered.contains("allow once"));
+        assert!(rendered.contains("allow session"));
+        assert!(rendered.contains("deny global"));
+        assert!(rendered.contains("preview diff/output"));
+    }
+
+    #[test]
+    fn render_permission_approval_shows_file_write_scope_and_preview() {
+        let req = crate::engine::conversation_loop::ToolApprovalRequest {
+            tool_call: crate::services::api::ToolCall {
+                id: "tool_2".to_string(),
+                name: "file_write".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/example.rs",
+                    "content": "fn main() {}"
+                }),
+            },
+            prompt: "Permission explanation: decision=Ask, risk=medium, reason=file write"
+                .to_string(),
+            review: None,
+        };
+
+        let rendered = render_permission_approval_text(&req);
+
+        assert!(rendered.contains("file_write"));
+        assert!(rendered.contains("src/example.rs"));
+        assert!(rendered.contains("Rule"));
+        assert!(rendered.contains("Preview"));
+        assert!(rendered.contains("Write"));
+        assert!(rendered.contains("fn main() {}"));
+        assert!(rendered.contains("allow project"));
     }
 }
 
