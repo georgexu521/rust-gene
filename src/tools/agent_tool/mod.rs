@@ -224,6 +224,23 @@ async fn spawn_single_agent(
         if !profile.system_prompt.trim().is_empty() {
             system_prompt = format!("{}\n\n{}", profile.system_prompt.trim(), system_prompt);
         }
+        let mut contract_lines = Vec::new();
+        if let Some(context_mode) = profile.context {
+            contract_lines.push(format!("Context mode: {}", context_mode));
+        }
+        if let Some(risk_policy) = profile.risk_policy {
+            contract_lines.push(format!("Risk policy: {}", risk_policy));
+        }
+        if let Some(output_contract) = profile.output_contract {
+            contract_lines.push(format!("Output contract: {}", output_contract));
+        }
+        if !contract_lines.is_empty() {
+            system_prompt = format!(
+                "Sub-agent profile contract:\n{}\n\n{}",
+                contract_lines.join("\n"),
+                system_prompt
+            );
+        }
     }
 
     let agent_config = AgentConfig::new(format!("sub-agent: {}", description))
@@ -261,8 +278,15 @@ async fn spawn_single_agent(
     }
     if let Some(profile) = profile {
         envelope.add_constraint(format!("profile={}", profile.name));
-        if let Some(context_mode) = &profile.context {
+        if let Some(context_mode) = profile.context {
             envelope.add_constraint(format!("context={}", context_mode));
+        }
+        if let Some(risk_policy) = profile.risk_policy {
+            envelope.add_constraint(format!("risk_policy={}", risk_policy));
+        }
+        if let Some(output_contract) = profile.output_contract {
+            envelope.add_constraint(format!("output_contract={}", output_contract));
+            envelope.add_expected_artifact(output_contract.to_string());
         }
     }
     let envelope_json = serde_json::to_string_pretty(&envelope)
@@ -694,6 +718,11 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
                     "files": files,
                     "role": ctx.role.display_name(),
                     "template": ctx.params["template"].as_str().unwrap_or(""),
+                    "profile": ctx.profile.as_ref().map(|profile| profile.name.clone()),
+                    "context_mode": ctx.profile.as_ref().and_then(|profile| profile.context.map(|value| value.to_string())),
+                    "risk_policy": ctx.profile.as_ref().and_then(|profile| profile.risk_policy.map(|value| value.to_string())),
+                    "output_contract": ctx.profile.as_ref().and_then(|profile| profile.output_contract.map(|value| value.to_string())),
+                    "allowed_tools": ctx.allowed_tools,
                     "completed_at": result.completed_at.elapsed().as_secs()
                 }),
             )
@@ -860,12 +889,15 @@ impl Tool for AgentTool {
             }
         }
 
-        let timeout_secs = params["timeout_secs"].as_u64().unwrap_or(300);
+        let requested_timeout_secs = params["timeout_secs"].as_u64();
         let max_turns = params["max_turns"].as_u64().unwrap_or(10) as usize;
         let max_cost_usd = params["max_cost_usd"].as_f64();
         let profile = params["profile"]
             .as_str()
             .and_then(|name| crate::agent::profiles::find_profile(&context.working_dir, name));
+        let timeout_secs = requested_timeout_secs
+            .or_else(|| profile.as_ref().and_then(|profile| profile.timeout_secs))
+            .unwrap_or(300);
         let mut allowed_tools: Vec<String> = params["allowed_tools"]
             .as_array()
             .map(|arr| {

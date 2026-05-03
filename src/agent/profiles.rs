@@ -4,6 +4,63 @@ use crate::agent::roles::AgentRole;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentContextMode {
+    Inherit,
+    Fork,
+    Minimal,
+}
+
+impl std::fmt::Display for AgentContextMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            AgentContextMode::Inherit => "inherit",
+            AgentContextMode::Fork => "fork",
+            AgentContextMode::Minimal => "minimal",
+        };
+        write!(f, "{}", label)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRiskPolicy {
+    ReadOnly,
+    VerifyOnly,
+    CodeChange,
+}
+
+impl std::fmt::Display for AgentRiskPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            AgentRiskPolicy::ReadOnly => "read_only",
+            AgentRiskPolicy::VerifyOnly => "verify_only",
+            AgentRiskPolicy::CodeChange => "code_change",
+        };
+        write!(f, "{}", label)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentOutputContract {
+    Findings,
+    PatchSummary,
+    VerificationReport,
+}
+
+impl std::fmt::Display for AgentOutputContract {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            AgentOutputContract::Findings => "findings",
+            AgentOutputContract::PatchSummary => "patch_summary",
+            AgentOutputContract::VerificationReport => "verification_report",
+        };
+        write!(f, "{}", label)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
     pub name: String,
@@ -16,7 +73,13 @@ pub struct AgentProfile {
     #[serde(default)]
     pub allowed_tools: Vec<String>,
     #[serde(default)]
-    pub context: Option<String>,
+    pub context: Option<AgentContextMode>,
+    #[serde(default)]
+    pub risk_policy: Option<AgentRiskPolicy>,
+    #[serde(default)]
+    pub output_contract: Option<AgentOutputContract>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_turns: Option<usize>,
     #[serde(default)]
@@ -94,7 +157,10 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             system_prompt: "Focus on discovering structure and risks. Do not edit files."
                 .to_string(),
             allowed_tools: vec!["project_list".into(), "grep".into(), "file_read".into()],
-            context: Some("inherit".to_string()),
+            context: Some(AgentContextMode::Inherit),
+            risk_policy: Some(AgentRiskPolicy::ReadOnly),
+            output_contract: Some(AgentOutputContract::Findings),
+            timeout_secs: Some(300),
             max_turns: Some(6),
             max_cost_usd: None,
         },
@@ -105,7 +171,10 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             system_prompt: "Try to falsify the change with tests and concrete evidence."
                 .to_string(),
             allowed_tools: vec!["bash".into(), "grep".into(), "file_read".into()],
-            context: Some("inherit".to_string()),
+            context: Some(AgentContextMode::Inherit),
+            risk_policy: Some(AgentRiskPolicy::VerifyOnly),
+            output_contract: Some(AgentOutputContract::VerificationReport),
+            timeout_secs: Some(300),
             max_turns: Some(8),
             max_cost_usd: None,
         },
@@ -121,7 +190,10 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "file_edit".into(),
                 "bash".into(),
             ],
-            context: Some("inherit".to_string()),
+            context: Some(AgentContextMode::Fork),
+            risk_policy: Some(AgentRiskPolicy::CodeChange),
+            output_contract: Some(AgentOutputContract::PatchSummary),
+            timeout_secs: Some(600),
             max_turns: Some(10),
             max_cost_usd: None,
         },
@@ -137,5 +209,12 @@ mod tests {
         let profiles = load_profiles(".");
         assert!(profiles.iter().any(|profile| profile.name == "explorer"));
         assert!(find_profile(".", "verifier").is_some());
+        let implementer = find_profile(".", "implementer").unwrap();
+        assert_eq!(implementer.context, Some(AgentContextMode::Fork));
+        assert_eq!(implementer.risk_policy, Some(AgentRiskPolicy::CodeChange));
+        assert_eq!(
+            implementer.output_contract,
+            Some(AgentOutputContract::PatchSummary)
+        );
     }
 }
