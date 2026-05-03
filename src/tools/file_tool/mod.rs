@@ -127,6 +127,9 @@ pub fn is_file_read(session_id: &str, file_path: &str) -> bool {
 pub fn clear_read_files(session_id: &str) {
     let mut tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
     tracker.remove(session_id);
+    let mut states = FILE_STATES.lock().unwrap_or_else(|e| e.into_inner());
+    let prefix = format!("{}:", session_id);
+    states.retain(|key, _| !key.starts_with(&prefix));
 }
 
 /// 文件修改状态跟踪（用于检测外部修改）
@@ -773,6 +776,11 @@ impl Tool for FileEditTool {
                     "type": "boolean",
                     "default": false,
                     "description": "If true, ignores leading/trailing whitespace differences when matching old_string."
+                },
+                "allow_stale_read": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Allow editing even when the file changed since this session last read it. Use only for intentional overwrites."
                 }
             },
             "required": ["path", "new_string"]
@@ -808,6 +816,7 @@ impl Tool for FileEditTool {
         let line_start = params["line_start"].as_u64().map(|n| n as usize);
         let line_end = params["line_end"].as_u64().map(|n| n as usize);
         let normalize_ws = params["normalize_whitespace"].as_bool().unwrap_or(false);
+        let allow_stale_read = params["allow_stale_read"].as_bool().unwrap_or(false);
 
         if path_str.is_empty() {
             return ToolResult::error("Path cannot be empty");
@@ -858,8 +867,16 @@ impl Tool for FileEditTool {
             .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         if is_file_modified_since_read(&context.session_id, path_str, &content, current_mtime) {
-            warn!("File '{}' was modified since it was read", path_str);
-            // 注意：我们仍然允许编辑，只是记录警告
+            if !allow_stale_read {
+                return ToolResult::error(format!(
+                    "Refusing file_edit for '{}': file changed since this session last read it. Re-read the file and retry, or set allow_stale_read=true if this overwrite is intentional.",
+                    path_str
+                ));
+            }
+            warn!(
+                "File '{}' was modified since it was read; continuing because allow_stale_read=true",
+                path_str
+            );
         }
 
         // 2. 对 old_string 和 new_string 应用 desanitize 和 quote normalization（仅在 PRIORITY_AGENT_SMART_EDIT=1 时）
@@ -934,6 +951,15 @@ impl Tool for FileEditTool {
                             cache.invalidate_content(&path);
                             cache.invalidate_metadata(&path);
                         }
+                        let new_mtime = std::fs::metadata(&path)
+                            .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        mark_file_read_with_state(
+                            &context.session_id,
+                            path_str,
+                            &new_content,
+                            new_mtime,
+                        );
                         info!("Successfully edited file: {:?}", path);
                         let data = json!({
                             "path": path_str,
@@ -1410,6 +1436,75 @@ mod tests {
         assert!(!content.contains("foo bar"));
 
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_stale_read_by_default() {
+        let read_tool = FileReadTool;
+        let edit_tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_stale_read.txt";
+        let session_id = "test-session-edit-stale-read";
+        tokio::fs::write(path, "hello world\n").await.unwrap();
+
+        let read_result = read_tool
+            .execute(json!({ "path": path }), ToolContext::new(".", session_id))
+            .await;
+        assert!(read_result.success, "read failed: {:?}", read_result.error);
+
+        tokio::fs::write(path, "hello changed\n").await.unwrap();
+        let edit_result = edit_tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "hello changed",
+                    "new_string": "hello edited"
+                }),
+                ToolContext::new(".", session_id),
+            )
+            .await;
+
+        assert!(!edit_result.success);
+        let err = edit_result.error.unwrap_or_default();
+        assert!(err.contains("file changed since this session last read it"));
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(content, "hello changed\n");
+
+        let _ = tokio::fs::remove_file(path).await;
+        clear_read_files(session_id);
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_allows_explicit_stale_read_override() {
+        let read_tool = FileReadTool;
+        let edit_tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_stale_override.txt";
+        let session_id = "test-session-edit-stale-override";
+        tokio::fs::write(path, "hello world\n").await.unwrap();
+
+        let read_result = read_tool
+            .execute(json!({ "path": path }), ToolContext::new(".", session_id))
+            .await;
+        assert!(read_result.success, "read failed: {:?}", read_result.error);
+
+        tokio::fs::write(path, "hello changed\n").await.unwrap();
+        let edit_result = edit_tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "hello changed",
+                    "new_string": "hello edited",
+                    "allow_stale_read": true
+                }),
+                ToolContext::new(".", session_id),
+            )
+            .await;
+
+        assert!(edit_result.success, "edit failed: {:?}", edit_result.error);
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(content, "hello edited\n");
+
+        let _ = tokio::fs::remove_file(path).await;
+        clear_read_files(session_id);
     }
 
     #[tokio::test]
