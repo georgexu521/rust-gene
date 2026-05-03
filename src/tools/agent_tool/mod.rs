@@ -408,6 +408,39 @@ fn synthesize_results(
     ToolResult::success_with_data(output, data)
 }
 
+fn persist_agent_artifact(
+    context: &ToolContext,
+    description: &str,
+    role: AgentRole,
+    profile: Option<&crate::agent::profiles::AgentProfile>,
+    result: &ManagerAgentResult,
+) {
+    let Some(store) = context.session_store.as_ref() else {
+        return;
+    };
+    let status = format!("{:?}", result.status).to_ascii_lowercase();
+    let payload = json!({
+        "tools_used": result.tools_used,
+        "confidence": result.confidence,
+        "has_conflict": result.has_conflict,
+    });
+    if let Err(err) = store.add_agent_artifact(
+        &context.session_id,
+        &result.agent_id.to_string(),
+        profile.map(|profile| profile.name.as_str()),
+        role.display_name(),
+        &status,
+        description,
+        &result.content,
+        &payload,
+    ) {
+        warn!(
+            "Failed to persist sub-agent artifact for {}: {}",
+            result.agent_id, err
+        );
+    }
+}
+
 /// 执行上下文参数
 struct ExecuteParams<'a> {
     agent_manager: &'a crate::agent::AgentManager,
@@ -512,6 +545,13 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
         .await
         {
             Ok(result) => {
+                persist_agent_artifact(
+                    ctx.context,
+                    &format!("{}: {}", description, branch_desc),
+                    ctx.role,
+                    ctx.profile.as_ref(),
+                    &result,
+                );
                 // If parent memory exists, copy to branch agent
                 if let Some(ref parent_mem) = parent_memory {
                     let branch_memory = crate::agent::memory::global_memory_manager()
@@ -634,7 +674,19 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             .collect();
 
         let completed = futures::future::join_all(futures).await;
-        completed.into_iter().filter_map(|r| r.ok()).collect()
+        completed
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .inspect(|result| {
+                persist_agent_artifact(
+                    ctx.context,
+                    description,
+                    ctx.role,
+                    ctx.profile.as_ref(),
+                    result,
+                );
+            })
+            .collect()
     } else {
         let st = &subtasks[0];
         match spawn_single_agent(
@@ -654,7 +706,16 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
         )
         .await
         {
-            Ok(r) => vec![r],
+            Ok(r) => {
+                persist_agent_artifact(
+                    ctx.context,
+                    &st.description,
+                    ctx.role,
+                    ctx.profile.as_ref(),
+                    &r,
+                );
+                vec![r]
+            }
             Err(e) => {
                 return ToolResult::error(format!("Sub-agent failed: {}", e));
             }
@@ -711,6 +772,13 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
     .await
     {
         Ok(result) => {
+            persist_agent_artifact(
+                ctx.context,
+                description,
+                ctx.role,
+                ctx.profile.as_ref(),
+                &result,
+            );
             let status_str = format!("{:?}", result.status);
             let files_info = if files.is_empty() {
                 String::new()

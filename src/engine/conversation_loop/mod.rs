@@ -1234,6 +1234,9 @@ impl ConversationLoop {
         if let Some(ref manager) = self.agent_manager {
             ctx = ctx.with_agent_manager(manager.clone());
         }
+        if let Some(ref store) = self.session_store {
+            ctx = ctx.with_session_store(store.clone());
+        }
         if let Some(ref mcp) = self.mcp_manager {
             ctx = ctx.with_mcp_manager(mcp.clone());
         }

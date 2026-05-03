@@ -477,6 +477,8 @@ pub struct ToolContext {
     pub agent_manager: Option<std::sync::Arc<crate::agent::AgentManager>>,
     /// 当前 turn trace（用于工具记录内部生命周期事件）
     pub trace_collector: Option<crate::engine::trace::TraceCollector>,
+    /// 会话存储（用于工具持久化运行时 artifact）
+    pub session_store: Option<std::sync::Arc<crate::session_store::SessionStore>>,
     /// MCP 管理器（mcp_tool 调用外部 MCP 工具）
     pub mcp_manager: Option<std::sync::Arc<crate::engine::mcp::McpManager>>,
     /// LSP 管理器（lsp_tool 查询语言服务器）
@@ -517,6 +519,10 @@ impl std::fmt::Debug for ToolContext {
                 &self.trace_collector.as_ref().map(|_| "<TraceCollector>"),
             )
             .field(
+                "session_store",
+                &self.session_store.as_ref().map(|_| "<SessionStore>"),
+            )
+            .field(
                 "mcp_manager",
                 &self.mcp_manager.as_ref().map(|_| "<McpManager>"),
             )
@@ -553,6 +559,7 @@ impl ToolContext {
             llm_provider: None,
             agent_manager: None,
             trace_collector: None,
+            session_store: None,
             mcp_manager: None,
             lsp_manager: None,
             worktree_manager: None,
@@ -582,6 +589,15 @@ impl ToolContext {
     /// 设置当前 turn trace collector
     pub fn with_trace_collector(mut self, trace: crate::engine::trace::TraceCollector) -> Self {
         self.trace_collector = Some(trace);
+        self
+    }
+
+    /// 设置会话存储
+    pub fn with_session_store(
+        mut self,
+        store: std::sync::Arc<crate::session_store::SessionStore>,
+    ) -> Self {
+        self.session_store = Some(store);
         self
     }
 

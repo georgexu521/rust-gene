@@ -51,6 +51,21 @@ pub struct LearningEventRecord {
     pub created_at: String,
 }
 
+/// Durable subagent result artifact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentArtifactRecord {
+    pub id: i64,
+    pub session_id: String,
+    pub agent_id: String,
+    pub profile: Option<String>,
+    pub role: String,
+    pub status: String,
+    pub description: String,
+    pub output: String,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
 /// 会话存储
 #[derive(Clone)]
 pub struct SessionStore {
@@ -102,6 +117,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v4_add_learning_events::V4AddLearningEvents,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v5_add_agent_artifacts::V5AddAgentArtifacts,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -130,6 +148,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v4_add_learning_events::V4AddLearningEvents,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v5_add_agent_artifacts::V5AddAgentArtifacts,
         ));
         runner.run(&conn)?;
 
@@ -637,6 +658,70 @@ impl SessionStore {
             Err(e) => Err(e),
         }
     }
+
+    // ==================== Agent Artifact 操作 ====================
+
+    pub fn add_agent_artifact(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        profile: Option<&str>,
+        role: &str,
+        status: &str,
+        description: &str,
+        output: &str,
+        payload: &serde_json::Value,
+    ) -> SqlResult<i64> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO agent_artifacts
+             (session_id, agent_id, profile, role, status, description, output, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                session_id,
+                agent_id,
+                profile,
+                role,
+                status,
+                description,
+                output,
+                payload.to_string()
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn recent_agent_artifacts(
+        &self,
+        session_id: &str,
+        limit: i64,
+    ) -> SqlResult<Vec<AgentArtifactRecord>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, agent_id, profile, role, status, description, output, payload, created_at
+             FROM agent_artifacts
+             WHERE session_id = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit], |row| {
+            let payload_text: String = row.get(8)?;
+            Ok(AgentArtifactRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                agent_id: row.get(2)?,
+                profile: row.get(3)?,
+                role: row.get(4)?,
+                status: row.get(5)?,
+                description: row.get(6)?,
+                output: row.get(7)?,
+                payload: serde_json::from_str(&payload_text)
+                    .unwrap_or_else(|_| serde_json::json!({})),
+                created_at: row.get(9)?,
+            })
+        })?;
+        rows.collect()
+    }
 }
 
 /// 数据库统计
@@ -775,6 +860,32 @@ mod tests {
         assert_eq!(events[0].kind, "turn_outcome");
         assert_eq!(events[0].confidence, 1.0);
         assert_eq!(events[0].payload["intent"], "CodeChange");
+    }
+
+    #[test]
+    fn test_agent_artifact_persistence() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+
+        let id = store
+            .add_agent_artifact(
+                "s1",
+                "agent_123",
+                Some("verifier"),
+                "Verifier",
+                "completed",
+                "check the patch",
+                "looks good",
+                &serde_json::json!({"confidence": 0.9}),
+            )
+            .unwrap();
+        assert!(id > 0);
+
+        let artifacts = store.recent_agent_artifacts("s1", 10).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].agent_id, "agent_123");
+        assert_eq!(artifacts[0].profile.as_deref(), Some("verifier"));
+        assert_eq!(artifacts[0].payload["confidence"], 0.9);
     }
 
     #[test]
