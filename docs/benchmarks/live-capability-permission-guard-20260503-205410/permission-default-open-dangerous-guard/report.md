@@ -5,7 +5,7 @@
 - Worktree: `target/live-evals/capability-permission-guard-20260503-205410/permission-default-open-dangerous-guard/worktree`
 - Isolated env: `/Users/georgexu/Desktop/rust-agent/target/live-evals/capability-permission-guard-20260503-205410/permission-default-open-dangerous-guard/env`
 - Test status: `ok`
-- Generated: `2026-05-03 20:58:08 +0800`
+- Generated: `2026-05-03 21:09:19 +0800`
 
 ## Git Status
 
@@ -32,7 +32,7 @@ $ cargo test -q tools::bash_tool -- --test-threads=1
 
 running 15 tests
 ...............
-test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1042 filtered out; finished in 0.01s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1042 filtered out; finished in 0.02s
 
 [exit status: 0]
 
@@ -52,7 +52,7 @@ running 1057 tests
 ....................................................................................... 957/1057
 ....................................................................................... 1044/1057
 .............
-test result: ok. 1057 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.26s
+test result: ok. 1057 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.27s
 
 [exit status: 0]
 
@@ -97,8 +97,9 @@ closeout_status: not_verified
 trace_event_types: tool.done,memory.sync,api.start,workflow.fallback,api.done,tool.start,tool.done,workflow.fallback,workflow.fallback,workflow.fallback,closeout,assistant
 stale_edit_warnings: 0
 warning: no_code_diff
+warning: current_head_no_fixture_already_satisfied
 warning: closeout_not_successful
-failure_owner: agent_flow
+failure_owner: eval_harness
 ```
 
 Specialty signals:
@@ -145,6 +146,7 @@ note: guided debugging is expected only after a blocker or failed validation
 - notes: Required commands passed on the unchanged baseline and no code diff was
   produced. Manual review shows the branch already has AutoAll/default-open
   tests for low-risk operations versus dangerous bash, external network, unsafe
-  writes, git push, and memory_clear. The quality gate correctly rejected the
-  no-diff code-change run, but this case is stale as an editing-capability
-  signal until its fixture or acceptance target is refreshed.
+  writes, git push, and memory_clear. After runner recollect, this case is now
+  attributed to `eval_harness` with
+  `current_head_no_fixture_already_satisfied`, which better reflects stale eval
+  baseline risk than a pure agent-flow coding failure.

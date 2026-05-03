@@ -1023,6 +1023,15 @@ print(f"stale_edit_warnings: {stale_edit_warnings}")
 failures = []
 warnings = []
 required_commands = ((sample.get("acceptance") or {}).get("required_commands") or [])
+repo = sample.get("repo") or {}
+base_ref = str(repo.get("base_ref", "HEAD")).strip()
+prepare_commands = repo.get("prepare_commands") or []
+task_type = str(sample.get("type", "")).strip()
+current_head_without_fixture = (
+    task_type in {"bug_fix", "feature", "refactor"}
+    and base_ref in {"", "HEAD", "head"}
+    and not prepare_commands
+)
 if not output.strip():
     print("warning: empty_agent_output")
     failures.append("empty_agent_output")
@@ -1032,6 +1041,9 @@ if tool_done and "Closeout:" not in output:
 if not diff.strip():
     print("warning: no_code_diff")
     warnings.append("no_code_diff")
+    if current_head_without_fixture and test_status == "ok":
+        print("warning: current_head_no_fixture_already_satisfied")
+        warnings.append("current_head_no_fixture_already_satisfied")
 if tool_errors:
     print("warning: tool_errors_seen")
     warnings.append("tool_errors_seen")
@@ -1063,8 +1075,6 @@ if verification_events and not verification_passed:
     print("warning: verification_failed")
     failures.append("verification_failed")
 
-base_ref = str((sample.get("repo") or {}).get("base_ref", "HEAD")).strip()
-task_type = str(sample.get("type", "")).strip()
 diff_required = task_type in {"bug_fix", "feature", "refactor"} and base_ref not in {"", "HEAD", "head"}
 if diff_required and not diff.strip():
     failures.append("expected_code_diff_missing")
@@ -1083,6 +1093,12 @@ def infer_failure_owner():
         return "agent_flow"
     if "tool_run_without_closeout" in failures:
         return "agent_flow"
+    if (
+        "no_code_diff" in warnings
+        and "current_head_no_fixture_already_satisfied" in warnings
+        and test_status == "ok"
+    ):
+        return "eval_harness"
     if "closeout_not_successful" in failures and test_status == "ok":
         return "agent_flow"
     if (

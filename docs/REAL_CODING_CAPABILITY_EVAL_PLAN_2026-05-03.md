@@ -295,7 +295,7 @@ For each run, record:
 - Report path:
   `docs/benchmarks/live-capability-permission-guard-20260503-205410/permission-default-open-dangerous-guard/report.md`
 - Status: failed/stale.
-- Failure owner: agent_flow / stale_eval.
+- Failure owner: eval_harness / stale_eval after report recollect.
 - Required commands: ok on unchanged baseline.
 - Files changed: none.
 - Specialty signals: 4/6 active.
@@ -313,6 +313,27 @@ For each run, record:
   default-open safety tests for safe operations versus dangerous bash, external
   network, unsafe writes, git push, and memory_clear. Refresh this case before
   using it again as an editing-capability signal.
+
+### Top-level capability review
+
+- Review doc:
+  `docs/TOP_LEVEL_AGENT_CAPABILITY_REVIEW_2026-05-03.md`
+- Core diagnosis: current small real coding tasks pass, while two recent
+  specialty failures are stale/current-HEAD baselines rather than clean
+  editing-capability failures.
+- Runner change: `scripts/run_live_eval.sh` now reports
+  `current_head_no_fixture_already_satisfied` and attributes no-diff,
+  required-commands-passing current-HEAD cases without `prepare_commands` to
+  `eval_harness`.
+- Validation:
+  - `bash -n scripts/run_live_eval.sh`
+  - `scripts/run_live_eval.sh --list`
+  - recollected
+    `permission-default-open-dangerous-guard`, which now reports
+    `failure_owner=eval_harness` while keeping status failed because closeout
+    was `not_verified`.
+- Boundary decision: keep patch synthesis disabled by default and fix stale eval
+  design instead of forcing hidden runtime edits.
 
 ## Stop Conditions
 
