@@ -82,6 +82,19 @@ Latest live smoke result:
 - [x] Update this plan with completed checks.
 - [x] Commit the script and docs.
 
+## Replay Matrix Expansion
+
+The first matrix reached 20 deterministic scenarios. The next low-waste step is
+to expand toward the 20-30 scenario target from the Claude gap matrix without
+adding live LLM/API cost.
+
+- [x] Add pytest validation success coverage.
+- [x] Add acceptance-review rejection coverage after passing validation.
+- [x] Add blocked closeout coverage when validation cannot be completed.
+- [x] Add permission-denied fallback coverage for read-only diagnosis.
+- [x] Add memory-conflict-before-planning coverage.
+- [x] Raise the bundled replay matrix floor from 20 to 25 scenarios.
+
 ## Recommended Daily Usage
 
 Small code change:

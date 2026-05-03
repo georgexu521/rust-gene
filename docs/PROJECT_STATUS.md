@@ -73,7 +73,7 @@ verification_passed=true stage_validation_passed=true closeout_status=passed
   placeholder, usable, and contextual permission actions plus approval-panel
   smoke tests for bash and file-write review flows, statusline active-tool
   state, tool-output viewer controls, and diff viewer output/empty states.
-- Evalsets include a 20-scenario deterministic coding replay matrix, JSON
+- Evalsets include a 25-scenario deterministic coding replay matrix, JSON
   report output, and `/eval record <name|all>` persisted report files for
   pass/fail trend collection; `/eval trend [limit]` summarizes recent persisted
   reports, deltas against the previous run, and optional external baseline

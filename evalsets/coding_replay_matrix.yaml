@@ -254,3 +254,90 @@ scenarios:
     expect:
       tool_sequence: ["file_edit", "git", "bash"]
       verification_passed: true
+
+  - id: pytest-validation-pass
+    prompt: "Python 后端改动后运行 pytest 验证"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited app/service.py"
+        - tool: bash
+          output: "pytest passed"
+      verification_passed: true
+      changed_files: ["app/service.py"]
+      acceptance_review_accepted: true
+    expect:
+      tool_sequence: ["file_edit", "bash"]
+      verification_passed: true
+      repair_required: false
+      trace_events: ["verify.done", "reflection.pass", "acceptance.review"]
+
+  - id: acceptance-rejects-partial-fix
+    prompt: "修改后测试过了但验收发现需求只完成一半"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited src/workflow.rs"
+        - tool: bash
+          output: "cargo test passed"
+      verification_passed: true
+      changed_files: ["src/workflow.rs"]
+      acceptance_review_accepted: false
+    expect:
+      tool_sequence: ["file_edit", "bash"]
+      verification_passed: true
+      repair_required: true
+      trace_events: ["verify.done", "acceptance.review"]
+
+  - id: blocked-closeout-after-no-validation
+    prompt: "代码已改但验证命令没有成功运行，不要宣布完成"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited src/lib.rs"
+        - tool: bash
+          success: false
+          output: "cargo test command unavailable"
+      verification_passed: false
+      changed_files: ["src/lib.rs"]
+      failed_commands: ["cargo test"]
+      acceptance_review_accepted: false
+    expect:
+      failed_tool: bash
+      tool_sequence: ["file_edit", "bash"]
+      verification_passed: false
+      reflection_status: Blocked
+      repair_required: true
+      trace_events: ["verify.done", "reflection.pass", "acceptance.review"]
+
+  - id: permission-denied-fallback-readonly
+    prompt: "写文件权限被拒绝后改为给出只读诊断和补丁建议"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          success: false
+          output: "Permission denied: file_edit"
+        - tool: file_read
+          output: "read current file for readonly diagnosis"
+        - tool: grep
+          output: "found relevant symbol"
+    expect:
+      failed_tool: file_edit
+      tool_sequence: ["file_edit", "file_read", "grep"]
+      repair_required: false
+      trace_events: ["tool.start", "tool.done"]
+
+  - id: memory-conflict-before-planning
+    prompt: "根据项目记忆继续做，但先处理互相冲突的旧设计记录"
+    replay:
+      workflow_judgment: true
+      tool_calls:
+        - tool: memory_load
+          output: "retrieved conflicting project memories"
+        - tool: project_list
+          output: "src/engine/conversation_loop/mod.rs"
+    expect:
+      retrieval: memory
+      recommended_tools: ["memory_load"]
+      tool_sequence: ["memory_load", "project_list"]
+      trace_events: ["workflow.judgment", "workflow.plan", "tool.done"]

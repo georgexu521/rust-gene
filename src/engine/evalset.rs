@@ -1112,8 +1112,8 @@ scenarios:
         }
         let set = load_evalset(path).unwrap();
         assert!(
-            set.scenarios.len() >= 20,
-            "coding replay matrix should cover at least 20 scenarios"
+            set.scenarios.len() >= 25,
+            "coding replay matrix should cover at least 25 scenarios"
         );
         let report = EvalRunner::new().run_set(&set);
         assert!(report.ok(), "{}", report.summary());

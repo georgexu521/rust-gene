@@ -193,7 +193,7 @@ Acceptance:
 
 Status: initial matrix landed.
 
-- `evalsets/coding_replay_matrix.yaml` now covers 20 deterministic coding
+- `evalsets/coding_replay_matrix.yaml` now covers 25 deterministic coding
   replay scenarios.
 - `/eval json <name|all>` emits machine-readable pass/fail reports, and
   `/eval record <name|all>` writes timestamped JSON reports under
@@ -212,6 +212,10 @@ Status: initial matrix landed.
   `live-eval-20260503-152320 code-change-verification-repair-loop`, status
   `ok`, with `verification_passed=true`, `stage_validation_passed=true`, and
   `closeout_status=passed`.
+- Next deterministic expansion added coverage for pytest validation,
+  acceptance rejection after passing validation, blocked closeout when
+  validation is unavailable, permission-denied read-only fallback, and
+  memory-conflict planning.
 
 ### P2: Product And Ecosystem Completion
 
