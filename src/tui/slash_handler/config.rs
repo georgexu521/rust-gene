@@ -2209,7 +2209,23 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Eval run failed: {}", e),
             }
         }
-        _ => "Usage: /eval [list|run <name|all>|json <name|all>|record <name|all>]".to_string(),
+        "trend" => {
+            let limit = parts
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(10)
+                .clamp(1, 50);
+            let report_dir = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("target")
+                .join("eval-reports");
+            match crate::engine::evalset::load_eval_report_bundles(&report_dir, limit) {
+                Ok(entries) => crate::engine::evalset::format_eval_trend(&entries),
+                Err(e) => format!("Eval trend failed: {}", e),
+            }
+        }
+        _ => "Usage: /eval [list|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
+            .to_string(),
     }
 }
 

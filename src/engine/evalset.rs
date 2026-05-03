@@ -541,6 +541,89 @@ pub fn write_reports_json(
     Ok(path)
 }
 
+pub fn load_eval_report_bundles(
+    dir: impl AsRef<Path>,
+    limit: usize,
+) -> Result<Vec<(PathBuf, EvalReportBundle)>> {
+    let dir = dir.as_ref();
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = fs::read_dir(dir)
+        .with_context(|| format!("failed to read eval report dir {}", dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension().and_then(|ext| ext.to_str()) == Some("json")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("eval-"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort_by(|a, b| {
+        a.file_name()
+            .and_then(|name| name.to_str())
+            .cmp(&b.file_name().and_then(|name| name.to_str()))
+    });
+    paths.reverse();
+
+    let mut bundles = Vec::new();
+    for path in paths.into_iter().take(limit.max(1)) {
+        let json = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read eval report {}", path.display()))?;
+        let bundle: EvalReportBundle = serde_json::from_str(&json)
+            .with_context(|| format!("failed to parse eval report {}", path.display()))?;
+        bundles.push((path, bundle));
+    }
+    Ok(bundles)
+}
+
+pub fn format_eval_trend(entries: &[(PathBuf, EvalReportBundle)]) -> String {
+    if entries.is_empty() {
+        return "No persisted eval reports found. Run /eval record <name|all> first.".to_string();
+    }
+
+    let latest = &entries[0];
+    let latest_name = latest
+        .0
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
+    let mut out = format!(
+        "Eval Trend\nReports: {}\nLatest: {}  generated={}  scenarios={}  passed={}  failed={}",
+        entries.len(),
+        latest_name,
+        latest.1.generated_at,
+        latest.1.scenarios,
+        latest.1.passed,
+        latest.1.failed
+    );
+
+    if let Some(previous) = entries.get(1) {
+        let pass_delta = latest.1.passed as isize - previous.1.passed as isize;
+        let fail_delta = latest.1.failed as isize - previous.1.failed as isize;
+        let scenario_delta = latest.1.scenarios as isize - previous.1.scenarios as isize;
+        out.push_str(&format!(
+            "\nDelta vs previous: scenarios={:+}  passed={:+}  failed={:+}",
+            scenario_delta, pass_delta, fail_delta
+        ));
+    }
+
+    out.push_str("\n\nRecent reports:");
+    for (path, bundle) in entries {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown");
+        out.push_str(&format!(
+            "\n- {}  generated={}  sets={}  scenarios={}  passed={}  failed={}",
+            name, bundle.generated_at, bundle.sets, bundle.scenarios, bundle.passed, bundle.failed
+        ));
+    }
+    out
+}
+
 fn check_eq<T>(
     failures: &mut Vec<EvalFailure>,
     scenario_id: &str,
@@ -1065,5 +1148,79 @@ scenarios:
         assert_eq!(value["sets"], 1);
         assert_eq!(value["scenarios"], 1);
         assert_eq!(value["failed"], 0);
+    }
+
+    #[test]
+    fn load_eval_report_bundles_returns_latest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = EvalReportBundle {
+            generated_at: "2026-05-03T01:00:00Z".to_string(),
+            sets: 1,
+            scenarios: 2,
+            passed: 1,
+            failed: 1,
+            reports: Vec::new(),
+        };
+        let new = EvalReportBundle {
+            generated_at: "2026-05-03T02:00:00Z".to_string(),
+            sets: 1,
+            scenarios: 2,
+            passed: 2,
+            failed: 0,
+            reports: Vec::new(),
+        };
+        fs::write(
+            dir.path().join("eval-20260503T010000Z-all.json"),
+            serde_json::to_string_pretty(&old).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("eval-20260503T020000Z-all.json"),
+            serde_json::to_string_pretty(&new).unwrap(),
+        )
+        .unwrap();
+        fs::write(dir.path().join("notes.json"), "{}").unwrap();
+
+        let entries = load_eval_report_bundles(dir.path(), 10).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].1.generated_at, "2026-05-03T02:00:00Z");
+        assert_eq!(entries[1].1.generated_at, "2026-05-03T01:00:00Z");
+    }
+
+    #[test]
+    fn format_eval_trend_shows_latest_and_delta() {
+        let entries = vec![
+            (
+                PathBuf::from("eval-20260503T020000Z-all.json"),
+                EvalReportBundle {
+                    generated_at: "2026-05-03T02:00:00Z".to_string(),
+                    sets: 1,
+                    scenarios: 3,
+                    passed: 3,
+                    failed: 0,
+                    reports: Vec::new(),
+                },
+            ),
+            (
+                PathBuf::from("eval-20260503T010000Z-all.json"),
+                EvalReportBundle {
+                    generated_at: "2026-05-03T01:00:00Z".to_string(),
+                    sets: 1,
+                    scenarios: 2,
+                    passed: 1,
+                    failed: 1,
+                    reports: Vec::new(),
+                },
+            ),
+        ];
+
+        let trend = format_eval_trend(&entries);
+
+        assert!(trend.contains("Eval Trend"));
+        assert!(trend.contains("Latest: eval-20260503T020000Z-all.json"));
+        assert!(trend.contains("scenarios=+1"));
+        assert!(trend.contains("passed=+2"));
+        assert!(trend.contains("failed=-1"));
     }
 }

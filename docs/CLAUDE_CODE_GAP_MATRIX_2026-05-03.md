@@ -193,7 +193,9 @@ Status: initial matrix landed.
 - `/eval json <name|all>` emits machine-readable pass/fail reports, and
   `/eval record <name|all>` writes timestamped JSON reports under
   `target/eval-reports/` for trend collection.
-- Current full local baseline after this batch: `1037 passed; 0 failed`.
+- `/eval trend [limit]` summarizes recent persisted reports and shows pass/fail
+  deltas against the previous run.
+- Current full local baseline after this batch: `1039 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 
