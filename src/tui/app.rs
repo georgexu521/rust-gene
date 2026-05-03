@@ -3287,6 +3287,7 @@ mod tests {
     };
     use async_openai::types::ChatCompletionResponseStream;
     use async_trait::async_trait;
+    use ratatui::{backend::TestBackend, Terminal};
 
     struct MockProvider;
 
@@ -3320,6 +3321,23 @@ mod tests {
         fn default_model(&self) -> &str {
             "mock-model"
         }
+    }
+
+    fn render_command_palette_text(app: &TuiApp) -> String {
+        let backend = TestBackend::new(160, 70);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                crate::tui::screens::main_screen::render_command_palette(frame, app, frame.area());
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
     }
 
     #[test]
@@ -3655,6 +3673,62 @@ mod tests {
         assert!(commands.iter().any(|command| command == "/search"));
         assert!(commands.iter().any(|command| command == "/session"));
         assert!(commands.iter().any(|command| command == "/export"));
+    }
+
+    #[test]
+    fn test_command_palette_render_marks_placeholder_commands() {
+        let mut app = TuiApp::new();
+        app.open_command_palette();
+        for ch in "desktop".chars() {
+            app.command_palette_push(ch);
+        }
+
+        let rendered = render_command_palette_text(&app);
+
+        assert!(rendered.contains("Command Palette"));
+        assert!(rendered.contains("/desktop"));
+        assert!(rendered.contains("[placeholder]"));
+        assert!(rendered.contains("Maturity:"));
+        assert!(rendered.contains("placeholder"));
+    }
+
+    #[test]
+    fn test_command_palette_render_marks_usable_commands() {
+        let mut app = TuiApp::new();
+        app.open_command_palette();
+        for ch in "agents".chars() {
+            app.command_palette_push(ch);
+        }
+
+        let rendered = render_command_palette_text(&app);
+
+        assert!(rendered.contains("/agents"));
+        assert!(rendered.contains("[usable]"));
+        assert!(rendered.contains("Maturity:"));
+        assert!(rendered.contains("usable"));
+    }
+
+    #[test]
+    fn test_command_palette_render_prioritizes_contextual_permission_actions() {
+        let mut app = TuiApp::new();
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tool_1".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({ "command": "ls" }),
+                },
+                prompt: "Allow?".to_string(),
+                review: None,
+            });
+        app.open_command_palette();
+
+        let rendered = render_command_palette_text(&app);
+
+        assert!(rendered.contains("Context"));
+        assert!(rendered.contains("/reject"));
+        assert!(rendered.contains("/permissions"));
+        assert!(rendered.contains("Maturity:"));
     }
 
     #[test]

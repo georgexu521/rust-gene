@@ -22,7 +22,7 @@ Latest verified baseline observed after the 2026-05-03 Claude-gap implementation
 batch:
 
 ```text
-1032 passed; 0 failed
+1035 passed; 0 failed
 ```
 
 Verified with:
@@ -56,7 +56,8 @@ cargo test --quiet -- --test-threads=1
   trace events, durable result artifacts, and manager tests for timeout, failure,
   cancellation, and resumable results.
 - Slash commands are labeled as `production`, `usable`, or `placeholder` in help
-  and command-palette surfaces.
+  and command-palette surfaces, with rendered command-palette smoke tests for
+  placeholder, usable, and contextual permission actions.
 - Evalsets include a 20-scenario deterministic coding replay matrix, JSON
   report output, and `/eval record <name|all>` persisted report files for
   pass/fail trend collection.
@@ -123,8 +124,8 @@ not missing foundations:
    against the replay matrix and live eval tasks.
 2. Deepen remaining high-use tool semantics for git, validation closeout, and
    long-running command progress.
-3. Expand command-level smoke tests beyond registry/help coverage into rendered
-   command-palette and approval-panel behavior.
+3. Expand rendered command-level smoke tests from command-palette coverage into
+   approval-panel behavior.
 4. Compare persisted eval trend history across baseline runs.
 5. Continue CLI polish based on trace-backed state: command palette, statusline,
    approval panels, tool expansion, and settings visibility.

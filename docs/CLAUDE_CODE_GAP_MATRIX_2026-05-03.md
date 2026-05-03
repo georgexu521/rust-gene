@@ -173,7 +173,8 @@ Deliverables:
   context visualization, and tool expansion views.
 - [x] Categorize all slash commands as `production`, `usable`, or `placeholder`.
 - [x] Hide or clearly label placeholders in help/model-visible surfaces.
-- [ ] Add broader rendered command-level smoke tests.
+- [x] Add rendered command-palette smoke tests for placeholder labels, usable
+  labels, and contextual permission actions.
 
 Acceptance:
 
@@ -190,7 +191,7 @@ Status: initial matrix landed.
 - `/eval json <name|all>` emits machine-readable pass/fail reports, and
   `/eval record <name|all>` writes timestamped JSON reports under
   `target/eval-reports/` for trend collection.
-- Current full local baseline after this batch: `1032 passed; 0 failed`.
+- Current full local baseline after this batch: `1035 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 
