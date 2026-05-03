@@ -154,6 +154,39 @@ pub async fn handle_agents(app: &TuiApp) -> String {
                 .join(", ")
         )
     };
+    let recent_artifacts = app
+        .session_manager
+        .recent_agent_artifacts(8)
+        .unwrap_or_default();
+    let artifact_lines = if recent_artifacts.is_empty() {
+        vec!["Recent artifacts: none for current session".to_string()]
+    } else {
+        let mut lines = vec![format!("Recent artifacts ({}):", recent_artifacts.len())];
+        for artifact in recent_artifacts {
+            let preview = artifact
+                .output
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(96)
+                .collect::<String>();
+            lines.push(format!(
+                "- {} [{}] profile={} role={} {}",
+                artifact.agent_id,
+                artifact.status,
+                artifact.profile.as_deref().unwrap_or("none"),
+                artifact.role,
+                if preview.is_empty() {
+                    artifact.description
+                } else {
+                    preview
+                }
+            ));
+        }
+        lines
+    };
+
     if let Some(manager) = app
         .streaming_engine
         .as_ref()
@@ -161,7 +194,10 @@ pub async fn handle_agents(app: &TuiApp) -> String {
     {
         let agents = manager.list_agents().await;
         if agents.is_empty() {
-            format!("No agents found.\n{}", profile_line)
+            let mut lines = vec!["No running agents found.".to_string(), profile_line];
+            lines.push(String::new());
+            lines.extend(artifact_lines);
+            lines.join("\n")
         } else {
             let mut lines = vec![format!("Agents ({}):", agents.len())];
             for handle in agents.iter().take(30) {
@@ -176,13 +212,18 @@ pub async fn handle_agents(app: &TuiApp) -> String {
             }
             lines.push(String::new());
             lines.push(profile_line);
+            lines.push(String::new());
+            lines.extend(artifact_lines);
             lines.join("\n")
         }
     } else {
-        format!(
-            "Agent manager unavailable (no engine connected).\n{}",
-            profile_line
-        )
+        let mut lines = vec![
+            "Agent manager unavailable (no engine connected).".to_string(),
+            profile_line,
+            String::new(),
+        ];
+        lines.extend(artifact_lines);
+        lines.join("\n")
     }
 }
 pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
