@@ -1,6 +1,7 @@
 id: memory-save-duplicate-demotion
 title: duplicate memory candidates should not pollute long-term memory
 type: bug_fix
+eval_intent: audit_or_regression_check
 complexity: medium
 risk: medium
 

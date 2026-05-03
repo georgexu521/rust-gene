@@ -1,6 +1,7 @@
 id: live-eval-dashboard-summary
 title: live eval reports should summarize pass rates and failure modes
 type: feature
+eval_intent: seeded_code_change
 complexity: medium
 risk: medium
 

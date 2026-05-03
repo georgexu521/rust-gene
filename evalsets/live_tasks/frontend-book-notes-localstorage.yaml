@@ -1,6 +1,7 @@
 id: frontend-book-notes-localstorage
 title: build a small book notes frontend with search, tags, and persistence
 type: feature
+eval_intent: seeded_code_change
 complexity: medium
 risk: medium
 

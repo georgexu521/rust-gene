@@ -1,6 +1,7 @@
 id: memory-save-sensitive-hard-block
 title: explicit memory saves must not persist sensitive data
 type: bug_fix
+eval_intent: audit_or_regression_check
 complexity: medium
 risk: high
 

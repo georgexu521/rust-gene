@@ -1,6 +1,7 @@
 id: code-change-verification-repair-loop
 title: failed verification should trigger repair before closeout
 type: feature
+eval_intent: seeded_code_change
 complexity: high
 risk: high
 

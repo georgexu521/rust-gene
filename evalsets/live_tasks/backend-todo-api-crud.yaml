@@ -1,6 +1,7 @@
 id: backend-todo-api-crud
 title: implement a tiny stdlib todo API backend
 type: feature
+eval_intent: seeded_code_change
 complexity: medium
 risk: medium
 

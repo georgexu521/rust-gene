@@ -1,6 +1,7 @@
 id: skill-promotion-gate
 title: skill apply should require promotion evidence
 type: bug_fix
+eval_intent: seeded_code_change
 complexity: medium
 risk: medium
 

@@ -1,6 +1,7 @@
 id: cli-scrollback-polish
 title: interactive CLI should feel smooth and readable
 type: ux
+eval_intent: seeded_code_change
 complexity: medium
 risk: medium
 

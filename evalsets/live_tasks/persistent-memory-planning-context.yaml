@@ -1,6 +1,7 @@
 id: persistent-memory-planning-context
 title: persistent memory should affect workflow planning
 type: bug_fix
+eval_intent: seeded_code_change
 complexity: medium
 risk: high
 

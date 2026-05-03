@@ -325,6 +325,10 @@ For each run, record:
   `current_head_no_fixture_already_satisfied` and attributes no-diff,
   required-commands-passing current-HEAD cases without `prepare_commands` to
   `eval_harness`.
+- Eval taxonomy change: every live task now declares `eval_intent`.
+  `seeded_code_change` tasks require a diff; `audit_or_regression_check` tasks
+  can legitimately close out with no diff if they prove current behavior and
+  required commands pass.
 - Validation:
   - `bash -n scripts/run_live_eval.sh`
   - `scripts/run_live_eval.sh --list`

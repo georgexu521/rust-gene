@@ -1,6 +1,7 @@
 id: resume-session-picker
 title: interactive CLI should support Claude-style resume
 type: feature
+eval_intent: seeded_code_change
 complexity: medium
 risk: medium
 

@@ -151,6 +151,7 @@ lines = [
     "",
     f"- Task id: `{sample.get('id', 'unknown')}`",
     f"- Type: `{sample.get('type', 'unknown')}`",
+    f"- Eval intent: `{sample.get('eval_intent', 'seeded_code_change')}`",
     f"- Risk: `{sample.get('risk', 'unknown')}`",
     f"- Complexity: `{sample.get('complexity', 'unknown')}`",
     "",
@@ -188,7 +189,15 @@ lines.append("")
 lines.extend([
     "## Closeout requirements",
     "",
-    "- This is a real code-change evaluation in an isolated worktree. Do not stop at investigation.",
+])
+intent = str(sample.get("eval_intent", "seeded_code_change")).strip()
+if intent == "audit_or_regression_check":
+    lines.append("- This is an audit/regression evaluation. If the requested behavior is already present, prove it with direct evidence and required commands instead of forcing an arbitrary edit.")
+elif intent == "stale_or_already_satisfied":
+    lines.append("- This case may already be satisfied on the current baseline. Do not force an arbitrary edit; prove the current state and call out stale-baseline risk clearly.")
+else:
+    lines.append("- This is a real code-change evaluation in an isolated worktree. Do not stop at investigation.")
+lines.extend([
     "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, either make a focused edit or clearly state the concrete blocker.",
     "- If the code is already fixed, prove it with the required commands and still provide a Closeout.",
     "- Summarize files changed and why.",
@@ -308,13 +317,14 @@ find_task_file() {
 
 list_tasks() {
   need_yaml
-  printf '%-36s %-12s %-10s %s\n' "id" "type" "risk" "title"
-  printf '%-36s %-12s %-10s %s\n' "--" "----" "----" "-----"
+  printf '%-36s %-12s %-26s %-10s %s\n' "id" "type" "eval_intent" "risk" "title"
+  printf '%-36s %-12s %-26s %-10s %s\n' "--" "----" "-----------" "----" "-----"
   local file
   for file in $(task_files); do
-    printf '%-36s %-12s %-10s %s\n' \
+    printf '%-36s %-12s %-26s %-10s %s\n' \
       "$(yaml_get "$file" id)" \
       "$(yaml_get "$file" type)" \
+      "$(yaml_get "$file" eval_intent seeded_code_change)" \
       "$(yaml_get "$file" risk)" \
       "$(yaml_get "$file" title)"
   done
@@ -1027,11 +1037,17 @@ repo = sample.get("repo") or {}
 base_ref = str(repo.get("base_ref", "HEAD")).strip()
 prepare_commands = repo.get("prepare_commands") or []
 task_type = str(sample.get("type", "")).strip()
+eval_intent = str(sample.get("eval_intent", "seeded_code_change")).strip() or "seeded_code_change"
+code_change_types = {"bug_fix", "feature", "refactor", "ux"}
 current_head_without_fixture = (
-    task_type in {"bug_fix", "feature", "refactor"}
+    task_type in code_change_types
     and base_ref in {"", "HEAD", "head"}
     and not prepare_commands
 )
+seeded_code_change = eval_intent == "seeded_code_change"
+audit_or_regression_check = eval_intent == "audit_or_regression_check"
+stale_or_already_satisfied = eval_intent == "stale_or_already_satisfied"
+print(f"eval_intent: {eval_intent}")
 if not output.strip():
     print("warning: empty_agent_output")
     failures.append("empty_agent_output")
@@ -1040,8 +1056,14 @@ if tool_done and "Closeout:" not in output:
     failures.append("tool_run_without_closeout")
 if not diff.strip():
     print("warning: no_code_diff")
-    warnings.append("no_code_diff")
-    if current_head_without_fixture and test_status == "ok":
+    if audit_or_regression_check:
+        warnings.append("audit_no_code_diff")
+    else:
+        warnings.append("no_code_diff")
+    if (
+        (stale_or_already_satisfied or (current_head_without_fixture and not seeded_code_change))
+        and test_status == "ok"
+    ):
         print("warning: current_head_no_fixture_already_satisfied")
         warnings.append("current_head_no_fixture_already_satisfied")
 if tool_errors:
@@ -1075,7 +1097,7 @@ if verification_events and not verification_passed:
     print("warning: verification_failed")
     failures.append("verification_failed")
 
-diff_required = task_type in {"bug_fix", "feature", "refactor"} and base_ref not in {"", "HEAD", "head"}
+diff_required = seeded_code_change and task_type in code_change_types
 if diff_required and not diff.strip():
     failures.append("expected_code_diff_missing")
 

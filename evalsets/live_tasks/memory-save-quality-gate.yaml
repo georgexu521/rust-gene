@@ -1,6 +1,7 @@
 id: memory-save-quality-gate
 title: memory_save should respect quality gates
 type: bug_fix
+eval_intent: seeded_code_change
 complexity: medium
 risk: high
 

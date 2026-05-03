@@ -149,3 +149,24 @@ Runtime should avoid:
 - Seeded tasks still require code diff and validation.
 - Patch synthesis remains disabled by default.
 - The evaluation plan clearly separates coding ability from benchmark freshness.
+
+## Implementation Update
+
+The live eval matrix now uses an explicit `eval_intent` field:
+
+- `seeded_code_change`: a real code-change task where a diff is required.
+- `audit_or_regression_check`: an audit/regression task where no diff can be
+  acceptable if the agent proves the current behavior and required commands pass.
+- `stale_or_already_satisfied`: reserved for historical cases that should not
+  count as fresh coding failures until their baseline is refreshed.
+
+Current classification:
+
+- `seeded_code_change`: backend/frontend fixture tasks, verification repair,
+  memory quality gate, persistent memory planning, skill promotion, resume
+  picker, CLI scrollback, and dashboard summary.
+- `audit_or_regression_check`: memory conflict precision, duplicate memory
+  demotion, sensitive memory hard block, and default-open permission guard.
+
+The runner now prints `eval_intent`, includes it in generated agent prompts, and
+uses it for no-diff quality decisions instead of relying only on `base_ref`.

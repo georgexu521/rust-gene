@@ -1,6 +1,7 @@
 id: permission-default-open-dangerous-guard
 title: default-open permissions should still guard destructive operations
 type: bug_fix
+eval_intent: audit_or_regression_check
 complexity: medium
 risk: high
 
