@@ -11,6 +11,36 @@ use tracing::info;
 /// Grep 文本搜索工具
 pub struct GrepTool;
 
+fn grep_no_match_recovery(
+    pattern: &str,
+    search_path: &std::path::Path,
+    include_pattern: Option<&str>,
+    files_searched: usize,
+) -> serde_json::Value {
+    let mut suggestions = vec![
+        "Broaden the search path or search from the project root.".to_string(),
+        "Try a simpler substring or escape regex metacharacters if a literal match was intended."
+            .to_string(),
+        "Use project_list search to find likely files, then grep within that narrower path."
+            .to_string(),
+    ];
+    if include_pattern.is_some() {
+        suggestions.push("Remove or relax the include glob and retry.".to_string());
+    }
+    if pattern.chars().any(|ch| ".+*?[](){}|^\\".contains(ch)) {
+        suggestions
+            .push("If this was intended as literal text, retry with regex escaping.".to_string());
+    }
+    json!({
+        "reason": "no_matches",
+        "pattern": pattern,
+        "path": search_path.display().to_string(),
+        "include": include_pattern,
+        "files_searched": files_searched,
+        "suggestions": suggestions,
+    })
+}
+
 #[async_trait]
 impl Tool for GrepTool {
     fn name(&self) -> &str {
@@ -72,6 +102,7 @@ impl Tool for GrepTool {
 
         // 收集要搜索的文件
         let files_to_search = collect_files(&search_path, include_pattern).await;
+        let files_searched = files_to_search.len();
 
         // 执行搜索
         let mut matches = Vec::new();
@@ -112,7 +143,32 @@ impl Tool for GrepTool {
 
         // 格式化输出
         if matches.is_empty() {
-            return ToolResult::success("No matches found.");
+            let recovery =
+                grep_no_match_recovery(pattern, &search_path, include_pattern, files_searched);
+            let suggestions = recovery["suggestions"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str())
+                        .map(|item| format!("- {}", item))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            return ToolResult::success_with_data(
+                format!(
+                    "No matches found for '{}'.\n\nSearch recovery suggestions:\n{}",
+                    pattern, suggestions
+                ),
+                json!({
+                    "pattern": pattern,
+                    "total_matches": 0,
+                    "truncated": false,
+                    "matches": [],
+                    "search_recovery": recovery,
+                }),
+            );
         }
 
         let mut output_lines = Vec::new();
@@ -148,6 +204,7 @@ impl Tool for GrepTool {
                 "pattern": pattern,
                 "total_matches": match_count,
                 "truncated": match_count >= MAX_MATCHES,
+                "files_searched": files_searched,
                 "matches": matches
             }),
         )
@@ -263,5 +320,34 @@ mod tests {
         let result = tool.execute(params, context).await;
 
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_grep_no_match_includes_recovery_metadata() {
+        let tool = GrepTool;
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("sample.rs");
+        tokio::fs::write(&file_path, "fn present_symbol() {}\n")
+            .await
+            .unwrap();
+        let params = json!({
+            "pattern": "absent_symbol",
+            "path": dir.path(),
+            "include": "*.rs"
+        });
+        let context = ToolContext::new(".", "test-session");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(result.success);
+        assert!(result.content.contains("Search recovery suggestions"));
+        let recovery = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("search_recovery"))
+            .expect("search recovery metadata");
+        assert_eq!(recovery["reason"], "no_matches");
+        assert!(recovery["files_searched"].as_u64().unwrap_or(0) > 0);
+        assert!(recovery["suggestions"].as_array().unwrap().len() >= 3);
     }
 }

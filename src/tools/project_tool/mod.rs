@@ -291,6 +291,43 @@ impl Default for ProjectScanner {
 /// Project List 工具 - 让 agent 查看项目结构
 pub struct ProjectListTool;
 
+fn project_search_recovery(action: &str, query: &str, files_indexed: usize) -> serde_json::Value {
+    let suggestions = match action {
+        "search" => vec![
+            "Use a shorter query such as a filename stem, extension, or directory segment.",
+            "Run action=summary to inspect top-level directories before searching again.",
+            "Try action=list with a small limit to inspect nearby naming conventions.",
+        ],
+        "dir" => vec![
+            "Run action=summary to see top-level directories.",
+            "Use action=search with part of the expected directory or filename.",
+            "Check whether the path should omit a leading ./ or trailing slash.",
+        ],
+        _ => vec!["Run action=summary, then retry with a narrower query."],
+    };
+    json!({
+        "reason": "no_results",
+        "action": action,
+        "query": query,
+        "files_indexed": files_indexed,
+        "suggestions": suggestions,
+    })
+}
+
+fn format_recovery_suggestions(recovery: &serde_json::Value) -> String {
+    recovery["suggestions"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| format!("- {}", item))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
 #[async_trait]
 impl Tool for ProjectListTool {
     fn name(&self) -> &str {
@@ -374,7 +411,20 @@ impl Tool for ProjectListTool {
                 }
                 let results = scanner.search(query, limit);
                 if results.is_empty() {
-                    ToolResult::success(format!("No files matching '{}'", query))
+                    let recovery = project_search_recovery("search", query, scanner.files().len());
+                    ToolResult::success_with_data(
+                        format!(
+                            "No files matching '{}'.\n\nSearch recovery suggestions:\n{}",
+                            query,
+                            format_recovery_suggestions(&recovery)
+                        ),
+                        json!({
+                            "action": "search",
+                            "query": query,
+                            "matches": [],
+                            "search_recovery": recovery,
+                        }),
+                    )
                 } else {
                     let output: Vec<String> = results
                         .iter()
@@ -394,7 +444,20 @@ impl Tool for ProjectListTool {
                 }
                 let results = scanner.files_in_dir(query);
                 if results.is_empty() {
-                    ToolResult::success(format!("No files in directory '{}'", query))
+                    let recovery = project_search_recovery("dir", query, scanner.files().len());
+                    ToolResult::success_with_data(
+                        format!(
+                            "No files in directory '{}'.\n\nSearch recovery suggestions:\n{}",
+                            query,
+                            format_recovery_suggestions(&recovery)
+                        ),
+                        json!({
+                            "action": "dir",
+                            "query": query,
+                            "matches": [],
+                            "search_recovery": recovery,
+                        }),
+                    )
                 } else {
                     let output: Vec<String> =
                         results.iter().take(50).map(|s| s.to_string()).collect();
@@ -497,6 +560,32 @@ mod tests {
 
         let results = scanner.search("xyznonexistent", 10);
         assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_project_search_no_match_includes_recovery_metadata() {
+        let tool = ProjectListTool;
+        let result = tool
+            .execute(
+                json!({
+                    "action": "search",
+                    "query": "xyznonexistent-priority-agent-file",
+                    "limit": 10
+                }),
+                ToolContext::new(".", "test-session"),
+            )
+            .await;
+
+        assert!(result.success);
+        assert!(result.content.contains("Search recovery suggestions"));
+        let recovery = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("search_recovery"))
+            .expect("search recovery metadata");
+        assert_eq!(recovery["reason"], "no_results");
+        assert_eq!(recovery["action"], "search");
+        assert!(recovery["files_indexed"].as_u64().unwrap_or(0) > 0);
     }
 
     #[test]
