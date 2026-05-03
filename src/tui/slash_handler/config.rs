@@ -437,7 +437,7 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
 // ─── Batch 2: hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color
 
 /// /hooks - Show hook configuration status
-pub fn handle_hooks(_app: &TuiApp) -> String {
+pub fn handle_hooks(app: &TuiApp) -> String {
     use std::env;
 
     let pre_hook = env::var("PRIORITY_AGENT_PRE_TOOL_HOOK").ok();
@@ -492,6 +492,60 @@ pub fn handle_hooks(_app: &TuiApp) -> String {
         "  HOOK_FAIL_CLOSED: {}",
         fail_closed.unwrap_or_else(|| "false".to_string())
     ));
+    lines.push(
+        "\nTyped lifecycle events: PromptSubmit, PreToolUse, PostToolUse, PermissionRequest, ValidationStart, ValidationEnd, SubagentStart, SubagentEnd, FileChange, Compact, SessionEnd"
+            .to_string(),
+    );
+
+    if let Some(trace) = latest_trace_for_app(app) {
+        let hook_events: Vec<_> = trace
+            .events
+            .iter()
+            .filter_map(|event| {
+                if let crate::engine::trace::TraceEvent::HookCompleted {
+                    event,
+                    hook_name,
+                    call_id,
+                    tool,
+                    success,
+                    blocked,
+                    duration_ms,
+                    error,
+                    output_preview,
+                } = event
+                {
+                    Some(format!(
+                        "  - {} '{}' tool={} call={} {}{} in {}ms{}",
+                        event,
+                        hook_name,
+                        tool.as_deref().unwrap_or("lifecycle"),
+                        call_id,
+                        if *success { "ok" } else { "failed" },
+                        if *blocked { " blocked" } else { "" },
+                        duration_ms,
+                        error
+                            .as_deref()
+                            .or(output_preview.as_deref())
+                            .map(|detail| format!(
+                                ": {}",
+                                detail.chars().take(120).collect::<String>()
+                            ))
+                            .unwrap_or_default()
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if hook_events.is_empty() {
+            lines.push("\nRecent hook executions: none in latest trace".to_string());
+        } else {
+            lines.push("\nRecent hook executions from latest trace:".to_string());
+            lines.extend(hook_events.into_iter().rev().take(8));
+        }
+    } else {
+        lines.push("\nRecent hook executions: no trace recorded yet".to_string());
+    }
 
     if pre_hook.is_none() && post_hook.is_none() && tool_before.is_empty() && tool_after.is_empty()
     {
