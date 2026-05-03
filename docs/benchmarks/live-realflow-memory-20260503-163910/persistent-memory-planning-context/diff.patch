@@ -1,0 +1,39 @@
+diff --git a/src/engine/conversation_loop/mod.rs b/src/engine/conversation_loop/mod.rs
+index 47ac64e..5ccf39e 100644
+--- a/src/engine/conversation_loop/mod.rs
++++ b/src/engine/conversation_loop/mod.rs
+@@ -1439,7 +1439,33 @@ impl ConversationLoop {
+                 turn_retrieval_context = Some(session_ctx);
+             }
+         }
+-        // Regression fixture: persistent memory prefetch was missing before workflow judgment.
++        // Prefetch memory context and merge into turn_retrieval_context for planning.
++        if let Some(ref mem_mutex) = self.memory_manager {
++            let mut mem = mem_mutex.lock().await;
++            mem.reset_turn();
++            if let Some(memory_ctx) = mem
++                .prefetch_retrieval_context_with_llm_rerank(
++                    &last_user_preview,
++                    self.provider.as_ref(),
++                    &self.model,
++                    route.retrieval,
++                )
++                .await
++            {
++                trace.record(TraceEvent::MemoryPrefetch {
++                    chars: memory_ctx
++                        .items
++                        .iter()
++                        .map(|item| item.content_preview.chars().count())
++                        .sum(),
++                });
++                if let Some(ref mut ctx) = turn_retrieval_context {
++                    ctx.extend(memory_ctx);
++                } else {
++                    turn_retrieval_context = Some(memory_ctx);
++                }
++            }
++        }
+         if let Some(ref ctx) = turn_retrieval_context {
+             trace.record(TraceEvent::RetrievalContextBuilt {
+                 policy: format!("{:?}", ctx.policy),

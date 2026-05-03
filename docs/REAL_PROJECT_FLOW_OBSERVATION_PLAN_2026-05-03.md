@@ -69,6 +69,54 @@ Observed specialty signals:
 - `guided_debugging_active=false`: expected for this successful repair path;
   validate it with a deliberately failing/blocking live task in the next round.
 
+## Fresh Agent Run Observation
+
+Run:
+
+`docs/benchmarks/live-realflow-memory-20260503-163910/persistent-memory-planning-context/report.md`
+
+Why this task was selected:
+
+- It is a real bug-fix task against `rust-agent`.
+- The fixture removes persistent memory prefetch before workflow judgment.
+- Acceptance requires memory/planning tests, retrieval-context tests, an
+  ordering assertion that prefetch happens before learning application, and the
+  full test suite.
+
+Result:
+
+- Status: passed.
+- Required command status: ok.
+- Full suite: `1053 passed; 0 failed`.
+- Changed file: `src/engine/conversation_loop/mod.rs`.
+- Diff size: 1 file, 28 lines.
+- Tool executions: 12.
+- Trace events: 73.
+
+Specialty signals:
+
+- `memory_active=true`: 6 memory sync events.
+- `automation_active=true`: required commands, verification, stage validation,
+  and progress events were present.
+- `guided_reasoning_active=true`: workflow judgment used guided reasoning.
+- `weighted_planning_active=true`: workflow plan exposed priority/importance
+  fields.
+- `closeout_active=true`: acceptance review accepted and closeout passed.
+- `guided_debugging_active=false`: no guided-debug event fired because final
+  validation passed; the one failed bash tool was handled by action-checkpoint
+  patch synthesis rather than the guided-debugging contract.
+
+Flow notes:
+
+- This was a genuinely slow path: release build, model/tool loop, required
+  command reruns, and full test validation.
+- The report shows the planning weight surface, but the latest top priority was
+  `P3` with low importance (`0.05000000074505806`). That is worth reviewing:
+  the signal exists, but the weight ordering may not be intuitive for a high-risk
+  memory/planning bug.
+- Guided debugging still needs a dedicated failing/blocking run; successful
+  repair paths do not necessarily trigger it.
+
 ## Validation
 
 Required local checks:
