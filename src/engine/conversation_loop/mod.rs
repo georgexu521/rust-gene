@@ -697,7 +697,135 @@ fn tool_error_code_label(result: &ToolResult) -> Option<String> {
     })
 }
 
-fn attach_tool_recovery_metadata(tool_name: &str, result: &mut ToolResult) {
+fn merge_tool_result_metadata(result: &mut ToolResult, key: &str, value: serde_json::Value) {
+    match result.data.take() {
+        Some(serde_json::Value::Object(mut object)) => {
+            object.insert(key.to_string(), value);
+            result.data = Some(serde_json::Value::Object(object));
+        }
+        Some(existing) => {
+            result.data = Some(serde_json::json!({
+                "value": existing,
+                key: value,
+            }));
+        }
+        None => {
+            result.data = Some(serde_json::json!({
+                key: value,
+            }));
+        }
+    }
+}
+
+fn build_tool_execution_summary(tool_call: &ToolCall, result: &ToolResult) -> serde_json::Value {
+    let output_chars = result.content.chars().count();
+    let mut summary = serde_json::json!({
+        "tool": tool_call.name,
+        "call_id": tool_call.id,
+        "success": result.success,
+        "output_chars": output_chars,
+        "duration_ms": result.duration_ms,
+    });
+    let Some(object) = summary.as_object_mut() else {
+        return summary;
+    };
+
+    match tool_call.name.as_str() {
+        "bash" => {
+            if let Some(command) = tool_call.arguments["command"].as_str() {
+                let classification =
+                    crate::tools::bash_tool::command_classifier::classify_command(command);
+                object.insert(
+                    "command".to_string(),
+                    serde_json::Value::String(safe_prefix_by_bytes(command, 240).to_string()),
+                );
+                object.insert(
+                    "command_kind".to_string(),
+                    serde_json::to_value(classification.command_kind)
+                        .unwrap_or_else(|_| serde_json::Value::Null),
+                );
+                object.insert(
+                    "validation_family".to_string(),
+                    serde_json::to_value(classification.validation_family)
+                        .unwrap_or_else(|_| serde_json::Value::Null),
+                );
+                object.insert(
+                    "safe_for_closeout".to_string(),
+                    serde_json::Value::Bool(classification.safe_for_closeout),
+                );
+            }
+        }
+        "file_edit" => {
+            if let Some(path) = tool_call.arguments["path"].as_str() {
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(path.to_string()),
+                );
+            }
+            if let Some(replacements) = result
+                .data
+                .as_ref()
+                .and_then(|data| data.get("replacements"))
+                .and_then(|value| value.as_u64())
+            {
+                object.insert(
+                    "replacements".to_string(),
+                    serde_json::Value::Number(replacements.into()),
+                );
+            }
+        }
+        "file_write" | "file_read" => {
+            if let Some(path) = tool_call.arguments["path"].as_str() {
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(path.to_string()),
+                );
+            }
+        }
+        "grep" => {
+            if let Some(pattern) = tool_call.arguments["pattern"].as_str() {
+                object.insert(
+                    "pattern".to_string(),
+                    serde_json::Value::String(safe_prefix_by_bytes(pattern, 120).to_string()),
+                );
+            }
+            if let Some(path) = tool_call
+                .arguments
+                .get("path")
+                .or_else(|| tool_call.arguments.get("include"))
+                .and_then(|value| value.as_str())
+            {
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(path.to_string()),
+                );
+            }
+        }
+        "git" => {
+            if let Some(action) = tool_call.arguments["action"].as_str() {
+                object.insert(
+                    "action".to_string(),
+                    serde_json::Value::String(action.to_string()),
+                );
+            }
+        }
+        _ => {}
+    }
+
+    if let Some(error) = result.error.as_deref() {
+        object.insert(
+            "error_preview".to_string(),
+            serde_json::Value::String(safe_prefix_by_bytes(error, 240).to_string()),
+        );
+    }
+
+    summary
+}
+
+fn attach_tool_execution_metadata(tool_call: &ToolCall, result: &mut ToolResult) {
+    let summary = build_tool_execution_summary(tool_call, result);
+    merge_tool_result_metadata(result, "tool_summary", summary);
+
     if result.success {
         return;
     }
@@ -707,8 +835,11 @@ fn attach_tool_recovery_metadata(tool_name: &str, result: &mut ToolResult) {
         .filter(|value| !value.is_empty())
         .unwrap_or("tool failed");
     let code = tool_error_code_label(result);
-    let plan =
-        crate::engine::recovery_plan::RecoveryPlan::tool_failure(tool_name, error, code.as_deref());
+    let plan = crate::engine::recovery_plan::RecoveryPlan::tool_failure(
+        &tool_call.name,
+        error,
+        code.as_deref(),
+    );
     let metadata = serde_json::json!({
         "recoverable": plan.retryable,
         "safe_retry": plan.safe_retry,
@@ -717,24 +848,7 @@ fn attach_tool_recovery_metadata(tool_name: &str, result: &mut ToolResult) {
         "recovery_action": plan.action,
         "recovery_category": plan.category,
     });
-
-    match result.data.take() {
-        Some(serde_json::Value::Object(mut object)) => {
-            object.insert("recovery".to_string(), metadata);
-            result.data = Some(serde_json::Value::Object(object));
-        }
-        Some(existing) => {
-            result.data = Some(serde_json::json!({
-                "value": existing,
-                "recovery": metadata,
-            }));
-        }
-        None => {
-            result.data = Some(serde_json::json!({
-                "recovery": metadata,
-            }));
-        }
-    }
+    merge_tool_result_metadata(result, "recovery", metadata);
 }
 
 fn persist_tool_outcome_learning_event(
@@ -753,6 +867,12 @@ fn persist_tool_outcome_learning_event(
         .and_then(|data| data.get("recovery"))
         .cloned()
         .unwrap_or_else(|| serde_json::json!(null));
+    let tool_summary = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_summary"))
+        .cloned()
+        .unwrap_or_else(|| build_tool_execution_summary(tool_call, result));
     let summary = if result.success {
         format!("Tool {} succeeded", tool_call.name)
     } else {
@@ -770,6 +890,7 @@ fn persist_tool_outcome_learning_event(
         "error": result.error,
         "duration_ms": result.duration_ms,
         "output_chars": result.content.chars().count(),
+        "tool_summary": tool_summary,
         "recovery": recovery,
     });
     let payload = crate::engine::experience_ledger::attach_experience_payload(
@@ -5914,7 +6035,7 @@ Do not answer in prose unless no safe patch exists."#;
                     "Tool '{}' was not exposed in the current request and cannot be executed.",
                     tc.name
                 ));
-                attach_tool_recovery_metadata(&tc.name, &mut result);
+                attach_tool_execution_metadata(tc, &mut result);
                 if let Some(ref trace) = trace {
                     trace.record(TraceEvent::ToolStarted {
                         tool: tc.name.clone(),
@@ -5946,7 +6067,7 @@ Do not answer in prose unless no safe patch exists."#;
                     "Resource policy blocked tool '{}': max tool calls ({}) reached.",
                     tc.name, resource_policy.max_tool_calls
                 ));
-                attach_tool_recovery_metadata(&tc.name, &mut result);
+                attach_tool_execution_metadata(tc, &mut result);
                 if let Some(ref trace) = trace {
                     trace.record(TraceEvent::ToolStarted {
                         tool: tc.name.clone(),
@@ -5978,7 +6099,7 @@ Do not answer in prose unless no safe patch exists."#;
                         "Tool '{}' is not allowed in this agent context",
                         tc.name
                     ));
-                    attach_tool_recovery_metadata(&tc.name, &mut result);
+                    attach_tool_execution_metadata(tc, &mut result);
                     persist_tool_outcome_learning_event(
                         self.session_store.as_ref(),
                         &self.session_id,
@@ -5998,7 +6119,7 @@ Do not answer in prose unless no safe patch exists."#;
                     "Bash is restricted during the action checkpoint: use it only to apply a patch (for example python/perl/sed -i/apply_patch/redirect/tee) or, after files have changed, to run validation. Do not use bash for read-only inspection at this checkpoint."
                         .to_string(),
                 );
-                attach_tool_recovery_metadata(&tc.name, &mut result);
+                attach_tool_execution_metadata(tc, &mut result);
                 if let Some(ref trace) = trace {
                     trace.record(TraceEvent::ToolStarted {
                         tool: tc.name.clone(),
@@ -6031,7 +6152,7 @@ Do not answer in prose unless no safe patch exists."#;
                     let mut result = ToolResult::error(format!(
                         "Action checkpoint file_edit rejected: {reason}"
                     ));
-                    attach_tool_recovery_metadata(&tc.name, &mut result);
+                    attach_tool_execution_metadata(tc, &mut result);
                     if let Some(ref trace) = trace {
                         trace.record(TraceEvent::ToolStarted {
                             tool: tc.name.clone(),
@@ -6060,7 +6181,7 @@ Do not answer in prose unless no safe patch exists."#;
 
             if let Some(pre_result) = pre_executed.get(&i) {
                 let mut pre_result = pre_result.clone();
-                attach_tool_recovery_metadata(&tc.name, &mut pre_result);
+                attach_tool_execution_metadata(tc, &mut pre_result);
                 persist_tool_outcome_learning_event(
                     self.session_store.as_ref(),
                     &self.session_id,
@@ -6160,7 +6281,7 @@ Do not answer in prose unless no safe patch exists."#;
                     if let Some(ref hooks) = hook_manager {
                         hooks.run_post_tool(&tc_clone, &result, &context).await;
                     };
-                    attach_tool_recovery_metadata(&tool_name, &mut result);
+                    attach_tool_execution_metadata(&tc_clone, &mut result);
                     {
                         let mut tracker = cost_tracker.lock().await;
                         tracker.record_tool_execution(
@@ -6228,7 +6349,7 @@ Do not answer in prose unless no safe patch exists."#;
                         "Tool '{}' is not allowed in this agent context",
                         tool_name
                     ));
-                    attach_tool_recovery_metadata(&tool_name, &mut result);
+                    attach_tool_execution_metadata(&tc, &mut result);
                     persist_tool_outcome_learning_event(
                         self.session_store.as_ref(),
                         &self.session_id,
@@ -6386,7 +6507,7 @@ Do not answer in prose unless no safe patch exists."#;
                 if result.duration_ms.is_none() {
                     result.duration_ms = Some(duration_ms);
                 }
-                attach_tool_recovery_metadata(&tool_name, &mut result);
+                attach_tool_execution_metadata(&tc, &mut result);
 
                 // ── Security Audit & Denial Tracking ──────────────────────
                 let params_summary = if let Some(tool) = self.tool_registry.get(&tool_name) {
@@ -6450,7 +6571,7 @@ Do not answer in prose unless no safe patch exists."#;
                 (result, Some(context))
             } else {
                 let mut result = ToolResult::error(format!("Tool '{}' not found", tool_name));
-                attach_tool_recovery_metadata(&tool_name, &mut result);
+                attach_tool_execution_metadata(&tc, &mut result);
                 (result, None)
             };
 
@@ -6517,7 +6638,23 @@ mod tests {
     #[test]
     fn test_tool_recovery_metadata_attached_to_failure() {
         let mut result = ToolResult::error("command timed out");
-        attach_tool_recovery_metadata("bash", &mut result);
+        let tool_call = ToolCall {
+            id: "call_bash".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "cargo test -q"
+            }),
+        };
+        attach_tool_execution_metadata(&tool_call, &mut result);
+        let summary = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("tool_summary"))
+            .expect("tool summary metadata");
+        assert_eq!(summary["tool"], "bash");
+        assert_eq!(summary["command_kind"], "validation");
+        assert_eq!(summary["validation_family"], "cargo_test");
+        assert_eq!(summary["safe_for_closeout"], true);
         let recovery = result
             .data
             .as_ref()
@@ -6526,6 +6663,40 @@ mod tests {
         assert_eq!(recovery["recoverable"], true);
         assert_eq!(recovery["safe_retry"], true);
         assert_eq!(recovery["suggested_command"], "/retry");
+    }
+
+    #[test]
+    fn test_tool_summary_metadata_attached_to_success() {
+        let mut result = ToolResult::success_with_data(
+            "File edited successfully",
+            serde_json::json!({
+                "path": "src/lib.rs",
+                "replacements": 1
+            }),
+        );
+        let tool_call = ToolCall {
+            id: "call_edit".to_string(),
+            name: "file_edit".to_string(),
+            arguments: serde_json::json!({
+                "path": "src/lib.rs",
+                "old_string": "old",
+                "new_string": "new"
+            }),
+        };
+        attach_tool_execution_metadata(&tool_call, &mut result);
+        let summary = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("tool_summary"))
+            .expect("tool summary metadata");
+        assert_eq!(summary["tool"], "file_edit");
+        assert_eq!(summary["path"], "src/lib.rs");
+        assert_eq!(summary["replacements"], 1);
+        assert!(result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("recovery"))
+            .is_none());
     }
 
     #[test]
