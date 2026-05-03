@@ -2053,6 +2053,40 @@ mod tests {
             .collect::<String>()
     }
 
+    fn render_status_bar_text(app: &TuiApp) -> String {
+        let backend = TestBackend::new(260, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_status_bar(frame, app, frame.area());
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    fn render_tool_viewer_text(app: &TuiApp) -> String {
+        let backend = TestBackend::new(160, 70);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_tool_viewer(frame, app, frame.area());
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
     #[test]
     fn transcript_window_prefers_active_turn_when_bottom_anchored() {
         let app = TuiApp::new();
@@ -2215,6 +2249,41 @@ mod tests {
         let expanded = estimate_tool_runs_height(&collapsed_runs, &app);
 
         assert!(expanded > collapsed);
+    }
+
+    #[test]
+    fn render_status_bar_shows_debug_density_and_active_tools() {
+        let mut app = TuiApp::new();
+        app.is_querying = true;
+        app.set_status_bar_density(crate::tui::app::StatusBarDensity::Debug);
+        let mut run = ToolRunView::new("tool_1".to_string(), "bash".to_string());
+        run.arguments = Some(serde_json::json!({ "command": "cargo test" }));
+        run.mark_running("bash".to_string());
+        app.tool_runs_snapshot.push(run);
+
+        let rendered = render_status_bar_text(&app);
+
+        assert!(rendered.contains("Running tests"));
+        assert!(rendered.contains("1 tools"));
+        assert!(rendered.contains("esc to interrupt"));
+        assert!(rendered.contains("density:debug"));
+        assert!(rendered.contains("tools:1"));
+        assert!(rendered.contains("? shortcuts"));
+    }
+
+    #[test]
+    fn render_tool_viewer_shows_title_content_and_controls() {
+        let mut app = TuiApp::new();
+        app.tool_viewer_title = "bash".to_string();
+        app.tool_viewer_content = "Result: OK\nline one\nline two".to_string();
+
+        let rendered = render_tool_viewer_text(&app);
+
+        assert!(rendered.contains("Tool Output: bash"));
+        assert!(rendered.contains("Result: OK"));
+        assert!(rendered.contains("line one"));
+        assert!(rendered.contains("esc/q"));
+        assert!(rendered.contains("PgUp/PgDn"));
     }
 
     #[test]

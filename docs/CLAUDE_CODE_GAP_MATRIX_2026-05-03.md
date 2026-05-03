@@ -177,6 +177,8 @@ Deliverables:
   labels, and contextual permission actions.
 - [x] Add rendered approval-panel smoke tests for bash risk review and
   file-write scope/preview.
+- [x] Add rendered statusline and tool-output viewer smoke tests for active
+  tool state and output controls.
 
 Acceptance:
 
@@ -195,7 +197,7 @@ Status: initial matrix landed.
   `target/eval-reports/` for trend collection.
 - `/eval trend [limit]` summarizes recent persisted reports and shows pass/fail
   deltas against the previous run.
-- Current full local baseline after this batch: `1039 passed; 0 failed`.
+- Current full local baseline after this batch: `1041 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 
