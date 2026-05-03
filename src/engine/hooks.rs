@@ -15,14 +15,55 @@ use crate::services::api::ToolCall;
 use crate::tools::{ToolContext, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
 const DEFAULT_HOOK_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_MAX_HOOK_RECORDS: usize = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HookEventKind {
+    PromptSubmit,
+    PreToolUse,
+    PostToolUse,
+    PermissionRequest,
+    ValidationStart,
+    ValidationEnd,
+    SubagentStart,
+    SubagentEnd,
+    FileChange,
+    Compact,
+    SessionEnd,
+}
+
+impl std::fmt::Display for HookEventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{:?}", self));
+        write!(f, "{}", value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookRunRecord {
+    pub event: HookEventKind,
+    pub hook_name: String,
+    pub tool_name: Option<String>,
+    pub success: bool,
+    pub blocked: bool,
+    pub duration_ms: u64,
+    pub error: Option<String>,
+    pub output_preview: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 struct CommandHook {
@@ -42,6 +83,8 @@ pub struct ToolHookManager {
     tool_specific_pre_hooks: HashMap<String, Vec<CommandHook>>,
     /// 特定工具的 post hooks (tool_name -> hooks)
     tool_specific_post_hooks: HashMap<String, Vec<CommandHook>>,
+    /// 最近 hook 执行记录
+    recent_records: Arc<Mutex<VecDeque<HookRunRecord>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +111,7 @@ impl HookDecision {
 
 #[derive(Debug, Serialize)]
 struct HookPayload<'a> {
-    event: &'a str,
+    event: HookEventKind,
     session_id: &'a str,
     working_dir: String,
     tool_call_id: &'a str,
@@ -85,6 +128,26 @@ struct HookResponse {
 }
 
 impl ToolHookManager {
+    pub fn recent_records(&self) -> Vec<HookRunRecord> {
+        self.recent_records
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    fn push_record(&self, record: HookRunRecord) {
+        let mut records = self
+            .recent_records
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        records.push_back(record);
+        while records.len() > DEFAULT_MAX_HOOK_RECORDS {
+            records.pop_front();
+        }
+    }
+
     pub fn from_env() -> Option<Self> {
         let pre = std::env::var("PRIORITY_AGENT_PRE_TOOL_HOOK").ok();
         let post = std::env::var("PRIORITY_AGENT_POST_TOOL_HOOK").ok();
@@ -199,7 +262,7 @@ impl ToolHookManager {
         }
 
         let payload = HookPayload {
-            event: "PreToolUse",
+            event: HookEventKind::PreToolUse,
             session_id: &context.session_id,
             working_dir: context.working_dir.to_string_lossy().to_string(),
             tool_call_id: &tool_call.id,
@@ -278,7 +341,7 @@ impl ToolHookManager {
         }
 
         let payload = HookPayload {
-            event: "PostToolUse",
+            event: HookEventKind::PostToolUse,
             session_id: &context.session_id,
             working_dir: context.working_dir.to_string_lossy().to_string(),
             tool_call_id: &tool_call.id,
@@ -321,6 +384,23 @@ impl ToolHookManager {
         hook: &CommandHook,
         payload: &HookPayload<'_>,
     ) -> Result<Option<HookDecision>, String> {
+        let started_at = Instant::now();
+        let finish_record = |manager: &Self,
+                             success: bool,
+                             blocked: bool,
+                             error: Option<String>,
+                             output_preview: Option<String>| {
+            manager.push_record(HookRunRecord {
+                event: payload.event,
+                hook_name: hook.name.clone(),
+                tool_name: Some(payload.tool_name.to_string()),
+                success,
+                blocked,
+                duration_ms: started_at.elapsed().as_millis() as u64,
+                error,
+                output_preview,
+            });
+        };
         let payload_json = serde_json::to_string(payload).map_err(|e| e.to_string())?;
 
         let mut child = Command::new("sh")
@@ -330,27 +410,38 @@ impl ToolHookManager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("spawn failed: {}", e))?;
+            .map_err(|e| {
+                let err = format!("spawn failed: {}", e);
+                finish_record(self, false, hook.block_on_error, Some(err.clone()), None);
+                err
+            })?;
 
         if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(payload_json.as_bytes())
                 .await
-                .map_err(|e| format!("stdin write failed: {}", e))?;
-            stdin
-                .write_all(b"\n")
-                .await
-                .map_err(|e| format!("stdin newline write failed: {}", e))?;
+                .map_err(|e| {
+                    let err = format!("stdin write failed: {}", e);
+                    finish_record(self, false, hook.block_on_error, Some(err.clone()), None);
+                    err
+                })?;
+            stdin.write_all(b"\n").await.map_err(|e| {
+                let err = format!("stdin newline write failed: {}", e);
+                finish_record(self, false, hook.block_on_error, Some(err.clone()), None);
+                err
+            })?;
         }
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "missing stdout pipe".to_string())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "missing stderr pipe".to_string())?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            let err = "missing stdout pipe".to_string();
+            finish_record(self, false, hook.block_on_error, Some(err.clone()), None);
+            err
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            let err = "missing stderr pipe".to_string();
+            finish_record(self, false, hook.block_on_error, Some(err.clone()), None);
+            err
+        })?;
 
         let stdout_task = tokio::spawn(async move {
             let mut buf = Vec::new();
@@ -367,11 +458,17 @@ impl ToolHookManager {
 
         let status = match timeout(Duration::from_millis(hook.timeout_ms), child.wait()).await {
             Ok(Ok(status)) => status,
-            Ok(Err(e)) => return Err(format!("wait failed: {}", e)),
+            Ok(Err(e)) => {
+                let err = format!("wait failed: {}", e);
+                finish_record(self, false, hook.block_on_error, Some(err.clone()), None);
+                return Err(err);
+            }
             Err(_) => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                return Err(format!("timed out after {}ms", hook.timeout_ms));
+                let err = format!("timed out after {}ms", hook.timeout_ms);
+                finish_record(self, false, hook.block_on_error, Some(err.clone()), None);
+                return Err(err);
             }
         };
 
@@ -380,31 +477,50 @@ impl ToolHookManager {
 
         if !status.success() {
             let stderr_text = String::from_utf8_lossy(&stderr_bytes);
-            return Err(format!(
-                "exit status {} stderr: {}",
-                status,
-                stderr_text.trim()
-            ));
+            let err = format!("exit status {} stderr: {}", status, stderr_text.trim());
+            finish_record(self, false, hook.block_on_error, Some(err.clone()), None);
+            return Err(err);
         }
 
         let stdout_text = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
         if stdout_text.is_empty() {
+            finish_record(self, true, false, None, None);
             return Ok(None);
         }
 
         match serde_json::from_str::<HookResponse>(&stdout_text) {
             Ok(resp) => {
                 if matches!(resp.allow, Some(false)) {
-                    return Ok(Some(HookDecision::deny(
-                        resp.reason.unwrap_or_else(|| "blocked by hook".to_string()),
-                    )));
+                    let reason = resp.reason.unwrap_or_else(|| "blocked by hook".to_string());
+                    finish_record(
+                        self,
+                        true,
+                        true,
+                        None,
+                        Some(reason.chars().take(240).collect()),
+                    );
+                    return Ok(Some(HookDecision::deny(reason)));
                 }
+                finish_record(
+                    self,
+                    true,
+                    false,
+                    None,
+                    Some(stdout_text.chars().take(240).collect()),
+                );
                 Ok(None)
             }
             Err(_) => {
                 debug!(
                     "Hook '{}' returned non-JSON output, treating as informational output",
                     hook.name
+                );
+                finish_record(
+                    self,
+                    true,
+                    false,
+                    None,
+                    Some(stdout_text.chars().take(240).collect()),
                 );
                 Ok(None)
             }
@@ -432,6 +548,7 @@ mod tests {
             post_tool_hooks: Vec::new(),
             tool_specific_pre_hooks: HashMap::new(),
             tool_specific_post_hooks: HashMap::new(),
+            recent_records: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -468,6 +585,11 @@ mod tests {
         let decision = manager.run_pre_tool(&tool_call, &context).await;
         assert!(!decision.allow);
         assert_eq!(decision.reason.as_deref(), Some("denied"));
+        let records = manager.recent_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].event, HookEventKind::PreToolUse);
+        assert_eq!(records[0].tool_name.as_deref(), Some("file_write"));
+        assert!(records[0].blocked);
     }
 
     #[tokio::test]
@@ -483,6 +605,10 @@ mod tests {
         let decision = manager.run_pre_tool(&tool_call, &context).await;
         assert!(decision.allow);
         assert!(decision.reason.is_none());
+        let records = manager.recent_records();
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].success);
+        assert!(!records[0].blocked);
     }
 
     #[tokio::test]
@@ -502,5 +628,16 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("failing pre-tool hook"));
+        let records = manager.recent_records();
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].success);
+        assert!(records[0].blocked);
+    }
+
+    #[test]
+    fn hook_event_kind_serializes_as_lifecycle_name() {
+        let value = serde_json::to_value(HookEventKind::ValidationStart).unwrap();
+        assert_eq!(value, serde_json::json!("ValidationStart"));
+        assert_eq!(HookEventKind::SubagentEnd.to_string(), "SubagentEnd");
     }
 }
