@@ -3811,9 +3811,12 @@ impl ConversationLoop {
         }
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let deterministic_calls = self.deterministic_patch_tool_calls(&deterministic_seed, &cwd);
-        if !deterministic_calls.is_empty() {
-            return Ok(deterministic_calls);
+        if Self::deterministic_patch_synthesis_enabled() {
+            let deterministic_calls =
+                self.deterministic_patch_tool_calls(&deterministic_seed, &cwd);
+            if !deterministic_calls.is_empty() {
+                return Ok(deterministic_calls);
+            }
         }
 
         if evidence.trim().is_empty() {
@@ -4088,6 +4091,15 @@ Do not answer in prose unless no safe patch exists."#;
             .filter_map(|action| self.validate_patch_synthesis_action(action, cwd).ok())
             .take(6)
             .collect()
+    }
+
+    fn deterministic_patch_synthesis_enabled() -> bool {
+        matches!(
+            std::env::var("PRIORITY_AGENT_DETERMINISTIC_PATCH_SYNTHESIS")
+                .ok()
+                .as_deref(),
+            Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+        )
     }
 
     fn file_contains(path: &std::path::Path, needle: &str) -> bool {

@@ -65,10 +65,14 @@ Each run gets a compact score:
   - Key learning: guided debugging fired and false success was prevented; model
     missed an explicit `src/tui/app.rs` acceptance target.
 
-- [ ] `memory-recall-conflict-precision`
+- [x] `memory-recall-conflict-precision`
   - Type: bug_fix.
   - Why: tests memory conflict precision and retrieval relevance.
   - Expected pressure: memory reasoning without over-demotion.
+  - Result: failed in `capability-memory-conflict-20260503-182641`.
+  - Key learning: tests were green on unchanged code, but agent produced no
+    code diff and hidden deterministic patch synthesis failed; this is a
+    workflow-boundary issue, not a product pass.
 
 - [ ] `permission-default-open-dangerous-guard`
   - Type: bug_fix.
@@ -164,6 +168,30 @@ For each run, record:
   green before closeout.
 - Improvement type: no immediate runtime change. Track repeated acceptance
   loops as a prompt/review calibration signal before considering runtime logic.
+
+### `memory-recall-conflict-precision`
+
+- Report path:
+  `docs/benchmarks/live-capability-memory-conflict-20260503-182641/memory-recall-conflict-precision/report.md`
+- Status: failed.
+- Failure owner: agent_flow.
+- Required commands: ok on unchanged baseline.
+- Files changed: none.
+- Specialty signals: 4/6 active.
+  - `memory_active=true`
+  - `automation_active=true`
+  - `guided_debugging_active=false`
+  - `guided_reasoning_active=true`
+  - `weighted_planning_active=true`
+  - `closeout_active=false`
+- Acceptance gaps: no acceptance review ran because there was no code diff and
+  no recorded validation event from the agent workflow.
+- False-success behavior: good; the quality gate rejected the run despite all
+  required commands passing, because the requested code-change task produced no
+  change and closeout was `not_verified`.
+- Improvement type: runtime boundary reduction. Disable deterministic
+  task-specific patch synthesis by default and keep it only as explicit opt-in
+  research behavior.
 
 ## Stop Conditions
 
