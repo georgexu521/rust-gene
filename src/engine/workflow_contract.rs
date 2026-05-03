@@ -820,7 +820,7 @@ impl ProgrammingWorkflowJudgment {
             }
         }
         out.push_str(
-            "Use this as operating context. Ask the listed questions if they block correctness; otherwise proceed under the assumptions and verify against the acceptance criteria before final response.",
+            "Use this as operating context. Ask the listed questions if they block correctness; otherwise proceed under the assumptions. Before editing, map every acceptance criterion to the file or behavior that must change and the evidence that will prove it. Before final response, verify each criterion individually; if any criterion is failed or not verified, continue repair or report the blocker instead of claiming completion.",
         );
         out
     }
@@ -932,6 +932,9 @@ Return only valid JSON with this shape:
 Guidance:
 - Ask user questions only when missing information affects architecture, data, permissions, deployment, UX, or acceptance criteria.
 - If a conservative default is safe, proceed and record the assumption.
+- Treat acceptance criteria as a checklist, not a summary. For each criterion, include or imply the concrete file, behavior, or command that will prove it.
+- If the user names a required file/path/command, include a plan step or acceptance criterion that directly touches it.
+- Do not merge multiple independent acceptance targets into one vague item.
 - For simple tasks, keep the plan short.
 - For complex or high-risk tasks, include acceptance criteria and guided reasoning triggers.
 - For low-risk tasks, priority and reason are enough.
@@ -981,6 +984,10 @@ impl AcceptanceReviewPrompt {
 Judge whether the implementation satisfies the original user goal and acceptance criteria.
 Do not pass criteria just because the intent was good. Use the evidence.
 If evidence is missing, mark that criterion as not_verified.
+Check every independent acceptance target separately. If the user named a file,
+path, command, or forbidden workaround, require direct evidence for that target.
+If a required file/path was not changed and the evidence does not prove the
+existing code already satisfies the criterion, mark it failed or not_verified.
 If the task should continue, choose continue_repair. If a human choice is needed, choose ask_user.
 
 Original goal:
@@ -1371,6 +1378,8 @@ mod tests {
 
         assert!(prompt.contains("You provide judgment"));
         assert!(prompt.contains("Do not assume the user must fill in numeric weights"));
+        assert!(prompt.contains("Treat acceptance criteria as a checklist"));
+        assert!(prompt.contains("If the user names a required file/path/command"));
         assert!(prompt.contains("Return only valid JSON"));
     }
 
@@ -1813,6 +1822,25 @@ mod tests {
         assert!(judgment
             .guided_reasoning_triggers
             .contains(&GuidedReasoningTrigger::TestFailure));
+    }
+
+    #[test]
+    fn acceptance_review_prompt_requires_per_target_evidence() {
+        let prompt = AcceptanceReviewPrompt::new(
+            AcceptanceContract::pending(
+                "Repair save output",
+                vec!["src/tui/app.rs no longer hardcodes Saved output".into()],
+                Vec::new(),
+            ),
+            vec!["src/memory/quality.rs".into()],
+            true,
+            vec!["cargo test passed".into()],
+        )
+        .render();
+
+        assert!(prompt.contains("Check every independent acceptance target separately"));
+        assert!(prompt.contains("If the user named a file"));
+        assert!(prompt.contains("mark it failed or not_verified"));
     }
 
     #[test]

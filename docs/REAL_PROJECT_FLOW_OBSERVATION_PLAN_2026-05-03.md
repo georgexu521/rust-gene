@@ -189,6 +189,61 @@ Interpretation:
   improvement is to tell the AI more clearly how to enumerate and close every
   acceptance target before editing and before final closeout.
 
+## Prompt-First Follow-Up
+
+The next change follows the boundary: the runtime should tell the AI how to
+work, not silently solve the task for it.
+
+Applied:
+
+- `WorkflowContractPrompt` now tells the model to treat acceptance criteria as a
+  checklist, map each target to the file/behavior/command that proves it, and
+  include direct criteria when the user names required files, paths, or
+  commands.
+- `ProgrammingWorkflowJudgment::to_turn_context()` now tells the model to map
+  every acceptance criterion before editing and verify each criterion before
+  final response.
+- `AcceptanceReviewPrompt` now rejects missing direct evidence for named files,
+  paths, commands, or forbidden workarounds.
+- Tests lock the prompt requirements so future refactors do not erase the
+  behavioral instruction.
+
+Validated with:
+
+```bash
+cargo test -q workflow_contract -- --test-threads=1
+scripts/coding-workflow-gates.sh quick
+```
+
+## Runtime Boundary Review
+
+Question: are we using too much software to help the LLM decide?
+
+Findings:
+
+- Appropriate software boundaries:
+  - Tool concurrency and permission exposure constrain execution safety; they do
+    not decide product behavior.
+  - Required validation, acceptance review, and closeout status prevent false
+    success; they do not choose the implementation.
+  - Memory and learning planning adjustments are bounded and audited; they
+    should remain advisory.
+- Risky but currently useful boundaries:
+  - Action checkpoints nudge the model away from endless read-only loops. This
+    is acceptable as workflow discipline, but should stay transparent and should
+    not encode product-specific fixes.
+  - Patch synthesis can apply edits from prior evidence. This is the closest
+    system-owned decision path. It should remain a last-resort recovery tool,
+    with strict evidence validation, trace logging, and no expansion into broad
+    implementation planning.
+- Inappropriate direction to avoid:
+  - Do not add more hidden heuristics for specific missed files like
+    `src/tui/app.rs`.
+  - Do not hardcode domain decisions that belong in the model's acceptance-target
+    reasoning.
+  - Prefer clearer prompts, better evidence, and stricter review over more
+    auto-repair rules.
+
 ## Validation
 
 Required local checks:
