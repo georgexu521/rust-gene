@@ -563,6 +563,22 @@ fn record_hook_traces(trace: &Option<TraceCollector>, records: &[HookRunRecord])
     }
 }
 
+fn tool_allowed_by_context(allowed_tools: &Option<HashSet<String>>, tool_name: &str) -> bool {
+    allowed_tools
+        .as_ref()
+        .map(|allowed| allowed.contains(tool_name))
+        .unwrap_or(true)
+}
+
+fn tool_not_allowed_result(tool_call: &ToolCall) -> ToolResult {
+    let mut result = ToolResult::error(format!(
+        "Tool '{}' is not allowed in this agent context",
+        tool_call.name
+    ));
+    attach_tool_execution_metadata(tool_call, &mut result);
+    result
+}
+
 fn record_web_retrieval_trace(
     trace: &Option<TraceCollector>,
     tool_call: &ToolCall,
@@ -5725,12 +5741,8 @@ Do not answer in prose unless no safe patch exists."#;
                 if !t.is_available(&context) {
                     return false;
                 }
-                if let Some(ref allowed) = self.allowed_tools {
-                    allowed.contains(t.name())
-                        && context.permission_context.should_expose_tool(t.name())
-                } else {
-                    context.permission_context.should_expose_tool(t.name())
-                }
+                tool_allowed_by_context(&self.allowed_tools, t.name())
+                    && context.permission_context.should_expose_tool(t.name())
             })
             .map(|t| crate::services::api::Tool {
                 name: t.name().to_string(),
@@ -6159,22 +6171,16 @@ Do not answer in prose unless no safe patch exists."#;
                 continue;
             }
             record_goal_drift_if_needed(&trace, active_goal.as_ref(), tc);
-            if let Some(ref allowed) = self.allowed_tools {
-                if !allowed.contains(&tc.name) {
-                    let mut result = ToolResult::error(format!(
-                        "Tool '{}' is not allowed in this agent context",
-                        tc.name
-                    ));
-                    attach_tool_execution_metadata(tc, &mut result);
-                    persist_tool_outcome_learning_event(
-                        self.session_store.as_ref(),
-                        &self.session_id,
-                        tc,
-                        &result,
-                    );
-                    denied_results.push((tc.clone(), result));
-                    continue;
-                }
+            if !tool_allowed_by_context(&self.allowed_tools, &tc.name) {
+                let result = tool_not_allowed_result(tc);
+                persist_tool_outcome_learning_event(
+                    self.session_store.as_ref(),
+                    &self.session_id,
+                    tc,
+                    &result,
+                );
+                denied_results.push((tc.clone(), result));
+                continue;
             }
 
             if action_checkpoint_active
@@ -6416,22 +6422,16 @@ Do not answer in prose unless no safe patch exists."#;
         for tc in read_write_calls {
             let tool_id = tc.id.clone();
             let tool_name = tc.name.clone();
-            if let Some(ref allowed) = self.allowed_tools {
-                if !allowed.contains(&tool_name) {
-                    let mut result = ToolResult::error(format!(
-                        "Tool '{}' is not allowed in this agent context",
-                        tool_name
-                    ));
-                    attach_tool_execution_metadata(&tc, &mut result);
-                    persist_tool_outcome_learning_event(
-                        self.session_store.as_ref(),
-                        &self.session_id,
-                        &tc,
-                        &result,
-                    );
-                    results.push((tc, result));
-                    continue;
-                }
+            if !tool_allowed_by_context(&self.allowed_tools, &tool_name) {
+                let result = tool_not_allowed_result(&tc);
+                persist_tool_outcome_learning_event(
+                    self.session_store.as_ref(),
+                    &self.session_id,
+                    &tc,
+                    &result,
+                );
+                results.push((tc, result));
+                continue;
             }
 
             if let Some(tx) = tx {
@@ -6704,7 +6704,7 @@ mod tests {
     use crate::test_utils::env_guard::EnvVarGuard;
     use crate::tools::{BashTool, FileEditTool, FileReadTool, FileWriteTool, GitTool};
     use async_openai::types::ChatCompletionResponseStream;
-    use std::collections::VecDeque;
+    use std::collections::{HashSet, VecDeque};
     use std::sync::Mutex as StdMutex;
     use tempfile::tempdir;
 
@@ -6713,6 +6713,31 @@ mod tests {
         let mut result = ToolResult::success("中".repeat(20_000));
         truncate_tool_result(&mut result, "grep", "call_utf8").await;
         assert!(result.content.contains("Output truncated"));
+    }
+
+    #[test]
+    fn test_allowed_tool_context_enforces_subagent_tool_scope() {
+        assert!(tool_allowed_by_context(&None, "bash"));
+
+        let allowed = Some(HashSet::from(["file_read".to_string(), "grep".to_string()]));
+        assert!(tool_allowed_by_context(&allowed, "file_read"));
+        assert!(tool_allowed_by_context(&allowed, "grep"));
+        assert!(!tool_allowed_by_context(&allowed, "bash"));
+    }
+
+    #[test]
+    fn test_not_allowed_tool_result_has_recovery_metadata() {
+        let tool_call = ToolCall {
+            id: "call_denied".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({"command": "echo hi"}),
+        };
+        let result = tool_not_allowed_result(&tool_call);
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("not allowed"));
+        let data = result.data.expect("tool summary data");
+        assert_eq!(data["tool_summary"]["tool"], "bash");
+        assert_eq!(data["tool_summary"]["call_id"], "call_denied");
     }
 
     #[test]
