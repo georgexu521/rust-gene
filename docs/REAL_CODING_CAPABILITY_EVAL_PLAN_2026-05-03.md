@@ -239,6 +239,29 @@ For each run, record:
   activated after focused repair attempts, so disable all patch synthesis by
   default behind explicit opt-in.
 
+### `memory-recall-conflict-precision` model-edit rerun
+
+- Report path:
+  `docs/benchmarks/live-capability-memory-conflict-modelledit-20260503-191431/memory-recall-conflict-precision/report.md`
+- Status: failed.
+- Failure owner: agent_flow.
+- Required commands: ok on unchanged baseline.
+- Files changed: none.
+- Specialty signals: 5/6 active.
+  - `memory_active=true`
+  - `automation_active=true`
+  - `guided_debugging_active=true`
+  - `guided_reasoning_active=true`
+  - `weighted_planning_active=true`
+  - `closeout_active=false`
+- Acceptance gaps: no acceptance review ran because no code diff or validation
+  event was recorded by the agent workflow.
+- False-success behavior: good; quality gates rejected an unchanged run.
+- Improvement type: tool-feedback observability. With patch synthesis disabled,
+  the model eventually attempted `file_edit`, but report-visible tool output did
+  not include the concrete failure reason. Failed tool results should surface
+  error text in visible content so the next model turn can repair from evidence.
+
 ## Stop Conditions
 
 - Stop and fix the harness if reports are missing trace, output, or required

@@ -52,6 +52,7 @@ cargo test -q patch_synthesis -- --test-threads=1
 cargo test -q code_action_tools -- --test-threads=1
 cargo test -q action_checkpoint -- --test-threads=1
 cargo test -q patch_synthesis_is_explicit_opt_in -- --test-threads=1
+cargo test -q tool_recovery_metadata_attached_to_failure -- --test-threads=1
 ```
 
 Result:
@@ -60,6 +61,7 @@ Result:
 - code action tools: passed, 1 test.
 - action checkpoint: passed, 5 tests.
 - patch synthesis opt-in: passed, 1 test.
+- tool failure visibility: passed, 1 test.
 
 ## Follow-up Run
 
@@ -78,3 +80,9 @@ diff. The focused repair bash issue was reduced, but generic patch synthesis
 still activated after invalid focused-repair attempts. This is also outside the
 desired runtime boundary, so generic patch synthesis is now disabled by default
 behind `PRIORITY_AGENT_PATCH_SYNTHESIS=1`.
+
+`capability-memory-conflict-modelledit-20260503-191431` still failed with no
+code diff after patch synthesis was disabled. This run reached a model-led
+`file_edit` attempt, but the visible tool output did not include the concrete
+failure reason. The next boundary-safe improvement is observability: failed
+tool results must surface their error text in visible content.

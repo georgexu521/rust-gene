@@ -918,6 +918,14 @@ fn attach_tool_execution_metadata(tool_call: &ToolCall, result: &mut ToolResult)
     if result.success {
         return;
     }
+    if result.content.trim().is_empty() {
+        result.content = result
+            .error
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("tool failed")
+            .to_string();
+    }
     let error = result
         .error
         .as_deref()
@@ -6876,6 +6884,7 @@ mod tests {
             }),
         };
         attach_tool_execution_metadata(&tool_call, &mut result);
+        assert_eq!(result.content, "command timed out");
         let summary = result
             .data
             .as_ref()
