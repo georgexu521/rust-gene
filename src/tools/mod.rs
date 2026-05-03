@@ -475,6 +475,8 @@ pub struct ToolContext {
     pub llm_provider: Option<std::sync::Arc<dyn crate::services::api::LlmProvider>>,
     /// Agent 管理器（agent_tool、send_message_tool 创建子 Agent）
     pub agent_manager: Option<std::sync::Arc<crate::agent::AgentManager>>,
+    /// 当前 turn trace（用于工具记录内部生命周期事件）
+    pub trace_collector: Option<crate::engine::trace::TraceCollector>,
     /// MCP 管理器（mcp_tool 调用外部 MCP 工具）
     pub mcp_manager: Option<std::sync::Arc<crate::engine::mcp::McpManager>>,
     /// LSP 管理器（lsp_tool 查询语言服务器）
@@ -509,6 +511,10 @@ impl std::fmt::Debug for ToolContext {
             .field(
                 "agent_manager",
                 &self.agent_manager.as_ref().map(|_| "<AgentManager>"),
+            )
+            .field(
+                "trace_collector",
+                &self.trace_collector.as_ref().map(|_| "<TraceCollector>"),
             )
             .field(
                 "mcp_manager",
@@ -546,6 +552,7 @@ impl ToolContext {
             metadata: HashMap::new(),
             llm_provider: None,
             agent_manager: None,
+            trace_collector: None,
             mcp_manager: None,
             lsp_manager: None,
             worktree_manager: None,
@@ -569,6 +576,12 @@ impl ToolContext {
         manager: std::sync::Arc<crate::agent::AgentManager>,
     ) -> Self {
         self.agent_manager = Some(manager);
+        self
+    }
+
+    /// 设置当前 turn trace collector
+    pub fn with_trace_collector(mut self, trace: crate::engine::trace::TraceCollector) -> Self {
+        self.trace_collector = Some(trace);
         self
     }
 

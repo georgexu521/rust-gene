@@ -1263,6 +1263,21 @@ impl ConversationLoop {
         ctx
     }
 
+    fn create_tool_context_with_trace(&self, trace: &TraceCollector) -> ToolContext {
+        self.create_tool_context()
+            .with_trace_collector(trace.clone())
+    }
+
+    fn create_tool_context_with_optional_trace(
+        &self,
+        trace: &Option<TraceCollector>,
+    ) -> ToolContext {
+        match trace {
+            Some(trace) => self.create_tool_context_with_trace(trace),
+            None => self.create_tool_context(),
+        }
+    }
+
     /// 运行对话循环（非流式）
     pub async fn run(&self, messages: Vec<Message>) -> Result<LoopResult> {
         self.run_inner(messages, None::<&mpsc::Sender<StreamEvent>>)
@@ -1700,7 +1715,7 @@ impl ConversationLoop {
                         tool_registry: self.tool_registry.clone(),
                         llm_provider: self.provider.clone(),
                         model: self.model.clone(),
-                        base_context: self.create_tool_context(),
+                        base_context: self.create_tool_context_with_trace(&trace),
                     };
                     let workflow_engine =
                         WorkflowEngine::new(self.provider.clone()).with_policy(workflow_policy);
@@ -3258,7 +3273,7 @@ impl ConversationLoop {
                 > = std::collections::HashMap::new();
                 let read_only_concurrency = read_only_tool_concurrency();
                 let tool_registry = self.tool_registry.clone();
-                let tool_context = self.create_tool_context();
+                let tool_context = self.create_tool_context_with_trace(trace);
                 let cost_tracker = self.cost_tracker.clone();
                 let hook_manager = self.hook_manager.clone();
 
@@ -6285,7 +6300,7 @@ Do not answer in prose unless no safe patch exists."#;
                         .await;
                 }
                 let registry = self.tool_registry.clone();
-                let context = self.create_tool_context();
+                let context = self.create_tool_context_with_optional_trace(&trace);
                 let tc_clone = tc.clone();
                 let tool_name = tc.name.clone();
                 let cost_tracker = self.cost_tracker.clone();
@@ -6434,7 +6449,7 @@ Do not answer in prose unless no safe patch exists."#;
             }
 
             let (result, hook_context) = if let Some(tool) = self.tool_registry.get(&tool_name) {
-                let mut context = self.create_tool_context();
+                let mut context = self.create_tool_context_with_optional_trace(&trace);
                 let drift_check = active_goal
                     .as_ref()
                     .map(|goal| {

@@ -217,7 +217,9 @@ async fn spawn_single_agent(
     template: Option<AgentTemplate>,
     profile: Option<&crate::agent::profiles::AgentProfile>,
     working_dir: &Path,
+    trace: Option<&crate::engine::trace::TraceCollector>,
 ) -> anyhow::Result<ManagerAgentResult> {
+    let started_at = std::time::Instant::now();
     let file_context = load_file_context(files, working_dir).await;
     let mut system_prompt = build_system_prompt(template, role, description, prompt, &file_context);
     if let Some(profile) = profile {
@@ -259,6 +261,16 @@ async fn spawn_single_agent(
 
     let agent_id = agent_manager.spawn(agent_config, None).await?;
     info!("Sub-agent spawned: {}", agent_id);
+    if let Some(trace) = trace {
+        trace.record(crate::engine::trace::TraceEvent::SubagentStarted {
+            agent_id: agent_id.to_string(),
+            profile: profile.map(|profile| profile.name.clone()),
+            role: role.display_name().to_string(),
+            description: description.to_string(),
+            timeout_secs,
+            allowed_tools: allowed_tools.len(),
+        });
+    }
 
     let mut envelope = AgentTaskEnvelope::new(
         AgentId("parent".to_string()),
@@ -314,7 +326,26 @@ async fn spawn_single_agent(
         agent_id, timeout_secs
     );
 
-    agent_manager.wait_for_result(&agent_id, timeout_secs).await
+    let result = agent_manager.wait_for_result(&agent_id, timeout_secs).await;
+    if let Some(trace) = trace {
+        match &result {
+            Ok(result) => trace.record(crate::engine::trace::TraceEvent::SubagentCompleted {
+                agent_id: result.agent_id.to_string(),
+                status: format!("{:?}", result.status).to_ascii_lowercase(),
+                duration_ms: started_at.elapsed().as_millis() as u64,
+                output_chars: result.content.chars().count(),
+                tools_used: result.tools_used.len(),
+            }),
+            Err(_) => trace.record(crate::engine::trace::TraceEvent::SubagentCompleted {
+                agent_id: agent_id.to_string(),
+                status: "failed".to_string(),
+                duration_ms: started_at.elapsed().as_millis() as u64,
+                output_chars: 0,
+                tools_used: 0,
+            }),
+        }
+    }
+    result
 }
 
 /// 汇总多个子 Agent 结果
@@ -476,6 +507,7 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
             ctx.template,
             ctx.profile.as_ref(),
             &ctx.context.working_dir,
+            ctx.context.trace_collector.as_ref(),
         )
         .await
         {
@@ -596,6 +628,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     ctx.template,
                     ctx.profile.as_ref(),
                     &ctx.context.working_dir,
+                    ctx.context.trace_collector.as_ref(),
                 )
             })
             .collect();
@@ -617,6 +650,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             ctx.template,
             ctx.profile.as_ref(),
             &ctx.context.working_dir,
+            ctx.context.trace_collector.as_ref(),
         )
         .await
         {
@@ -672,6 +706,7 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
         ctx.template,
         ctx.profile.as_ref(),
         &ctx.context.working_dir,
+        ctx.context.trace_collector.as_ref(),
     )
     .await
     {

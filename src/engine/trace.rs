@@ -232,6 +232,21 @@ pub enum TraceEvent {
         error: Option<String>,
         output_preview: Option<String>,
     },
+    SubagentStarted {
+        agent_id: String,
+        profile: Option<String>,
+        role: String,
+        description: String,
+        timeout_secs: u64,
+        allowed_tools: usize,
+    },
+    SubagentCompleted {
+        agent_id: String,
+        status: String,
+        duration_ms: u64,
+        output_chars: usize,
+        tools_used: usize,
+    },
     VerificationCompleted {
         changed_files: usize,
         passed: bool,
@@ -325,6 +340,8 @@ impl TraceEvent {
             TraceEvent::PermissionResolved { .. } => "permission.resolve",
             TraceEvent::ToolCompleted { .. } => "tool.done",
             TraceEvent::HookCompleted { .. } => "hook.done",
+            TraceEvent::SubagentStarted { .. } => "subagent.start",
+            TraceEvent::SubagentCompleted { .. } => "subagent.done",
             TraceEvent::VerificationCompleted { .. } => "verify.done",
             TraceEvent::AcceptanceReviewCompleted { .. } => "acceptance.review",
             TraceEvent::GuidedDebuggingCompleted { .. } => "guided.debug",
@@ -666,6 +683,32 @@ impl TraceEvent {
                     detail
                 )
             }
+            TraceEvent::SubagentStarted {
+                agent_id,
+                profile,
+                role,
+                description,
+                timeout_secs,
+                allowed_tools,
+            } => format!(
+                "subagent {} started role={} profile={} timeout={}s tools={} task={}",
+                agent_id,
+                role,
+                profile.as_deref().unwrap_or("none"),
+                timeout_secs,
+                allowed_tools,
+                preview(description)
+            ),
+            TraceEvent::SubagentCompleted {
+                agent_id,
+                status,
+                duration_ms,
+                output_chars,
+                tools_used,
+            } => format!(
+                "subagent {} {} in {}ms ({} chars, {} tools)",
+                agent_id, status, duration_ms, output_chars, tools_used
+            ),
             TraceEvent::VerificationCompleted {
                 changed_files,
                 passed,
