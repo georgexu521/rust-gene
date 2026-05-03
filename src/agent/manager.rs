@@ -700,6 +700,106 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[tokio::test]
+    async fn test_wait_for_result_returns_cached_completed_result() {
+        let manager = AgentManager::new();
+        let agent_id = AgentId::new();
+        let result = AgentResult {
+            agent_id: agent_id.clone(),
+            status: AgentStatus::Completed,
+            content: "done".to_string(),
+            completed_at: std::time::Instant::now(),
+            tools_used: vec!["file_read".to_string()],
+            confidence: 0.95,
+            has_conflict: false,
+        };
+        manager
+            .results
+            .write()
+            .await
+            .insert(agent_id.clone(), result.clone());
+
+        let loaded = manager
+            .wait_for_result(&agent_id, 1)
+            .await
+            .expect("cached result should be resumable");
+        assert_eq!(loaded.agent_id, agent_id);
+        assert_eq!(loaded.status, AgentStatus::Completed);
+        assert_eq!(loaded.content, "done");
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_result_returns_cached_failed_result() {
+        let manager = AgentManager::new();
+        let agent_id = AgentId::new();
+        manager.results.write().await.insert(
+            agent_id.clone(),
+            AgentResult {
+                agent_id: agent_id.clone(),
+                status: AgentStatus::Failed,
+                content: "failed".to_string(),
+                completed_at: std::time::Instant::now(),
+                tools_used: Vec::new(),
+                confidence: 0.0,
+                has_conflict: false,
+            },
+        );
+
+        let loaded = manager
+            .wait_for_result(&agent_id, 1)
+            .await
+            .expect("failed result should still be resumable");
+        assert_eq!(loaded.status, AgentStatus::Failed);
+        assert_eq!(loaded.content, "failed");
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_result_times_out_pending_receiver() {
+        let manager = AgentManager::new();
+        let agent_id = AgentId::new();
+        let (_tx, rx) = tokio::sync::oneshot::channel::<AgentResult>();
+        manager
+            .completion_receivers
+            .write()
+            .await
+            .insert(agent_id.clone(), rx);
+
+        let err = manager
+            .wait_for_result(&agent_id, 0)
+            .await
+            .expect_err("pending receiver should time out");
+        assert!(err.to_string().contains("Timeout waiting for agent"));
+    }
+
+    #[tokio::test]
+    async fn test_kill_sends_cancel_message_and_removes_channel() {
+        let manager = AgentManager::new();
+        let agent_id = AgentId::new();
+        let (tx, mut rx) = mpsc::channel::<AgentMessage>(1);
+        manager
+            .message_channels
+            .write()
+            .await
+            .insert(agent_id.clone(), tx);
+
+        manager
+            .kill(&agent_id)
+            .await
+            .expect("kill should send stop");
+        let msg = rx.recv().await.expect("stop message");
+        assert_eq!(msg.to, agent_id);
+        assert_eq!(msg.content, "stop");
+        assert!(matches!(
+            msg.msg_type,
+            crate::agent::types::AgentMessageType::Control
+        ));
+        assert!(!manager
+            .message_channels
+            .read()
+            .await
+            .contains_key(&agent_id));
+    }
+
     // ─── DAG Tests ─────────────────────────────────────────────────────────────
 
     #[test]

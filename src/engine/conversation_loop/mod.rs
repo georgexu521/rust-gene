@@ -6734,7 +6734,11 @@ mod tests {
         };
         let result = tool_not_allowed_result(&tool_call);
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or("").contains("not allowed"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("not allowed"));
         let data = result.data.expect("tool summary data");
         assert_eq!(data["tool_summary"]["tool"], "bash");
         assert_eq!(data["tool_summary"]["call_id"], "call_denied");
