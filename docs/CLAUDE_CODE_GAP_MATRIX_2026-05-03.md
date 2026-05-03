@@ -187,9 +187,10 @@ Status: initial matrix landed.
 
 - `evalsets/coding_replay_matrix.yaml` now covers 20 deterministic coding
   replay scenarios.
-- `/eval json <name|all>` emits machine-readable pass/fail reports for trend
-  collection.
-- Current full local baseline after this batch: `1030 passed; 0 failed`.
+- `/eval json <name|all>` emits machine-readable pass/fail reports, and
+  `/eval record <name|all>` writes timestamped JSON reports under
+  `target/eval-reports/` for trend collection.
+- Current full local baseline after this batch: `1032 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 

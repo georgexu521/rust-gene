@@ -503,6 +503,44 @@ pub fn format_reports_json(reports: &[EvalReport]) -> Result<String> {
         .context("failed to serialize eval report bundle")
 }
 
+pub fn safe_eval_report_label(label: &str) -> String {
+    let safe_label = label
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if safe_label.is_empty() {
+        "all".to_string()
+    } else {
+        safe_label
+    }
+}
+
+pub fn write_reports_json(
+    reports: &[EvalReport],
+    dir: impl AsRef<Path>,
+    label: &str,
+) -> Result<PathBuf> {
+    let dir = dir.as_ref();
+    fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create eval report dir {}", dir.display()))?;
+    let safe_label = safe_eval_report_label(label);
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let path = dir.join(format!("eval-{}-{}.json", timestamp, safe_label));
+    let json = format_reports_json(reports)?;
+    fs::write(&path, json)
+        .with_context(|| format!("failed to write eval report {}", path.display()))?;
+    Ok(path)
+}
+
 fn check_eq<T>(
     failures: &mut Vec<EvalFailure>,
     scenario_id: &str,
@@ -991,5 +1029,41 @@ scenarios:
         assert_eq!(value["failed"], 1);
         assert!(value["generated_at"].as_str().unwrap_or("").contains('T'));
         assert_eq!(value["reports"][0]["failures"][0]["scenario_id"], "case-1");
+    }
+
+    #[test]
+    fn safe_eval_report_label_removes_path_separators() {
+        assert_eq!(
+            safe_eval_report_label("../coding replay/matrix.yaml"),
+            "coding-replay-matrix-yaml"
+        );
+        assert_eq!(safe_eval_report_label("../../"), "all");
+        assert_eq!(safe_eval_report_label("smoke_1"), "smoke_1");
+    }
+
+    #[test]
+    fn write_reports_json_creates_trend_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports = vec![EvalReport {
+            set_name: "sample".to_string(),
+            total: 1,
+            passed: 1,
+            failed: 0,
+            failures: Vec::new(),
+        }];
+
+        let path = write_reports_json(&reports, dir.path(), "../sample").unwrap();
+
+        assert_eq!(path.parent(), Some(dir.path()));
+        assert!(path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("-sample.json"));
+        let json = fs::read_to_string(path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["sets"], 1);
+        assert_eq!(value["scenarios"], 1);
+        assert_eq!(value["failed"], 0);
     }
 }

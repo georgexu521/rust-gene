@@ -22,7 +22,7 @@ Latest verified baseline observed after the 2026-05-03 Claude-gap implementation
 batch:
 
 ```text
-1030 passed; 0 failed
+1032 passed; 0 failed
 ```
 
 Verified with:
@@ -57,8 +57,9 @@ cargo test --quiet -- --test-threads=1
   cancellation, and resumable results.
 - Slash commands are labeled as `production`, `usable`, or `placeholder` in help
   and command-palette surfaces.
-- Evalsets include a 20-scenario deterministic coding replay matrix plus JSON
-  report output for pass/fail trend collection.
+- Evalsets include a 20-scenario deterministic coding replay matrix, JSON
+  report output, and `/eval record <name|all>` persisted report files for
+  pass/fail trend collection.
 - CLI panels are increasingly backed by actual runtime state, not decoration.
 - `karpathy-guidelines` is bundled as a coding behavior skill and exposed
   through `/skills`, `/karpathy <task>`, and code-change reflection checks.
@@ -124,8 +125,7 @@ not missing foundations:
    long-running command progress.
 3. Expand command-level smoke tests beyond registry/help coverage into rendered
    command-palette and approval-panel behavior.
-4. Add persisted eval trend history and compare replay results across baseline
-   runs.
+4. Compare persisted eval trend history across baseline runs.
 5. Continue CLI polish based on trace-backed state: command palette, statusline,
    approval panels, tool expansion, and settings visibility.
 6. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
