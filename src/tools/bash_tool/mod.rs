@@ -2,8 +2,11 @@
 //!
 //! 对应 Claude Code 中的 BashTool
 
+pub mod command_classifier;
+
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
+use command_classifier::classify_command;
 use serde_json::json;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -184,17 +187,25 @@ fn build_audit(
     })
 }
 
+fn classification_data(command: &str) -> serde_json::Value {
+    serde_json::to_value(classify_command(command)).unwrap_or_else(|_| json!({}))
+}
+
 fn error_with_audit(
     error: impl Into<String>,
     content: Option<String>,
     audit: &serde_json::Value,
+    command: &str,
 ) -> ToolResult {
     let mut result = if let Some(content) = content {
         ToolResult::error_with_content(error, content)
     } else {
         ToolResult::error(error)
     };
-    result.data = Some(json!({ "audit": audit }));
+    result.data = Some(json!({
+        "audit": audit,
+        "command_classification": classification_data(command)
+    }));
     result
 }
 
@@ -320,7 +331,7 @@ impl Tool for BashTool {
                         timeout,
                         &working_dir,
                     );
-                    return error_with_audit(external_err, None, &audit);
+                    return error_with_audit(external_err, None, &audit, command);
                 }
             }
         }
@@ -363,6 +374,7 @@ impl Tool for BashTool {
                     ),
                     None,
                     &audit,
+                    command,
                 );
             }
         }
@@ -376,7 +388,7 @@ impl Tool for BashTool {
             BashExecutionBackend::Restricted => restricted_command(command),
             BashExecutionBackend::External => match external_command(command) {
                 Ok(cmd) => cmd,
-                Err(msg) => return error_with_audit(msg, None, &audit),
+                Err(msg) => return error_with_audit(msg, None, &audit, command),
             },
         };
 
@@ -401,7 +413,12 @@ impl Tool for BashTool {
             Ok(child) => child,
             Err(e) => {
                 error!("Failed to spawn command: {}", e);
-                return error_with_audit(format!("Failed to spawn command: {}", e), None, &audit);
+                return error_with_audit(
+                    format!("Failed to spawn command: {}", e),
+                    None,
+                    &audit,
+                    command,
+                );
             }
         };
 
@@ -415,7 +432,7 @@ impl Tool for BashTool {
                     Ok(output) => output,
                     Err(e) => {
                         error!("Failed to execute command: {}", e);
-                        return error_with_audit(format!("Failed to execute command: {}", e), None, &audit);
+                        return error_with_audit(format!("Failed to execute command: {}", e), None, &audit, command);
                     }
                 }
             }
@@ -427,10 +444,10 @@ impl Tool for BashTool {
                     Ok(Ok(output)) => output,
                     Ok(Err(e)) => {
                         error!("Command timed out and failed while collecting output: {}", e);
-                        return error_with_audit(format!("Command timed out after {} seconds", timeout), None, &audit);
+                        return error_with_audit(format!("Command timed out after {} seconds", timeout), None, &audit, command);
                     }
                     Err(_) => {
-                        return error_with_audit(format!("Command timed out after {} seconds", timeout), None, &audit);
+                        return error_with_audit(format!("Command timed out after {} seconds", timeout), None, &audit, command);
                     }
                 }
             }
@@ -484,6 +501,7 @@ impl Tool for BashTool {
                 truncated,
                 json!({
                     "audit": audit,
+                    "command_classification": classification_data(command),
                     "execution": {
                         "exit_code": exit_code,
                         "stdout_length": stdout.len(),
@@ -497,6 +515,7 @@ impl Tool for BashTool {
                 format!("Command failed with exit code: {}", exit_code),
                 Some(truncated),
                 &audit,
+                command,
             )
         }
     }
@@ -704,6 +723,29 @@ mod tests {
             .and_then(|e| e.get("backend"))
             .and_then(|v| v.as_str());
         assert_eq!(backend, Some("restricted"));
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_includes_command_classification() {
+        let tool = BashTool;
+        let params = json!({
+            "command": "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 echo classified",
+            "description": "Classify validation-like command",
+            "backend": "local"
+        });
+        let context = ToolContext::new(".", "test-session-classification");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(result.success, "bash failed: {:?}", result.error);
+        let classification = result
+            .data
+            .as_ref()
+            .and_then(|d| d.get("command_classification"))
+            .expect("classification metadata should be present");
+        assert_eq!(classification["command_kind"], "unknown");
+        assert_eq!(classification["env_prefixed"], true);
+        assert_eq!(classification["safe_for_closeout"], false);
     }
 
     #[tokio::test]

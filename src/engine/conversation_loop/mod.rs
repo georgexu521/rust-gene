@@ -5578,75 +5578,15 @@ Do not answer in prose unless no safe patch exists."#;
         let Some(command) = tool_call.arguments["command"].as_str() else {
             return false;
         };
-        Self::is_safe_validation_command(command)
+        crate::tools::bash_tool::command_classifier::classify_command(command).is_safe_validation()
     }
 
     fn normalize_validation_command_for_match(command: &str) -> String {
-        let mut command = command.trim();
-        if let Some(inner) = Self::strip_shell_lc_wrapper(command) {
-            command = inner;
-        }
-        command.split_whitespace().collect::<Vec<_>>().join(" ")
-    }
-
-    fn strip_shell_lc_wrapper(command: &str) -> Option<&str> {
-        let command = command.trim();
-        for prefix in ["bash -lc ", "sh -lc "] {
-            let Some(rest) = command.strip_prefix(prefix) else {
-                continue;
-            };
-            let rest = rest.trim();
-            if rest.len() < 2 {
-                return None;
-            }
-            let bytes = rest.as_bytes();
-            let quote = bytes[0];
-            if quote != b'\'' && quote != b'"' {
-                return None;
-            }
-            if bytes[bytes.len() - 1] != quote {
-                return None;
-            }
-            return Some(&rest[1..rest.len() - 1]);
-        }
-        None
+        crate::tools::bash_tool::command_classifier::normalize_command_for_match(command)
     }
 
     fn is_safe_validation_command(command: &str) -> bool {
-        let command = Self::normalize_validation_command_for_match(command);
-        let command = command.as_str();
-        command.contains("cargo test")
-            || command.contains("cargo check")
-            || command.contains("cargo clippy")
-            || command.contains("npm test")
-            || command.contains("npm run test")
-            || command.starts_with("node ")
-            || command.starts_with("python3 -c ")
-            || command.starts_with("python -c ")
-            || command.starts_with("python3 -m unittest")
-            || command.starts_with("python -m unittest")
-            || command.contains("pytest")
-            || command.contains("python -m pytest")
-            || command.contains("go test")
-            || Self::is_safe_rg_validation_command(command)
-    }
-
-    fn is_safe_rg_validation_command(command: &str) -> bool {
-        let command = command.trim();
-        let command = command.strip_prefix("! ").unwrap_or(command).trim();
-        if !command.starts_with("rg ") {
-            return false;
-        }
-        !command.contains('\n')
-            && !command.contains(';')
-            && !command.contains('|')
-            && !command.contains("&&")
-            && !command.ends_with('&')
-            && !command.contains(" & ")
-            && !command.contains('`')
-            && !command.contains("$(")
-            && !command.contains('>')
-            && !command.contains('<')
+        crate::tools::bash_tool::command_classifier::classify_command(command).is_safe_validation()
     }
 
     fn extract_required_validation_commands(prompt: &str) -> Vec<String> {
