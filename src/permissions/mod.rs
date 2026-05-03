@@ -899,6 +899,28 @@ pub struct ExplainableDecision {
 }
 
 impl ExplainableDecision {
+    /// Compact one-line summary suitable for approval prompts and traces.
+    pub fn concise_summary(&self) -> String {
+        let reason = self
+            .reasons
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "no explicit rule matched".to_string());
+        let warnings = if self.warnings.is_empty() {
+            "none".to_string()
+        } else {
+            self.warnings.join("; ")
+        };
+        format!(
+            "decision={:?}, risk={:?}, confidence={:.0}%, reason={}, warnings={}",
+            self.decision,
+            self.risk_level,
+            self.confidence * 100.0,
+            reason,
+            warnings
+        )
+    }
+
     /// Format as human-readable string
     pub fn format(&self) -> String {
         let mut lines = Vec::new();
@@ -1088,6 +1110,26 @@ mod tests {
 
         let matches = rules.get_matching_rules("file_dangerous");
         assert_eq!(matches.len(), 2); // allow and deny both match
+    }
+
+    #[test]
+    fn test_explainable_decision_concise_summary_mentions_risk_and_reason() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::Default,
+            rules: PermissionRules::new().ask_with_source("bash", RuleSource::Project),
+            working_dir: std::path::PathBuf::from("."),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+        let decision = ctx.explain_decision(
+            "bash",
+            &serde_json::json!({"command": "rm -rf /tmp/example"}),
+        );
+        let summary = decision.concise_summary();
+        assert!(summary.contains("decision=Ask"));
+        assert!(summary.contains("risk="));
+        assert!(summary.contains("Project rule 'bash'"));
+        assert!(summary.contains("warnings="));
     }
 
     #[test]

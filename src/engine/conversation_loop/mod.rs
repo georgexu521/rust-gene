@@ -6492,7 +6492,7 @@ Do not answer in prose unless no safe patch exists."#;
                 } {
                     let mut approved = false;
                     if let (Some(ref channel), Some(tx)) = (&self.approval_channel, tx) {
-                        let prompt = if drift_requires_approval {
+                        let base_prompt = if drift_requires_approval {
                             format!(
                                 "Tool '{}' may drift from the current goal. Reason: {} Suggested action: {} Allow?",
                                 tool_name,
@@ -6513,6 +6513,15 @@ Do not answer in prose unless no safe patch exists."#;
                             prompt
                         } else {
                             format!("Tool '{}' requires approval. Allow?", tool_name)
+                        };
+                        let prompt = if drift_requires_approval {
+                            base_prompt
+                        } else {
+                            let explanation = context
+                                .permission_context
+                                .explain_decision(&tool_name, &tc.arguments)
+                                .concise_summary();
+                            format!("{}\nPermission explanation: {}", base_prompt, explanation)
                         };
                         let _ = tx
                             .send(StreamEvent::PermissionRequest {
