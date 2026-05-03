@@ -143,3 +143,64 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         ])
         .split(popup_layout[1])[1]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn render_diff_text(diff_text: &str, title: &str) -> String {
+        let backend = TestBackend::new(160, 70);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let theme = crate::tui::theme::Theme::default();
+        terminal
+            .draw(|frame| {
+                render_diff_viewer(frame, diff_text, title, 0, frame.area(), &theme);
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn render_diff_viewer_shows_unified_diff_and_controls() {
+        let diff = "\
+diff --git a/src/main.rs b/src/main.rs
+index 1111111..2222222 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,3 +1,4 @@
+ fn main() {
+-    println!(\"old\");
++    println!(\"new\");
++    println!(\"done\");
+ }";
+
+        let rendered = render_diff_text(diff, "Working tree");
+
+        assert!(rendered.contains("Diff: Working tree"));
+        assert!(rendered.contains("diff --git a/src/main.rs b/src/main.rs"));
+        assert!(rendered.contains("--- a/src/main.rs"));
+        assert!(rendered.contains("+++ b/src/main.rs"));
+        assert!(rendered.contains("@@ -1,3 +1,4 @@"));
+        assert!(rendered.contains("-    println!(\"old\");"));
+        assert!(rendered.contains("+    println!(\"new\");"));
+        assert!(rendered.contains("+    println!(\"done\");"));
+        assert!(rendered.contains("Esc/q"));
+        assert!(rendered.contains("PgUp/PgDn"));
+    }
+
+    #[test]
+    fn render_diff_viewer_shows_empty_diff_message() {
+        let rendered = render_diff_text("", "No changes");
+
+        assert!(rendered.contains("Diff: No changes"));
+        assert!(rendered.contains("No differences found."));
+        assert!(rendered.contains("Esc/q"));
+    }
+}
