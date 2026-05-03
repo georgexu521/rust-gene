@@ -32,6 +32,13 @@ cargo check --quiet
 cargo test --quiet -- --test-threads=1
 ```
 
+Latest live coding workflow smoke:
+
+```text
+live-eval-20260503-152320 code-change-verification-repair-loop: ok
+verification_passed=true stage_validation_passed=true closeout_status=passed
+```
+
 ## Completed Runtime Spine
 
 - `TurnTrace` records prompt, routing, memory, context, tool, permission,
@@ -71,6 +78,9 @@ cargo test --quiet -- --test-threads=1
   pass/fail trend collection; `/eval trend [limit]` summarizes recent persisted
   reports, deltas against the previous run, and optional external baseline
   metadata when present.
+- The layered workflow gates now cover focused, standard, full-local, and
+  opt-in live-smoke validation; the latest live smoke exercised the real
+  code-change repair path and passed with full-suite validation.
 - CLI panels are increasingly backed by actual runtime state, not decoration.
 - `karpathy-guidelines` is bundled as a coding behavior skill and exposed
   through `/skills`, `/karpathy <task>`, and code-change reflection checks.

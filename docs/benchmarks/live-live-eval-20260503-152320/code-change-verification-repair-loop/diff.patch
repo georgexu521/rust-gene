@@ -1,0 +1,20 @@
+diff --git a/src/engine/conversation_loop/mod.rs b/src/engine/conversation_loop/mod.rs
+index 5db62b2..dcf5000 100644
+--- a/src/engine/conversation_loop/mod.rs
++++ b/src/engine/conversation_loop/mod.rs
+@@ -2877,10 +2877,11 @@ impl ConversationLoop {
+                         .cloned()
+                         .unwrap_or_else(|| "post-edit verification".to_string());
+                     post_edit_reflection.record_repair_action(
+-                  acceptance_repair_attempts + 1,
+-                  &format!("retry: {}", verification_command),
+-                  changed_files.first().map(|path| path.display().to_string()),
+-              );
++                        acceptance_repair_attempts + 1,
++                        "repair failed verification before closeout",
++                        changed_files.first().map(|path| path.display().to_string()),
++                        verification_command,
++                    );
+                 }
+                 trace.record(TraceEvent::ReflectionPassCompleted {
+                     pass_id: post_edit_reflection.pass_id.clone(),

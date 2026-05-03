@@ -55,6 +55,21 @@ Use only after changing the actual agent loop or repair/closeout behavior.
 - [x] Default to `code-change-verification-repair-loop`.
 - [x] Do not run `--case all` by default.
 - [x] Make live smoke opt-in and clearly warn that it uses the real agent path.
+- [x] Execute the representative live smoke once after the deterministic gates.
+
+Latest live smoke result:
+
+- Run id: `live-eval-20260503-152320`
+- Case: `code-change-verification-repair-loop`
+- Status: `ok`
+- Report:
+  `docs/benchmarks/live-live-eval-20260503-152320/code-change-verification-repair-loop/report.md`
+- Full suite inside the live run: `1053 passed; 0 failed`
+- Key signals: `verification_passed=true`, `stage_validation_passed=true`,
+  `acceptance_accepted=True`, `closeout_status=passed`,
+  `failure_owner=none`
+- Runtime visibility: long-running validation emitted progress notices after
+  30s/60s/90s as expected.
 
 ## Implementation Tasks
 
@@ -62,6 +77,8 @@ Use only after changing the actual agent loop or repair/closeout behavior.
 - [x] Document the script in `scripts/README.md`.
 - [x] Add `--help`, `quick`, `standard`, `full`, and `live-smoke` modes.
 - [x] Run the new quick and standard gates.
+- [x] Run the full local gate.
+- [x] Run the opt-in live smoke gate.
 - [x] Update this plan with completed checks.
 - [x] Commit the script and docs.
 

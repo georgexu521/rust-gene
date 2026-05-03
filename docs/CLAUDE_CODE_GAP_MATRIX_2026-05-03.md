@@ -38,6 +38,8 @@ Current project evidence:
 - `docs/PROJECT_STATUS.md`: current runtime spine and remaining product work.
 - `docs/benchmarks/live-eval-20260501-testing-plan.md`: live eval history,
   known failure modes, and repair-loop behavior.
+- `docs/benchmarks/live-live-eval-20260503-152320/code-change-verification-repair-loop/report.md`:
+  latest real agent smoke for the code-change verification repair loop.
 - `src/engine/conversation_loop/mod.rs`: current workflow, validation, closeout,
   tool execution, and recovery path.
 - `src/tools/`: broad registered tool surface.
@@ -206,6 +208,10 @@ Status: initial matrix landed.
   now use validation command classification for cargo test/check/clippy and
   similar long-running validation commands.
 - Current full local baseline after this batch: `1053 passed; 0 failed`.
+- Latest opt-in live smoke after this batch:
+  `live-eval-20260503-152320 code-change-verification-repair-loop`, status
+  `ok`, with `verification_passed=true`, `stage_validation_passed=true`, and
+  `closeout_status=passed`.
 
 ### P2: Product And Ecosystem Completion
 
