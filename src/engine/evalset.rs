@@ -482,7 +482,19 @@ pub struct EvalReportBundle {
     pub scenarios: usize,
     pub passed: usize,
     pub failed: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<EvalBaselineSummary>,
     pub reports: Vec<EvalReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalBaselineSummary {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_at: Option<String>,
+    pub scenarios: usize,
+    pub passed: usize,
+    pub failed: usize,
 }
 
 impl EvalReportBundle {
@@ -493,6 +505,7 @@ impl EvalReportBundle {
             scenarios: reports.iter().map(|r| r.total).sum(),
             passed: reports.iter().map(|r| r.passed).sum(),
             failed: reports.iter().map(|r| r.failed).sum(),
+            baseline: None,
             reports: reports.to_vec(),
         }
     }
@@ -610,6 +623,17 @@ pub fn format_eval_trend(entries: &[(PathBuf, EvalReportBundle)]) -> String {
         ));
     }
 
+    if let Some(baseline) = &latest.1.baseline {
+        let pass_delta = latest.1.passed as isize - baseline.passed as isize;
+        let fail_delta = latest.1.failed as isize - baseline.failed as isize;
+        let scenario_delta = latest.1.scenarios as isize - baseline.scenarios as isize;
+        let generated = baseline.generated_at.as_deref().unwrap_or("unknown");
+        out.push_str(&format!(
+            "\nDelta vs baseline '{}': scenarios={:+}  passed={:+}  failed={:+}  baseline_generated={}",
+            baseline.name, scenario_delta, pass_delta, fail_delta, generated
+        ));
+    }
+
     out.push_str("\n\nRecent reports:");
     for (path, bundle) in entries {
         let name = path
@@ -620,6 +644,9 @@ pub fn format_eval_trend(entries: &[(PathBuf, EvalReportBundle)]) -> String {
             "\n- {}  generated={}  sets={}  scenarios={}  passed={}  failed={}",
             name, bundle.generated_at, bundle.sets, bundle.scenarios, bundle.passed, bundle.failed
         ));
+        if let Some(baseline) = &bundle.baseline {
+            out.push_str(&format!("  baseline={}", baseline.name));
+        }
     }
     out
 }
@@ -1159,6 +1186,7 @@ scenarios:
             scenarios: 2,
             passed: 1,
             failed: 1,
+            baseline: None,
             reports: Vec::new(),
         };
         let new = EvalReportBundle {
@@ -1167,6 +1195,7 @@ scenarios:
             scenarios: 2,
             passed: 2,
             failed: 0,
+            baseline: None,
             reports: Vec::new(),
         };
         fs::write(
@@ -1199,6 +1228,7 @@ scenarios:
                     scenarios: 3,
                     passed: 3,
                     failed: 0,
+                    baseline: None,
                     reports: Vec::new(),
                 },
             ),
@@ -1210,6 +1240,7 @@ scenarios:
                     scenarios: 2,
                     passed: 1,
                     failed: 1,
+                    baseline: None,
                     reports: Vec::new(),
                 },
             ),
@@ -1222,5 +1253,53 @@ scenarios:
         assert!(trend.contains("scenarios=+1"));
         assert!(trend.contains("passed=+2"));
         assert!(trend.contains("failed=-1"));
+    }
+
+    #[test]
+    fn eval_report_bundle_parses_legacy_json_without_baseline() {
+        let json = r#"{
+            "generated_at": "2026-05-03T01:00:00Z",
+            "sets": 1,
+            "scenarios": 2,
+            "passed": 2,
+            "failed": 0,
+            "reports": []
+        }"#;
+
+        let bundle: EvalReportBundle = serde_json::from_str(json).unwrap();
+
+        assert_eq!(bundle.generated_at, "2026-05-03T01:00:00Z");
+        assert!(bundle.baseline.is_none());
+    }
+
+    #[test]
+    fn format_eval_trend_shows_external_baseline_delta() {
+        let entries = vec![(
+            PathBuf::from("eval-20260503T020000Z-all.json"),
+            EvalReportBundle {
+                generated_at: "2026-05-03T02:00:00Z".to_string(),
+                sets: 1,
+                scenarios: 20,
+                passed: 18,
+                failed: 2,
+                baseline: Some(EvalBaselineSummary {
+                    name: "claude-code-local".to_string(),
+                    generated_at: Some("2026-05-03T01:30:00Z".to_string()),
+                    scenarios: 20,
+                    passed: 19,
+                    failed: 1,
+                }),
+                reports: Vec::new(),
+            },
+        )];
+
+        let trend = format_eval_trend(&entries);
+
+        assert!(trend.contains("Delta vs baseline 'claude-code-local'"));
+        assert!(trend.contains("scenarios=+0"));
+        assert!(trend.contains("passed=-1"));
+        assert!(trend.contains("failed=+1"));
+        assert!(trend.contains("baseline_generated=2026-05-03T01:30:00Z"));
+        assert!(trend.contains("baseline=claude-code-local"));
     }
 }

@@ -22,7 +22,7 @@ Latest verified baseline observed after the 2026-05-03 Claude-gap implementation
 batch:
 
 ```text
-1043 passed; 0 failed
+1045 passed; 0 failed
 ```
 
 Verified with:
@@ -63,7 +63,8 @@ cargo test --quiet -- --test-threads=1
 - Evalsets include a 20-scenario deterministic coding replay matrix, JSON
   report output, and `/eval record <name|all>` persisted report files for
   pass/fail trend collection; `/eval trend [limit]` summarizes recent persisted
-  reports and deltas against the previous run.
+  reports, deltas against the previous run, and optional external baseline
+  metadata when present.
 - CLI panels are increasingly backed by actual runtime state, not decoration.
 - `karpathy-guidelines` is bundled as a coding behavior skill and exposed
   through `/skills`, `/karpathy <task>`, and code-change reflection checks.
@@ -129,8 +130,8 @@ not missing foundations:
    long-running command progress.
 3. Expand rendered command-level smoke tests beyond core panels into broader
    settings and history surfaces.
-4. Extend persisted eval trend comparison against external Claude/Codex
-   baselines, not only local runs.
+4. Populate persisted eval reports with real external Claude/Codex baseline
+   data once those baseline runs are available.
 5. Continue CLI polish based on trace-backed state: command palette, statusline,
    approval panels, tool expansion, and settings visibility.
 6. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,

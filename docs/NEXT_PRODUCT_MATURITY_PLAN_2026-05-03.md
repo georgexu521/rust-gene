@@ -33,11 +33,11 @@ regression coverage, not only string-generation tests.
 Goal: persisted eval trends should be ready to compare local runs against
 Claude/Codex-style baselines when those reports are available.
 
-- [ ] Extend persisted eval report bundles with optional baseline metadata.
-- [ ] Add a loader/formatter path that reports local-vs-baseline deltas when a
+- [x] Extend persisted eval report bundles with optional baseline metadata.
+- [x] Add a loader/formatter path that reports local-vs-baseline deltas when a
   baseline entry is present.
-- [ ] Keep existing JSON backward compatible.
-- [ ] Add unit tests for old JSON and baseline-aware JSON.
+- [x] Keep existing JSON backward compatible.
+- [x] Add unit tests for old JSON and baseline-aware JSON.
 
 ### 3. Git Tool Semantics And Closeout Evidence
 

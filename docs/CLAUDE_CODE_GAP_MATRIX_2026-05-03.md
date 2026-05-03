@@ -198,7 +198,9 @@ Status: initial matrix landed.
   `target/eval-reports/` for trend collection.
 - `/eval trend [limit]` summarizes recent persisted reports and shows pass/fail
   deltas against the previous run.
-- Current full local baseline after this batch: `1043 passed; 0 failed`.
+- Persisted eval report JSON is backward compatible and can carry optional
+  external baseline metadata for Claude/Codex-style comparisons.
+- Current full local baseline after this batch: `1045 passed; 0 failed`.
 
 ### P2: Product And Ecosystem Completion
 
