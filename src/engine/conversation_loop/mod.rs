@@ -134,9 +134,13 @@ fn required_validation_timeout() -> std::time::Duration {
     let secs = std::env::var("PRIORITY_AGENT_REQUIRED_VALIDATION_TIMEOUT_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(300)
+        .unwrap_or(900)
         .clamp(30, 900);
     std::time::Duration::from_secs(secs)
+}
+
+fn should_run_default_auto_tests(required_validation_commands: &[String]) -> bool {
+    required_validation_commands.is_empty()
 }
 
 async fn shell_output_with_timeout(
@@ -171,21 +175,36 @@ async fn shell_output_with_timeout(
         Ok::<Vec<u8>, std::io::Error>(buffer)
     });
 
-    let status = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(result) => result?,
-        Err(_) => {
-            #[cfg(unix)]
-            if let Some(pid) = child_pid {
-                unsafe {
-                    libc::kill(-(pid as i32), libc::SIGKILL);
+    let started_at = std::time::Instant::now();
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let status = loop {
+        tokio::select! {
+            result = child.wait() => break result?,
+            _ = heartbeat.tick() => {
+                let elapsed = started_at.elapsed();
+                if elapsed >= std::time::Duration::from_secs(30) {
+                    eprintln!(
+                        "[required validation still running after {}s] {}",
+                        elapsed.as_secs(),
+                        safe_prefix_by_bytes(command, 160)
+                    );
                 }
             }
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("command timed out after {}s", timeout.as_secs()),
-            ));
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(started_at + timeout)) => {
+                #[cfg(unix)]
+                if let Some(pid) = child_pid {
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGKILL);
+                    }
+                }
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("command timed out after {}s", timeout.as_secs()),
+                ));
+            }
         }
     };
     let stdout = stdout_task
@@ -2462,55 +2481,12 @@ impl ConversationLoop {
                     }
                 }
 
-                // ── 自动测试闭环 ──────────────────────────────
-                let test_results =
-                    super::auto_verify::run_tests(&working_dir, &changed_files, check_passed).await;
-                let manual_validation_after_changes = !successful_validation_commands.is_empty();
-                let tests_passed = test_results.iter().all(|r| r.success)
-                    || (manual_validation_after_changes && check_passed);
-                if !tests_passed {
-                    if let Some(source_context) =
-                        verification_source_context(&working_dir, &test_results)
-                    {
-                        post_edit_evidence.push(source_context.clone());
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&source_context);
-                        messages.push(Message::system(source_context));
-                    }
-                }
-                for result in test_results {
-                    let test_text = result.to_dialog_text();
-                    acceptance_evidence.push(test_text.clone());
-                    if !result.success {
-                        if manual_validation_after_changes {
-                            debug!(
-                                "Ignoring stale automatic test failure after successful manual validation command: {}",
-                                result.command
-                            );
-                        } else {
-                            failed_commands.push(result.command.clone());
-                            post_edit_evidence.push(test_text.clone());
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&test_text);
-                            messages.push(Message::system(test_text));
-                        }
-                    } else {
-                        debug!("{}", test_text);
-                    }
-                }
-                if manual_validation_after_changes {
-                    let manual_text = format!(
-                        "[Manual validation passed after code changes]\n{}",
-                        successful_validation_commands
-                            .iter()
-                            .map(|cmd| format!("  $ {}", cmd))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    );
-                    acceptance_evidence.push(manual_text.clone());
-                    post_edit_evidence.push(manual_text.clone());
-                    debug!("{}", manual_text);
-                }
+                // ── Required validation first ───────────────────
+                //
+                // Live tasks can define domain-specific required commands. Run
+                // those before generic auto-test discovery so a cold full
+                // `cargo test` probe cannot spend the turn budget before the
+                // deterministic closeout path sees the required evidence.
                 let mut required_validation_passed = true;
                 if !required_validation_commands.is_empty() {
                     let already_ran = successful_validation_commands
@@ -2545,6 +2521,62 @@ impl ConversationLoop {
                         }
                     }
                 }
+                let required_validation_covers_tests =
+                    !required_validation_commands.is_empty() && required_validation_passed;
+
+                // ── 自动测试闭环 ──────────────────────────────
+                let manual_validation_after_changes = !successful_validation_commands.is_empty();
+                let test_results = if should_run_default_auto_tests(&required_validation_commands) {
+                    super::auto_verify::run_tests(&working_dir, &changed_files, check_passed).await
+                } else {
+                    Vec::new()
+                };
+                let tests_passed = required_validation_covers_tests
+                    || test_results.iter().all(|r| r.success)
+                    || (manual_validation_after_changes && check_passed);
+                if !tests_passed {
+                    if let Some(source_context) =
+                        verification_source_context(&working_dir, &test_results)
+                    {
+                        post_edit_evidence.push(source_context.clone());
+                        tool_results_text.push('\n');
+                        tool_results_text.push_str(&source_context);
+                        messages.push(Message::system(source_context));
+                    }
+                }
+                for result in test_results {
+                    let test_text = result.to_dialog_text();
+                    acceptance_evidence.push(test_text.clone());
+                    if !result.success {
+                        if manual_validation_after_changes || required_validation_covers_tests {
+                            debug!(
+                                "Ignoring stale automatic test failure after successful required/manual validation command: {}",
+                                result.command
+                            );
+                        } else {
+                            failed_commands.push(result.command.clone());
+                            post_edit_evidence.push(test_text.clone());
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&test_text);
+                            messages.push(Message::system(test_text));
+                        }
+                    } else {
+                        debug!("{}", test_text);
+                    }
+                }
+                if manual_validation_after_changes {
+                    let manual_text = format!(
+                        "[Manual validation passed after code changes]\n{}",
+                        successful_validation_commands
+                            .iter()
+                            .map(|cmd| format!("  $ {}", cmd))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                    acceptance_evidence.push(manual_text.clone());
+                    post_edit_evidence.push(manual_text.clone());
+                    debug!("{}", manual_text);
+                }
 
                 if let Some(diff_text) =
                     changed_files_diff_evidence(&working_dir, &changed_files).await
@@ -2567,14 +2599,12 @@ impl ConversationLoop {
                 }
 
                 // ── 编程质量可观测性 ───────────────────────
-                // Live tasks can define domain-specific required commands
-                // (for example node or Python API tests). When all required
-                // commands pass, they are stronger evidence than the Rust
-                // repository's default cargo auto-test for that changed area.
-                let required_validation_covers_tests =
-                    !required_validation_commands.is_empty() && required_validation_passed;
+                // When all required commands pass, they are stronger evidence
+                // than the repository's default auto-test for that changed
+                // area.
+                let effective_check_passed = check_passed || required_validation_covers_tests;
                 let effective_tests_passed = tests_passed || required_validation_covers_tests;
-                let verify_passed = check_passed
+                let verify_passed = effective_check_passed
                     && effective_tests_passed
                     && required_validation_passed
                     && review_result.success;
@@ -2582,7 +2612,7 @@ impl ConversationLoop {
                 trace.record(TraceEvent::VerificationCompleted {
                     changed_files: changed_files.len(),
                     passed: verify_passed,
-                    check_passed,
+                    check_passed: effective_check_passed,
                     tests_passed: effective_tests_passed,
                     review_passed: review_result.success,
                     failed_commands: failed_commands.clone(),
@@ -7416,6 +7446,14 @@ mod tests {
                 "rg 'good_pattern' src/lib.rs".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_required_validation_disables_default_auto_tests() {
+        assert!(should_run_default_auto_tests(&[]));
+        assert!(!should_run_default_auto_tests(&[
+            "cargo test -q -- --test-threads=1".to_string()
+        ]));
     }
 
     #[test]
