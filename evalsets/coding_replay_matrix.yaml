@@ -1,0 +1,256 @@
+name: coding_replay_matrix
+description: Stable deterministic replay matrix for daily coding-agent behavior.
+scenarios:
+  - id: edit-then-test-pass
+    prompt: "修改代码并运行测试确认通过"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited src/lib.rs"
+        - tool: bash
+          output: "cargo test passed"
+      verification_passed: true
+      changed_files: ["src/lib.rs"]
+      acceptance_review_accepted: true
+    expect:
+      tool_sequence: ["file_edit", "bash"]
+      verification_passed: true
+      reflection_status: Passed
+      trace_events: ["tool.start", "tool.done", "verify.done", "reflection.pass", "acceptance.review"]
+
+  - id: edit-then-test-fail
+    prompt: "修复失败测试"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited src/main.rs"
+        - tool: bash
+          success: false
+          output: "cargo test failed"
+      verification_passed: false
+      changed_files: ["src/main.rs"]
+      failed_commands: ["cargo test"]
+    expect:
+      tool_sequence: ["file_edit", "bash"]
+      failed_tool: bash
+      verification_passed: false
+      reflection_status: Blocked
+      repair_required: true
+
+  - id: cargo-check-env-pass
+    prompt: "运行带环境变量的 cargo check 验证"
+    replay:
+      tool_calls:
+        - tool: bash
+          output: "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo check passed"
+      verification_passed: true
+    expect:
+      tool_sequence: ["bash"]
+      verification_passed: true
+      repair_required: false
+
+  - id: npm-test-fail-repair-needed
+    prompt: "前端改动后 npm test 报错，继续修"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited src/App.tsx"
+        - tool: bash
+          success: false
+          output: "npm test failed"
+      verification_passed: false
+      changed_files: ["src/App.tsx"]
+      failed_commands: ["npm test"]
+    expect:
+      failed_tool: bash
+      verification_passed: false
+      repair_required: true
+
+  - id: grep-no-result-recovery
+    prompt: "搜索符号没有结果后换查询策略"
+    replay:
+      tool_calls:
+        - tool: grep
+          success: false
+          output: "No matches found. Try broader terms."
+        - tool: project_list
+          output: "src/engine/conversation_loop/mod.rs"
+    expect:
+      tool_sequence: ["grep", "project_list"]
+      failed_tool: grep
+      trace_events: ["tool.done"]
+
+  - id: stale-file-edit-refusal
+    prompt: "文件被改过后不要用旧读数继续编辑"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          success: false
+          output: "stale read refused"
+    expect:
+      tool_sequence: ["file_edit"]
+      failed_tool: file_edit
+      repair_required: false
+
+  - id: action-checkpoint-synthesis
+    prompt: "反复读取后进入补丁合成"
+    replay:
+      tool_calls:
+        - tool: file_read
+          output: "current source"
+        - tool: grep
+          output: "target symbol"
+        - tool: file_edit
+          output: "patch synthesized"
+      verification_passed: true
+      changed_files: ["src/engine/mod.rs"]
+    expect:
+      tool_sequence: ["file_read", "grep", "file_edit"]
+      verification_passed: true
+
+  - id: permission-denied-command
+    prompt: "危险 bash 命令被权限拦截"
+    replay:
+      tool_calls:
+        - tool: bash
+          success: false
+          output: "Permission denied: dangerous command"
+    expect:
+      failed_tool: bash
+      tool_sequence: ["bash"]
+
+  - id: hook-blocks-risky-tool
+    prompt: "pre-tool hook 阻止风险操作"
+    replay:
+      tool_calls:
+        - tool: bash
+          success: false
+          output: "blocked by pre-tool hook"
+    expect:
+      failed_tool: bash
+      trace_events: ["tool.start", "tool.done"]
+
+  - id: subagent-verifier-report
+    prompt: "派 verifier 子 agent 审查补丁"
+    replay:
+      tool_calls:
+        - tool: agent
+          output: "verifier completed with findings"
+    expect:
+      tool_sequence: ["agent"]
+      trace_events: ["tool.done"]
+
+  - id: subagent-timeout-visible
+    prompt: "子 agent 超时后返回结构化失败"
+    replay:
+      tool_calls:
+        - tool: agent
+          success: false
+          output: "Timeout waiting for agent"
+    expect:
+      failed_tool: agent
+      tool_sequence: ["agent"]
+
+  - id: mcp-resource-read
+    prompt: "读取 MCP resource 并纳入上下文"
+    replay:
+      tool_calls:
+        - tool: read_mcp_resource
+          output: "resource content"
+    expect:
+      tool_sequence: ["read_mcp_resource"]
+
+  - id: memory-retrieval-routing
+    prompt: "根据之前记忆继续规划这个项目"
+    expect:
+      retrieval: memory
+      recommended_tools: ["memory_load"]
+
+  - id: web-research-route
+    prompt: "搜索最新 Rust CLI 设计资料"
+    expect:
+      intent: research
+      retrieval: web
+      recommended_tools: ["web_search", "web_fetch"]
+
+  - id: direct-answer-no-tools
+    prompt: "你好，简单介绍一下当前能力"
+    expect:
+      intent: direct_answer
+      forbidden_tools: ["bash", "file_edit"]
+
+  - id: project-search-before-edit
+    prompt: "在项目里找到状态栏代码再修改"
+    replay:
+      tool_calls:
+        - tool: project_list
+          output: "src/tui/status.rs"
+        - tool: file_read
+          output: "status code"
+        - tool: file_edit
+          output: "edited status"
+    expect:
+      tool_sequence: ["project_list", "file_read", "file_edit"]
+
+  - id: validation-closeout-pass
+    prompt: "完成修改后最终回复必须包含验证证据"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited"
+        - tool: bash
+          output: "cargo check passed"
+      verification_passed: true
+      changed_files: ["src/lib.rs"]
+      acceptance_review_accepted: true
+    expect:
+      verification_passed: true
+      trace_events: ["verify.done", "acceptance.review"]
+
+  - id: validation-closeout-fail
+    prompt: "验证失败时不要声称完成"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited"
+        - tool: bash
+          success: false
+          output: "cargo check failed"
+      verification_passed: false
+      changed_files: ["src/lib.rs"]
+      failed_commands: ["cargo check"]
+      acceptance_review_accepted: false
+    expect:
+      failed_tool: bash
+      verification_passed: false
+      repair_required: true
+      trace_events: ["verify.done", "acceptance.review"]
+
+  - id: context-compaction-safe
+    prompt: "长会话压缩后继续执行当前修复"
+    replay:
+      workflow_judgment: true
+      tool_calls:
+        - tool: file_read
+          output: "compressed context retained target"
+        - tool: file_edit
+          output: "edited after compaction"
+    expect:
+      trace_events: ["workflow.judgment", "workflow.plan", "tool.done"]
+      tool_sequence: ["file_read", "file_edit"]
+
+  - id: git-diff-before-final
+    prompt: "修改完成前检查 git diff"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited"
+        - tool: git
+          output: "diff summary"
+        - tool: bash
+          output: "cargo test passed"
+      verification_passed: true
+      changed_files: ["src/lib.rs"]
+    expect:
+      tool_sequence: ["file_edit", "git", "bash"]
+      verification_passed: true

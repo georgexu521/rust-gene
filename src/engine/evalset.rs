@@ -927,4 +927,19 @@ scenarios:
         let report = EvalRunner::new().run_set(&set);
         assert!(report.ok(), "{}", report.summary());
     }
+
+    #[test]
+    fn bundled_coding_replay_matrix_passes() {
+        let path = std::path::Path::new("evalsets/coding_replay_matrix.yaml");
+        if !path.exists() {
+            return;
+        }
+        let set = load_evalset(path).unwrap();
+        assert!(
+            set.scenarios.len() >= 20,
+            "coding replay matrix should cover at least 20 scenarios"
+        );
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
 }
