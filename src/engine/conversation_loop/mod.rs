@@ -1397,6 +1397,16 @@ impl ConversationLoop {
             risks: task_bundle.risks.len(),
             acceptance_checks: task_bundle.acceptance_checks.len(),
         });
+        if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
+            trace.record(TraceEvent::ImplementationIntentRecorded {
+                task_id: task_bundle.task_id.clone(),
+                workflow: format!("{:?}", task_bundle.route.workflow),
+                target_files: task_bundle.relevant_files.len(),
+                validation_commands: required_validation_commands.clone(),
+                risks: task_bundle.risks.len(),
+                reason: "code-change workflow must identify target scope and validation before first edit".to_string(),
+            });
+        }
         let reflection_pass =
             crate::engine::reflection_pass::ReflectionPass::from_task_bundle(&task_bundle);
         trace.record(TraceEvent::ReflectionPassCompleted {
@@ -2029,10 +2039,12 @@ impl ConversationLoop {
                 if result.success && Self::is_validation_tool_call(tc) {
                     if let Some(command) = tc.arguments["command"].as_str() {
                         let command = command.trim().to_string();
-                        if required_validation_commands
-                            .iter()
-                            .any(|required| required.trim() == command)
-                        {
+                        let normalized_command =
+                            Self::normalize_validation_command_for_match(&command);
+                        if required_validation_commands.iter().any(|required| {
+                            Self::normalize_validation_command_for_match(required)
+                                == normalized_command
+                        }) {
                             successful_required_validation_commands.insert(command.clone());
                         }
                         successful_validation_commands.push(command);
@@ -2491,12 +2503,19 @@ impl ConversationLoop {
                 if !required_validation_commands.is_empty() {
                     let already_ran = successful_validation_commands
                         .iter()
-                        .map(|cmd| cmd.trim().to_string())
-                        .chain(successful_required_validation_commands.iter().cloned())
+                        .map(|cmd| Self::normalize_validation_command_for_match(cmd))
+                        .chain(
+                            successful_required_validation_commands
+                                .iter()
+                                .map(|cmd| Self::normalize_validation_command_for_match(cmd)),
+                        )
                         .collect::<HashSet<_>>();
                     let required_to_run = required_validation_commands
                         .iter()
-                        .filter(|cmd| !already_ran.contains(cmd.trim()))
+                        .filter(|cmd| {
+                            !already_ran
+                                .contains(&Self::normalize_validation_command_for_match(cmd))
+                        })
                         .cloned()
                         .collect::<Vec<_>>();
                     if !required_to_run.is_empty() {
@@ -5562,8 +5581,40 @@ Do not answer in prose unless no safe patch exists."#;
         Self::is_safe_validation_command(command)
     }
 
-    fn is_safe_validation_command(command: &str) -> bool {
+    fn normalize_validation_command_for_match(command: &str) -> String {
+        let mut command = command.trim();
+        if let Some(inner) = Self::strip_shell_lc_wrapper(command) {
+            command = inner;
+        }
+        command.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn strip_shell_lc_wrapper(command: &str) -> Option<&str> {
         let command = command.trim();
+        for prefix in ["bash -lc ", "sh -lc "] {
+            let Some(rest) = command.strip_prefix(prefix) else {
+                continue;
+            };
+            let rest = rest.trim();
+            if rest.len() < 2 {
+                return None;
+            }
+            let bytes = rest.as_bytes();
+            let quote = bytes[0];
+            if quote != b'\'' && quote != b'"' {
+                return None;
+            }
+            if bytes[bytes.len() - 1] != quote {
+                return None;
+            }
+            return Some(&rest[1..rest.len() - 1]);
+        }
+        None
+    }
+
+    fn is_safe_validation_command(command: &str) -> bool {
+        let command = Self::normalize_validation_command_for_match(command);
+        let command = command.as_str();
         command.contains("cargo test")
             || command.contains("cargo check")
             || command.contains("cargo clippy")
@@ -7404,6 +7455,20 @@ mod tests {
                 "command": "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs"
             }),
         };
+        let env_prefixed_cargo_test = ToolCall {
+            id: "env_test".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1"
+            }),
+        };
+        let shell_wrapped_cargo_test = ToolCall {
+            id: "wrapped_test".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "bash -lc 'env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1'"
+            }),
+        };
 
         assert!(ConversationLoop::is_validation_tool_call(&cargo_test));
         assert!(ConversationLoop::is_validation_tool_call(&python_assertion));
@@ -7413,14 +7478,37 @@ mod tests {
         assert!(ConversationLoop::is_validation_tool_call(
             &rg_assertion_with_ampersand_pattern
         ));
+        assert!(ConversationLoop::is_validation_tool_call(
+            &env_prefixed_cargo_test
+        ));
+        assert!(ConversationLoop::is_validation_tool_call(
+            &shell_wrapped_cargo_test
+        ));
         assert!(!ConversationLoop::is_validation_tool_call(&ls));
         assert!(!ConversationLoop::is_validation_tool_call(&file_read));
+    }
+
+    #[test]
+    fn test_validation_command_match_normalizes_shell_lc_wrappers() {
+        assert_eq!(
+            ConversationLoop::normalize_validation_command_for_match(
+                "bash -lc 'env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1'"
+            ),
+            "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1"
+        );
+        assert_eq!(
+            ConversationLoop::normalize_validation_command_for_match(
+                "  env   PRIORITY_AGENT_WORKFLOW_ENABLED=1   cargo test --quiet -- --test-threads=1  "
+            ),
+            "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1"
+        );
     }
 
     #[test]
     fn test_extract_required_validation_commands_from_live_eval_prompt() {
         let prompt = r#"
 ## Acceptance checks
+- `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
 - `cargo test -q learning_planning -- --test-threads=1`
 - `node fixtures/live_frontend/book_notes/test-book-notes.cjs`
 - `python3 -m unittest fixtures/live_backend/todo_api/test_todo_api.py`
@@ -7437,6 +7525,7 @@ mod tests {
         assert_eq!(
             commands,
             vec![
+                "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1".to_string(),
                 "cargo test -q learning_planning -- --test-threads=1".to_string(),
                 "node fixtures/live_frontend/book_notes/test-book-notes.cjs".to_string(),
                 "python3 -m unittest fixtures/live_backend/todo_api/test_todo_api.py".to_string(),

@@ -91,6 +91,14 @@ pub enum TraceEvent {
         risks: usize,
         acceptance_checks: usize,
     },
+    ImplementationIntentRecorded {
+        task_id: String,
+        workflow: String,
+        target_files: usize,
+        validation_commands: Vec<String>,
+        risks: usize,
+        reason: String,
+    },
     WorkflowJudgmentCompleted {
         task_type: String,
         complexity: String,
@@ -283,6 +291,7 @@ impl TraceEvent {
             TraceEvent::IntentRouted { .. } => "intent",
             TraceEvent::ResourcePolicySelected { .. } => "resource.policy",
             TraceEvent::TaskContextBuilt { .. } => "task.context",
+            TraceEvent::ImplementationIntentRecorded { .. } => "implementation.intent",
             TraceEvent::WorkflowJudgmentCompleted { .. } => "workflow.judgment",
             TraceEvent::WorkflowPlanProgress { .. } => "workflow.plan",
             TraceEvent::WorkflowLearningAdjusted { .. } => "workflow.learning",
@@ -370,6 +379,22 @@ impl TraceEvent {
                 constraints,
                 risks,
                 acceptance_checks
+            ),
+            TraceEvent::ImplementationIntentRecorded {
+                task_id,
+                workflow,
+                target_files,
+                validation_commands,
+                risks,
+                reason,
+            } => format!(
+                "implementation intent {} workflow={} targets={} validations={} risks={} reason={}",
+                short_id(task_id),
+                workflow,
+                target_files,
+                validation_commands.len(),
+                risks,
+                preview(reason)
             ),
             TraceEvent::WorkflowJudgmentCompleted {
                 task_type,
