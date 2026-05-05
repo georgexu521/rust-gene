@@ -80,137 +80,125 @@ if [[ -z "$RUN_ID" ]]; then
 fi
 
 need_yaml() {
-  python3 - <<'PY'
-try:
-    import yaml  # noqa: F401
-except Exception as exc:
-    raise SystemExit(f"PyYAML is required for live eval parsing: {exc}")
-PY
+  ruby -e 'require "yaml"; require "json"' >/dev/null 2>&1 || {
+    echo "Ruby with yaml/json stdlib is required for live eval parsing." >&2
+    exit 1
+  }
 }
 
 yaml_get() {
   local file="$1" path="$2" default="${3:-}"
-  python3 - "$file" "$path" "$default" <<'PY'
-import sys, yaml
-file, path, default = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(file, "r", encoding="utf-8") as fh:
-    data = yaml.safe_load(fh) or {}
-cur = data
-for part in path.split("."):
-    if isinstance(cur, dict) and part in cur:
+  ruby -ryaml -rjson -e '
+    file, path, default = ARGV
+    cur = YAML.load_file(file) || {}
+    path.split(".").each do |part|
+      if cur.is_a?(Hash) && cur.key?(part)
         cur = cur[part]
-    else:
-        print(default)
-        raise SystemExit(0)
-if cur is None:
-    print(default)
-elif isinstance(cur, (dict, list)):
-    import json
-    print(json.dumps(cur, ensure_ascii=False))
-else:
-    print(cur)
-PY
+      else
+        puts default
+        exit 0
+      end
+    end
+    if cur.nil?
+      puts default
+    elsif cur.is_a?(Hash) || cur.is_a?(Array)
+      puts JSON.generate(cur)
+    else
+      puts cur
+    end
+  ' "$file" "$path" "$default"
 }
 
 yaml_list() {
   local file="$1" path="$2"
-  python3 - "$file" "$path" <<'PY'
-import sys, yaml
-file, path = sys.argv[1], sys.argv[2]
-with open(file, "r", encoding="utf-8") as fh:
-    data = yaml.safe_load(fh) or {}
-cur = data
-for part in path.split("."):
-    cur = cur.get(part, {}) if isinstance(cur, dict) else {}
-if isinstance(cur, list):
-    for item in cur:
-        print(item)
-PY
+  ruby -ryaml -e '
+    file, path = ARGV
+    cur = YAML.load_file(file) || {}
+    path.split(".").each do |part|
+      cur = cur.is_a?(Hash) ? (cur[part] || {}) : {}
+    end
+    if cur.is_a?(Array)
+      cur.each { |item| puts item }
+    end
+  ' "$file" "$path"
 }
 
 write_agent_prompt() {
   local file="$1" out="$2"
-  python3 - "$file" "$out" <<'PY'
-import sys, yaml
-
-sample_path, out_path = sys.argv[1], sys.argv[2]
-with open(sample_path, "r", encoding="utf-8") as fh:
-    sample = yaml.safe_load(fh) or {}
-
-def list_block(title, values, empty="(none)"):
-    lines = [f"## {title}"]
-    if values:
-        lines.extend(f"- {item}" for item in values)
-    else:
-        lines.append(empty)
-    return lines
-
-acceptance = sample.get("acceptance") or {}
-diff_constraints = acceptance.get("diff_constraints") or {}
-
-lines = [
-    f"# Live coding regression task: {sample.get('title', sample.get('id', 'unknown'))}",
-    "",
-    f"- Task id: `{sample.get('id', 'unknown')}`",
-    f"- Type: `{sample.get('type', 'unknown')}`",
-    f"- Eval intent: `{sample.get('eval_intent', 'seeded_code_change')}`",
-    f"- Risk: `{sample.get('risk', 'unknown')}`",
-    f"- Complexity: `{sample.get('complexity', 'unknown')}`",
-    "",
-    "## User task",
-    "",
-    str(sample.get("prompt", "")).strip(),
-    "",
-]
-
-lines.extend(list_block("Allowed tools", sample.get("allowed_tools") or []))
-lines.append("")
-lines.extend(list_block("Forbidden tools", sample.get("forbidden_tools") or []))
-lines.append("")
-lines.extend(list_block("Expected behavior", sample.get("expected_behavior") or []))
-lines.append("")
-lines.extend([
-    "## Acceptance checks",
-    "",
-    "Before your final response, run every required command below. If any command fails, inspect the failure, repair the code, and rerun the relevant command. Do not claim completion while required commands are failing.",
-])
-required = acceptance.get("required_commands") or []
-if required:
-    lines.extend(f"- `{cmd}`" for cmd in required)
-else:
-    lines.append("- (none)")
-lines.append("")
-lines.extend([
-    "## Diff constraints",
-    "",
-    f"- Max files changed: `{diff_constraints.get('max_files_changed', 'unspecified')}`",
-])
-for forbidden in diff_constraints.get("forbidden_paths") or []:
-    lines.append(f"- Do not change path: `{forbidden}`")
-lines.append("")
-lines.extend([
-    "## Closeout requirements",
-    "",
-])
-intent = str(sample.get("eval_intent", "seeded_code_change")).strip()
-if intent == "audit_or_regression_check":
-    lines.append("- This is an audit/regression evaluation. If the requested behavior is already present, prove it with direct evidence and required commands instead of forcing an arbitrary edit.")
-elif intent == "stale_or_already_satisfied":
-    lines.append("- This case may already be satisfied on the current baseline. Do not force an arbitrary edit; prove the current state and call out stale-baseline risk clearly.")
-else:
-    lines.append("- This is a real code-change evaluation in an isolated worktree. Do not stop at investigation.")
-lines.extend([
-    "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, either make a focused edit or clearly state the concrete blocker.",
-    "- If the code is already fixed, prove it with the required commands and still provide a Closeout.",
-    "- Summarize files changed and why.",
-    "- List validation commands you ran and their pass/fail status.",
-    "- Mention any remaining risk or blocker explicitly.",
-    "- The final response must include a `Closeout:` section.",
-])
-
-with open(out_path, "w", encoding="utf-8") as fh:
-    fh.write("\n".join(lines).rstrip() + "\n")
-PY
+  ruby -ryaml -e '
+    sample_path, out_path = ARGV
+    sample = YAML.load_file(sample_path) || {}
+    acceptance = sample["acceptance"] || {}
+    diff_constraints = acceptance["diff_constraints"] || {}
+    list_block = lambda do |title, values, empty = "(none)"|
+      lines = ["## #{title}"]
+      values = [] unless values.is_a?(Array)
+      if values.empty?
+        lines << empty
+      else
+        values.each { |item| lines << "- #{item}" }
+      end
+      lines
+    end
+    lines = [
+      "# Live coding regression task: #{sample["title"] || sample["id"] || "unknown"}",
+      "",
+      "- Task id: `#{sample["id"] || "unknown"}`",
+      "- Type: `#{sample["type"] || "unknown"}`",
+      "- Eval intent: `#{sample["eval_intent"] || "seeded_code_change"}`",
+      "- Risk: `#{sample["risk"] || "unknown"}`",
+      "- Complexity: `#{sample["complexity"] || "unknown"}`",
+      "",
+      "## User task",
+      "",
+      sample["prompt"].to_s.strip,
+      "",
+    ]
+    lines.concat(list_block.call("Allowed tools", sample["allowed_tools"] || []))
+    lines << ""
+    lines.concat(list_block.call("Forbidden tools", sample["forbidden_tools"] || []))
+    lines << ""
+    lines.concat(list_block.call("Expected behavior", sample["expected_behavior"] || []))
+    lines << ""
+    lines.concat([
+      "## Acceptance checks",
+      "",
+      "Before your final response, run every required command below. If any command fails, inspect the failure, repair the code, and rerun the relevant command. Do not claim completion while required commands are failing.",
+    ])
+    required = acceptance["required_commands"] || []
+    if required.empty?
+      lines << "- (none)"
+    else
+      required.each { |cmd| lines << "- `#{cmd}`" }
+    end
+    lines.concat([
+      "",
+      "## Diff constraints",
+      "",
+      "- Max files changed: `#{diff_constraints["max_files_changed"] || "unspecified"}`",
+    ])
+    (diff_constraints["forbidden_paths"] || []).each do |forbidden|
+      lines << "- Do not change path: `#{forbidden}`"
+    end
+    lines.concat(["", "## Closeout requirements", ""])
+    case sample.fetch("eval_intent", "seeded_code_change").to_s.strip
+    when "audit_or_regression_check"
+      lines << "- This is an audit/regression evaluation. If the requested behavior is already present, prove it with direct evidence and required commands instead of forcing an arbitrary edit."
+    when "stale_or_already_satisfied"
+      lines << "- This case may already be satisfied on the current baseline. Do not force an arbitrary edit; prove the current state and call out stale-baseline risk clearly."
+    else
+      lines << "- This is a real code-change evaluation in an isolated worktree. Do not stop at investigation."
+    end
+    lines.concat([
+      "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, either make a focused edit or clearly state the concrete blocker.",
+      "- If the code is already fixed, prove it with the required commands and still provide a Closeout.",
+      "- Summarize files changed and why.",
+      "- List validation commands you ran and their pass/fail status.",
+      "- Mention any remaining risk or blocker explicitly.",
+      "- The final response must include a `Closeout:` section.",
+    ])
+    File.write(out_path, lines.join("\n").rstrip + "\n")
+  ' "$file" "$out"
 }
 
 json_payload() {
@@ -234,26 +222,18 @@ PY
 
 task_keywords() {
   local file="$1"
-  python3 - "$file" <<'PY'
-import re, sys, yaml
-with open(sys.argv[1], encoding="utf-8") as fh:
-    data = yaml.safe_load(fh) or {}
-text = "\n".join(str(data.get(k, "")) for k in ("id", "title", "type", "prompt"))
-stop = {
-    "this", "that", "with", "from", "into", "should", "must", "only", "when",
-    "true", "false", "mode", "task", "code", "file", "files", "test", "tests",
-    "要求", "修复", "问题", "新增", "更新", "项目", "任务", "代码", "测试",
-}
-terms = []
-for term in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}|[\u4e00-\u9fff]{2,}", text):
-    normalized = term.strip().lower()
-    if normalized in stop:
-        continue
-    if normalized not in terms:
-        terms.append(normalized)
-for term in terms[:14]:
-    print(term)
-PY
+  ruby -ryaml -e '
+    data = YAML.load_file(ARGV[0]) || {}
+    text = %w[id title type prompt].map { |key| data[key].to_s }.join("\n")
+    stop = %w[this that with from into should must only when true false mode task code file files test tests 要求 修复 问题 新增 更新 项目 任务 代码 测试]
+    terms = []
+    text.scan(/[A-Za-z_][A-Za-z0-9_]{3,}|[\u4e00-\u9fff]{2,}/).each do |term|
+      normalized = term.strip.downcase
+      next if stop.include?(normalized)
+      terms << normalized unless terms.include?(normalized)
+    end
+    puts terms.first(14)
+  ' "$file"
 }
 
 build_repo_context() {
@@ -414,35 +394,24 @@ prepare_task() {
     fi
   fi
 
-  if ! python3 - "$file" "$task_workdir" "$prepare_log" <<'PY'
-import subprocess
-import sys
-import yaml
-
-sample_path, workdir, log_path = sys.argv[1:4]
-with open(sample_path, encoding="utf-8") as fh:
-    sample = yaml.safe_load(fh) or {}
-commands = (sample.get("repo") or {}).get("prepare_commands") or []
-with open(log_path, "w", encoding="utf-8") as log:
-    for command in commands:
-        if not str(command).strip():
-            continue
-        log.write(f"$ {command}\n")
-        log.flush()
-        result = subprocess.run(
-            str(command),
-            cwd=workdir,
-            shell=True,
-            executable="/bin/bash",
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        log.write(f"[exit status: {result.returncode}]\n\n")
-        log.flush()
-        if result.returncode != 0:
-            raise SystemExit(result.returncode)
-PY
+  if ! ruby -ryaml -e '
+sample_path, workdir, log_path = ARGV
+sample = YAML.load_file(sample_path) || {}
+commands = (sample["repo"] || {})["prepare_commands"] || []
+File.open(log_path, "w") do |log|
+  commands.each do |command|
+    command = command.to_s
+    next if command.strip.empty?
+    log.write("$ #{command}\n")
+    log.flush
+    system(command, chdir: workdir, out: log, err: [:child, :out])
+    status = $?.exitstatus || 1
+    log.write("[exit status: #{status}]\n\n")
+    log.flush
+    exit(status) if status != 0
+  end
+end
+' "$file" "$task_workdir" "$prepare_log"
   then
     echo "Prepare command failed for $id. See $prepare_log" >&2
     exit 1
@@ -457,18 +426,15 @@ PY
   fi
 
   write_agent_prompt "$file" "$prompt_file"
-  python3 - "$file" "$metadata" "$task_workdir" "$resolved_ref" "$env_base" <<'PY'
-import json, sys, yaml
-sample_path, metadata_path, workdir, resolved_ref, env_base = sys.argv[1:6]
-with open(sample_path, encoding="utf-8") as fh:
-    sample = yaml.safe_load(fh) or {}
+  ruby -ryaml -rjson -e '
+sample_path, metadata_path, workdir, resolved_ref, env_base = ARGV
+sample = YAML.load_file(sample_path) || {}
 sample["_sample_path"] = sample_path
 sample["_workdir"] = workdir
 sample["_resolved_ref"] = resolved_ref
 sample["_env_base"] = env_base
-with open(metadata_path, "w", encoding="utf-8") as fh:
-    json.dump(sample, fh, ensure_ascii=False, indent=2)
-PY
+File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
+' "$file" "$metadata" "$task_workdir" "$resolved_ref" "$env_base"
 
   {
     echo "# Live Eval Runbook: $id"

@@ -205,6 +205,8 @@ Follow-up implemented:
 
 - `scripts/run_live_eval.sh --list` now uses a lightweight stdlib parser for
   top-level task metadata and no longer requires PyYAML.
+- The remaining live task parsing paths now use Ruby's YAML/JSON stdlib, so
+  prepare/collect/report flows no longer require PyYAML either.
 - `scripts/run_live_eval.sh --mode summary --run-id <id>` writes
   `docs/benchmarks/live-<run-id>/summary.md`.
 - Summary rows include pass/fail status, `eval_intent`, `failure_owner`,
@@ -225,3 +227,10 @@ Rerun:
 - The model again produced no `file_edit`.
 - This confirms the current weakness is not stale eval design for this case; it
   is the model-led edit transition on a medium script feature.
+
+Latest fixture adjustment:
+
+- The dashboard summary fixture now keeps the `--mode summary` branch and help
+  surface, but replaces `summary_task()` with a not-implemented stub. This keeps
+  the case seeded while narrowing the expected edit to the actual missing
+  implementation point.

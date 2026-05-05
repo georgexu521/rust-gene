@@ -12,6 +12,7 @@ repo:
     - |
       python3 - <<'PY'
       from pathlib import Path
+      from textwrap import dedent
 
       path = Path("scripts/run_live_eval.sh")
       text = path.read_text()
@@ -19,23 +20,21 @@ repo:
       end = text.find("\nrun_one() {", start)
       if start < 0 or end < 0:
           raise SystemExit("expected summary_task function was not found")
-      text = text[:start] + text[end:]
-      block = "\n".join([
-          '  if [[ "$MODE" == "summary" ]]; then',
-          '    if [[ -z "$RUN_ID" ]]; then',
-          '      echo "--run-id is required for summary mode" >&2',
-          '      exit 1',
-          '    fi',
-          '    summary_task',
-          '    exit 0',
-          '  fi',
-          '',
-      ])
-      if block not in text:
-          raise SystemExit("expected summary mode branch was not found")
-      text = text.replace(block, "")
-      text = text.replace("  scripts/run_live_eval.sh --mode summary --run-id <id>\n", "")
-      text = text.replace("  summary   Generate docs/benchmarks/live-<run-id>/summary.md.\n", "")
+      stub = dedent('''
+      summary_task() {
+        local run_report_dir="$REPORT_DIR/live-$RUN_ID"
+        local summary="$run_report_dir/summary.md"
+        mkdir -p "$run_report_dir"
+        echo "summary mode is not implemented yet" >&2
+        echo "# Live Eval Summary: $RUN_ID" >"$summary"
+        echo "" >>"$summary"
+        echo "- status: not_implemented" >>"$summary"
+        return 2
+      }
+      ''')
+      text = text[:start] + "\n" + stub + text[end:]
+      if "--mode summary" not in text or "summary_task" not in text:
+          raise SystemExit("summary mode entrypoint unexpectedly missing")
       path.write_text(text)
       PY
   setup:
@@ -43,6 +42,10 @@ repo:
 
 prompt: |
   为 live eval 增加汇总报告能力，方便长期对标 Claude Code / Codex。
+
+  当前 seeded worktree 已保留 `scripts/run_live_eval.sh --mode summary` 入口，
+  但 `summary_task()` 被替换成了未实现 stub。请优先修改
+  `scripts/run_live_eval.sh` 里的 `summary_task()`，不要停在检查脚本状态。
 
   要求：
   - 对一个 run-id 下的任务生成 summary.md。

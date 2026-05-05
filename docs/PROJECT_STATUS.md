@@ -168,3 +168,6 @@ Latest maintenance note:
 - The scrollback-first interactive shell now prints concise long-running tool
   progress lines, so validation work is visible without switching to a
   full-screen interface.
+- Live eval task parsing no longer depends on PyYAML for prepare/collect paths,
+  and the dashboard-summary seeded fixture now preserves the summary entrypoint
+  while stubbing only `summary_task()`.

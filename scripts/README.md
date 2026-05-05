@@ -22,7 +22,8 @@ Use this file as the source of truth for what is on the critical path.
   diff/test/report artifacts. Agent-run reports include a `Specialty signals`
   section that summarizes memory, automation/validation, guided debugging,
   guided reasoning, weighted planning, and closeout activity for real-task
-  review.
+  review. Task YAML parsing uses the system Ruby YAML/JSON stdlib, so
+  prepare/collect paths do not require installing PyYAML.
 - `coding-workflow-gates.sh`: layered coding-agent workflow gates. Use `quick`
   for focused deterministic edit/validation/repair/closeout contracts,
   `standard` before workflow/tool commits, `full` for docs/build/full-test

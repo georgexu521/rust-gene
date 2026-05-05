@@ -99,6 +99,12 @@ Each run gets a compact score:
     `capability-dashboard-summary-rerun-20260503-235256`; the seeded fixture
     worked and required `--mode summary` failed, but the model again produced no
     `file_edit`.
+  - Harness follow-up: `run_live_eval.sh` now uses Ruby YAML/JSON stdlib for
+    live task parsing instead of requiring PyYAML in prepare/collect paths.
+    The dashboard summary fixture now keeps the `--mode summary` entrypoint and
+    replaces only `summary_task()` with an explicit not-implemented stub, so the
+    seeded edit target is narrower and less likely to require reconstructing a
+    large script block from scratch.
 
 - [x] `resume-session-picker`
   - Type: feature.
