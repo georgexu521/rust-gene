@@ -195,3 +195,11 @@ Latest maintenance note:
   `file_read`/`grep` lookup before patching instead of contradicting that with a
   blanket read/search ban. Action-checkpoint unexposed-tool errors now list the
   currently exposed tools and the expected repair path.
+- Action checkpoint now enforces that targeted lookup budget in the exposed
+  tool set: after one successful `file_read`/`grep` lookup, the next focused
+  repair request hides read/search tools and forces patch tools only.
+- A live A/B on `memory-save-quality-gate` confirmed the lookup-budget change
+  moved the run from `agent_flow/action_checkpoint_no_patch` with zero edits to
+  a real repair loop with changed files, validation, guided debugging,
+  acceptance review, and final `llm_reasoning` failure. The remaining failure is
+  product reasoning/repair quality, not checkpoint tool flow.

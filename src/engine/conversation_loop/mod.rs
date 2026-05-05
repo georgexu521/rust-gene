@@ -1864,6 +1864,7 @@ impl ConversationLoop {
         let mut iterations_used = 0;
         let mut no_code_progress_rounds = 0usize;
         let mut action_checkpoint_active = false;
+        let mut action_checkpoint_lookup_used = false;
         let mut patch_synthesis_recovery_used = false;
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
@@ -1991,7 +1992,11 @@ impl ConversationLoop {
                 crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
                     && !Self::git_status_files_since(&baseline_git_status_files).is_empty();
             let tools = if action_checkpoint_active {
-                let action_tools = Self::code_action_tools(&base_tools, has_changes_before_request);
+                let action_tools = Self::code_action_tools(
+                    &base_tools,
+                    has_changes_before_request,
+                    !action_checkpoint_lookup_used,
+                );
                 if action_tools.is_empty() {
                     base_tools.clone()
                 } else {
@@ -2011,6 +2016,7 @@ impl ConversationLoop {
                 exposed_names.sort();
                 request_messages.push(Message::system(Self::focused_repair_mode_prompt(
                     &exposed_names,
+                    action_checkpoint_lookup_used,
                 )));
             }
             let memory_already_in_turn_context = turn_retrieval_context
@@ -2220,6 +2226,10 @@ impl ConversationLoop {
             let used_write_tool = tool_calls
                 .iter()
                 .any(|tc| Self::is_code_write_tool_name(&tc.name));
+            let used_action_checkpoint_lookup = action_checkpoint_active
+                && tool_calls
+                    .iter()
+                    .any(|tc| matches!(tc.name.as_str(), "file_read" | "grep"));
             let mut any_tool_success = false;
             let mut repeated_failed_tools = Vec::new();
             let mut failed_tool_names_this_round = Vec::new();
@@ -2298,11 +2308,13 @@ impl ConversationLoop {
                     no_code_progress_rounds = 0;
                     action_checkpoint_no_change_rounds = 0;
                     action_checkpoint_active = false;
+                    action_checkpoint_lookup_used = false;
                 } else if any_tool_success && !used_write_tool {
                     if has_worktree_changes && !successful_validation_commands.is_empty() {
                         no_code_progress_rounds = 0;
                         action_checkpoint_active = false;
                         action_checkpoint_no_change_rounds = 0;
+                        action_checkpoint_lookup_used = false;
                     } else {
                         no_code_progress_rounds += 1;
                     }
@@ -2324,6 +2336,7 @@ impl ConversationLoop {
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&checkpoint);
                         action_checkpoint_active = true;
+                        action_checkpoint_lookup_used = true;
                         action_checkpoint_no_change_rounds = 2;
                         force_patch_synthesis_after_no_change = true;
                         activated_checkpoint_this_round = true;
@@ -2352,8 +2365,16 @@ impl ConversationLoop {
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&checkpoint);
                         action_checkpoint_active = true;
+                        action_checkpoint_lookup_used = false;
                         action_checkpoint_no_change_rounds = 0;
                         activated_checkpoint_this_round = true;
+                    } else if action_checkpoint_active && used_action_checkpoint_lookup {
+                        action_checkpoint_lookup_used = true;
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error:
+                                "focused repair targeted lookup used; next checkpoint request will expose patch tools only"
+                                    .to_string(),
+                        });
                     }
                     if action_checkpoint_active && !activated_checkpoint_this_round {
                         action_checkpoint_no_change_rounds += 1;
@@ -2396,7 +2417,7 @@ impl ConversationLoop {
                             patch_synthesis_recovery_used = true;
                             action_checkpoint_no_change_rounds = 0;
                             let recovery = format!(
-                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe file_edit/file_write patch from the evidence already gathered. If the evidence is insufficient, perform exactly one targeted file_read/grep, then patch. Do not call tools that are not exposed.",
+                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe file_edit/file_write patch from the evidence already gathered. If file_read or grep is still exposed, you may use exactly one targeted lookup before patching; otherwise patch from the evidence already gathered. Do not call tools that are not exposed.",
                                 exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", ")
                             );
                             messages.push(Message::system(recovery.clone()));
@@ -2487,6 +2508,7 @@ impl ConversationLoop {
                             }
                             if !changed_files.is_empty() {
                                 action_checkpoint_active = false;
+                                action_checkpoint_lookup_used = false;
                                 action_checkpoint_no_change_rounds = 0;
                                 no_code_progress_rounds = 0;
                             } else {
@@ -2521,6 +2543,7 @@ impl ConversationLoop {
                             {
                                 patch_synthesis_recovery_used = true;
                                 action_checkpoint_active = false;
+                                action_checkpoint_lookup_used = false;
                                 action_checkpoint_no_change_rounds = 0;
                                 no_code_progress_rounds = 1;
                                 let recovery = format!(
@@ -3164,6 +3187,7 @@ impl ConversationLoop {
                                         action_checkpoint_no_change_rounds = 0;
                                         if needs_acceptance_investigation {
                                             action_checkpoint_active = false;
+                                            action_checkpoint_lookup_used = false;
                                             messages.push(Message::system(
                                                 "Acceptance review gaps remain after compile/code review checks. Restore investigation mode: inspect the unresolved acceptance items against the implementation, identify every acceptance-critical bypass or missing call site, then make the smallest targeted fix. If multiple independent acceptance-critical bypasses are visible, fix them together."
                                                     .to_string(),
@@ -3175,6 +3199,7 @@ impl ConversationLoop {
                                             });
                                         } else {
                                             action_checkpoint_active = true;
+                                            action_checkpoint_lookup_used = true;
                                             trace.record(TraceEvent::WorkflowFallback {
                                                 error:
                                                     "acceptance review requested repair; switching to action-only repair mode"
@@ -5866,22 +5891,29 @@ Do not answer in prose unless no safe patch exists."#;
     fn code_action_tools(
         tools: &[crate::services::api::Tool],
         has_changes_before_request: bool,
+        allow_targeted_lookup: bool,
     ) -> Vec<crate::services::api::Tool> {
         tools
             .iter()
             .filter(|tool| {
                 Self::is_code_write_tool_name(&tool.name)
-                    || matches!(tool.name.as_str(), "file_read" | "grep")
+                    || (allow_targeted_lookup && matches!(tool.name.as_str(), "file_read" | "grep"))
                     || (has_changes_before_request && tool.name == "bash")
             })
             .cloned()
             .collect()
     }
 
-    fn focused_repair_mode_prompt(exposed_names: &[String]) -> String {
+    fn focused_repair_mode_prompt(exposed_names: &[String], targeted_lookup_used: bool) -> String {
+        let lookup_rule = if targeted_lookup_used {
+            "The targeted lookup budget has already been used; do not call file_read/grep again. Patch from the evidence already gathered."
+        } else {
+            "file_read/grep are allowed only for one targeted lookup of a specific symbol, test, or call site; do not repeat broad inspection."
+        };
         format!(
-            "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Use file_edit/file_write to patch files as soon as the target line is known. file_read/grep are allowed only for one targeted lookup of a specific symbol, test, or call site; do not repeat broad inspection. Do not call glob/project_list or any tool that is not in the exposed list. If bash is exposed, use it only to run validation after a patch. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
-            exposed_names.join(", ")
+            "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Use file_edit/file_write to patch files as soon as the target line is known. {} Do not call glob/project_list or any tool that is not in the exposed list. If bash is exposed, use it only to run validation after a patch. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
+            exposed_names.join(", "),
+            lookup_rule
         )
     }
 
@@ -7228,7 +7260,7 @@ mod tests {
             },
         ];
 
-        let before_change = ConversationLoop::code_action_tools(&tools, false)
+        let before_change = ConversationLoop::code_action_tools(&tools, false, true)
             .into_iter()
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
@@ -7237,11 +7269,19 @@ mod tests {
         assert!(before_change.contains("grep"));
         assert!(!before_change.contains("bash"));
 
-        let after_change = ConversationLoop::code_action_tools(&tools, true)
+        let after_change = ConversationLoop::code_action_tools(&tools, true, true)
             .into_iter()
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
         assert!(after_change.contains("bash"));
+
+        let after_lookup = ConversationLoop::code_action_tools(&tools, false, false)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<HashSet<_>>();
+        assert!(after_lookup.contains("file_edit"));
+        assert!(!after_lookup.contains("file_read"));
+        assert!(!after_lookup.contains("grep"));
     }
 
     #[test]
@@ -7252,11 +7292,15 @@ mod tests {
             "grep".to_string(),
         ];
 
-        let prompt = ConversationLoop::focused_repair_mode_prompt(&exposed);
+        let prompt = ConversationLoop::focused_repair_mode_prompt(&exposed, false);
 
         assert!(prompt.contains("file_read/grep are allowed only for one targeted lookup"));
         assert!(prompt.contains("Do not call glob/project_list"));
         assert!(!prompt.contains("Do not call grep/glob/file_read/project_list"));
+
+        let prompt_after_lookup = ConversationLoop::focused_repair_mode_prompt(&exposed, true);
+        assert!(prompt_after_lookup.contains("targeted lookup budget has already been used"));
+        assert!(prompt_after_lookup.contains("do not call file_read/grep again"));
     }
 
     #[test]
