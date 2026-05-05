@@ -183,4 +183,6 @@ Latest maintenance note:
   summaries and writes `docs/benchmarks/live-eval-shortfall-summary.md`; the
   current aggregate scans 111 runs / 110 task reports and shows the largest
   shortfalls are verification/closeout failure, required-command failure, and
-  older report metadata gaps.
+  older report metadata gaps. The aggregate also backfills conservative
+  inferred owners for old reports while keeping `owner_metadata_missing`
+  separate, so historical format gaps do not hide product failure patterns.

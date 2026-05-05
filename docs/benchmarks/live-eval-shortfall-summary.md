@@ -1,6 +1,6 @@
 # Live Eval Shortfall Summary
 
-- Generated: `2026-05-05 23:08:56 +0800`
+- Generated: `2026-05-05 23:14:56 +0800`
 - Runs scanned: `111`
 - Task reports scanned: `110`
 - Pass rate: `29/110` (26.4%)
@@ -18,7 +18,10 @@
 | failed_tasks | 81 | 73.6% |
 | required_command_failed | 52 | 47.3% |
 | verification_failed | 80 | 72.7% |
+| closeout_not_successful | 76 | 69.1% |
+| recovered_validation_failures | 56 | 50.9% |
 | seeded_no_diff_failed | 2 | 1.8% |
+| owner_metadata_missing | 92 | 83.6% |
 | real_code_change_passed | 25 | 22.7% |
 | plan_only_passed | 0 | 0.0% |
 
@@ -30,6 +33,15 @@
 | none | 7 | 6.4% |
 | agent_flow | 7 | 6.4% |
 | llm_reasoning | 3 | 2.7% |
+| eval_harness | 1 | 0.9% |
+
+## Inferred Owners
+
+| owner | count | share |
+|---|---|---|
+| llm_reasoning | 44 | 40.0% |
+| agent_flow | 36 | 32.7% |
+| none | 29 | 26.4% |
 | eval_harness | 1 | 0.9% |
 
 ## Failure Modes
@@ -65,31 +77,33 @@
 
 ## Recent Failed Tasks
 
-| run | task | intent | owner | required | verification | diff | warnings |
-|---|---|---|---|---|---|---|---|
-| live-eval-20260501-211109 | code-change-verification-repair-loop | missing | missing | ok | failed | yes | none |
-| live-eval-20260501-215158 | code-change-verification-repair-loop | missing | missing | failed | failed | no | no_code_diff |
-| live-eval-20260501-225616 | skill-promotion-gate | missing | missing | ok | failed | no | no_code_diff |
-| live-eval-20260501-231638 | skill-promotion-gate | missing | missing | failed | failed | no | no_code_diff |
-| live-eval-20260501-233203 | skill-promotion-gate | missing | missing | failed | failed | yes | tool_errors_seen |
-| live-eval-20260501-235010 | skill-promotion-gate | missing | missing | failed | failed | no | no_code_diff |
-| live-eval-20260502-084615 | skill-promotion-gate | missing | missing | failed | failed | yes | tool_errors_seen |
-| live-eval-20260502-094751 | memory-recall-conflict-precision | missing | missing | failed | failed | yes | none |
-| live-eval-20260502-101528 | memory-recall-conflict-precision | missing | missing | ok | failed | no | no_code_diff |
-| live-eval-20260502-104533 | memory-save-duplicate-demotion | missing | missing | failed | failed | yes | none |
-| live-eval-20260502-115116 | memory-save-sensitive-hard-block | missing | missing | failed | failed | yes | none |
-| live-eval-20260502-125317 | memory-save-quality-gate | missing | missing | failed | failed | no | no_code_diff |
-| live-eval-20260502-131257 | memory-save-quality-gate | missing | missing | failed | failed | yes | none |
-| live-eval-20260502-143038 | skill-promotion-gate | missing | missing | ok | failed | yes | tool_errors_seen |
-| live-memory-planning-20260502-200232 | persistent-memory-planning-context | missing | agent_flow | ok | failed | yes | none |
-| live-memory-planning-20260502-224641 | persistent-memory-planning-context | missing | agent_flow | ok | failed | yes | none |
-| realflow-guided-20260503-170614 | memory-save-quality-gate | missing | llm_reasoning | failed | failed | yes | none |
-| realtask-backend-20260502-181555 | backend-todo-api-crud | missing | missing | failed | failed | yes | tool_errors_seen |
-| realtask-frontend-20260502-161816 | frontend-book-notes-localstorage | missing | missing | failed | failed | yes | tool_errors_seen |
-| realtask-frontend-20260502-164958 | frontend-book-notes-localstorage | missing | missing | ok | failed | yes | tool_errors_seen |
+| run | task | intent | owner | inferred_owner | required | verification | diff | warnings |
+|---|---|---|---|---|---|---|---|---|
+| live-eval-20260501-211109 | code-change-verification-repair-loop | missing | missing | llm_reasoning | ok | failed | yes | none |
+| live-eval-20260501-215158 | code-change-verification-repair-loop | missing | missing | agent_flow | failed | failed | no | no_code_diff |
+| live-eval-20260501-225616 | skill-promotion-gate | missing | missing | agent_flow | ok | failed | no | no_code_diff |
+| live-eval-20260501-231638 | skill-promotion-gate | missing | missing | agent_flow | failed | failed | no | no_code_diff |
+| live-eval-20260501-233203 | skill-promotion-gate | missing | missing | llm_reasoning | failed | failed | yes | tool_errors_seen |
+| live-eval-20260501-235010 | skill-promotion-gate | missing | missing | agent_flow | failed | failed | no | no_code_diff |
+| live-eval-20260502-084615 | skill-promotion-gate | missing | missing | llm_reasoning | failed | failed | yes | tool_errors_seen |
+| live-eval-20260502-094751 | memory-recall-conflict-precision | missing | missing | llm_reasoning | failed | failed | yes | none |
+| live-eval-20260502-101528 | memory-recall-conflict-precision | missing | missing | agent_flow | ok | failed | no | no_code_diff |
+| live-eval-20260502-104533 | memory-save-duplicate-demotion | missing | missing | llm_reasoning | failed | failed | yes | none |
+| live-eval-20260502-115116 | memory-save-sensitive-hard-block | missing | missing | llm_reasoning | failed | failed | yes | none |
+| live-eval-20260502-125317 | memory-save-quality-gate | missing | missing | agent_flow | failed | failed | no | no_code_diff |
+| live-eval-20260502-131257 | memory-save-quality-gate | missing | missing | llm_reasoning | failed | failed | yes | none |
+| live-eval-20260502-143038 | skill-promotion-gate | missing | missing | agent_flow | ok | failed | yes | tool_errors_seen |
+| live-memory-planning-20260502-200232 | persistent-memory-planning-context | missing | agent_flow | agent_flow | ok | failed | yes | none |
+| live-memory-planning-20260502-224641 | persistent-memory-planning-context | missing | agent_flow | agent_flow | ok | failed | yes | none |
+| realflow-guided-20260503-170614 | memory-save-quality-gate | missing | llm_reasoning | llm_reasoning | failed | failed | yes | none |
+| realtask-backend-20260502-181555 | backend-todo-api-crud | missing | missing | llm_reasoning | failed | failed | yes | tool_errors_seen |
+| realtask-frontend-20260502-161816 | frontend-book-notes-localstorage | missing | missing | llm_reasoning | failed | failed | yes | tool_errors_seen |
+| realtask-frontend-20260502-164958 | frontend-book-notes-localstorage | missing | missing | agent_flow | ok | failed | yes | tool_errors_seen |
 
 ## Reading
 
 - `real_code_change_passed` requires an agent-run report with a non-empty diff.
 - `plan_only_passed` is tracked separately so planning success is not counted as code-change success.
 - `seeded_no_diff_failed` is the strongest signal for agents that inspect but do not patch.
+- `inferred_owner` is a conservative backfill for older reports that predate structured `failure_owner` fields.
+- `owner_metadata_missing` tracks that historical evidence gap separately from inferred product failures.

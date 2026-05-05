@@ -58,10 +58,29 @@ def table_rows(text):
                 rows.append(cells[:12])
     return rows
 
+def infer_owner(record):
+    if record["owner"] != "missing":
+        return record["owner"]
+    warnings = record["warnings"].split(",") if record["warnings"] != "none" else []
+    if record["status"] == "passed":
+        return "none"
+    if record["diff"] == "no" and record["intent"] == "seeded_code_change":
+        return "llm_reasoning"
+    if record["required"] == "failed" and record["diff"] == "yes":
+        return "llm_reasoning"
+    if "tool_errors_seen" in warnings:
+        return "agent_flow"
+    if "no_code_diff" in warnings:
+        return "agent_flow"
+    if record["verification"] == "failed":
+        return "llm_reasoning"
+    return "unknown"
+
 run_records = []
 task_records = []
 failure_modes = collections.Counter()
 owners = collections.Counter()
+inferred_owners = collections.Counter()
 intents = collections.Counter()
 status_counts = collections.Counter()
 warning_counts = collections.Counter()
@@ -92,7 +111,7 @@ for summary in sorted(benchmarks.glob("live-*/summary.md")):
     for task, status, intent, owner, required, plan, boundary, verification, closeout, first_write, diff, warnings in table_rows(text):
         if task == "none":
             continue
-        task_records.append({
+        record = {
             "run": run_id,
             "task": task,
             "status": status,
@@ -106,8 +125,11 @@ for summary in sorted(benchmarks.glob("live-*/summary.md")):
             "first_write": first_write,
             "diff": diff,
             "warnings": warnings,
-        })
+        }
+        record["inferred_owner"] = infer_owner(record)
+        task_records.append(record)
         owners[owner] += 1
+        inferred_owners[record["inferred_owner"]] += 1
         intents[intent] += 1
         status_counts[status] += 1
 
@@ -119,6 +141,12 @@ plan_only_passes = sum(record["plan_only_passes"] for record in run_records)
 seeded_no_diff = sum(record["seeded_no_diff"] for record in run_records)
 required_failed = sum(1 for record in task_records if record["required"] == "failed")
 verification_failed = sum(1 for record in task_records if record["verification"] == "failed")
+closeout_not_successful = failure_modes["closeout_not_successful"]
+owner_metadata_missing = owners["missing"]
+recovered_validation_failures = (
+    failure_modes["earlier_verification_failed_before_repair"]
+    + failure_modes["earlier_stage_validation_failed_before_repair"]
+)
 no_diff_seeded_tasks = [
     record
     for record in task_records
@@ -174,7 +202,10 @@ lines.extend(md_table(
         ["failed_tasks", failed_tasks, pct(failed_tasks, total_tasks)],
         ["required_command_failed", required_failed, pct(required_failed, total_tasks)],
         ["verification_failed", verification_failed, pct(verification_failed, total_tasks)],
+        ["closeout_not_successful", closeout_not_successful, pct(closeout_not_successful, total_tasks)],
+        ["recovered_validation_failures", recovered_validation_failures, pct(recovered_validation_failures, total_tasks)],
         ["seeded_no_diff_failed", seeded_no_diff, pct(seeded_no_diff, total_tasks)],
+        ["owner_metadata_missing", owner_metadata_missing, pct(owner_metadata_missing, total_tasks)],
         ["real_code_change_passed", real_code_passes, pct(real_code_passes, total_tasks)],
         ["plan_only_passed", plan_only_passes, pct(plan_only_passes, total_tasks)],
     ],
@@ -182,6 +213,12 @@ lines.extend(md_table(
 
 lines.extend(["", "## Failure Owners", ""])
 lines.extend(md_table(["owner", "count", "share"], [[k, v, pct(v, total_tasks)] for k, v in top(owners)]))
+
+lines.extend(["", "## Inferred Owners", ""])
+lines.extend(md_table(
+    ["owner", "count", "share"],
+    [[k, v, pct(v, total_tasks)] for k, v in top(inferred_owners)],
+))
 
 lines.extend(["", "## Failure Modes", ""])
 lines.extend(md_table(["mode", "count"], top(failure_modes)))
@@ -200,20 +237,21 @@ lines.extend(md_table(
 
 lines.extend(["", "## Recent Failed Tasks", ""])
 lines.extend(md_table(
-    ["run", "task", "intent", "owner", "required", "verification", "diff", "warnings"],
+    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "warnings"],
     [
         [
             record["run"],
             record["task"],
             record["intent"],
             record["owner"],
+            record["inferred_owner"],
             record["required"],
             record["verification"],
             record["diff"],
             record["warnings"],
         ]
         for record in recent_failures
-    ] or [["none", "none", "none", "none", "none", "none", "none", "none"]],
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
 lines.extend([
@@ -223,6 +261,8 @@ lines.extend([
     "- `real_code_change_passed` requires an agent-run report with a non-empty diff.",
     "- `plan_only_passed` is tracked separately so planning success is not counted as code-change success.",
     "- `seeded_no_diff_failed` is the strongest signal for agents that inspect but do not patch.",
+    "- `inferred_owner` is a conservative backfill for older reports that predate structured `failure_owner` fields.",
+    "- `owner_metadata_missing` tracks that historical evidence gap separately from inferred product failures.",
 ])
 
 output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
