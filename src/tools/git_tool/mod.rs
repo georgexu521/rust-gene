@@ -95,10 +95,10 @@ impl Tool for GitTool {
     }
 
     fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
-        match params["action"].as_str() {
-            Some("add" | "commit" | "push" | "checkout" | "branch") => true,
-            _ => false,
-        }
+        matches!(
+            params["action"].as_str(),
+            Some("add" | "commit" | "push" | "checkout" | "branch")
+        )
     }
 
     fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {

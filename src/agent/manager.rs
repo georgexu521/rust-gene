@@ -578,11 +578,7 @@ impl AgentManager {
     /// 获取 Agent 状态
     pub async fn get_status(&self, agent_id: &AgentId) -> Option<AgentStatus> {
         let agents = self.agents.read().await;
-        if let Some(handle) = agents.get(agent_id) {
-            Some(*handle.status.borrow())
-        } else {
-            None
-        }
+        agents.get(agent_id).map(|handle| *handle.status.borrow())
     }
 
     /// 列出所有 Agent

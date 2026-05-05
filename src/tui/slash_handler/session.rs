@@ -390,7 +390,7 @@ pub async fn handle_checkpoints(app: &TuiApp) -> String {
         lines.push(format!(
             "[{}] {} ({} files)\n  tool: {} | {}",
             c.sequence,
-            c.id.split('_').last().unwrap_or(&c.id),
+            c.id.split('_').next_back().unwrap_or(&c.id),
             c.file_backups.len(),
             c.tool_name,
             files.join(", ")

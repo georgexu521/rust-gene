@@ -445,7 +445,7 @@ impl Tool for FileWriteTool {
         {
             let mut cp = cp_mgr.lock().await;
             if let Err(e) = cp
-                .create_checkpoint("file_write", None, None, &[path.clone()])
+                .create_checkpoint("file_write", None, None, std::slice::from_ref(&path))
                 .await
             {
                 warn!("Failed to create checkpoint for file_write: {}", e);
@@ -898,7 +898,7 @@ impl Tool for FileEditTool {
         {
             let mut cp = cp_mgr.lock().await;
             if let Err(e) = cp
-                .create_checkpoint("file_edit", None, None, &[path.clone()])
+                .create_checkpoint("file_edit", None, None, std::slice::from_ref(&path))
                 .await
             {
                 warn!("Failed to create checkpoint for file_edit: {}", e);

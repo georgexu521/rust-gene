@@ -2,7 +2,7 @@
 //!
 //! 将本 agent 作为 MCP 服务器运行，供其他 MCP 客户端连接调用。
 //!
-//! 协议：https://spec.modelcontextprotocol.io/
+//! 协议：<https://spec.modelcontextprotocol.io/>
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

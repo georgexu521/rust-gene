@@ -2,14 +2,14 @@
 //!
 //! Minimal implementation inspired by Claude Code's hook model.
 //! Hooks are optional and configured by environment variables:
-//! - PRIORITY_AGENT_PRE_TOOL_HOOK (全局 pre-tool hook)
-//! - PRIORITY_AGENT_POST_TOOL_HOOK (全局 post-tool hook)
-//! - PRIORITY_AGENT_HOOK_TIMEOUT_MS (optional, default 5000)
-//! - PRIORITY_AGENT_HOOK_FAIL_CLOSED (optional, default false)
+//! - `PRIORITY_AGENT_PRE_TOOL_HOOK` (全局 pre-tool hook)
+//! - `PRIORITY_AGENT_POST_TOOL_HOOK` (全局 post-tool hook)
+//! - `PRIORITY_AGENT_HOOK_TIMEOUT_MS` (optional, default 5000)
+//! - `PRIORITY_AGENT_HOOK_FAIL_CLOSED` (optional, default false)
 //!
 //! 细粒度工具钩子（按工具名称）：
-//! - PRIORITY_AGENT_TOOL_HOOK_BEFORE_<NAME> (特定工具的 pre hook)
-//! - PRIORITY_AGENT_TOOL_HOOK_AFTER_<NAME> (特定工具的 post hook)
+//! - `PRIORITY_AGENT_TOOL_HOOK_BEFORE_<NAME>` (特定工具的 pre hook)
+//! - `PRIORITY_AGENT_TOOL_HOOK_AFTER_<NAME>` (特定工具的 post hook)
 
 use crate::services::api::ToolCall;
 use crate::tools::{ToolContext, ToolResult};

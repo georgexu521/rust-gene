@@ -1,6 +1,6 @@
 # Quality Gates
 
-> Last updated: 2026-04-21
+> Last updated: 2026-05-05
 > Purpose: Define acceptance criteria for Phase transitions and releases
 
 ---
@@ -179,6 +179,6 @@ If quality gates fail repeatedly:
 |--------|--------|---------|
 | Test coverage | >80% | varies |
 | Compilation time | <60s | ~20s |
-| Test suite time | <120s | ~30s |
-| Clippy warnings | 0 | varies |
+| Test suite time | <120s | ~22s workflow-enabled full suite |
+| Clippy warnings | 0 | clean as of 2026-05-05 |
 | Doc warnings | 0 | varies |

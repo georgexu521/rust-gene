@@ -2,21 +2,16 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentContext {
+    #[default]
     Primary,
     Subagent,
     Cron,
     Flush,
     Eval,
     Test,
-}
-
-impl Default for AgentContext {
-    fn default() -> Self {
-        Self::Primary
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

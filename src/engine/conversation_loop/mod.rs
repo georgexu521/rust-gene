@@ -207,12 +207,8 @@ async fn shell_output_with_timeout(
             }
         }
     };
-    let stdout = stdout_task
-        .await
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))??;
-    let stderr = stderr_task
-        .await
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))??;
+    let stdout = stdout_task.await.map_err(std::io::Error::other)??;
+    let stderr = stderr_task.await.map_err(std::io::Error::other)??;
     Ok(std::process::Output {
         status,
         stdout,
@@ -777,12 +773,12 @@ fn build_tool_execution_summary(tool_call: &ToolCall, result: &ToolResult) -> se
                 object.insert(
                     "command_kind".to_string(),
                     serde_json::to_value(classification.command_kind)
-                        .unwrap_or_else(|_| serde_json::Value::Null),
+                        .unwrap_or(serde_json::Value::Null),
                 );
                 object.insert(
                     "validation_family".to_string(),
                     serde_json::to_value(classification.validation_family)
-                        .unwrap_or_else(|_| serde_json::Value::Null),
+                        .unwrap_or(serde_json::Value::Null),
                 );
                 object.insert(
                     "safe_for_closeout".to_string(),
@@ -963,7 +959,7 @@ fn persist_tool_outcome_learning_event(
         .as_ref()
         .and_then(|data| data.get("recovery"))
         .cloned()
-        .unwrap_or_else(|| serde_json::json!(null));
+        .unwrap_or(serde_json::Value::Null);
     let tool_summary = result
         .data
         .as_ref()
@@ -5920,13 +5916,12 @@ Do not answer in prose unless no safe patch exists."#;
             if command.is_empty() || command == "(none)" {
                 continue;
             }
-            if Self::is_safe_validation_command(command)
+            if (Self::is_safe_validation_command(command)
                 || command.starts_with("python3 -c ")
-                || command.starts_with("python -c ")
+                || command.starts_with("python -c "))
+                && !commands.iter().any(|existing| existing == command)
             {
-                if !commands.iter().any(|existing| existing == command) {
-                    commands.push(command.to_string());
-                }
+                commands.push(command.to_string());
             }
         }
         commands
@@ -6201,6 +6196,7 @@ Do not answer in prose unless no safe patch exists."#;
     }
 
     /// 并行执行工具调用
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tools_parallel(
         &self,
         tool_calls: &[ToolCall],
@@ -6591,13 +6587,7 @@ Do not answer in prose unless no safe patch exists."#;
                 };
 
                 let started_at = std::time::Instant::now();
-                let mut result = if !pre_decision.allow {
-                    ToolResult::error(
-                        pre_decision
-                            .reason
-                            .unwrap_or_else(|| format!("blocked by pre-tool hook: {}", tool_name)),
-                    )
-                } else if {
+                let requires_approval = {
                     let permission_requires = context
                         .permission_context
                         .requires_confirmation(&tool_name, &tc.arguments);
@@ -6606,7 +6596,14 @@ Do not answer in prose unless no safe patch exists."#;
                             .permission_context
                             .auto_approves_tool_confirmation(&tool_name, &tc.arguments);
                     permission_requires || tool_requires || drift_requires_approval
-                } {
+                };
+                let mut result = if !pre_decision.allow {
+                    ToolResult::error(
+                        pre_decision
+                            .reason
+                            .unwrap_or_else(|| format!("blocked by pre-tool hook: {}", tool_name)),
+                    )
+                } else if requires_approval {
                     let mut approved = false;
                     if let (Some(ref channel), Some(tx)) = (&self.approval_channel, tx) {
                         let base_prompt = if drift_requires_approval {

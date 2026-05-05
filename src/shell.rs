@@ -603,7 +603,7 @@ fn build_line_editor() -> anyhow::Result<Editor<ShellHelper, DefaultHistory>> {
         .completion_type(rustyline::CompletionType::List)
         .build();
     let mut editor = Editor::<ShellHelper, DefaultHistory>::with_config(config)?;
-    editor.set_helper(Some(ShellHelper::default()));
+    editor.set_helper(Some(ShellHelper));
     Ok(editor)
 }
 

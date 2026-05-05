@@ -331,7 +331,7 @@ pub fn upsert_tool_run(runs: &mut Vec<ToolRunView>, id: String, name: String) {
     }
 }
 
-pub fn with_tool_run<F>(runs: &mut Vec<ToolRunView>, id: &str, f: F)
+pub fn with_tool_run<F>(runs: &mut [ToolRunView], id: &str, f: F)
 where
     F: FnOnce(&mut ToolRunView),
 {

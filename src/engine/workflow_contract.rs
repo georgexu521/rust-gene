@@ -653,7 +653,7 @@ impl AcceptanceReview {
 impl ProgrammingWorkflowJudgment {
     pub fn sorted_plan(&self) -> Vec<WorkflowPlanStep> {
         let mut steps = self.plan.clone();
-        steps.sort_by(|a, b| compare_plan_steps(a, b));
+        steps.sort_by(compare_plan_steps);
         steps
     }
 
@@ -735,7 +735,7 @@ fn compare_plan_steps(a: &WorkflowPlanStep, b: &WorkflowPlanStep) -> std::cmp::O
 
 fn top_sorted_step(steps: &[WorkflowPlanStep]) -> Option<WorkflowPlanStep> {
     let mut sorted = steps.to_vec();
-    sorted.sort_by(|a, b| compare_plan_steps(a, b));
+    sorted.sort_by(compare_plan_steps);
     sorted.into_iter().next()
 }
 

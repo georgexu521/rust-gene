@@ -36,10 +36,7 @@ pub fn send_progress(percent: i32) {
 }
 
 fn escape_osc(s: &str) -> String {
-    s.replace('\x07', "")
-        .replace('\x1b', "")
-        .replace('\n', " ")
-        .replace('\r', " ")
+    s.replace(['\x07', '\x1b'], "").replace(['\n', '\r'], " ")
 }
 
 #[cfg(test)]

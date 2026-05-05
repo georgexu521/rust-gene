@@ -16,6 +16,13 @@ be implemented and verified locally.
 
 ## Checklist
 
+Maintenance update, 2026-05-05:
+
+- The local full workflow-enabled suite is now `1057 passed; 0 failed`.
+- `cargo clippy --all-features -- -D warnings` is clean.
+- `scripts/validate_docs.sh` passes with 74 registered tool entries and 130
+  command constants.
+
 ### 1. Rendered Diff Review Coverage
 
 Goal: `/diff` and permission diff review should have actual rendering

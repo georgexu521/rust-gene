@@ -67,12 +67,8 @@ async fn command_output_with_timeout(
         }
     };
 
-    let stdout = stdout_task
-        .await
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))??;
-    let stderr = stderr_task
-        .await
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))??;
+    let stdout = stdout_task.await.map_err(std::io::Error::other)??;
+    let stderr = stderr_task.await.map_err(std::io::Error::other)??;
 
     Ok(std::process::Output {
         status,
@@ -559,11 +555,13 @@ async fn run_cargo_test(working_dir: &Path, manifest: Option<&Path>) -> Option<V
 
 /// 解析 cargo check --message-format=short 输出
 /// 格式示例：
-///   error[E0308]: mismatched types
-///     --> src/main.rs:42:10
-///      |
-///   42 |     let x: u32 = "hello";
-///      |                  ^^^^^^^ expected u32, found &str
+/// ```text
+/// error[E0308]: mismatched types
+///   --> src/main.rs:42:10
+///    |
+/// 42 |     let x: u32 = "hello";
+///    |                  ^^^^^^^ expected u32, found &str
+/// ```
 fn parse_cargo_check_output(stderr: &str) -> Vec<VerificationIssue> {
     let mut issues = Vec::new();
     let lines: Vec<&str> = stderr.lines().collect();

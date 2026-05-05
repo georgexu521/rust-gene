@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-03
+Last updated: 2026-05-05
 
 ## Summary
 
@@ -18,11 +18,11 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest verified baseline observed after the 2026-05-03 Claude-gap implementation
-batch:
+Latest verified baseline observed after the 2026-05-05 validation and lint
+cleanup batch:
 
 ```text
-1053 passed; 0 failed
+1057 passed; 0 failed
 ```
 
 Verified with:
@@ -30,6 +30,8 @@ Verified with:
 ```bash
 cargo check --quiet
 cargo test --quiet -- --test-threads=1
+cargo clippy --all-features -- -D warnings
+env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
 ```
 
 Latest live coding workflow smoke:
@@ -153,3 +155,10 @@ not missing foundations:
 6. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
    Discord/Slack adapters if they become product priorities.
 7. Keep docs synchronized with tests and current behavior.
+
+Latest maintenance note:
+
+- `cargo clippy --all-features -- -D warnings` is clean as of 2026-05-05.
+- `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command
+  constants, then passed all required docs, all-features build, and the
+  workflow-enabled full test suite.

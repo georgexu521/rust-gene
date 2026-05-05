@@ -18,11 +18,24 @@
 ```bash
 cd ~/Desktop/rust-agent
 
-# 运行所有测试（约 30 秒）
-cargo test
+# 运行当前 workflow-enabled 全量测试
+env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
 
 # 预期输出：
-# test result: ok. 68 passed; 0 failed; 0 ignored
+# test result: ok. 1057 passed; 0 failed; 0 ignored
+```
+
+### 当前推荐门禁（2026-05-05）
+
+```bash
+# 编码工作流快速/标准门禁
+scripts/coding-workflow-gates.sh standard
+
+# 文档、all-features build、workflow-enabled 全量测试
+bash scripts/validate_docs.sh
+
+# Clippy 发布门禁
+cargo clippy --all-features -- -D warnings
 ```
 
 ### Audit API 联调 Smoke Test

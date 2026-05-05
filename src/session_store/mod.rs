@@ -553,13 +553,9 @@ impl SessionStore {
         )?;
         let rows = stmt.query_map(params![trace_id], |row| row.get::<_, String>(0))?;
         let mut events = Vec::new();
-        for row in rows {
-            if let Ok(payload) = row {
-                if let Ok(event) =
-                    serde_json::from_str::<crate::engine::trace::TraceEvent>(&payload)
-                {
-                    events.push(event);
-                }
+        for payload in rows.flatten() {
+            if let Ok(event) = serde_json::from_str::<crate::engine::trace::TraceEvent>(&payload) {
+                events.push(event);
             }
         }
         trace.events = events;
@@ -661,6 +657,7 @@ impl SessionStore {
 
     // ==================== Agent Artifact 操作 ====================
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_agent_artifact(
         &self,
         session_id: &str,

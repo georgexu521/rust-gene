@@ -3,7 +3,7 @@
 //! 支持连接外部 MCP 服务器，发现和调用远程工具。
 //! 类似 Claude Code 和 Hermes Agent 的 MCP 集成。
 //!
-//! 协议：https://spec.modelcontextprotocol.io/
+//! 协议：<https://spec.modelcontextprotocol.io/>
 //!
 //! 当前支持：
 //! - stdio transport（通过子进程通信）

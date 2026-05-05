@@ -1,9 +1,9 @@
 //! Layered instruction loader for AGENTS.md.
 //!
 //! Load order (low to high priority):
-//! 1. Global: ~/.priority-agent/AGENTS.md
-//! 2. Project root: <repo-root>/AGENTS.md
-//! 3. Directory-specific: <repo-root>/.../<cwd>/AGENTS.md
+//! 1. Global: `~/.priority-agent/AGENTS.md`
+//! 2. Project root: `<repo-root>/AGENTS.md`
+//! 3. Directory-specific: `<repo-root>/.../<cwd>/AGENTS.md`
 
 use std::path::{Path, PathBuf};
 use tracing::debug;

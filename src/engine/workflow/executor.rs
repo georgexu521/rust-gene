@@ -3,7 +3,7 @@
 //! M1 范围：
 //! - 串行执行（非并行）
 //! - 依赖检查：未满足依赖的步骤先等待
-//! - 失败重试：第 1 次失败重试，第 2 次失败标记 [重构]
+//! - 失败重试：第 1 次失败重试，第 2 次失败标记 `[重构]`
 //! - 状态更新：执行后更新 PlanStep.status
 //! - 执行报告：产出 ExecutionRecord 列表
 
@@ -121,7 +121,7 @@ impl WorkflowExecutor {
     ///
     /// # 重试策略（M1）
     /// - 首次执行失败 → 重试 1 次（E-04）
-    /// - 重试仍失败 → 标记 [重构]（E-05），返回 NeedsRefactor
+    /// - 重试仍失败 → 标记 `[重构]`（E-05），返回 NeedsRefactor
     pub(crate) async fn execute_single_step(
         &self,
         plan: &mut Plan,

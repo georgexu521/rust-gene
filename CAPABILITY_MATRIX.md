@@ -1,6 +1,6 @@
 # Capability Matrix
 
-> Last updated: 2026-04-22
+> Last updated: 2026-05-05
 > Purpose: Track maturity of commands and tools
 
 ## Command Maturity Levels
@@ -11,7 +11,11 @@
 | **Usable** | Working implementation, may need polish |
 | **Scaffold** | Placeholder only, needs significant work |
 
-## Commands (114 total)
+## Commands (130 registered constants)
+
+`scripts/validate_docs.sh` currently counts 130 command constants in
+`src/tui/commands.rs`. The table below is a maturity audit of the high-value
+surface, not a generated inventory of every registered alias/helper command.
 
 ### Production-ready (Core)
 
@@ -180,12 +184,16 @@ No scaffold commands at the slash-command layer.
 
 | Category | Total | Production | Usable | Scaffold |
 |----------|-------|------------|--------|----------|
-| Commands | 114 | 16 (14%) | 98 (86%) | 0 (0%) |
-| Tools | ~58 | ~40 (69%) | ~16 (28%) | ~2 (3%) |
+| Commands | 130 registered constants | 16 audited core | broad usable surface | 0 slash-command scaffold |
+| Tools | 74 registered entries | core coding tools production | utility/integration tools usable | mcp_server/voice still not product priorities |
 
 ---
 
 ## Next Steps
 
-1. **Phase 1 (W4-W6)**: Focus on raising Scaffold commands to Usable
-2. Target: Convert 20+ Scaffold commands to Usable in Phase 1
+1. Keep the generated command/tool counts synchronized with
+   `scripts/validate_docs.sh`.
+2. Continue rendered smoke tests for high-use panels before claiming production
+   maturity for broad CLI surfaces.
+3. Productize remaining ecosystem surfaces, especially MCP server mode and
+   plugin lifecycle, only after coding-loop reliability stays stable.

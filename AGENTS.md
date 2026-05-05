@@ -4,7 +4,7 @@
 
 ## 当前文档口径
 
-Last updated: 2026-05-03
+Last updated: 2026-05-05
 
 - 当前主界面称为 interactive CLI。历史上的 TUI 目录和 `--tui` 参数仍存在，
   但 `--tui` 只是 `--cli` 的兼容别名。
@@ -13,8 +13,10 @@ Last updated: 2026-05-03
   不再用工具/命令数量直接当作 Claude Code 对等证据。
 - 最近 5 项闭环计划已完成：tool recovery learning、learning-aware routing、
   goal drift visibility、memory namespace search、MCP health/resource traces。
-- 最近全量验证：`env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
-  通过，`1006 passed; 0 failed`。
+- 最近全量验证：
+  - `cargo clippy --all-features -- -D warnings` 通过。
+  - `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
+    通过，`1057 passed; 0 failed`。
 
 ## 核心理念
 

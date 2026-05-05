@@ -13,11 +13,12 @@ full-screen terminal interface.
 
 Current project status is tracked in [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
-Latest verified baseline:
+Latest verified baseline (2026-05-05):
 
 - `cargo check --quiet`
 - `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
-- Result: `899 passed; 0 failed`
+- `cargo clippy --all-features -- -D warnings`
+- Result: `1057 passed; 0 failed`
 
 ## Quick Start
 
@@ -148,6 +149,7 @@ cargo fmt
 cargo check --quiet
 cargo test --quiet
 env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
+cargo clippy --all-features -- -D warnings
 ```
 
 Some tests mutate process environment variables. Use `--test-threads=1` for the

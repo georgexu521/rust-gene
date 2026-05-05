@@ -447,7 +447,7 @@ pub fn run_evalsets_from_dir(dir: impl AsRef<Path>, name: Option<&str>) -> Resul
     let runner = EvalRunner::new();
     let mut reports = Vec::new();
     for (_, set) in sets {
-        if name.map_or(true, |target| target == "all" || target == set.name) {
+        if name.is_none_or(|target| target == "all" || target == set.name) {
             reports.push(runner.run_set(&set));
         }
     }

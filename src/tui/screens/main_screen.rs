@@ -646,10 +646,10 @@ fn render_tool_runs_message<'a>(runs: &'a [ToolRunView], app: &'a TuiApp) -> Par
             };
             let style = if line_idx == 0 {
                 Style::default().fg(accent)
-            } else if expanded && matches!(line.trim_start().chars().next(), Some('{' | '}' | '"'))
+            } else if expanded
+                && (matches!(line.trim_start().chars().next(), Some('{' | '}' | '"'))
+                    || line.contains("result:"))
             {
-                Style::default().fg(app.theme.text)
-            } else if expanded && line.contains("result:") {
                 Style::default().fg(app.theme.text)
             } else {
                 Style::default().fg(app.theme.text_dim)

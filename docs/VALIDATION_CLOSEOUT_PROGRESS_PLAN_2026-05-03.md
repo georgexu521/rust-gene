@@ -16,6 +16,12 @@ closeout semantics and long-running command progress.
 
 ## Checklist
 
+Maintenance update, 2026-05-05:
+
+- The closeout/progress-focused standard gate still passes after lint cleanup.
+- The full workflow-enabled suite is `1057 passed; 0 failed`.
+- `cargo clippy --all-features -- -D warnings` is clean.
+
 ### 1. Closeout Evidence Quality
 
 Goal: final closeout should distinguish required validation, opportunistic

@@ -3137,7 +3137,7 @@ pub fn handle_evolution(app: &mut TuiApp, args: &str) -> String {
             };
             let events = events
                 .into_iter()
-                .filter(|event| is_evolution_learning_event(event))
+                .filter(is_evolution_learning_event)
                 .take(limit as usize)
                 .collect::<Vec<_>>();
             if events.is_empty() {
@@ -3170,7 +3170,7 @@ pub fn handle_evolution(app: &mut TuiApp, args: &str) -> String {
             };
             let events = events
                 .into_iter()
-                .filter(|event| is_evolution_learning_event(event))
+                .filter(is_evolution_learning_event)
                 .take(limit as usize)
                 .collect::<Vec<_>>();
             serde_json::to_string_pretty(&events).unwrap_or_else(|_| "[]".to_string())

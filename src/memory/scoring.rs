@@ -102,9 +102,8 @@ pub fn score_memory_write(
     let status = if matches!(
         sensitivity,
         SensitivityLevel::Unsafe | SensitivityLevel::SecretLike
-    ) {
-        MemoryStatus::Rejected
-    } else if duplication >= 0.85 {
+    ) || duplication >= 0.85
+    {
         MemoryStatus::Rejected
     } else if score >= 0.65 || explicit_override {
         MemoryStatus::Accepted
@@ -260,6 +259,7 @@ pub fn memory_keep_factors_from_document(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn memory_write_factors_from_signals(
     kind: MemoryKind,
     content: &str,

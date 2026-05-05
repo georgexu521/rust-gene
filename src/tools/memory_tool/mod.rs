@@ -684,10 +684,7 @@ fn sanitize_topic(topic: &str) -> Option<String> {
     let mut last_dash = false;
 
     for ch in topic.trim().chars().flat_map(char::to_lowercase) {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            output.push(ch);
-            last_dash = false;
-        } else if ch.is_alphanumeric() {
+        if ch.is_alphanumeric() || ch == '_' {
             output.push(ch);
             last_dash = false;
         } else if !last_dash {

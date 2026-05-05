@@ -98,11 +98,10 @@ fn render_tool_message<'a>(
     message: &'a MessageItem,
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
-    let mut lines = Vec::new();
-    lines.push(Line::from(vec![
+    let lines = vec![Line::from(vec![
         Span::styled("⎿ ", Style::default().fg(theme.text_dim)),
         Span::styled(&message.content, Style::default().fg(theme.text_dim)),
-    ]));
+    ])];
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
 }
 

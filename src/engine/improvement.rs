@@ -61,10 +61,6 @@ impl ImprovementStore {
         Self { path }
     }
 
-    pub fn default() -> Self {
-        Self::new(Self::default_path())
-    }
-
     pub fn list(&self) -> Vec<ImprovementProposal> {
         read_latest_proposals(&self.path)
     }
@@ -112,6 +108,12 @@ impl ImprovementStore {
             proposals.push(proposal);
         }
         Ok(proposals)
+    }
+}
+
+impl Default for ImprovementStore {
+    fn default() -> Self {
+        Self::new(Self::default_path())
     }
 }
 

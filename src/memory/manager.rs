@@ -176,6 +176,7 @@ impl MemoryFileLock {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(lock_path)?;
         let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
         if rc != 0 {
@@ -1561,8 +1562,10 @@ Return exactly the word NONE if there is nothing critical to remember.";
     pub fn memory_flush_summary(&self) -> MemoryFlushSummary {
         let content = std::fs::read_to_string(&self.flush_log_path).unwrap_or_default();
         let records = memory_flush_records_from_jsonl(&content);
-        let mut summary = MemoryFlushSummary::default();
-        summary.total = records.len();
+        let mut summary = MemoryFlushSummary {
+            total: records.len(),
+            ..Default::default()
+        };
         for record in records.values() {
             match record.status {
                 MemoryFlushStatus::Pending => summary.pending += 1,

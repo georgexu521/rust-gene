@@ -167,11 +167,11 @@ impl CommandRegistry {
                             format!(" ({})", cmd.aliases.join(", "))
                         };
                         result.push_str(&format!(
-                            "    {:<24} {}{}{}\n",
+                            "    {:<24} {}{} {}\n",
                             cmd.usage,
                             cmd.description,
                             alias_str,
-                            format!(" {}", cmd.maturity.badge())
+                            cmd.maturity.badge()
                         ));
                     }
                 }
@@ -198,11 +198,11 @@ impl CommandRegistry {
                             format!(" ({})", cmd.aliases.join(", "))
                         };
                         result.push_str(&format!(
-                            "    {:<24} {}{}{}\n",
+                            "    {:<24} {}{} {}\n",
                             cmd.usage,
                             cmd.description,
                             alias_str,
-                            format!(" {}", cmd.maturity.badge())
+                            cmd.maturity.badge()
                         ));
                     }
                 }

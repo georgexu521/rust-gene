@@ -218,10 +218,6 @@ impl SkillProposalStore {
         }
     }
 
-    pub fn default() -> Self {
-        Self::new(Self::default_path())
-    }
-
     pub fn list(&self) -> Vec<SkillProposal> {
         read_latest_proposals(&self.path)
     }
@@ -346,6 +342,12 @@ impl SkillProposalStore {
             proposals.push(proposal);
         }
         Ok(proposals)
+    }
+}
+
+impl Default for SkillProposalStore {
+    fn default() -> Self {
+        Self::new(Self::default_path())
     }
 }
 
@@ -501,35 +503,36 @@ pub fn evaluate_skill_proposal(proposal: &SkillProposal) -> SkillEvalResult {
 }
 
 pub fn quality_check_skill_proposal(proposal: &SkillProposal) -> SkillQualityReport {
-    let mut checks = Vec::new();
-    checks.push(check(
-        "trigger_condition",
-        !proposal.trigger_conditions.is_empty()
-            && proposal
-                .trigger_conditions
-                .iter()
-                .any(|item| item.chars().count() >= 8),
-        "skill must say when it should be used",
-    ));
-    checks.push(check(
-        "concrete_workflow",
-        proposal.workflow_steps.len() >= 2
-            && proposal
-                .workflow_steps
-                .iter()
-                .all(|step| step.chars().count() >= 8),
-        "skill must contain concrete procedure steps",
-    ));
-    checks.push(check(
-        "validation_plan",
-        !proposal.validation.is_empty(),
-        "skill must include validation instructions",
-    ));
-    checks.push(check(
-        "scoped_tools",
-        !proposal.allowed_tools.is_empty() && proposal.allowed_tools.len() <= 8,
-        "skill must declare a small tool scope",
-    ));
+    let mut checks = vec![
+        check(
+            "trigger_condition",
+            !proposal.trigger_conditions.is_empty()
+                && proposal
+                    .trigger_conditions
+                    .iter()
+                    .any(|item| item.chars().count() >= 8),
+            "skill must say when it should be used",
+        ),
+        check(
+            "concrete_workflow",
+            proposal.workflow_steps.len() >= 2
+                && proposal
+                    .workflow_steps
+                    .iter()
+                    .all(|step| step.chars().count() >= 8),
+            "skill must contain concrete procedure steps",
+        ),
+        check(
+            "validation_plan",
+            !proposal.validation.is_empty(),
+            "skill must include validation instructions",
+        ),
+        check(
+            "scoped_tools",
+            !proposal.allowed_tools.is_empty() && proposal.allowed_tools.len() <= 8,
+            "skill must declare a small tool scope",
+        ),
+    ];
     let markdown = proposal.to_skill_markdown();
     let safety = scan_memory_content(&markdown);
     checks.push(check(
@@ -584,6 +587,7 @@ pub fn write_active_skill(proposal: &SkillProposal, root: &Path) -> anyhow::Resu
 }
 
 impl SkillProposal {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         procedure: String,
         scope: String,

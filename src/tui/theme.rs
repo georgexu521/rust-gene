@@ -335,13 +335,13 @@ impl Theme {
 
     /// 判断是否为暗色主题（用于代码高亮主题选择）
     pub fn is_dark(&self) -> bool {
-        match self.bg {
+        !matches!(
+            self.bg,
             Color::White
-            | Color::Rgb(245, 245, 245)
-            | Color::Rgb(255, 255, 255)
-            | Color::Rgb(250, 250, 250) => false,
-            _ => true,
-        }
+                | Color::Rgb(245, 245, 245)
+                | Color::Rgb(255, 255, 255)
+                | Color::Rgb(250, 250, 250)
+        )
     }
 }
 
