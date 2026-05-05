@@ -16,7 +16,7 @@ Last updated: 2026-05-05
 - 最近全量验证：
   - `cargo clippy --all-features -- -D warnings` 通过。
   - `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
-    通过，`1057 passed; 0 failed`。
+    通过，`1059 passed; 0 failed`。
 
 ## 核心理念
 

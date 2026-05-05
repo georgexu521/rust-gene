@@ -22,7 +22,7 @@ cd ~/Desktop/rust-agent
 env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
 
 # 预期输出：
-# test result: ok. 1057 passed; 0 failed; 0 ignored
+# test result: ok. 1059 passed; 0 failed; 0 ignored
 ```
 
 ### 当前推荐门禁（2026-05-05）

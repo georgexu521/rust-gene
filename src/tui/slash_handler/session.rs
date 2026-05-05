@@ -17,12 +17,12 @@ use tokio::process::Command;
 
 pub async fn handle_resume(app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        match app.session_manager.list_sessions(10) {
+        match app.session_manager.list_resumable_sessions(10) {
             Ok(sessions) => {
                 if sessions.is_empty() {
                     "No saved sessions found. Start chatting to create one!".to_string()
                 } else {
-                    let mut lines = vec!["Recent sessions:".to_string()];
+                    let mut lines = vec!["Recent resumable sessions:".to_string()];
                     for (i, session) in sessions.iter().enumerate() {
                         let title = if session.title.is_empty() {
                             "(untitled)"
@@ -39,26 +39,24 @@ pub async fn handle_resume(app: &mut TuiApp, args: &str) -> String {
                             session.updated_at
                         ));
                     }
-                    lines.push("\nUse /resume <number> or /resume <id> to restore.".to_string());
+                    lines.push(
+                        "\nUse /resume <number>, /resume <id>, /resume <search>, or /resume latest."
+                            .to_string(),
+                    );
                     lines.join("\n")
                 }
             }
             Err(e) => format!("Failed to list sessions: {}", e),
         }
-    } else if let Ok(index) = args.parse::<usize>() {
-        match app.session_manager.list_sessions(20) {
-            Ok(sessions) => {
-                if index == 0 || index > sessions.len() {
-                    "Invalid session number. Use /resume without arguments to see available sessions.".to_string()
-                } else {
-                    let session = &sessions[index - 1];
-                    app.restore_session(&session.id).await
-                }
-            }
-            Err(e) => format!("Failed to list sessions: {}", e),
-        }
     } else {
-        app.restore_session(args).await
+        match app.session_manager.resolve_resume_selection(args, 40) {
+            Ok(Some(session)) => app.restore_session(&session.id).await,
+            Ok(None) => {
+                "No matching session found. Use /resume without arguments to see recent sessions."
+                    .to_string()
+            }
+            Err(e) => format!("Failed to resolve session: {}", e),
+        }
     }
 }
 
@@ -133,7 +131,7 @@ pub fn handle_sessions(app: &TuiApp) -> String {
                         session.updated_at
                     ));
                 }
-                lines.push("\nUse /session <number> to restore a session.".to_string());
+                lines.push("\nUse /resume <number|id|search> to restore a session.".to_string());
                 lines.join("\n")
             }
         }

@@ -2907,11 +2907,18 @@ impl TuiApp {
                     }
                 }
 
-                format!(
+                let mut lines = vec![format!(
                     "Restored session {} ({} messages). Previous conversation loaded.",
                     &session_id[..8.min(session_id.len())],
                     self.messages.len()
-                )
+                )];
+                if let Ok(preview) = self.session_manager.recent_preview_lines(session_id, 4) {
+                    if !preview.is_empty() {
+                        lines.push("Recent context:".to_string());
+                        lines.extend(preview);
+                    }
+                }
+                lines.join("\n")
             }
             Err(e) => format!("Failed to restore session: {}", e),
         }
@@ -3908,6 +3915,9 @@ mod tests {
         let result = app.restore_session(&session_id).await;
         assert!(result.contains("Restored session"));
         assert!(result.contains("2 messages"));
+        assert!(result.contains("Recent context:"));
+        assert!(result.contains("Hello"));
+        assert!(result.contains("Hi there!"));
 
         // 验证 UI 消息已恢复
         assert_eq!(app.messages.len(), 2);

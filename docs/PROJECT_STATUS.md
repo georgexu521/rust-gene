@@ -18,11 +18,11 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest verified baseline observed after the 2026-05-05 validation and lint
-cleanup batch:
+Latest verified baseline observed after the 2026-05-05 resume-session picker
+batch:
 
 ```text
-1057 passed; 0 failed
+1059 passed; 0 failed
 ```
 
 Verified with:
@@ -162,3 +162,6 @@ Latest maintenance note:
 - `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command
   constants, then passed all required docs, all-features build, and the
   workflow-enabled full test suite.
+- `/resume` now resolves recent conversations by number, id prefix, title/model
+  keyword, or message search, and restored sessions show a recent context
+  preview.

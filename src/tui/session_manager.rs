@@ -293,30 +293,56 @@ impl TuiSessionManager {
         Ok(self.store.list_sessions(limit)?)
     }
 
+    /// 列出有消息的可恢复会话
+    pub fn list_resumable_sessions(&self, limit: i64) -> anyhow::Result<Vec<SessionRecord>> {
+        let sessions = self.store.list_sessions(limit)?;
+        Ok(sessions
+            .into_iter()
+            .filter(|session| self.message_count(&session.id).unwrap_or_default() > 0)
+            .collect())
+    }
+
+    /// 解析 /resume 选择输入：序号、完整/前缀 id、标题/模型关键词或消息搜索词。
+    pub fn resolve_resume_selection(
+        &self,
+        query: &str,
+        limit: i64,
+    ) -> anyhow::Result<Option<SessionRecord>> {
+        let sessions = self.list_resumable_sessions(limit)?;
+        resolve_session_selection_with_store(&self.store, &sessions, query)
+    }
+
     /// 搜索会话
     pub fn search_sessions(&self, query: &str, limit: i64) -> anyhow::Result<Vec<SessionRecord>> {
-        // 先搜索消息找到相关会话 ID
+        let query_lower = query.to_lowercase();
+        let mut sessions = self
+            .store
+            .list_sessions(limit * 2)?
+            .into_iter()
+            .filter(|session| {
+                session.id.starts_with(query)
+                    || session.title.to_lowercase().contains(&query_lower)
+                    || session.model.to_lowercase().contains(&query_lower)
+            })
+            .collect::<Vec<_>>();
+
         let message_results = self.store.search_messages(query, limit * 2)?;
-
-        // 收集唯一的会话 ID
-        let mut session_ids: Vec<String> = message_results
-            .into_iter()
-            .map(|m| m.session_id)
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
-
-        // 限制数量
-        session_ids.truncate(limit as usize);
-
-        // 获取会话详情
-        let mut sessions = Vec::new();
-        for id in session_ids {
-            if let Some(session) = self.store.get_session(&id)? {
+        for message in message_results {
+            if sessions
+                .iter()
+                .any(|session| session.id == message.session_id)
+            {
+                continue;
+            }
+            if let Some(session) = self.store.get_session(&message.session_id)? {
                 sessions.push(session);
+            }
+            if sessions.len() >= limit as usize {
+                break;
             }
         }
 
+        sessions.truncate(limit as usize);
         Ok(sessions)
     }
 
@@ -410,6 +436,15 @@ impl TuiSessionManager {
     /// 获取会话消息数量
     pub fn message_count(&self, session_id: &str) -> anyhow::Result<i64> {
         Ok(self.store.message_count(session_id)?)
+    }
+
+    pub fn recent_preview_lines(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<String>> {
+        let records = self.store.get_messages(session_id)?;
+        Ok(recent_preview_from_records(&records, limit))
     }
 
     /// 生成会话标题（基于第一条用户消息）
@@ -667,6 +702,81 @@ impl TuiSessionManager {
     }
 }
 
+fn resolve_session_selection_with_store(
+    store: &SessionStore,
+    sessions: &[SessionRecord],
+    query: &str,
+) -> anyhow::Result<Option<SessionRecord>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(None);
+    }
+    if matches!(query, "latest" | "last" | "continue") {
+        return Ok(sessions.first().cloned());
+    }
+    if let Ok(index) = query.parse::<usize>() {
+        if (1..=sessions.len()).contains(&index) {
+            return Ok(Some(sessions[index - 1].clone()));
+        }
+    }
+
+    let query_lower = query.to_lowercase();
+    if let Some(session) = sessions.iter().find(|session| {
+        session.id.starts_with(query)
+            || session.title.to_lowercase().contains(&query_lower)
+            || session.model.to_lowercase().contains(&query_lower)
+    }) {
+        return Ok(Some(session.clone()));
+    }
+
+    for message in store.search_messages(query, 8).unwrap_or_default() {
+        if let Some(session) = store.get_session(&message.session_id)? {
+            return Ok(Some(session));
+        }
+    }
+
+    Ok(None)
+}
+
+fn recent_preview_from_records(
+    records: &[crate::session_store::MessageRecord],
+    limit: usize,
+) -> Vec<String> {
+    let mut recent = records
+        .iter()
+        .rev()
+        .filter(|record| matches!(record.role.as_str(), "user" | "assistant"))
+        .take(limit)
+        .map(|record| {
+            let label = if record.role == "user" {
+                "you"
+            } else {
+                "agent"
+            };
+            format!(
+                "  {:<5} {}",
+                label,
+                compact_preview_line(&record.content, 96)
+            )
+        })
+        .collect::<Vec<_>>();
+    recent.reverse();
+    recent
+}
+
+fn compact_preview_line(input: &str, max_chars: usize) -> String {
+    let one_line = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = String::new();
+    for ch in one_line.chars() {
+        if out.chars().count() >= max_chars {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,6 +816,64 @@ mod tests {
 
         // 需要为每个会话创建新的 manager 实例才能看到独立的会话
         // 这里只是测试接口可用
+    }
+
+    #[test]
+    fn test_resume_selection_accepts_index_id_title_and_message_search() {
+        let mut manager = TuiSessionManager::in_memory().unwrap();
+
+        let alpha = manager.start_session("Fix login bug", "model-a").unwrap();
+        manager
+            .add_message(MessageRole::User, "Need authentication callback repair")
+            .unwrap();
+        manager.start_session("Build dashboard", "model-b").unwrap();
+        manager
+            .add_message(MessageRole::Assistant, "Dashboard session ready")
+            .unwrap();
+
+        let expected_latest = manager.list_resumable_sessions(10).unwrap()[0].id.clone();
+        let by_latest = manager
+            .resolve_resume_selection("latest", 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_latest.id, expected_latest);
+
+        let by_id = manager
+            .resolve_resume_selection(&alpha[..8], 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_id.id, alpha);
+
+        let by_title = manager
+            .resolve_resume_selection("dashboard", 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_title.title, "Build dashboard");
+
+        let by_message = manager
+            .resolve_resume_selection("authentication", 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_message.id, alpha);
+    }
+
+    #[test]
+    fn test_recent_preview_lines_show_conversation_context() {
+        let mut manager = TuiSessionManager::in_memory().unwrap();
+        let session_id = manager.start_session("Preview", "model").unwrap();
+        manager
+            .add_message(MessageRole::User, "Hello there")
+            .unwrap();
+        manager
+            .add_message(MessageRole::Assistant, "Hi, I can help")
+            .unwrap();
+
+        let preview = manager.recent_preview_lines(&session_id, 4).unwrap();
+        assert_eq!(preview.len(), 2);
+        assert!(preview[0].contains("you"));
+        assert!(preview[0].contains("Hello there"));
+        assert!(preview[1].contains("agent"));
+        assert!(preview[1].contains("Hi, I can help"));
     }
 
     #[test]

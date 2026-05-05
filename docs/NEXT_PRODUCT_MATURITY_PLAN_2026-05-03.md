@@ -18,10 +18,12 @@ be implemented and verified locally.
 
 Maintenance update, 2026-05-05:
 
-- The local full workflow-enabled suite is now `1057 passed; 0 failed`.
+- The local full workflow-enabled suite is now `1059 passed; 0 failed`.
 - `cargo clippy --all-features -- -D warnings` is clean.
 - `scripts/validate_docs.sh` passes with 74 registered tool entries and 130
   command constants.
+- `/resume` session picker behavior has been tightened locally with direct
+  selection/search and restored-context preview coverage.
 
 ### 1. Rendered Diff Review Coverage
 
