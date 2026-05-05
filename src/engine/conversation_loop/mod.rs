@@ -2009,9 +2009,8 @@ impl ConversationLoop {
             if action_checkpoint_active {
                 let mut exposed_names = exposed_tool_names.iter().cloned().collect::<Vec<_>>();
                 exposed_names.sort();
-                request_messages.push(Message::system(format!(
-                    "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Use file_edit/file_write to patch files as soon as the target line is known. file_read/grep are allowed only for one targeted lookup of a specific symbol, test, or call site; do not repeat broad inspection. If bash is exposed, use it only to run validation after a patch. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
-                    exposed_names.join(", ")
+                request_messages.push(Message::system(Self::focused_repair_mode_prompt(
+                    &exposed_names,
                 )));
             }
             let memory_already_in_turn_context = turn_retrieval_context
@@ -2342,7 +2341,7 @@ impl ConversationLoop {
                         tool_results_text.push_str(&checkpoint);
                     } else if no_code_progress_rounds >= 3 && !action_checkpoint_active {
                         let checkpoint = format!(
-                            "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit line_start/line_end to replace the specific lines instead of asking to inspect again. Do not call grep/glob/file_read/project_list or other inspection-only tools. If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
+                            "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not call glob/project_list or repeat broad inspection. If a specific symbol, test, or call site is still missing, use exactly one targeted file_read or grep, then patch. If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
                             route.workflow, no_code_progress_rounds
                         );
                         trace.record(TraceEvent::WorkflowFallback {
@@ -5879,6 +5878,25 @@ Do not answer in prose unless no safe patch exists."#;
             .collect()
     }
 
+    fn focused_repair_mode_prompt(exposed_names: &[String]) -> String {
+        format!(
+            "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Use file_edit/file_write to patch files as soon as the target line is known. file_read/grep are allowed only for one targeted lookup of a specific symbol, test, or call site; do not repeat broad inspection. Do not call glob/project_list or any tool that is not in the exposed list. If bash is exposed, use it only to run validation after a patch. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
+            exposed_names.join(", ")
+        )
+    }
+
+    fn action_checkpoint_unexposed_tool_message(
+        tool_name: &str,
+        exposed_tool_names: &HashSet<String>,
+    ) -> String {
+        let mut exposed = exposed_tool_names.iter().cloned().collect::<Vec<_>>();
+        exposed.sort();
+        format!(
+            "Tool '{tool_name}' was not exposed in the current focused repair request and cannot be executed. Exposed tools: {}. Use file_edit/file_write for the patch. Use file_read or grep only for one targeted lookup of a missing symbol, test, or call site. Do not call glob/project_list or repeat broad inspection.",
+            exposed.join(", ")
+        )
+    }
+
     fn is_code_write_tool_name(name: &str) -> bool {
         matches!(name, "file_edit" | "file_write")
     }
@@ -6222,10 +6240,15 @@ Do not answer in prose unless no safe patch exists."#;
                 continue;
             }
             if !exposed_tool_names.contains(&tc.name) {
-                let mut result = ToolResult::error(format!(
-                    "Tool '{}' was not exposed in the current request and cannot be executed.",
-                    tc.name
-                ));
+                let error = if action_checkpoint_active {
+                    Self::action_checkpoint_unexposed_tool_message(&tc.name, exposed_tool_names)
+                } else {
+                    format!(
+                        "Tool '{}' was not exposed in the current request and cannot be executed.",
+                        tc.name
+                    )
+                };
+                let mut result = ToolResult::error(error);
                 attach_tool_execution_metadata(tc, &mut result);
                 if let Some(ref trace) = trace {
                     trace.record(TraceEvent::ToolStarted {
@@ -7219,6 +7242,38 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
         assert!(after_change.contains("bash"));
+    }
+
+    #[test]
+    fn focused_repair_prompt_allows_one_targeted_read_without_broad_tools() {
+        let exposed = vec![
+            "file_edit".to_string(),
+            "file_read".to_string(),
+            "grep".to_string(),
+        ];
+
+        let prompt = ConversationLoop::focused_repair_mode_prompt(&exposed);
+
+        assert!(prompt.contains("file_read/grep are allowed only for one targeted lookup"));
+        assert!(prompt.contains("Do not call glob/project_list"));
+        assert!(!prompt.contains("Do not call grep/glob/file_read/project_list"));
+    }
+
+    #[test]
+    fn action_checkpoint_unexposed_tool_message_lists_allowed_tools() {
+        let exposed = HashSet::from([
+            "file_edit".to_string(),
+            "file_read".to_string(),
+            "grep".to_string(),
+        ]);
+
+        let message =
+            ConversationLoop::action_checkpoint_unexposed_tool_message("project_list", &exposed);
+
+        assert!(message.contains("project_list"));
+        assert!(message.contains("Exposed tools: file_edit, file_read, grep"));
+        assert!(message.contains("Use file_edit/file_write for the patch"));
+        assert!(message.contains("one targeted lookup"));
     }
 
     #[test]

@@ -191,3 +191,7 @@ Latest maintenance note:
   `patch_synthesis_no_change`) and the aggregate report has an `Agent Flow
   Stops` section. This separates model reasoning failures from execution-loop
   failures where the agent never produced an applicable patch.
+- Focused repair prompts now consistently allow exactly one targeted
+  `file_read`/`grep` lookup before patching instead of contradicting that with a
+  blanket read/search ban. Action-checkpoint unexposed-tool errors now list the
+  currently exposed tools and the expected repair path.
