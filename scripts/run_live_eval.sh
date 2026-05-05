@@ -837,6 +837,7 @@ collect_task() {
   cmd_log="$report_dir/required-commands.log"
   status_file="$report_dir/test-status.txt"
   quality_status_file="$report_dir/agent-quality-status.txt"
+  sample_json="$report_dir/sample.json"
   test_status="skipped"
   env_base="$(task_env_base "$id")"
   required_cmd_count="$(yaml_list "$file" acceptance.required_commands | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
@@ -875,6 +876,10 @@ collect_task() {
     done < <(yaml_list "$file" acceptance.required_commands)
   fi
   echo "$test_status" >"$status_file"
+  ruby -ryaml -rjson -e '
+sample_path, json_path = ARGV
+File.write(json_path, JSON.generate(YAML.load_file(sample_path) || {}) + "\n")
+' "$file" "$sample_json"
 
   {
     echo "# Live Eval Report: $id"
@@ -939,23 +944,22 @@ PY
       echo "Quality signals:"
       echo
       echo '```text'
-      python3 - "$report_dir/agent-output.md" "$report_dir/agent-events.jsonl" "$diff_patch" "$quality_status_file" "$file" "$status_file" "$cmd_log" "$report_dir/agent-stderr.log" <<'PY'
+      python3 - "$report_dir/agent-output.md" "$report_dir/agent-events.jsonl" "$diff_patch" "$quality_status_file" "$sample_json" "$status_file" "$cmd_log" "$report_dir/agent-stderr.log" <<'PY'
 import json
 import pathlib
 import sys
-import yaml
 
 output_path = pathlib.Path(sys.argv[1])
 events_path = pathlib.Path(sys.argv[2])
 diff_path = pathlib.Path(sys.argv[3])
 status_path = pathlib.Path(sys.argv[4])
-sample_path = pathlib.Path(sys.argv[5])
+sample_json_path = pathlib.Path(sys.argv[5])
 test_status_path = pathlib.Path(sys.argv[6])
 cmd_log_path = pathlib.Path(sys.argv[7])
 stderr_path = pathlib.Path(sys.argv[8])
 output = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
 diff = diff_path.read_text(encoding="utf-8") if diff_path.exists() else ""
-sample = yaml.safe_load(sample_path.read_text(encoding="utf-8")) or {}
+sample = json.loads(sample_json_path.read_text(encoding="utf-8")) if sample_json_path.exists() else {}
 test_status = test_status_path.read_text(encoding="utf-8").strip() if test_status_path.exists() else "missing"
 cmd_log_text = cmd_log_path.read_text(encoding="utf-8") if cmd_log_path.exists() else ""
 stderr_text = stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else ""
@@ -1149,18 +1153,17 @@ PY
       echo "Specialty signals:"
       echo
       echo '```text'
-      python3 - "$report_dir/agent-events.jsonl" "$file" "$status_file" "$cmd_log" <<'PY'
+      python3 - "$report_dir/agent-events.jsonl" "$sample_json" "$status_file" "$cmd_log" <<'PY'
 import json
 import pathlib
 import sys
-import yaml
 
 events_path = pathlib.Path(sys.argv[1])
-sample_path = pathlib.Path(sys.argv[2])
+sample_json_path = pathlib.Path(sys.argv[2])
 test_status_path = pathlib.Path(sys.argv[3])
 cmd_log_path = pathlib.Path(sys.argv[4])
 
-sample = yaml.safe_load(sample_path.read_text(encoding="utf-8")) or {}
+sample = json.loads(sample_json_path.read_text(encoding="utf-8")) if sample_json_path.exists() else {}
 test_status = test_status_path.read_text(encoding="utf-8").strip() if test_status_path.exists() else "missing"
 cmd_log_text = cmd_log_path.read_text(encoding="utf-8") if cmd_log_path.exists() else ""
 events = []

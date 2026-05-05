@@ -105,6 +105,11 @@ Each run gets a compact score:
     replaces only `summary_task()` with an explicit not-implemented stub, so the
     seeded edit target is narrower and less likely to require reconstructing a
     large script block from scratch.
+  - Harness rerun after dependency cleanup:
+    `capability-dashboard-summary-pyyaml-free-20260505-225124` failed without
+    PyYAML traceback. Failure owner remained `llm_reasoning`: no code diff,
+    required commands failed on the seeded `summary_task()` stub, and closeout
+    stayed `not_verified`.
 
 - [x] `resume-session-picker`
   - Type: feature.

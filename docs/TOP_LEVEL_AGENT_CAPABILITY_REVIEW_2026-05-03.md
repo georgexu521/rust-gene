@@ -212,9 +212,14 @@ Follow-up implemented:
 - Summary rows include pass/fail status, `eval_intent`, `failure_owner`,
   required-command status, plan/tool boundary, verification status, closeout,
   first write index, diff presence, and warnings.
-- The dashboard summary live task now has `prepare_commands` that remove summary
-  support from the fixture worktree, so it remains a true seeded code-change
-  eval after the feature lands.
+- A follow-up agent-run
+  `capability-dashboard-summary-pyyaml-free-20260505-225124` verified the
+  dependency cleanup: the report no longer contains PyYAML traceback, and the
+  remaining failure is a clean `llm_reasoning` signal from no code diff plus the
+  intentionally stubbed `summary_task()`.
+- The dashboard summary live task now has `prepare_commands` that preserve the
+  `--mode summary` entrypoint but replace `summary_task()` with a stub, so it
+  remains a true seeded code-change eval after the feature lands.
 
 Rerun:
 

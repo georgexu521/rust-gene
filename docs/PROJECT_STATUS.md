@@ -171,3 +171,7 @@ Latest maintenance note:
 - Live eval task parsing no longer depends on PyYAML for prepare/collect paths,
   and the dashboard-summary seeded fixture now preserves the summary entrypoint
   while stubbing only `summary_task()`.
+- A fresh dashboard-summary agent-run on 2026-05-05 confirmed the harness-side
+  PyYAML traceback is gone; the remaining failure is a clean `llm_reasoning`
+  signal because the agent produced no code diff and left the seeded
+  `summary_task()` stub failing.
