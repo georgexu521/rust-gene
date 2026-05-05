@@ -64,7 +64,7 @@ Local Claude Code evidence:
 
 | Dimension | Current `rust-agent` | Claude Code reference shape | Gap | Priority |
 |-----------|----------------------|-----------------------------|-----|----------|
-| Coding loop | Can inspect, edit, run required validation, and repair narrow failures. Recent local baseline reached `1059 passed`. | First-pass implementation, streaming tool use, retry, compaction, and closeout are mature daily paths. | Reduce first-pass hesitation, validation fragility, and broad-task repair misses. | P0 |
+| Coding loop | Can inspect, edit, run required validation, and repair narrow failures. Recent local baseline reached `1060 passed`. | First-pass implementation, streaming tool use, retry, compaction, and closeout are mature daily paths. | Reduce first-pass hesitation, validation fragility, and broad-task repair misses. | P0 |
 | Tool semantics | Broad registry across file, bash, grep, web, memory, MCP, git, LSP, worktree, agent, and utility tools. | Each tool has deeper prompt guidance, UI display, safety classification, summaries, and recovery behavior. | Move from surface parity to per-tool depth. | P0 |
 | Validation/closeout | Required validation is now explicit and long-running commands emit progress, but this path was recently fixed. | Validation and final reporting are stable parts of the product loop. | Keep hardening stale-evidence detection, env-prefixed commands, and closeout normalization. | P0 |
 | CLI/TUI UX | Interactive CLI and many slash commands exist. Some panels are trace-backed. | Rich Ink components for diff review, context visualization, MCP approval, history search, status, remote sessions, and settings. | Make high-use panels production-grade and mark placeholders honestly. | P1 |
@@ -208,7 +208,7 @@ Status: initial matrix landed.
   now use validation command classification for cargo test/check/clippy and
   similar long-running validation commands.
 - Current full local baseline after the 2026-05-05 validation/lint cleanup:
-  `1059 passed; 0 failed`, with
+  `1060 passed; 0 failed`, with
   `cargo clippy --all-features -- -D warnings` clean.
 - Latest opt-in live smoke after this batch:
   `live-eval-20260503-152320 code-change-verification-repair-loop`, status

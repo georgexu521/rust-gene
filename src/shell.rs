@@ -657,6 +657,13 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
             }
             StreamEvent::ToolExecutionProgress { id, progress } => {
                 with_tool_run(&mut tool_runs, &id, |run| run.push_progress(progress));
+                if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
+                    if let Some(line) = tool_progress_line(run) {
+                        clear_status_if_visible(&mut status_visible)?;
+                        assistant_printer.finish_line_if_needed()?;
+                        println_tool_line("…", YELLOW, &line, false);
+                    }
+                }
             }
             StreamEvent::ToolExecutionComplete { id, result } => {
                 clear_status_if_visible(&mut status_visible)?;
@@ -736,6 +743,18 @@ fn println_tool_line(marker: &str, color: &str, text: &str, first_line_normal: b
             println!("{DIM}{line}{RESET}");
         }
     }
+}
+
+fn tool_progress_line(run: &ToolRunView) -> Option<String> {
+    let latest = run.progress.last()?.trim();
+    if latest.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} · {}",
+        compact_line(&run.name, 24),
+        compact_line(latest, 96)
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -1060,6 +1079,15 @@ mod tests {
         assert_eq!(percent_bar(0, 4), "[░░░░]");
         assert_eq!(percent_bar(50, 4), "[██░░]");
         assert_eq!(percent_bar(100, 4), "[████]");
+    }
+
+    #[test]
+    fn tool_progress_line_shows_latest_progress_compactly() {
+        let mut run = ToolRunView::new("tool_1".to_string(), "bash".to_string());
+        run.push_progress("required validation still running after 30s".to_string());
+        let line = tool_progress_line(&run).expect("progress line");
+        assert!(line.contains("bash"));
+        assert!(line.contains("30s"));
     }
 
     #[test]

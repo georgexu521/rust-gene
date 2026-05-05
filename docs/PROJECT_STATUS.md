@@ -18,11 +18,11 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest verified baseline observed after the 2026-05-05 resume-session picker
+Latest verified baseline observed after the 2026-05-05 CLI scrollback progress
 batch:
 
 ```text
-1059 passed; 0 failed
+1060 passed; 0 failed
 ```
 
 Verified with:
@@ -165,3 +165,6 @@ Latest maintenance note:
 - `/resume` now resolves recent conversations by number, id prefix, title/model
   keyword, or message search, and restored sessions show a recent context
   preview.
+- The scrollback-first interactive shell now prints concise long-running tool
+  progress lines, so validation work is visible without switching to a
+  full-screen interface.

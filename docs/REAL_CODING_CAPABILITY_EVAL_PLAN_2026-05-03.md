@@ -107,13 +107,20 @@ Each run gets a compact score:
   - Local validation:
     `cargo test -q resume -- --test-threads=1`,
     `cargo test -q session -- --test-threads=1`, and
-    `cargo test -q -- --test-threads=1` passed with `1059 passed; 0 failed`.
+    `cargo test -q -- --test-threads=1` passed.
   - Key change: `/resume` resolves number/id/search selections and restored
     sessions show recent conversation preview.
 
-- [ ] `cli-scrollback-polish`
+- [x] `cli-scrollback-polish`
   - Type: ux.
   - Why: tests interactive CLI polish without overfitting to tests.
+  - Local implementation: completed on 2026-05-05.
+  - Local validation:
+    `cargo test -q shell -- --test-threads=1`,
+    `cargo test -q tui -- --test-threads=1`, and
+    `cargo test -q -- --test-threads=1` passed with `1060 passed; 0 failed`.
+  - Key change: scrollback shell now surfaces concise long-running tool
+    progress lines while keeping assistant text and tool status readable.
 
 ## Run Commands
 

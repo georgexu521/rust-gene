@@ -18,7 +18,7 @@ Latest verified baseline (2026-05-05):
 - `cargo check --quiet`
 - `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
 - `cargo clippy --all-features -- -D warnings`
-- Result: `1059 passed; 0 failed`
+- Result: `1060 passed; 0 failed`
 
 ## Quick Start
 
