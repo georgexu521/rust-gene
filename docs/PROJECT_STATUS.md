@@ -186,3 +186,8 @@ Latest maintenance note:
   older report metadata gaps. The aggregate also backfills conservative
   inferred owners for old reports while keeping `owner_metadata_missing`
   separate, so historical format gaps do not hide product failure patterns.
+- Live eval reports now classify action-checkpoint stops separately
+  (`action_checkpoint_no_patch`, `action_checkpoint_invalid_tools`,
+  `patch_synthesis_no_change`) and the aggregate report has an `Agent Flow
+  Stops` section. This separates model reasoning failures from execution-loop
+  failures where the agent never produced an applicable patch.

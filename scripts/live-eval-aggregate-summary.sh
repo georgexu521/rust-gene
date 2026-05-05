@@ -68,6 +68,12 @@ def infer_owner(record):
         return "llm_reasoning"
     if record["required"] == "failed" and record["diff"] == "yes":
         return "llm_reasoning"
+    if (
+        "action_checkpoint_no_patch" in warnings
+        or "action_checkpoint_invalid_tools" in warnings
+        or "patch_synthesis_no_change" in warnings
+    ):
+        return "agent_flow"
     if "tool_errors_seen" in warnings:
         return "agent_flow"
     if "no_code_diff" in warnings:
@@ -84,6 +90,14 @@ inferred_owners = collections.Counter()
 intents = collections.Counter()
 status_counts = collections.Counter()
 warning_counts = collections.Counter()
+agent_flow_stop_modes = {
+    "action_checkpoint_no_patch",
+    "action_checkpoint_invalid_tools",
+    "patch_synthesis_no_change",
+    "tool_run_without_closeout",
+    "empty_agent_output",
+    "missing_trace_summary",
+}
 
 for summary in sorted(benchmarks.glob("live-*/summary.md")):
     text = read(summary)
@@ -222,6 +236,17 @@ lines.extend(md_table(
 
 lines.extend(["", "## Failure Modes", ""])
 lines.extend(md_table(["mode", "count"], top(failure_modes)))
+
+agent_flow_rows = []
+for mode in sorted(agent_flow_stop_modes):
+    count = failure_modes[mode] + failure_modes[f"warning:{mode}"]
+    if count:
+        agent_flow_rows.append([mode, count, pct(count, total_tasks)])
+lines.extend(["", "## Agent Flow Stops", ""])
+lines.extend(md_table(
+    ["mode", "count", "share"],
+    agent_flow_rows or [["none", 0, "0.0%"]],
+))
 
 lines.extend(["", "## Eval Intents", ""])
 lines.extend(md_table(["intent", "count", "share"], [[k, v, pct(v, total_tasks)] for k, v in top(intents)]))

@@ -60,6 +60,8 @@ eval_intent: seeded_code_change
 required_command_status: failed
 closeout_status: not_verified
 first_write_tool_index: none
+action_checkpoint_no_patch: true
+warning: action_checkpoint_no_patch
 ```
 EOF
 cat >"$RUN_DIR/task-seeded-fail/agent-quality-status.txt" <<'EOF'
@@ -79,6 +81,7 @@ grep -q 'Plan-only passes: `1`' "$summary_path"
 grep -q 'Seeded no-diff failures: `1`' "$summary_path"
 grep -q '`expected_code_diff_missing`: `1`' "$summary_path"
 grep -q '`warning:no_code_diff`: `1`' "$summary_path"
+grep -q '`warning:action_checkpoint_no_patch`: `1`' "$summary_path"
 grep -q '| real_code_change_passed | 1 |' "$summary_path"
 grep -q '| plan_only_passed | 1 |' "$summary_path"
 grep -q '| seeded_no_diff_failed | 1 |' "$summary_path"

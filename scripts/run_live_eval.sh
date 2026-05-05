@@ -1021,6 +1021,12 @@ if trace_types:
     print("trace_event_types: " + ",".join(trace_types[-12:]))
 stale_edit_warnings = stderr_text.count("was modified since it was read")
 print(f"stale_edit_warnings: {stale_edit_warnings}")
+action_checkpoint_no_patch = "Stopped action checkpoint without patch synthesis" in output
+action_checkpoint_invalid_tools = "Stopped action checkpoint after repeated invalid tool requests" in output
+patch_synthesis_no_change = "Patch synthesis did not produce a file change" in output
+print(f"action_checkpoint_no_patch: {str(action_checkpoint_no_patch).lower()}")
+print(f"action_checkpoint_invalid_tools: {str(action_checkpoint_invalid_tools).lower()}")
+print(f"patch_synthesis_no_change: {str(patch_synthesis_no_change).lower()}")
 
 failures = []
 warnings = []
@@ -1064,6 +1070,15 @@ if tool_errors:
 if stale_edit_warnings >= 2:
     print("warning: repeated_stale_edit_warnings")
     warnings.append("repeated_stale_edit_warnings")
+if action_checkpoint_no_patch:
+    print("warning: action_checkpoint_no_patch")
+    failures.append("action_checkpoint_no_patch")
+if action_checkpoint_invalid_tools:
+    print("warning: action_checkpoint_invalid_tools")
+    failures.append("action_checkpoint_invalid_tools")
+if patch_synthesis_no_change:
+    print("warning: patch_synthesis_no_change")
+    failures.append("patch_synthesis_no_change")
 if verification_events and any(event.get("passed") is not True for event in verification_events[:-1]):
     print("warning: earlier_verification_failed_before_repair")
     warnings.append("earlier_verification_failed_before_repair")
@@ -1106,6 +1121,12 @@ def infer_failure_owner():
     if "empty_agent_output" in failures or "missing_trace_summary" in failures:
         return "agent_flow"
     if "tool_run_without_closeout" in failures:
+        return "agent_flow"
+    if (
+        "action_checkpoint_no_patch" in failures
+        or "action_checkpoint_invalid_tools" in failures
+        or "patch_synthesis_no_change" in failures
+    ):
         return "agent_flow"
     if (
         "no_code_diff" in warnings
@@ -1380,8 +1401,25 @@ for report in sorted(run_dir.glob("*/report.md")):
     verification_status = "passed" if closeout == "passed" and required == "ok" else ("failed" if quality_status == "failed" or test_status == "failed" else "unknown")
     run_status = "passed" if quality_status in {"ok", "missing"} and test_status in {"ok", "skipped", "missing"} else "failed"
     warnings = []
-    for warning in ("no_code_diff", "audit_no_code_diff", "current_head_no_fixture_already_satisfied", "tool_errors_seen"):
-        if has_warning(quality_text, warning) or warning in report_values(report_text, "warning"):
+    output_warning_markers = {
+        "action_checkpoint_no_patch": "Stopped action checkpoint without patch synthesis",
+        "action_checkpoint_invalid_tools": "Stopped action checkpoint after repeated invalid tool requests",
+        "patch_synthesis_no_change": "Patch synthesis did not produce a file change",
+    }
+    for warning in (
+        "no_code_diff",
+        "audit_no_code_diff",
+        "current_head_no_fixture_already_satisfied",
+        "tool_errors_seen",
+        "action_checkpoint_no_patch",
+        "action_checkpoint_invalid_tools",
+        "patch_synthesis_no_change",
+    ):
+        if (
+            has_warning(quality_text, warning)
+            or warning in report_values(report_text, "warning")
+            or output_warning_markers.get(warning, "\0") in agent_output
+        ):
             warnings.append(warning)
     failures = unique_items(status_values(quality_text, "failure") + [
         warning

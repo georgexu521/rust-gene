@@ -16,6 +16,7 @@
 - `closeout_not_successful`: `1`
 - `expected_code_diff_missing`: `1`
 - `required_commands_not_passing`: `1`
+- `warning:action_checkpoint_no_patch`: `1`
 - `warning:no_code_diff`: `1`
 
 ## Outcome Classes
@@ -30,7 +31,7 @@
 
 | task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | first_write | diff | warnings |
 |------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|-------------|------|----------|
-| live-eval-dashboard-summary | failed | seeded_code_change | llm_reasoning | failed | none | agent-run | failed | not_verified | none | no | no_code_diff |
+| live-eval-dashboard-summary | failed | seeded_code_change | llm_reasoning | failed | none | agent-run | failed | not_verified | none | no | no_code_diff,action_checkpoint_no_patch |
 
 ## Notes
 

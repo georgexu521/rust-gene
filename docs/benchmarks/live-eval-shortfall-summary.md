@@ -1,6 +1,6 @@
 # Live Eval Shortfall Summary
 
-- Generated: `2026-05-05 23:14:56 +0800`
+- Generated: `2026-05-05 23:21:22 +0800`
 - Runs scanned: `111`
 - Task reports scanned: `110`
 - Pass rate: `29/110` (26.4%)
@@ -39,8 +39,8 @@
 
 | owner | count | share |
 |---|---|---|
-| llm_reasoning | 44 | 40.0% |
-| agent_flow | 36 | 32.7% |
+| llm_reasoning | 42 | 38.2% |
+| agent_flow | 38 | 34.5% |
 | none | 29 | 26.4% |
 | eval_harness | 1 | 0.9% |
 
@@ -56,10 +56,21 @@
 | verification_failed | 31 |
 | earlier_stage_validation_failed_before_repair | 28 |
 | earlier_verification_failed_before_repair | 28 |
+| warning:action_checkpoint_invalid_tools | 24 |
 | warning:tool_errors_seen | 19 |
 | expected_code_diff_missing | 16 |
 | empty_agent_output | 12 |
-| tool_run_without_closeout | 12 |
+
+## Agent Flow Stops
+
+| mode | count | share |
+|---|---|---|
+| action_checkpoint_invalid_tools | 24 | 21.8% |
+| action_checkpoint_no_patch | 4 | 3.6% |
+| empty_agent_output | 12 | 10.9% |
+| missing_trace_summary | 10 | 9.1% |
+| patch_synthesis_no_change | 2 | 1.8% |
+| tool_run_without_closeout | 12 | 10.9% |
 
 ## Eval Intents
 
@@ -72,22 +83,22 @@
 
 | run | task | owner | required | closeout | warnings |
 |---|---|---|---|---|---|
-| capability-dashboard-summary-20260503-213148 | live-eval-dashboard-summary | llm_reasoning | failed | not_verified | no_code_diff |
-| capability-dashboard-summary-rerun-20260503-235256 | live-eval-dashboard-summary | llm_reasoning | failed | not_verified | no_code_diff |
+| capability-dashboard-summary-20260503-213148 | live-eval-dashboard-summary | llm_reasoning | failed | not_verified | no_code_diff,action_checkpoint_no_patch |
+| capability-dashboard-summary-rerun-20260503-235256 | live-eval-dashboard-summary | llm_reasoning | failed | not_verified | no_code_diff,action_checkpoint_no_patch |
 
 ## Recent Failed Tasks
 
 | run | task | intent | owner | inferred_owner | required | verification | diff | warnings |
 |---|---|---|---|---|---|---|---|---|
 | live-eval-20260501-211109 | code-change-verification-repair-loop | missing | missing | llm_reasoning | ok | failed | yes | none |
-| live-eval-20260501-215158 | code-change-verification-repair-loop | missing | missing | agent_flow | failed | failed | no | no_code_diff |
-| live-eval-20260501-225616 | skill-promotion-gate | missing | missing | agent_flow | ok | failed | no | no_code_diff |
-| live-eval-20260501-231638 | skill-promotion-gate | missing | missing | agent_flow | failed | failed | no | no_code_diff |
-| live-eval-20260501-233203 | skill-promotion-gate | missing | missing | llm_reasoning | failed | failed | yes | tool_errors_seen |
-| live-eval-20260501-235010 | skill-promotion-gate | missing | missing | agent_flow | failed | failed | no | no_code_diff |
+| live-eval-20260501-215158 | code-change-verification-repair-loop | missing | missing | agent_flow | failed | failed | no | no_code_diff,action_checkpoint_invalid_tools |
+| live-eval-20260501-225616 | skill-promotion-gate | missing | missing | agent_flow | ok | failed | no | no_code_diff,action_checkpoint_invalid_tools |
+| live-eval-20260501-231638 | skill-promotion-gate | missing | missing | agent_flow | failed | failed | no | no_code_diff,action_checkpoint_invalid_tools |
+| live-eval-20260501-233203 | skill-promotion-gate | missing | missing | llm_reasoning | failed | failed | yes | tool_errors_seen,action_checkpoint_invalid_tools |
+| live-eval-20260501-235010 | skill-promotion-gate | missing | missing | agent_flow | failed | failed | no | no_code_diff,action_checkpoint_invalid_tools |
 | live-eval-20260502-084615 | skill-promotion-gate | missing | missing | llm_reasoning | failed | failed | yes | tool_errors_seen |
 | live-eval-20260502-094751 | memory-recall-conflict-precision | missing | missing | llm_reasoning | failed | failed | yes | none |
-| live-eval-20260502-101528 | memory-recall-conflict-precision | missing | missing | agent_flow | ok | failed | no | no_code_diff |
+| live-eval-20260502-101528 | memory-recall-conflict-precision | missing | missing | agent_flow | ok | failed | no | no_code_diff,action_checkpoint_invalid_tools |
 | live-eval-20260502-104533 | memory-save-duplicate-demotion | missing | missing | llm_reasoning | failed | failed | yes | none |
 | live-eval-20260502-115116 | memory-save-sensitive-hard-block | missing | missing | llm_reasoning | failed | failed | yes | none |
 | live-eval-20260502-125317 | memory-save-quality-gate | missing | missing | agent_flow | failed | failed | no | no_code_diff |
