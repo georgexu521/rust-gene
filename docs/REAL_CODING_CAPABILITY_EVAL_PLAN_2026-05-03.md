@@ -110,6 +110,11 @@ Each run gets a compact score:
     PyYAML traceback. Failure owner remained `llm_reasoning`: no code diff,
     required commands failed on the seeded `summary_task()` stub, and closeout
     stayed `not_verified`.
+  - Product follow-up: summary reports now include pass/failure rates,
+    failure-mode aggregates, outcome classes that separate real code-change
+    passes from plan-only passes, and seeded no-diff failure counts. A
+    deterministic `scripts/live-eval-summary-smoke.sh` fixture guards the
+    summary contract without running an LLM.
 
 - [x] `resume-session-picker`
   - Type: feature.

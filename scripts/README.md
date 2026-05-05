@@ -24,6 +24,10 @@ Use this file as the source of truth for what is on the critical path.
   guided reasoning, weighted planning, and closeout activity for real-task
   review. Task YAML parsing uses the system Ruby YAML/JSON stdlib, so
   prepare/collect/report paths do not require installing PyYAML.
+- `live-eval-summary-smoke.sh`: deterministic fixture test for
+  `run_live_eval.sh --mode summary`; validates pass rates, plan-only separation,
+  real code-change pass classification, and seeded no-diff failure modes without
+  running an LLM.
 - `coding-workflow-gates.sh`: layered coding-agent workflow gates. Use `quick`
   for focused deterministic edit/validation/repair/closeout contracts,
   `standard` before workflow/tool commits, `full` for docs/build/full-test

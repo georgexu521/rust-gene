@@ -212,6 +212,11 @@ Follow-up implemented:
 - Summary rows include pass/fail status, `eval_intent`, `failure_owner`,
   required-command status, plan/tool boundary, verification status, closeout,
   first write index, diff presence, and warnings.
+- Summary reports now also show pass/failure rates, failure-mode aggregates,
+  outcome classes for real code-change passes versus plan-only passes, and
+  seeded no-diff failures.
+- `scripts/live-eval-summary-smoke.sh` verifies those summary semantics with
+  deterministic synthetic reports and is included in the quick workflow gate.
 - A follow-up agent-run
   `capability-dashboard-summary-pyyaml-free-20260505-225124` verified the
   dependency cleanup: the report no longer contains PyYAML traceback, and the

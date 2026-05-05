@@ -175,3 +175,7 @@ Latest maintenance note:
   PyYAML traceback is gone; the remaining failure is a clean `llm_reasoning`
   signal because the agent produced no code diff and left the seeded
   `summary_task()` stub failing.
+- Live eval summaries now include pass/failure rates, real code-change pass
+  counts, plan-only pass counts, seeded no-diff failure counts, and aggregated
+  failure modes. `scripts/live-eval-summary-smoke.sh` covers this without
+  running an LLM and is part of the quick coding workflow gate.

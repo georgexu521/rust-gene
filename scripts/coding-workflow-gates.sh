@@ -52,6 +52,8 @@ quick_gate() {
     cargo test -q git_tool -- --test-threads=1
   run_step "eval report/trend helpers" \
     cargo test -q eval_report -- --test-threads=1
+  run_step "live eval summary smoke" \
+    bash scripts/live-eval-summary-smoke.sh
   run_step "deterministic coding replay matrix" \
     cargo test -q bundled_coding_replay_matrix_passes -- --test-threads=1
 }

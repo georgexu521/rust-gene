@@ -1321,6 +1321,21 @@ def report_value(text, key, default="missing"):
 def has_warning(text, warning):
     return bool(re.search(rf"^warning={re.escape(warning)}$", text, re.MULTILINE))
 
+def status_values(text, key):
+    return [
+        match.group(1).strip()
+        for match in re.finditer(rf"^{re.escape(key)}=(.+)$", text, re.MULTILINE)
+    ]
+
+def md_cell(value):
+    text = str(value)
+    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")
+
+def pct(part, whole):
+    if whole == 0:
+        return "0.0%"
+    return f"{(part / whole) * 100:.1f}%"
+
 rows = []
 for report in sorted(run_dir.glob("*/report.md")):
     task_dir = report.parent
@@ -1353,6 +1368,7 @@ for report in sorted(run_dir.glob("*/report.md")):
     for warning in ("no_code_diff", "audit_no_code_diff", "current_head_no_fixture_already_satisfied", "tool_errors_seen"):
         if has_warning(quality_text, warning):
             warnings.append(warning)
+    failures = status_values(quality_text, "failure")
     rows.append({
         "task": task_id,
         "status": run_status,
@@ -1366,6 +1382,7 @@ for report in sorted(run_dir.glob("*/report.md")):
         "first_write": first_write,
         "diff": "yes" if diff_stat else "no",
         "warnings": ",".join(warnings) if warnings else "none",
+        "failures": failures,
         "has_output": bool(agent_output.strip()),
     })
 
@@ -1378,12 +1395,46 @@ for row in rows:
 intents = {}
 for row in rows:
     intents[row["intent"]] = intents.get(row["intent"], 0) + 1
+failure_modes = {}
+for row in rows:
+    for failure in row["failures"]:
+        failure_modes[failure] = failure_modes.get(failure, 0) + 1
+for row in rows:
+    if row["warnings"] != "none":
+        for warning in row["warnings"].split(","):
+            failure_modes[f"warning:{warning}"] = failure_modes.get(f"warning:{warning}", 0) + 1
+
+task_count = len(rows)
+passed_count = totals.get("passed", 0)
+failed_count = totals.get("failed", 0)
+real_code_change_passed = sum(
+    1
+    for row in rows
+    if row["status"] == "passed" and row["boundary"] == "agent-run" and row["diff"] == "yes"
+)
+plan_only_passed = sum(
+    1
+    for row in rows
+    if row["status"] == "passed" and row["boundary"] == "plan-only"
+)
+seeded_no_diff_failures = sum(
+    1
+    for row in rows
+    if row["status"] == "failed"
+    and row["intent"] == "seeded_code_change"
+    and row["diff"] == "no"
+)
 
 lines = [
     f"# Live Eval Summary: {run_id}",
     "",
     f"- Run directory: `{run_dir}`",
-    f"- Tasks found: `{len(rows)}`",
+    f"- Tasks found: `{task_count}`",
+    f"- Pass rate: `{passed_count}/{task_count}` ({pct(passed_count, task_count)})",
+    f"- Failure rate: `{failed_count}/{task_count}` ({pct(failed_count, task_count)})",
+    f"- Real code-change passes: `{real_code_change_passed}`",
+    f"- Plan-only passes: `{plan_only_passed}`",
+    f"- Seeded no-diff failures: `{seeded_no_diff_failures}`",
     "- Status counts: "
     + (", ".join(f"{key}={value}" for key, value in sorted(totals.items())) if totals else "none"),
     "- Failure owners: "
@@ -1391,17 +1442,37 @@ lines = [
     "- Eval intents: "
     + (", ".join(f"{key}={value}" for key, value in sorted(intents.items())) if intents else "none"),
     "",
+    "## Failure Modes",
+    "",
+]
+
+if failure_modes:
+    for key, value in sorted(failure_modes.items(), key=lambda item: (-item[1], item[0])):
+        lines.append(f"- `{key}`: `{value}`")
+else:
+    lines.append("- none")
+
+lines.extend([
+    "",
+    "## Outcome Classes",
+    "",
+    "| class | count | meaning |",
+    "|-------|-------|---------|",
+    f"| real_code_change_passed | {real_code_change_passed} | Agent-run tasks with passing status and a real diff. |",
+    f"| plan_only_passed | {plan_only_passed} | Planning/API-only artifacts that passed their available checks. |",
+    f"| seeded_no_diff_failed | {seeded_no_diff_failures} | Seeded code-change tasks where the agent did not produce a diff. |",
+    "",
     "## Task Matrix",
     "",
     "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | first_write | diff | warnings |",
     "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|-------------|------|----------|",
-]
+])
 
 if rows:
     for row in rows:
         lines.append(
             "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {first_write} | {diff} | {warnings} |".format(
-                **row
+                **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
@@ -1414,6 +1485,7 @@ lines.extend([
     "- `plan_quality` describes plan-only/API artifacts when present.",
     "- `tool_boundary` separates plan-only, collect-only, and real agent-run reports.",
     "- `verification_status` combines closeout and required-command evidence; it is not a human-quality score.",
+    "- `real_code_change_passed` requires an agent-run report with a non-empty diff; plan-only success is tracked separately.",
 ])
 
 summary_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
