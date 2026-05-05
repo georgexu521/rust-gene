@@ -1318,6 +1318,12 @@ def report_value(text, key, default="missing"):
     match = re.search(rf"^{re.escape(key)}:\s*(.+)$", text, re.MULTILINE)
     return match.group(1).strip() if match else default
 
+def report_values(text, key):
+    return [
+        match.group(1).strip()
+        for match in re.finditer(rf"^{re.escape(key)}:\s*(.+)$", text, re.MULTILINE)
+    ]
+
 def has_warning(text, warning):
     return bool(re.search(rf"^warning={re.escape(warning)}$", text, re.MULTILINE))
 
@@ -1336,6 +1342,15 @@ def pct(part, whole):
         return "0.0%"
     return f"{(part / whole) * 100:.1f}%"
 
+def unique_items(items):
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
 rows = []
 for report in sorted(run_dir.glob("*/report.md")):
     task_dir = report.parent
@@ -1350,7 +1365,7 @@ for report in sorted(run_dir.glob("*/report.md")):
     api_response = task_dir / "api-response.json"
     agent_events = task_dir / "agent-events.jsonl"
     quality_status = status_value(quality_text, "status", "missing")
-    failure_owner = status_value(quality_text, "failure_owner", "missing")
+    failure_owner = status_value(quality_text, "failure_owner", report_value(report_text, "failure_owner", "missing"))
     eval_intent = report_value(report_text, "eval_intent", "missing")
     closeout = report_value(report_text, "closeout_status", "missing")
     first_write = report_value(report_text, "first_write_tool_index", "missing")
@@ -1366,9 +1381,13 @@ for report in sorted(run_dir.glob("*/report.md")):
     run_status = "passed" if quality_status in {"ok", "missing"} and test_status in {"ok", "skipped", "missing"} else "failed"
     warnings = []
     for warning in ("no_code_diff", "audit_no_code_diff", "current_head_no_fixture_already_satisfied", "tool_errors_seen"):
-        if has_warning(quality_text, warning):
+        if has_warning(quality_text, warning) or warning in report_values(report_text, "warning"):
             warnings.append(warning)
-    failures = status_values(quality_text, "failure")
+    failures = unique_items(status_values(quality_text, "failure") + [
+        warning
+        for warning in report_values(report_text, "warning")
+        if warning not in warnings
+    ])
     rows.append({
         "task": task_id,
         "status": run_status,

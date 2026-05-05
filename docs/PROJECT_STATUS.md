@@ -179,3 +179,8 @@ Latest maintenance note:
   counts, plan-only pass counts, seeded no-diff failure counts, and aggregated
   failure modes. `scripts/live-eval-summary-smoke.sh` covers this without
   running an LLM and is part of the quick coding workflow gate.
+- `scripts/live-eval-aggregate-summary.sh` now refreshes existing benchmark
+  summaries and writes `docs/benchmarks/live-eval-shortfall-summary.md`; the
+  current aggregate scans 111 runs / 110 task reports and shows the largest
+  shortfalls are verification/closeout failure, required-command failure, and
+  older report metadata gaps.
