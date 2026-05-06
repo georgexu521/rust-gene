@@ -1,6 +1,6 @@
 # Live Eval Shortfall Summary
 
-- Generated: `2026-05-06 14:06:13 +0800`
+- Generated: `2026-05-06 14:12:19 +0800`
 - Runs scanned: `116`
 - Task reports scanned: `116`
 - Pass rate: `30/116` (25.9%)

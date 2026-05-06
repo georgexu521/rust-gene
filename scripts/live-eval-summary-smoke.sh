@@ -68,7 +68,7 @@ warning: action_checkpoint_no_patch
 EOF
 cat >"$RUN_DIR/task-seeded-fail/agent-quality-status.txt" <<'EOF'
 status=failed
-failure_owner=llm_reasoning
+failure_owner=agent_flow
 failure=expected_code_diff_missing
 warning=no_code_diff
 EOF
@@ -88,6 +88,22 @@ grep -q '| real_code_change_passed | 1 |' "$summary_path"
 grep -q '| plan_only_passed | 1 |' "$summary_path"
 grep -q '| seeded_no_diff_failed | 1 |' "$summary_path"
 grep -q '| task-code-pass | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | required_validation,first_code_change | 2 | yes | none |' "$summary_path"
-grep -q '| task-seeded-fail | failed | seeded_code_change | llm_reasoning | failed | none | agent-run | failed | not_verified | repeated_no_code_progress | none | no | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
+grep -q '| task-seeded-fail | failed | seeded_code_change | agent_flow | failed | none | agent-run | failed | not_verified | repeated_no_code_progress | none | no | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
+
+aggregate_path="$RUN_DIR/aggregate-summary.md"
+LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES=0 \
+  LIVE_EVAL_AGGREGATE_RUN_GLOB="live-$RUN_ID" \
+  bash scripts/live-eval-aggregate-summary.sh "$aggregate_path" >/dev/null
+
+grep -q 'Runs scanned: `1`' "$aggregate_path"
+grep -q 'Task reports scanned: `3`' "$aggregate_path"
+grep -q 'Pass rate: `2/3` (66.7%)' "$aggregate_path"
+grep -q '| instrumented_task_reports | 3 | 100.0% |' "$aggregate_path"
+grep -q '| passed | 2 | 66.7% |' "$aggregate_path"
+grep -q '| failed | 1 | 33.3% |' "$aggregate_path"
+grep -q '| agent_flow | 1 | 33.3% |' "$aggregate_path"
+grep -q '| warning:action_checkpoint_no_patch | 1 |' "$aggregate_path"
+grep -q '| warning:no_code_diff | 1 |' "$aggregate_path"
+grep -q '| task-seeded-fail | seeded_code_change | agent_flow | agent_flow | failed | failed | no | repeated_no_code_progress | no_code_diff,action_checkpoint_no_patch |' "$aggregate_path"
 
 echo "live eval summary smoke passed: $summary_path"

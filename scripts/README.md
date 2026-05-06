@@ -25,15 +25,17 @@ Use this file as the source of truth for what is on the critical path.
   review. Task YAML parsing uses the system Ruby YAML/JSON stdlib, so
   prepare/collect/report paths do not require installing PyYAML.
 - `live-eval-summary-smoke.sh`: deterministic fixture test for
-  `run_live_eval.sh --mode summary`; validates pass rates, plan-only separation,
-  real code-change pass classification, and seeded no-diff failure modes without
-  running an LLM.
-- `live-eval-aggregate-summary.sh`: refreshes existing live benchmark summaries
-  and writes `docs/benchmarks/live-eval-shortfall-summary.md`, a cross-run
-  distribution of pass rates, failure owners, failure modes, verification
-  failures, and seeded no-diff tasks. Set
-  `LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES=0` to aggregate already-generated
-  summaries only.
+  `run_live_eval.sh --mode summary` and the aggregate shortfall report;
+  validates pass rates, plan-only separation, real code-change pass
+  classification, instrumented slices, and seeded no-diff/action-checkpoint
+  failure modes without running an LLM.
+- `live-eval-aggregate-summary.sh`: reads live benchmark reports and quality
+  artifacts directly, then writes `docs/benchmarks/live-eval-shortfall-summary.md`,
+  a cross-run distribution of pass rates, failure owners, failure modes,
+  verification failures, instrumented metadata coverage, and seeded no-diff
+  tasks. Set `LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES=1` to refresh per-run
+  summaries first; use `LIVE_EVAL_AGGREGATE_RUN_GLOB` to limit the scanned run
+  directories for deterministic fixture tests.
 - `coding-workflow-gates.sh`: layered coding-agent workflow gates. Use `quick`
   for focused deterministic edit/validation/repair/closeout contracts,
   `standard` before workflow/tool commits, `full` for docs/build/full-test

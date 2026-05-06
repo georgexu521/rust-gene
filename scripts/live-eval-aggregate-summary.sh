@@ -6,15 +6,18 @@ cd "$ROOT_DIR"
 
 OUTPUT="${1:-docs/benchmarks/live-eval-shortfall-summary.md}"
 REFRESH_SUMMARIES="${LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES:-0}"
+BENCHMARKS_DIR="${LIVE_EVAL_AGGREGATE_BENCHMARKS_DIR:-docs/benchmarks}"
+RUN_GLOB="${LIVE_EVAL_AGGREGATE_RUN_GLOB:-live-*}"
 
 if [[ "$REFRESH_SUMMARIES" == "1" ]]; then
-  while IFS= read -r run_dir; do
+  while IFS= read -r report_path; do
+    run_dir="$(basename "$(dirname "$(dirname "$report_path")")")"
     run_id="${run_dir#live-}"
     scripts/run_live_eval.sh --mode summary --run-id "$run_id" >/dev/null
-  done < <(find docs/benchmarks -maxdepth 3 -name report.md | awk -F/ '{print $3}' | sort -u)
+  done < <(find "$BENCHMARKS_DIR" -maxdepth 3 -name report.md | sort -u)
 fi
 
-python3 - "$OUTPUT" <<'PY'
+python3 - "$OUTPUT" "$BENCHMARKS_DIR" "$RUN_GLOB" <<'PY'
 import collections
 import datetime as dt
 import pathlib
@@ -22,7 +25,8 @@ import re
 import sys
 
 output = pathlib.Path(sys.argv[1])
-benchmarks = pathlib.Path("docs/benchmarks")
+benchmarks = pathlib.Path(sys.argv[2])
+run_glob = sys.argv[3]
 
 def read(path):
     return path.read_text(encoding="utf-8") if path.exists() else ""
@@ -230,7 +234,7 @@ agent_flow_stop_modes = {
     "missing_trace_summary",
 }
 
-for run_dir in sorted(benchmarks.glob("live-*")):
+for run_dir in sorted(benchmarks.glob(run_glob)):
     if not run_dir.is_dir():
         continue
     run_id = run_dir.name.removeprefix("live-")
