@@ -203,3 +203,8 @@ Latest maintenance note:
   a real repair loop with changed files, validation, guided debugging,
   acceptance review, and final `llm_reasoning` failure. The remaining failure is
   product reasoning/repair quality, not checkpoint tool flow.
+- Verification and acceptance failures now generate a deterministic
+  `RepairSpec` prompt that lists failed commands, extracted failing tests,
+  required next-patch constraints, forbidden fixes, and validation commands.
+  This gives the model a structured repair target without writing the product
+  patch for it.

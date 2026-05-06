@@ -38,6 +38,7 @@ pub mod prompt_templates;
 pub mod query_engine;
 pub mod recovery_plan;
 pub mod reflection_pass;
+pub mod repair_spec;
 pub mod resource_policy;
 pub mod retrieval_context;
 pub mod session_goal;

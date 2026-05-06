@@ -2941,6 +2941,15 @@ impl ConversationLoop {
                         changed_files.first().map(|path| path.display().to_string()),
                         verification_command,
                     );
+                    let repair_spec = crate::engine::repair_spec::RepairSpec::from_failure(
+                        &failed_commands,
+                        &post_edit_evidence,
+                        None,
+                    );
+                    let repair_spec_text = repair_spec.format_for_prompt();
+                    tool_results_text.push('\n');
+                    tool_results_text.push_str(&repair_spec_text);
+                    messages.push(Message::system(repair_spec_text));
                 }
                 trace.record(TraceEvent::ReflectionPassCompleted {
                     pass_id: post_edit_reflection.pass_id.clone(),
@@ -3155,6 +3164,16 @@ impl ConversationLoop {
                                         },
                                     );
                                     acceptance_repair_attempts += 1;
+                                    let repair_spec =
+                                        crate::engine::repair_spec::RepairSpec::from_failure(
+                                            &failed_commands,
+                                            &post_edit_evidence,
+                                            Some(&review),
+                                        );
+                                    let repair_spec_text = repair_spec.format_for_prompt();
+                                    tool_results_text.push('\n');
+                                    tool_results_text.push_str(&repair_spec_text);
+                                    messages.push(Message::system(repair_spec_text));
                                     messages.push(Message::system(
                                         "Acceptance review did not pass. If verification or compile errors are present, fix those first using the latest verification source context; only then address the unresolved acceptance items. Continue repair if possible; otherwise report the unresolved items clearly."
                                             .to_string(),
