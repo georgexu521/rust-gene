@@ -1,0 +1,5 @@
+2026-05-06T06:23:45.344972Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: invalid escape at line 125 column 35
+[required validation still running after 30s] cargo test -q reflection_pass -- --test-threads=1
+[required validation still running after 60s] cargo test -q reflection_pass -- --test-threads=1
+[required validation still running after 30s] cargo test -q -- --test-threads=1
+[required validation still running after 60s] cargo test -q -- --test-threads=1

@@ -2353,6 +2353,7 @@ impl ConversationLoop {
             let has_worktree_changes = !changed_files.is_empty();
 
             let mut force_patch_synthesis_after_no_change = false;
+            let mut force_patch_synthesis_reason: Option<&'static str> = None;
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                 let mut activated_checkpoint_this_round = false;
                 if successful_write_tool {
@@ -2406,6 +2407,9 @@ impl ConversationLoop {
                         action_checkpoint_lookup_used = true;
                         action_checkpoint_no_change_rounds = 2;
                         force_patch_synthesis_after_no_change = true;
+                        force_patch_synthesis_reason = Some(
+                            "existing diff still needs repair after repeated read-only rounds",
+                        );
                         activated_checkpoint_this_round = true;
                     } else if no_code_progress_rounds == 2 && !action_checkpoint_active {
                         let checkpoint = format!(
@@ -2447,7 +2451,10 @@ impl ConversationLoop {
                         tool_results_text.push_str(&checkpoint);
                         action_checkpoint_active = true;
                         action_checkpoint_lookup_used = false;
-                        action_checkpoint_no_change_rounds = 0;
+                        action_checkpoint_no_change_rounds = 1;
+                        force_patch_synthesis_after_no_change = true;
+                        force_patch_synthesis_reason =
+                            Some("no code diff after repeated inspection");
                         activated_checkpoint_this_round = true;
                     } else if action_checkpoint_active && used_action_checkpoint_lookup {
                         action_checkpoint_lookup_used = true;
@@ -2465,6 +2472,8 @@ impl ConversationLoop {
                                     .to_string(),
                             });
                             force_patch_synthesis_after_no_change = true;
+                            force_patch_synthesis_reason =
+                                Some("focused repair lookup did not produce a patch");
                         }
                     }
                 }
@@ -2482,8 +2491,11 @@ impl ConversationLoop {
                 if action_checkpoint_no_change_rounds >= 2 {
                     trace.record(TraceEvent::WorkflowFallback {
                         error: if force_patch_synthesis_after_no_change {
-                            "action checkpoint entered patch synthesis after repeated focused repair reads"
-                                .to_string()
+                            format!(
+                                "action checkpoint entered patch synthesis: {}",
+                                force_patch_synthesis_reason
+                                    .unwrap_or("repeated no-change checkpoint")
+                            )
                         } else {
                             "action checkpoint entered patch synthesis after repeated invalid tools"
                                 .to_string()

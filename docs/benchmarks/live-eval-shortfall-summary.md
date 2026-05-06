@@ -1,11 +1,11 @@
 # Live Eval Shortfall Summary
 
-- Generated: `2026-05-06 14:12:19 +0800`
-- Runs scanned: `116`
-- Task reports scanned: `116`
-- Pass rate: `30/116` (25.9%)
-- Failure rate: `86/116` (74.1%)
-- Real code-change passes: `26`
+- Generated: `2026-05-06 14:29:40 +0800`
+- Runs scanned: `117`
+- Task reports scanned: `117`
+- Pass rate: `31/117` (26.5%)
+- Failure rate: `86/117` (73.5%)
+- Real code-change passes: `27`
 - Plan-only passes: `0`
 - Seeded no-diff failures: `4`
 - Required-command failures: `57`
@@ -15,63 +15,63 @@
 
 | dimension | count | share |
 |---|---|---|
-| failed_tasks | 86 | 74.1% |
-| required_command_failed | 57 | 49.1% |
-| verification_failed | 85 | 73.3% |
-| closeout_not_successful | 81 | 69.8% |
-| recovered_validation_failures | 60 | 51.7% |
+| failed_tasks | 86 | 73.5% |
+| required_command_failed | 57 | 48.7% |
+| verification_failed | 85 | 72.6% |
+| closeout_not_successful | 81 | 69.2% |
+| recovered_validation_failures | 60 | 51.3% |
 | seeded_no_diff_failed | 4 | 3.4% |
-| owner_metadata_missing | 92 | 79.3% |
-| real_code_change_passed | 26 | 22.4% |
+| owner_metadata_missing | 92 | 78.6% |
+| real_code_change_passed | 27 | 23.1% |
 | plan_only_passed | 0 | 0.0% |
 
 ## Failure Owners
 
 | owner | count | share |
 |---|---|---|
-| missing | 92 | 79.3% |
-| agent_flow | 9 | 7.8% |
-| none | 8 | 6.9% |
-| llm_reasoning | 6 | 5.2% |
+| missing | 92 | 78.6% |
+| none | 9 | 7.7% |
+| agent_flow | 9 | 7.7% |
+| llm_reasoning | 6 | 5.1% |
 | eval_harness | 1 | 0.9% |
 
 ## Inferred Owners
 
 | owner | count | share |
 |---|---|---|
-| llm_reasoning | 45 | 38.8% |
-| agent_flow | 40 | 34.5% |
-| none | 30 | 25.9% |
+| llm_reasoning | 45 | 38.5% |
+| agent_flow | 40 | 34.2% |
+| none | 31 | 26.5% |
 | eval_harness | 1 | 0.9% |
 
 ## Metadata Coverage
 
 | dimension | count | share |
 |---|---|---|
-| structured_failure_owner | 24 | 20.7% |
-| structured_eval_intent | 8 | 6.9% |
-| adaptive_trigger_metadata | 6 | 5.2% |
-| instrumented_task_reports | 24 | 20.7% |
+| structured_failure_owner | 25 | 21.4% |
+| structured_eval_intent | 9 | 7.7% |
+| adaptive_trigger_metadata | 7 | 6.0% |
+| instrumented_task_reports | 25 | 21.4% |
 
 ## Instrumented Slice
 
 | dimension | count | share |
 |---|---|---|
-| task_reports | 24 | 100.0% |
-| passed | 8 | 33.3% |
-| failed | 16 | 66.7% |
-| required_command_failed | 8 | 33.3% |
-| verification_failed | 16 | 66.7% |
-| seeded_no_diff_failed | 4 | 16.7% |
+| task_reports | 25 | 100.0% |
+| passed | 9 | 36.0% |
+| failed | 16 | 64.0% |
+| required_command_failed | 8 | 32.0% |
+| verification_failed | 16 | 64.0% |
+| seeded_no_diff_failed | 4 | 16.0% |
 
 ### Instrumented Owners
 
 | owner | count | share |
 |---|---|---|
-| agent_flow | 9 | 37.5% |
-| none | 8 | 33.3% |
-| llm_reasoning | 6 | 25.0% |
-| eval_harness | 1 | 4.2% |
+| none | 9 | 36.0% |
+| agent_flow | 9 | 36.0% |
+| llm_reasoning | 6 | 24.0% |
+| eval_harness | 1 | 4.0% |
 
 ### Instrumented Failure Modes
 
@@ -107,10 +107,10 @@
 
 | mode | count | share |
 |---|---|---|
-| action_checkpoint_invalid_tools | 24 | 20.7% |
-| action_checkpoint_no_patch | 8 | 6.9% |
+| action_checkpoint_invalid_tools | 24 | 20.5% |
+| action_checkpoint_no_patch | 8 | 6.8% |
 | empty_agent_output | 12 | 10.3% |
-| missing_trace_summary | 10 | 8.6% |
+| missing_trace_summary | 10 | 8.5% |
 | patch_synthesis_no_change | 2 | 1.7% |
 | tool_run_without_closeout | 12 | 10.3% |
 
@@ -118,9 +118,9 @@
 
 | trigger | count | share |
 |---|---|---|
-| required_validation | 6 | 5.2% |
-| repeated_no_code_progress | 6 | 5.2% |
-| first_code_change | 4 | 3.4% |
+| required_validation | 7 | 6.0% |
+| repeated_no_code_progress | 7 | 6.0% |
+| first_code_change | 5 | 4.3% |
 | verification_failed | 3 | 2.6% |
 | acceptance_rejected | 3 | 2.6% |
 
@@ -128,8 +128,8 @@
 
 | intent | count | share |
 |---|---|---|
-| missing | 108 | 93.1% |
-| seeded_code_change | 8 | 6.9% |
+| missing | 108 | 92.3% |
+| seeded_code_change | 9 | 7.7% |
 
 ## Seeded No-Diff Tasks
 
@@ -169,12 +169,12 @@
 
 | run | task | intent | owner | required | verification | diff | triggers | warnings |
 |---|---|---|---|---|---|---|---|---|
-| live-eval-20260502-134336 | memory-save-quality-gate | missing | missing | ok | passed | yes | none | none |
 | live-eval-20260502-141037 | persistent-memory-planning-context | missing | missing | ok | passed | yes | none | none |
 | live-eval-20260502-151157 | skill-promotion-gate | missing | missing | ok | passed | yes | none | none |
 | live-eval-20260502-153305 | code-change-verification-repair-loop | missing | missing | ok | passed | yes | none | none |
 | live-eval-20260503-152320 | code-change-verification-repair-loop | missing | none | ok | passed | yes | none | none |
 | live-eval-20260506-134904 | code-change-verification-repair-loop | seeded_code_change | none | ok | passed | yes | required_validation,repeated_no_code_progress,first_code_change | tool_errors_seen |
+| live-eval-20260506-142145 | code-change-verification-repair-loop | seeded_code_change | none | ok | passed | yes | required_validation,repeated_no_code_progress,first_code_change | none |
 | live-isolated-minimax-1 | memory-save-quality-gate | missing | missing | missing | unknown | no | none | none |
 | realflow-memory-20260503-163910 | persistent-memory-planning-context | missing | none | ok | passed | yes | none | none |
 | realtask-backend-20260502-183603 | backend-todo-api-crud | missing | none | ok | passed | yes | none | none |

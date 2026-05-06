@@ -37,7 +37,7 @@ env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
 Latest live coding workflow smoke:
 
 ```text
-live-eval-20260506-134904 code-change-verification-repair-loop: ok
+live-eval-20260506-142145 code-change-verification-repair-loop: ok
 verification_passed=true stage_validation_passed=true closeout_status=passed
 ```
 
@@ -209,6 +209,10 @@ Latest maintenance note:
   required next-patch constraints, forbidden fixes, and validation commands.
   This gives the model a structured repair target without writing the product
   patch for it.
+- Initial no-diff action checkpoints now immediately attempt deterministic
+  patch fallback when a safe hand-written rule matches the gathered evidence.
+  Generic LLM patch synthesis remains opt-in, but known repair cases no longer
+  need an extra model turn before the fallback can apply.
 - Code-change workflow strictness is now adaptive instead of medium-risk by
   default: required validation, first code change, failed verification,
   acceptance rejection, and repeated no-edit progress activate the heavier
