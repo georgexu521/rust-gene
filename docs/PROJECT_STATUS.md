@@ -45,6 +45,11 @@ verification_passed=true stage_validation_passed=true closeout_status=passed
 
 - `TurnTrace` records prompt, routing, memory, context, tool, permission,
   recovery, goal drift, assistant, and MCP resource events.
+- Maintainability cleanup is underway: focused action-checkpoint helpers now
+  live outside the core conversation loop, deterministic patch repair is routed
+  through a named rule registry with owner/review metadata, live-eval report
+  parsing is shared by summary and aggregate scripts, and `/permissions` has
+  its own slash-handler module.
 - `IntentRouter` chooses workflow/retrieval/reasoning policy and now consumes
   learning events from tool outcomes.
 - `SessionGoal` tracks the active goal; high drift requires approval and

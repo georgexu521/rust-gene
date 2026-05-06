@@ -6,17 +6,20 @@
 //! Handler functions are organized into submodules:
 //! - `session`: Session management, review skills, control commands
 //! - `agents`: System diagnostics, agent generation, git operations
-//! - `config`: Configuration, permissions, integrations, tool commands
+//! - `permissions`: Permission modes and project/global permission rules
+//! - `config`: Configuration, integrations, tool commands
 //! - `utils`: Shared utility functions and types
 
 pub mod agents;
 pub mod config;
+pub mod permissions;
 pub mod session;
 pub mod utils;
 
 // Re-export all handler functions so they're accessible via `slash_handler::handle_*`
 pub use agents::*;
 pub use config::*;
+pub use permissions::*;
 pub use session::*;
 
 #[cfg(test)]
