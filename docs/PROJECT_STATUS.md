@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-05
+Last updated: 2026-05-06
 
 ## Summary
 
@@ -208,3 +208,11 @@ Latest maintenance note:
   required next-patch constraints, forbidden fixes, and validation commands.
   This gives the model a structured repair target without writing the product
   patch for it.
+- Code-change workflow strictness is now adaptive instead of medium-risk by
+  default: required validation, first code change, failed verification,
+  acceptance rejection, and repeated no-edit progress activate the heavier
+  judgment/validation/repair path automatically. Closeout evidence records the
+  trigger labels so benchmark reports can explain why strict mode engaged.
+- Adaptive workflow triggers are first-class trace events and live-eval
+  summaries now expose a `triggers` column plus aggregate trigger distribution,
+  so strict-mode activation can be measured without parsing fallback prose.

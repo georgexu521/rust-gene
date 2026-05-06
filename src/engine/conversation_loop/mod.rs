@@ -1097,6 +1097,21 @@ fn trace_stage_validation(
     });
 }
 
+fn trace_adaptive_workflow_trigger(
+    trace: &TraceCollector,
+    trigger: crate::engine::code_change_workflow::AdaptiveWorkflowTrigger,
+    runner: &crate::engine::code_change_workflow::CodeChangeWorkflowRunner,
+) {
+    trace.record(TraceEvent::AdaptiveWorkflowTriggered {
+        trigger: trigger.label().to_string(),
+        depth: format!("{:?}", runner.policy.depth),
+        require_workflow_judgment: runner.policy.require_workflow_judgment,
+        require_stage_validation: runner.policy.require_stage_validation,
+        max_repair_attempts: runner.policy.max_repair_attempts,
+        reason: runner.policy.reason.clone(),
+    });
+}
+
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,
@@ -1507,6 +1522,23 @@ impl ConversationLoop {
         }
         let mut code_workflow =
             crate::engine::code_change_workflow::CodeChangeWorkflowRunner::new(&task_bundle);
+        if !required_validation_commands.is_empty()
+            && code_workflow.activate_trigger(
+                crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RequiredValidation,
+            )
+        {
+            trace_adaptive_workflow_trigger(
+                &trace,
+                crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RequiredValidation,
+                &code_workflow,
+            );
+            trace.record(TraceEvent::WorkflowFallback {
+                error: format!(
+                    "adaptive workflow trigger activated: required_validation commands={}",
+                    required_validation_commands.len()
+                ),
+            });
+        }
         let workflow_contract_prompt =
             crate::engine::workflow_contract::WorkflowContractPrompt::new(
                 last_user_preview.as_str(),
@@ -1957,6 +1989,7 @@ impl ConversationLoop {
         let max_loop_iterations = self.max_iterations + code_workflow.max_repair_attempts().max(3);
         let baseline_git_status_files = Self::git_status_files();
         let mut action_checkpoint_no_change_rounds = 0usize;
+        let mut action_checkpoint_requires_patch_before_validation = false;
 
         for iteration in 0..max_loop_iterations {
             debug!(
@@ -1991,10 +2024,12 @@ impl ConversationLoop {
             let has_changes_before_request =
                 crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
                     && !Self::git_status_files_since(&baseline_git_status_files).is_empty();
+            let validation_allowed_before_request =
+                has_changes_before_request && !action_checkpoint_requires_patch_before_validation;
             let tools = if action_checkpoint_active {
                 let action_tools = Self::code_action_tools(
                     &base_tools,
-                    has_changes_before_request,
+                    validation_allowed_before_request,
                     !action_checkpoint_lookup_used,
                 );
                 if action_tools.is_empty() {
@@ -2226,6 +2261,7 @@ impl ConversationLoop {
             let used_write_tool = tool_calls
                 .iter()
                 .any(|tc| Self::is_code_write_tool_name(&tc.name));
+            let mut successful_write_tool = false;
             let used_action_checkpoint_lookup = action_checkpoint_active
                 && tool_calls
                     .iter()
@@ -2273,6 +2309,8 @@ impl ConversationLoop {
                 }
 
                 if result.success && (tc.name == "file_edit" || tc.name == "file_write") {
+                    successful_write_tool = true;
+                    action_checkpoint_requires_patch_before_validation = false;
                     if let Some(path) = tc.arguments["path"].as_str() {
                         changed_files.push(std::path::PathBuf::from(path));
                     }
@@ -2293,6 +2331,19 @@ impl ConversationLoop {
                 }
             }
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
+                if let Some(correction) =
+                    Self::file_edit_failure_repair_correction(&failed_tool_evidence)
+                {
+                    trace.record(TraceEvent::WorkflowFallback {
+                        error: "file_edit failure converted to line-range repair correction"
+                            .to_string(),
+                    });
+                    tool_results_text.push('\n');
+                    tool_results_text.push_str(&correction);
+                    messages.push(Message::system(correction));
+                }
+            }
+            if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                 for path in Self::git_status_files_since(&baseline_git_status_files) {
                     if !changed_files.iter().any(|existing| existing == &path) {
                         changed_files.push(path);
@@ -2304,11 +2355,13 @@ impl ConversationLoop {
             let mut force_patch_synthesis_after_no_change = false;
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                 let mut activated_checkpoint_this_round = false;
-                if used_write_tool {
+                if successful_write_tool {
                     no_code_progress_rounds = 0;
                     action_checkpoint_no_change_rounds = 0;
                     action_checkpoint_active = false;
                     action_checkpoint_lookup_used = false;
+                } else if used_write_tool {
+                    action_checkpoint_requires_patch_before_validation = true;
                 } else if any_tool_success && !used_write_tool {
                     if has_worktree_changes && !successful_validation_commands.is_empty() {
                         no_code_progress_rounds = 0;
@@ -2323,6 +2376,20 @@ impl ConversationLoop {
                         && no_code_progress_rounds >= 2
                         && !action_checkpoint_active
                     {
+                        if code_workflow.activate_trigger(
+                            crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
+                        ) {
+                            trace_adaptive_workflow_trigger(
+                                &trace,
+                                crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
+                                &code_workflow,
+                            );
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error:
+                                    "adaptive workflow trigger activated: repeated_no_code_progress"
+                                        .to_string(),
+                            });
+                        }
                         let checkpoint = format!(
                             "Workflow acceptance repair checkpoint: this {:?} task already has code changes, but {} consecutive successful tool rounds made no additional edit. Use the evidence already gathered to synthesize the smallest remaining file_edit/file_write patch now. If multiple independent acceptance-critical bypasses are visible, fix them together; otherwise stop with a Closeout status of not_verified and name the blocker.",
                             route.workflow, no_code_progress_rounds
@@ -2353,6 +2420,20 @@ impl ConversationLoop {
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&checkpoint);
                     } else if no_code_progress_rounds >= 3 && !action_checkpoint_active {
+                        if code_workflow.activate_trigger(
+                            crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
+                        ) {
+                            trace_adaptive_workflow_trigger(
+                                &trace,
+                                crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
+                                &code_workflow,
+                            );
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error:
+                                    "adaptive workflow trigger activated: repeated_no_code_progress"
+                                        .to_string(),
+                            });
+                        }
                         let checkpoint = format!(
                             "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not call glob/project_list or repeat broad inspection. If a specific symbol, test, or call site is still missing, use exactly one targeted file_read or grep, then patch. If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
                             route.workflow, no_code_progress_rounds
@@ -2709,6 +2790,21 @@ impl ConversationLoop {
 
             // ── 自动验证闭环 ──────────────────────────────
             if !changed_files.is_empty() {
+                if code_workflow.activate_trigger(
+                    crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::FirstCodeChange,
+                ) {
+                    trace_adaptive_workflow_trigger(
+                        &trace,
+                        crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::FirstCodeChange,
+                        &code_workflow,
+                    );
+                    trace.record(TraceEvent::WorkflowFallback {
+                        error: format!(
+                            "adaptive workflow trigger activated: first_code_change files={}",
+                            changed_files.len()
+                        ),
+                    });
+                }
                 let working_dir =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let mut post_edit_evidence = Vec::new();
@@ -2931,6 +3027,19 @@ impl ConversationLoop {
                         &post_edit_evidence,
                     );
                 if !verify_passed {
+                    if code_workflow.activate_trigger(
+                        crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::VerificationFailed,
+                    ) {
+                        trace_adaptive_workflow_trigger(
+                            &trace,
+                            crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::VerificationFailed,
+                            &code_workflow,
+                        );
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error: "adaptive workflow trigger activated: verification_failed"
+                                .to_string(),
+                        });
+                    }
                     let verification_command = failed_commands
                         .first()
                         .cloned()
@@ -3072,7 +3181,13 @@ impl ConversationLoop {
                             weight_source: None,
                             reweighted: true,
                         });
-                    } else if workflow_contract_enabled(self.provider.as_ref()) {
+                    } else if code_workflow.should_run_acceptance_review(
+                        verify_passed,
+                        review_result.success,
+                        !required_validation_commands.is_empty(),
+                        judgment.acceptance.criteria.len(),
+                    ) && workflow_contract_enabled(self.provider.as_ref())
+                    {
                         let analyzer =
                             crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
                                 self.provider.as_ref(),
@@ -3145,6 +3260,20 @@ impl ConversationLoop {
                                             | crate::engine::workflow_contract::AcceptanceNextAction::Stop
                                     )
                                 {
+                                    if code_workflow.activate_trigger(
+                                        crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::AcceptanceRejected,
+                                    ) {
+                                        trace_adaptive_workflow_trigger(
+                                            &trace,
+                                            crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::AcceptanceRejected,
+                                            &code_workflow,
+                                        );
+                                        trace.record(TraceEvent::WorkflowFallback {
+                                            error:
+                                                "adaptive workflow trigger activated: acceptance_rejected"
+                                                    .to_string(),
+                                        });
+                                    }
                                     should_closeout_after_verified_change = false;
                                     apply_workflow_feedback_and_trace(
                                         &mut task_bundle,
@@ -3196,8 +3325,11 @@ impl ConversationLoop {
                                         review_next_action,
                                         crate::engine::workflow_contract::AcceptanceNextAction::ContinueRepair
                                     ) {
+                                        let validation_failed = !failed_commands.is_empty()
+                                            || !verify_passed
+                                            || !required_validation_passed;
                                         let compile_or_review_failed =
-                                            !check_passed || !review_result.success;
+                                            !check_passed || !review_result.success || validation_failed;
                                         let needs_acceptance_investigation =
                                             review_unresolved > 0 && !compile_or_review_failed;
                                         reserved_repair_rounds = reserved_repair_rounds.max(
@@ -3219,6 +3351,12 @@ impl ConversationLoop {
                                         } else {
                                             action_checkpoint_active = true;
                                             action_checkpoint_lookup_used = true;
+                                            action_checkpoint_requires_patch_before_validation =
+                                                true;
+                                            messages.push(Message::system(
+                                                "Repair must patch before validation: the latest verification/acceptance evidence already shows the current diff is invalid. Use file_edit/file_write first; run bash validation only after that new patch succeeds."
+                                                    .to_string(),
+                                            ));
                                             trace.record(TraceEvent::WorkflowFallback {
                                                 error:
                                                     "acceptance review requested repair; switching to action-only repair mode"
@@ -3245,6 +3383,7 @@ impl ConversationLoop {
                     != crate::engine::reflection_pass::ReflectionStatus::Passed
                 {
                     should_closeout_after_verified_change = false;
+                    action_checkpoint_requires_patch_before_validation = true;
                     let repair_instruction = format!(
                         "{}\nPost-edit reflection found unresolved quality gaps. Fix the changed files before giving a final answer.",
                         post_edit_reflection.format_for_prompt()
@@ -5936,6 +6075,31 @@ Do not answer in prose unless no safe patch exists."#;
         )
     }
 
+    fn file_edit_failure_repair_correction(failed_tool_evidence: &[String]) -> Option<String> {
+        let relevant = failed_tool_evidence
+            .iter()
+            .filter(|evidence| evidence.contains("file_edit"))
+            .filter(|evidence| {
+                evidence.contains("Expected 1 occurrence")
+                    || evidence.contains("old_string cannot be empty")
+                    || evidence.contains("old_string cannot be empty or whitespace-only")
+                    || evidence.contains("Action checkpoint file_edit rejected")
+                    || evidence.contains("unique edit anchor")
+            })
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if relevant.is_empty() {
+            return None;
+        }
+
+        Some(format!(
+            "File edit repair correction:\n{}\nNext action is still a patch, not closeout. The previous file_edit did not modify a file because its anchor was empty, whitespace-only, or non-unique. Use one of these safer forms:\n- If prior file_read/grep output shows the target line number, call file_edit with path, line_start, line_end, and new_string for that exact line.\n- Otherwise copy a multi-line old_string that includes the surrounding function call and is unique exactly once.\nDo not retry the same broad old_string. Do not close out until a file_edit/file_write succeeds and validation runs.",
+            relevant.join("\n\n")
+        ))
+    }
+
     fn action_checkpoint_unexposed_tool_message(
         tool_name: &str,
         exposed_tool_names: &HashSet<String>,
@@ -7320,6 +7484,21 @@ mod tests {
         let prompt_after_lookup = ConversationLoop::focused_repair_mode_prompt(&exposed, true);
         assert!(prompt_after_lookup.contains("targeted lookup budget has already been used"));
         assert!(prompt_after_lookup.contains("do not call file_read/grep again"));
+    }
+
+    #[test]
+    fn file_edit_failure_correction_prefers_line_range_retry() {
+        let correction = ConversationLoop::file_edit_failure_repair_correction(&[r#"
+file_edit call_1 failed:
+Expected 1 occurrence(s) of old_string, but found 1487.
+  ... showing first 12 of 1487 matches. The old_string is too broad.
+"#
+        .to_string()])
+        .expect("ambiguous file_edit should produce a correction");
+
+        assert!(correction.contains("line_start, line_end"));
+        assert!(correction.contains("Do not retry the same broad old_string"));
+        assert!(correction.contains("not close out"));
     }
 
     #[test]

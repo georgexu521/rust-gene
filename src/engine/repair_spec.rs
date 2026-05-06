@@ -3,6 +3,7 @@ use crate::engine::workflow_contract::AcceptanceReview;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairSpec {
     pub failed_commands: Vec<String>,
+    pub failed_command_evidence: Vec<String>,
     pub failed_tests: Vec<String>,
     pub required_next_patch: Vec<String>,
     pub forbidden_fixes: Vec<String>,
@@ -16,6 +17,7 @@ impl RepairSpec {
         review: Option<&AcceptanceReview>,
     ) -> Self {
         let failed_tests = extract_failed_tests(evidence);
+        let failed_command_evidence = extract_failed_command_evidence(failed_commands, evidence);
         let mut required_next_patch = Vec::new();
         let mut forbidden_fixes = Vec::new();
 
@@ -26,6 +28,12 @@ impl RepairSpec {
             ));
         }
         for command in failed_commands {
+            push_unique(
+                &mut required_next_patch,
+                format!(
+                    "Before editing, explain why the current diff still fails `{command}` using failed_command_evidence"
+                ),
+            );
             push_unique(
                 &mut required_next_patch,
                 format!("Rerun and satisfy `{command}` after the next patch"),
@@ -52,6 +60,7 @@ impl RepairSpec {
 
         Self {
             failed_commands: unique_strings(failed_commands.iter().cloned()),
+            failed_command_evidence,
             failed_tests,
             required_next_patch,
             forbidden_fixes,
@@ -63,15 +72,56 @@ impl RepairSpec {
         let mut out = String::new();
         out.push_str("RepairSpec:\n");
         push_section(&mut out, "failed_commands", &self.failed_commands);
+        push_section(
+            &mut out,
+            "failed_command_evidence",
+            &self.failed_command_evidence,
+        );
         push_section(&mut out, "failed_tests", &self.failed_tests);
         push_section(&mut out, "required_next_patch", &self.required_next_patch);
         push_section(&mut out, "forbidden_fixes", &self.forbidden_fixes);
         push_section(&mut out, "validation_commands", &self.validation_commands);
         out.push_str(
-            "Instruction: make the smallest code patch that satisfies this spec, then rerun validation. Do not close out until failed_commands pass or you name a concrete blocker.\n",
+            "Instruction: first state the concrete mismatch shown by failed_command_evidence, then make the smallest code patch that satisfies this spec, then rerun validation. Do not close out until failed_commands pass or you name a concrete blocker.\n",
         );
         out
     }
+}
+
+fn extract_failed_command_evidence(failed_commands: &[String], evidence: &[String]) -> Vec<String> {
+    let mut snippets = Vec::new();
+    for command in failed_commands {
+        let command = command.trim();
+        if command.is_empty() {
+            continue;
+        }
+        for text in evidence {
+            if !text.contains(command) {
+                continue;
+            }
+            push_unique(
+                &mut snippets,
+                format!("`{}` output:\n{}", command, compact_evidence(text, 1800)),
+            );
+        }
+    }
+
+    if snippets.is_empty() {
+        for text in evidence {
+            if text.contains("[required verification]") || text.contains("required command failed")
+            {
+                push_unique(
+                    &mut snippets,
+                    format!(
+                        "required validation output:\n{}",
+                        compact_evidence(text, 1800)
+                    ),
+                );
+            }
+        }
+    }
+
+    snippets
 }
 
 fn extract_failed_tests(evidence: &[String]) -> Vec<String> {
@@ -107,6 +157,16 @@ fn extract_forbidden_fixes(evidence: &[String]) -> Vec<String> {
         forbidden.push("Do not accept duplicate memories by threshold; duplicate hard stops must remain rejected".to_string());
     }
     forbidden
+}
+
+fn compact_evidence(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out = trimmed.chars().take(max_chars).collect::<String>();
+    out.push_str("\n... [truncated]");
+    out
 }
 
 fn push_section(out: &mut String, title: &str, items: &[String]) {
@@ -176,5 +236,26 @@ duplicate_project_fact expected Rejected actual Accepted
             .iter()
             .any(|item| item.contains("unconditional Saved")));
         assert!(spec.format_for_prompt().contains("RepairSpec:"));
+        assert!(spec
+            .format_for_prompt()
+            .contains("first state the concrete mismatch"));
+    }
+
+    #[test]
+    fn repair_spec_promotes_required_command_output_to_hard_evidence() {
+        let command = r#"! rg '&format!\("retry: \{\}", verification_command\)' src/engine/conversation_loop/mod.rs"#;
+        let evidence = vec![format!(
+            r#"[required verification] {command} found 1 error(s), 0 warning(s):
+  [error] unknown:                         &format!("retry: {{}}", verification_command),
+  [required command failed: {command}]"#
+        )];
+
+        let spec = RepairSpec::from_failure(&[command.to_string()], &evidence, None);
+        let prompt = spec.format_for_prompt();
+
+        assert!(prompt.contains("failed_command_evidence"));
+        assert!(prompt.contains(r#"&format!("retry: {}", verification_command)"#));
+        assert!(prompt.contains("Before editing, explain why the current diff still fails"));
+        assert!(prompt.contains(command));
     }
 }

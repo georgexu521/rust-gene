@@ -41,6 +41,28 @@ pub enum StageValidationStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum AdaptiveWorkflowTrigger {
+    RequiredValidation,
+    FirstCodeChange,
+    VerificationFailed,
+    AcceptanceRejected,
+    RepeatedNoCodeProgress,
+}
+
+impl AdaptiveWorkflowTrigger {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RequiredValidation => "required_validation",
+            Self::FirstCodeChange => "first_code_change",
+            Self::VerificationFailed => "verification_failed",
+            Self::AcceptanceRejected => "acceptance_rejected",
+            Self::RepeatedNoCodeProgress => "repeated_no_code_progress",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PlanStepRuntimeStatus {
     Pending,
     Active,
@@ -114,15 +136,15 @@ impl RiskSensitiveWorkflowPolicy {
                 reason: "high-risk programming workflow requires strict validation".to_string(),
             },
             RiskLevel::Medium if programming => Self {
-                depth: WorkflowDepth::Standard,
-                visibility: WorkflowVisibility::Normal,
-                require_workflow_judgment: true,
-                require_stage_validation: true,
+                depth: WorkflowDepth::Minimal,
+                visibility: WorkflowVisibility::Quiet,
+                require_workflow_judgment: false,
+                require_stage_validation: false,
                 require_final_closeout: true,
                 reflection_blocks: false,
-                max_repair_attempts: 2,
+                max_repair_attempts: 1,
                 expose_weight_details: false,
-                reason: "medium-risk programming workflow uses lightweight validation".to_string(),
+                reason: "medium-risk programming workflow starts lightweight; strict checks are trigger-activated".to_string(),
             },
             _ if programming => Self {
                 depth: WorkflowDepth::Minimal,
@@ -250,6 +272,7 @@ pub struct CodeChangeWorkflowRunner {
     validations: Vec<StageValidationRecord>,
     acceptance_reviews: Vec<AcceptanceReview>,
     residual_risks: Vec<String>,
+    adaptive_triggers: Vec<AdaptiveWorkflowTrigger>,
 }
 
 impl CodeChangeWorkflowRunner {
@@ -266,6 +289,7 @@ impl CodeChangeWorkflowRunner {
             validations: Vec::new(),
             acceptance_reviews: Vec::new(),
             residual_risks: Vec::new(),
+            adaptive_triggers: Vec::new(),
         }
     }
 
@@ -275,6 +299,46 @@ impl CodeChangeWorkflowRunner {
             bundle.workflow_judgment.as_ref(),
         );
         self.step_states = step_states_from_bundle(bundle);
+        let triggers = self.adaptive_triggers.clone();
+        for trigger in triggers {
+            self.apply_trigger_to_policy(trigger);
+        }
+    }
+
+    pub fn activate_trigger(&mut self, trigger: AdaptiveWorkflowTrigger) -> bool {
+        if self.adaptive_triggers.contains(&trigger) {
+            return false;
+        }
+        self.adaptive_triggers.push(trigger);
+        self.apply_trigger_to_policy(trigger);
+        true
+    }
+
+    pub fn adaptive_trigger_labels(&self) -> Vec<&'static str> {
+        self.adaptive_triggers
+            .iter()
+            .map(|trigger| trigger.label())
+            .collect()
+    }
+
+    pub fn should_run_acceptance_review(
+        &self,
+        verify_passed: bool,
+        code_review_passed: bool,
+        has_required_validation: bool,
+        acceptance_checks: usize,
+    ) -> bool {
+        if acceptance_checks == 0 {
+            return false;
+        }
+        matches!(self.policy.depth, WorkflowDepth::Strict)
+            || has_required_validation
+            || !verify_passed
+            || !code_review_passed
+            || self
+                .adaptive_triggers
+                .iter()
+                .any(|trigger| matches!(trigger, AdaptiveWorkflowTrigger::AcceptanceRejected))
     }
 
     pub fn should_request_workflow_judgment(&self) -> bool {
@@ -287,6 +351,66 @@ impl CodeChangeWorkflowRunner {
 
     pub fn max_repair_attempts(&self) -> usize {
         self.policy.max_repair_attempts
+    }
+
+    fn apply_trigger_to_policy(&mut self, trigger: AdaptiveWorkflowTrigger) {
+        match trigger {
+            AdaptiveWorkflowTrigger::RequiredValidation => {
+                self.policy.require_workflow_judgment = true;
+                self.policy.require_stage_validation = true;
+                self.policy.require_final_closeout = true;
+                self.policy.max_repair_attempts = self.policy.max_repair_attempts.max(2);
+                self.policy.visibility = WorkflowVisibility::Normal;
+                self.policy.reason = append_reason(
+                    &self.policy.reason,
+                    "required validation command activated workflow judgment and stage validation",
+                );
+            }
+            AdaptiveWorkflowTrigger::FirstCodeChange => {
+                self.policy.require_stage_validation = true;
+                self.policy.require_final_closeout = true;
+                self.policy.max_repair_attempts = self.policy.max_repair_attempts.max(1);
+                self.policy.reason = append_reason(
+                    &self.policy.reason,
+                    "code changes activated validation closeout",
+                );
+            }
+            AdaptiveWorkflowTrigger::VerificationFailed => {
+                self.policy.depth = WorkflowDepth::Strict;
+                self.policy.visibility = WorkflowVisibility::Debug;
+                self.policy.require_workflow_judgment = true;
+                self.policy.require_stage_validation = true;
+                self.policy.require_final_closeout = true;
+                self.policy.max_repair_attempts = self.policy.max_repair_attempts.max(3);
+                self.policy.expose_weight_details = true;
+                self.policy.reason = append_reason(
+                    &self.policy.reason,
+                    "failed verification activated strict repair",
+                );
+            }
+            AdaptiveWorkflowTrigger::AcceptanceRejected => {
+                self.policy.depth = WorkflowDepth::Strict;
+                self.policy.visibility = WorkflowVisibility::Debug;
+                self.policy.require_stage_validation = true;
+                self.policy.require_final_closeout = true;
+                self.policy.max_repair_attempts = self.policy.max_repair_attempts.max(3);
+                self.policy.expose_weight_details = true;
+                self.policy.reason = append_reason(
+                    &self.policy.reason,
+                    "acceptance rejection activated strict repair",
+                );
+            }
+            AdaptiveWorkflowTrigger::RepeatedNoCodeProgress => {
+                self.policy.require_stage_validation = true;
+                self.policy.require_final_closeout = true;
+                self.policy.max_repair_attempts = self.policy.max_repair_attempts.max(2);
+                self.policy.visibility = WorkflowVisibility::Normal;
+                self.policy.reason = append_reason(
+                    &self.policy.reason,
+                    "repeated no-edit progress activated focused repair",
+                );
+            }
+        }
     }
 
     pub fn record_stage_validation(
@@ -393,6 +517,12 @@ impl CodeChangeWorkflowRunner {
             } else {
                 validation.push("No file-change validation was required or recorded".to_string());
             }
+        }
+        if !self.adaptive_triggers.is_empty() {
+            validation.push(format!(
+                "Adaptive triggers: {}",
+                self.adaptive_trigger_labels().join(", ")
+            ));
         }
 
         let mut acceptance = Vec::new();
@@ -639,6 +769,16 @@ fn push_unique(items: &mut Vec<String>, value: String) {
     }
 }
 
+fn append_reason(current: &str, addition: &str) -> String {
+    if current.contains(addition) {
+        current.to_string()
+    } else if current.trim().is_empty() {
+        addition.to_string()
+    } else {
+        format!("{}; {}", current, addition)
+    }
+}
+
 fn preview(text: &str, max_chars: usize) -> String {
     let mut out = text.chars().take(max_chars).collect::<String>();
     if text.chars().count() > max_chars {
@@ -758,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn closeout_is_not_verified_without_required_validation_or_acceptance() {
+    fn lightweight_closeout_does_not_require_stage_validation_before_trigger() {
         let route = code_change_route(RiskLevel::Medium);
         let mut bundle = TaskContextBundle::new("修复 memory_save 质量门控", ".", route, None);
         bundle.add_acceptance_check("memory_save respects quality gates");
@@ -770,7 +910,7 @@ mod tests {
         assert!(closeout
             .validation
             .iter()
-            .any(|item| item.contains("No required file-change validation")));
+            .any(|item| item.contains("No file-change validation was required")));
         assert!(closeout
             .acceptance
             .iter()
@@ -782,6 +922,39 @@ mod tests {
         assert!(closeout
             .format_for_final_response()
             .contains("acceptance_pending=1"));
+    }
+
+    #[test]
+    fn required_validation_trigger_requests_workflow_judgment() {
+        let route = code_change_route(RiskLevel::Medium);
+        let bundle = TaskContextBundle::new("修复 memory_save 质量门控", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        assert!(!runner.should_request_workflow_judgment());
+        assert!(runner.activate_trigger(AdaptiveWorkflowTrigger::RequiredValidation));
+
+        assert!(runner.should_request_workflow_judgment());
+        assert!(runner.policy.require_stage_validation);
+        assert_eq!(runner.policy.max_repair_attempts, 2);
+        assert_eq!(
+            runner.adaptive_trigger_labels(),
+            vec!["required_validation"]
+        );
+    }
+
+    #[test]
+    fn verification_failure_trigger_promotes_to_strict_repair() {
+        let route = code_change_route(RiskLevel::Medium);
+        let bundle = TaskContextBundle::new("修复 memory_save 质量门控", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        assert!(runner.activate_trigger(AdaptiveWorkflowTrigger::VerificationFailed));
+
+        assert_eq!(runner.policy.depth, WorkflowDepth::Strict);
+        assert!(runner.policy.require_stage_validation);
+        assert!(runner.policy.require_final_closeout);
+        assert_eq!(runner.policy.max_repair_attempts, 3);
+        assert!(runner.should_run_acceptance_review(false, true, false, 1));
     }
 
     #[test]

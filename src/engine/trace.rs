@@ -164,6 +164,14 @@ pub enum TraceEvent {
     WorkflowFallback {
         error: String,
     },
+    AdaptiveWorkflowTriggered {
+        trigger: String,
+        depth: String,
+        require_workflow_judgment: bool,
+        require_stage_validation: bool,
+        max_repair_attempts: usize,
+        reason: String,
+    },
     MemorySnapshotInjected {
         chars: usize,
     },
@@ -328,6 +336,7 @@ impl TraceEvent {
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
+            TraceEvent::AdaptiveWorkflowTriggered { .. } => "workflow.trigger",
             TraceEvent::MemorySnapshotInjected { .. } => "memory.snapshot",
             TraceEvent::MemoryPrefetch { .. } => "memory.prefetch",
             TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
@@ -553,6 +562,22 @@ impl TraceEvent {
             TraceEvent::WorkflowFallback { error } => {
                 format!("workflow fallback: {}", preview(error))
             }
+            TraceEvent::AdaptiveWorkflowTriggered {
+                trigger,
+                depth,
+                require_workflow_judgment,
+                require_stage_validation,
+                max_repair_attempts,
+                reason,
+            } => format!(
+                "workflow trigger={} depth={} judgment={} stage_validation={} repairs={} reason={}",
+                trigger,
+                depth,
+                require_workflow_judgment,
+                require_stage_validation,
+                max_repair_attempts,
+                preview(reason)
+            ),
             TraceEvent::MemorySnapshotInjected { chars } => {
                 format!("memory snapshot injected: {} chars", chars)
             }

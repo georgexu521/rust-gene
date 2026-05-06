@@ -1200,7 +1200,9 @@ pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkf
 pub fn parse_acceptance_review(content: &str) -> anyhow::Result<AcceptanceReview> {
     let json = extract_json_object(content)
         .ok_or_else(|| anyhow::anyhow!("acceptance review response did not contain JSON"))?;
-    let mut review: AcceptanceReview = serde_json::from_str(json)?;
+    let mut value: serde_json::Value = serde_json::from_str(json)?;
+    sanitize_acceptance_review_value(&mut value);
+    let mut review: AcceptanceReview = serde_json::from_value(value)?;
     normalize_acceptance_review(&mut review);
     Ok(review)
 }
@@ -1302,6 +1304,205 @@ fn sanitize_workflow_judgment_value(value: &mut serde_json::Value) {
         .into_iter()
         .map(serde_json::Value::String)
         .collect();
+}
+
+fn sanitize_acceptance_review_value(value: &mut serde_json::Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+
+    if !object
+        .get("accepted")
+        .is_some_and(|value| value.is_boolean())
+    {
+        object.insert("accepted".to_string(), serde_json::Value::Bool(false));
+    }
+    normalize_enum_field(
+        object,
+        "confidence",
+        &["low", "medium", "high"],
+        "medium",
+        &["confidence", "level", "status"],
+    );
+    normalize_enum_field(
+        object,
+        "next_action",
+        &["finish", "continue_repair", "ask_user", "stop"],
+        "continue_repair",
+        &["next_action", "action", "recommendation"],
+    );
+    sanitize_acceptance_criteria(object);
+    sanitize_string_array_field(
+        object,
+        "unresolved_items",
+        &["item", "issue", "reason", "criterion", "message", "summary"],
+    );
+    sanitize_string_array_field(
+        object,
+        "residual_risks",
+        &["risk", "reason", "item", "message", "summary"],
+    );
+}
+
+fn sanitize_acceptance_criteria(object: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(criteria) = object.get_mut("criteria") else {
+        object.insert("criteria".to_string(), serde_json::Value::Array(Vec::new()));
+        return;
+    };
+
+    if criteria.is_object() {
+        *criteria = serde_json::Value::Array(vec![criteria.take()]);
+    }
+
+    let Some(items) = criteria.as_array_mut() else {
+        *criteria = serde_json::Value::Array(Vec::new());
+        return;
+    };
+
+    for item in items.iter_mut() {
+        if !item.is_object() {
+            let criterion = json_value_to_text(
+                item,
+                &["criterion", "text", "description", "message", "summary"],
+            );
+            *item = serde_json::json!({
+                "criterion": criterion,
+                "status": "not_verified",
+                "evidence": null
+            });
+        }
+
+        if let Some(criterion) = item.as_object_mut() {
+            normalize_string_field(
+                criterion,
+                "criterion",
+                "Unspecified acceptance criterion",
+                &["criterion", "text", "description", "message", "summary"],
+            );
+            normalize_enum_field(
+                criterion,
+                "status",
+                &["pending", "passed", "failed", "not_verified"],
+                "not_verified",
+                &["status", "state", "result"],
+            );
+            if let Some(evidence) = criterion.get_mut("evidence") {
+                if evidence.is_null() {
+                    continue;
+                }
+                let normalized = json_value_to_text(
+                    evidence,
+                    &[
+                        "evidence", "message", "reason", "command", "output", "summary",
+                    ],
+                );
+                *evidence = if normalized.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(normalized)
+                };
+            }
+        }
+    }
+}
+
+fn normalize_string_field(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    fallback: &str,
+    preferred_fields: &[&str],
+) {
+    let normalized = object
+        .get(key)
+        .map(|value| json_value_to_text(value, preferred_fields))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| fallback.to_string());
+    object.insert(key.to_string(), serde_json::Value::String(normalized));
+}
+
+fn normalize_enum_field(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    allowed: &[&str],
+    fallback: &str,
+    preferred_fields: &[&str],
+) {
+    let normalized = object
+        .get(key)
+        .map(|value| normalize_enum_token(&json_value_to_text(value, preferred_fields)))
+        .filter(|value| allowed.iter().any(|allowed| allowed == value))
+        .unwrap_or_else(|| fallback.to_string());
+    object.insert(key.to_string(), serde_json::Value::String(normalized));
+}
+
+fn sanitize_string_array_field(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    preferred_fields: &[&str],
+) {
+    let values = match object.get_mut(key) {
+        Some(value) if value.is_array() => value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| json_value_to_text(item, preferred_fields))
+                    .filter(|item| !item.trim().is_empty())
+                    .map(serde_json::Value::String)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Some(value) if value.is_null() => Vec::new(),
+        Some(value) => {
+            let item = json_value_to_text(value, preferred_fields);
+            if item.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![serde_json::Value::String(item)]
+            }
+        }
+        None => Vec::new(),
+    };
+    object.insert(key.to_string(), serde_json::Value::Array(values));
+}
+
+fn json_value_to_text(value: &serde_json::Value, preferred_fields: &[&str]) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(value) => value.trim().to_string(),
+        serde_json::Value::Array(items) => {
+            let joined = items
+                .iter()
+                .map(|item| json_value_to_text(item, preferred_fields))
+                .filter(|item| !item.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("; ");
+            if joined.is_empty() {
+                value.to_string()
+            } else {
+                joined
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for field in preferred_fields {
+                if let Some(nested) = object.get(*field) {
+                    let text = json_value_to_text(nested, preferred_fields);
+                    if !text.trim().is_empty() {
+                        return text;
+                    }
+                }
+            }
+            value.to_string()
+        }
+        _ => value.to_string(),
+    }
+}
+
+fn normalize_enum_token(raw: &str) -> String {
+    raw.trim()
+        .trim_matches('"')
+        .to_ascii_lowercase()
+        .replace([' ', '-'], "_")
 }
 
 fn normalize_guided_reasoning_trigger(raw: &str) -> &'static str {
@@ -1890,6 +2091,50 @@ mod tests {
 
         assert!(!review.accepted);
         assert_eq!(review.unresolved_count(), 2);
+        assert_eq!(review.next_action, AcceptanceNextAction::ContinueRepair);
+    }
+
+    #[test]
+    fn parse_acceptance_review_sanitizes_structured_items() {
+        let content = r#"{
+  "accepted": true,
+  "confidence": {"level": "high"},
+  "criteria": [
+    {
+      "criterion": {"description": "Forbidden retry format is removed"},
+      "status": {"result": "failed"},
+      "evidence": {"command": "rg retry src/engine/conversation_loop/mod.rs", "output": "match found"}
+    },
+    "Focused tests pass"
+  ],
+  "unresolved_items": [
+    {"item": "Remove the forbidden pattern"},
+    {"reason": "Required command is still failing"}
+  ],
+  "residual_risks": [
+    {"risk": "Repair loop may leave stale formatting"}
+  ],
+  "next_action": {"action": "continue-repair"}
+}"#;
+
+        let review = parse_acceptance_review(content).unwrap();
+
+        assert!(!review.accepted);
+        assert_eq!(review.confidence, AcceptanceConfidence::High);
+        assert_eq!(
+            review.criteria[0].criterion,
+            "Forbidden retry format is removed"
+        );
+        assert_eq!(review.criteria[0].status, AcceptanceStatus::Failed);
+        assert!(review.criteria[0]
+            .evidence
+            .as_deref()
+            .unwrap_or_default()
+            .contains("rg retry"));
+        assert_eq!(review.criteria[1].criterion, "Focused tests pass");
+        assert_eq!(review.criteria[1].status, AcceptanceStatus::NotVerified);
+        assert_eq!(review.unresolved_items.len(), 2);
+        assert_eq!(review.residual_risks.len(), 1);
         assert_eq!(review.next_action, AcceptanceNextAction::ContinueRepair);
     }
 

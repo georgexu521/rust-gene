@@ -54,8 +54,10 @@ def table_rows(text):
             if not line.startswith("|"):
                 break
             cells = [cell.strip() for cell in line.strip("|").split("|")]
-            if len(cells) >= 12:
-                rows.append(cells[:12])
+            if len(cells) >= 13:
+                rows.append(cells[:13])
+            elif len(cells) >= 12:
+                rows.append(cells[:9] + ["none"] + cells[9:12])
     return rows
 
 def infer_owner(record):
@@ -90,6 +92,7 @@ inferred_owners = collections.Counter()
 intents = collections.Counter()
 status_counts = collections.Counter()
 warning_counts = collections.Counter()
+trigger_counts = collections.Counter()
 agent_flow_stop_modes = {
     "action_checkpoint_no_patch",
     "action_checkpoint_invalid_tools",
@@ -122,7 +125,7 @@ for summary in sorted(benchmarks.glob("live-*/summary.md")):
         if mode.startswith("warning:"):
             warning_counts[mode.removeprefix("warning:")] += int(count)
 
-    for task, status, intent, owner, required, plan, boundary, verification, closeout, first_write, diff, warnings in table_rows(text):
+    for task, status, intent, owner, required, plan, boundary, verification, closeout, triggers, first_write, diff, warnings in table_rows(text):
         if task == "none":
             continue
         record = {
@@ -136,6 +139,7 @@ for summary in sorted(benchmarks.glob("live-*/summary.md")):
             "boundary": boundary,
             "verification": verification,
             "closeout": closeout,
+            "triggers": triggers,
             "first_write": first_write,
             "diff": diff,
             "warnings": warnings,
@@ -146,6 +150,11 @@ for summary in sorted(benchmarks.glob("live-*/summary.md")):
         inferred_owners[record["inferred_owner"]] += 1
         intents[intent] += 1
         status_counts[status] += 1
+        if triggers != "none":
+            for trigger in triggers.split(","):
+                trigger = trigger.strip()
+                if trigger:
+                    trigger_counts[trigger] += 1
 
 total_tasks = len(task_records)
 passed_tasks = status_counts["passed"]
@@ -248,6 +257,12 @@ lines.extend(md_table(
     agent_flow_rows or [["none", 0, "0.0%"]],
 ))
 
+lines.extend(["", "## Adaptive Workflow Triggers", ""])
+lines.extend(md_table(
+    ["trigger", "count", "share"],
+    [[k, v, pct(v, total_tasks)] for k, v in top(trigger_counts)] or [["none", 0, "0.0%"]],
+))
+
 lines.extend(["", "## Eval Intents", ""])
 lines.extend(md_table(["intent", "count", "share"], [[k, v, pct(v, total_tasks)] for k, v in top(intents)]))
 
@@ -262,7 +277,7 @@ lines.extend(md_table(
 
 lines.extend(["", "## Recent Failed Tasks", ""])
 lines.extend(md_table(
-    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "warnings"],
+    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "triggers", "warnings"],
     [
         [
             record["run"],
@@ -273,10 +288,11 @@ lines.extend(md_table(
             record["required"],
             record["verification"],
             record["diff"],
+            record["triggers"],
             record["warnings"],
         ]
         for record in recent_failures
-    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none"]],
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
 lines.extend([

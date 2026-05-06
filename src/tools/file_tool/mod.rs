@@ -15,6 +15,7 @@ use tracing::{debug, error, info, warn};
 
 const MAX_EDITABLE_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 const DEFAULT_MAX_FILE_EDIT_REPLACEMENTS: usize = 20;
+const MAX_MATCH_CONTEXT_OCCURRENCES: usize = 12;
 
 fn is_unc_or_network_path(path: &str) -> bool {
     path.starts_with("\\\\") || path.starts_with("//")
@@ -590,7 +591,11 @@ fn build_match_context(
     let lines: Vec<&str> = content.lines().collect();
 
     let mut parts = vec![format!("Found {} occurrence(s):", occurrences.len())];
-    for (occ_idx, (start, _end)) in occurrences.iter().enumerate() {
+    for (occ_idx, (start, _end)) in occurrences
+        .iter()
+        .take(MAX_MATCH_CONTEXT_OCCURRENCES)
+        .enumerate()
+    {
         let start_line = content[..*start].matches('\n').count();
         let ctx_start = start_line.saturating_sub(context_lines);
         let ctx_end = (start_line + 1 + context_lines).min(lines.len());
@@ -607,6 +612,13 @@ fn build_match_context(
         {
             parts.push(format!("    {:4} | {}", li + 1, line));
         }
+    }
+    if occurrences.len() > MAX_MATCH_CONTEXT_OCCURRENCES {
+        parts.push(format!(
+            "\n  ... showing first {} of {} matches. The old_string is too broad; use a unique old_string copied from the target lines or a precise line_start/line_end replacement.",
+            MAX_MATCH_CONTEXT_OCCURRENCES,
+            occurrences.len()
+        ));
     }
     parts.join("\n")
 }
@@ -917,9 +929,9 @@ impl Tool for FileEditTool {
         } else if let Some(before) = insert_before {
             Self::do_insert(content, before, &new_string, InsertMode::Before)
         } else {
-            if old_string.is_empty() {
+            if old_string.trim().is_empty() {
                 return ToolResult::error(
-                    "old_string cannot be empty unless insert_after or insert_before is used"
+                    "old_string cannot be empty or whitespace-only unless insert_after, insert_before, or line_start/line_end is used. For a known target line, use line_start and line_end instead."
                         .to_string(),
                 );
             }
@@ -1019,9 +1031,9 @@ impl FileEditTool {
             Self::do_insert(original.to_string(), before, new_string, InsertMode::Before)
                 .map(|(s, _)| s)
         } else {
-            if old_string.is_empty() {
+            if old_string.trim().is_empty() {
                 return Err(
-                    "old_string cannot be empty unless insert_after or insert_before is used"
+                    "old_string cannot be empty or whitespace-only unless insert_after, insert_before, or line_start/line_end is used. For a known target line, use line_start and line_end instead."
                         .to_string(),
                 );
             }
@@ -1048,6 +1060,13 @@ impl FileEditTool {
         } else {
             find_occurrences(&content, old_string)
         };
+
+        if old_string.trim().is_empty() {
+            return Err(
+                "old_string cannot be empty or whitespace-only unless insert_after, insert_before, or line_start/line_end is used. For a known target line, use line_start and line_end instead."
+                    .to_string(),
+            );
+        }
 
         if occurrences.is_empty() {
             // 尝试模糊匹配
@@ -1527,6 +1546,47 @@ mod tests {
         assert!(err.contains("but found 3"));
 
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_whitespace_only_old_string() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_blank_anchor.txt";
+        tokio::fs::write(path, "line1\nline2\nline3\n")
+            .await
+            .unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "\n",
+                    "new_string": "replacement"
+                }),
+                ToolContext::new(".", "test-session-edit-blank-anchor"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("whitespace-only"));
+        assert!(err.contains("line_start"));
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[test]
+    fn test_match_context_limits_large_occurrence_output() {
+        let content = (0..50)
+            .map(|i| format!("let value_{i} = true;"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let occurrences = find_occurrences(&content, "let");
+        let context = build_match_context(&content, &occurrences, 0);
+
+        assert!(context.contains("Found 50 occurrence(s)"));
+        assert!(context.contains("showing first 12 of 50 matches"));
+        assert!(!context.contains("Match #13"));
     }
 
     #[tokio::test]

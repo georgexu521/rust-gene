@@ -994,6 +994,12 @@ verification_events = [event for event in trace_events if event.get("type") == "
 stage_validation_events = [event for event in trace_events if event.get("type") == "stage_validation_completed"]
 acceptance_events = [event for event in trace_events if event.get("type") == "acceptance_review_completed"]
 closeout_events = [event for event in trace_events if event.get("type") == "final_closeout_prepared"]
+adaptive_trigger_events = [event for event in trace_events if event.get("type") == "adaptive_workflow_triggered"]
+adaptive_triggers = []
+for event in adaptive_trigger_events:
+    trigger = str(event.get("trigger", "")).strip()
+    if trigger and trigger not in adaptive_triggers:
+        adaptive_triggers.append(trigger)
 latest_verification = verification_events[-1] if verification_events else {}
 latest_stage_validation = stage_validation_events[-1] if stage_validation_events else {}
 latest_closeout = closeout_events[-1] if closeout_events else {}
@@ -1017,6 +1023,7 @@ print(f"verification_passed: {str(verification_passed).lower()}")
 print(f"stage_validation_passed: {str(stage_validation_passed).lower()}")
 print(f"acceptance_accepted: {accepted}")
 print(f"closeout_status: {closeout_status}")
+print(f"adaptive_triggers: {','.join(adaptive_triggers) if adaptive_triggers else 'none'}")
 if trace_types:
     print("trace_event_types: " + ",".join(trace_types[-12:]))
 stale_edit_warnings = stderr_text.count("was modified since it was read")
@@ -1214,6 +1221,7 @@ verification_events = trace_events_of("verification_completed")
 stage_validation_events = trace_events_of("stage_validation_completed")
 acceptance_events = trace_events_of("acceptance_review_completed")
 closeout_events = trace_events_of("final_closeout_prepared")
+adaptive_trigger_events = trace_events_of("adaptive_workflow_triggered")
 progress_events = [event for event in events if event.get("event") == "tool_execution_progress"]
 memory_tools = [
     event
@@ -1245,6 +1253,7 @@ guided_debugging_active = bool(guided_debugs)
 guided_reasoning_active = bool(guided_reasoning_events)
 weighted_planning_active = bool(weighted_plan_events)
 closeout_active = bool(closeout_events and acceptance_events)
+adaptive_workflow_active = bool(adaptive_trigger_events)
 
 signals = {
     "memory_active": memory_active,
@@ -1253,6 +1262,7 @@ signals = {
     "guided_reasoning_active": guided_reasoning_active,
     "weighted_planning_active": weighted_planning_active,
     "closeout_active": closeout_active,
+    "adaptive_workflow_active": adaptive_workflow_active,
 }
 active_count = sum(1 for value in signals.values() if value)
 
@@ -1276,6 +1286,8 @@ print(f"guided_reasoning_events: {len(guided_reasoning_events)}")
 print(f"workflow_plan_events: {len(workflow_plans)}")
 print(f"weighted_plan_events: {len(weighted_plan_events)}")
 print(f"reweighted_plan_events: {len(reweighted_events)}")
+print(f"adaptive_trigger_events: {len(adaptive_trigger_events)}")
+print("adaptive_triggers: " + (",".join(dict.fromkeys(str(event.get("trigger", "")) for event in adaptive_trigger_events if event.get("trigger"))) or "none"))
 print(f"latest_top_priority: {latest_plan.get('top_priority', 'none')}")
 print(f"latest_top_importance_score: {latest_plan.get('top_importance_score', 'none')}")
 print(f"latest_top_weight_share: {latest_plan.get('top_weight_share', 'none')}")
@@ -1389,6 +1401,7 @@ for report in sorted(run_dir.glob("*/report.md")):
     failure_owner = status_value(quality_text, "failure_owner", report_value(report_text, "failure_owner", "missing"))
     eval_intent = report_value(report_text, "eval_intent", "missing")
     closeout = report_value(report_text, "closeout_status", "missing")
+    adaptive_triggers = report_value(report_text, "adaptive_triggers", "none")
     first_write = report_value(report_text, "first_write_tool_index", "missing")
     required = report_value(report_text, "required_command_status", test_status)
     if plan_file.exists():
@@ -1436,6 +1449,7 @@ for report in sorted(run_dir.glob("*/report.md")):
         "boundary": tool_boundary,
         "verification": verification_status,
         "closeout": closeout,
+        "triggers": adaptive_triggers,
         "first_write": first_write,
         "diff": "yes" if diff_stat else "no",
         "warnings": ",".join(warnings) if warnings else "none",
@@ -1521,19 +1535,19 @@ lines.extend([
     "",
     "## Task Matrix",
     "",
-    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | first_write | diff | warnings |",
-    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|-------------|------|----------|",
+    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | triggers | first_write | diff | warnings |",
+    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|----------|-------------|------|----------|",
 ])
 
 if rows:
     for row in rows:
         lines.append(
-            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {first_write} | {diff} | {warnings} |".format(
+            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {triggers} | {first_write} | {diff} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | missing | no | none |")
+    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | none | missing | no | none |")
 
 lines.extend([
     "",

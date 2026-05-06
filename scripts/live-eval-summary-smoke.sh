@@ -23,6 +23,7 @@ Quality signals:
 eval_intent: seeded_code_change
 required_command_status: ok
 closeout_status: passed
+adaptive_triggers: required_validation,first_code_change
 first_write_tool_index: 2
 ```
 EOF
@@ -59,6 +60,7 @@ Quality signals:
 eval_intent: seeded_code_change
 required_command_status: failed
 closeout_status: not_verified
+adaptive_triggers: repeated_no_code_progress
 first_write_tool_index: none
 action_checkpoint_no_patch: true
 warning: action_checkpoint_no_patch
@@ -85,5 +87,7 @@ grep -q '`warning:action_checkpoint_no_patch`: `1`' "$summary_path"
 grep -q '| real_code_change_passed | 1 |' "$summary_path"
 grep -q '| plan_only_passed | 1 |' "$summary_path"
 grep -q '| seeded_no_diff_failed | 1 |' "$summary_path"
+grep -q '| task-code-pass | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | required_validation,first_code_change | 2 | yes | none |' "$summary_path"
+grep -q '| task-seeded-fail | failed | seeded_code_change | llm_reasoning | failed | none | agent-run | failed | not_verified | repeated_no_code_progress | none | no | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
 
 echo "live eval summary smoke passed: $summary_path"
