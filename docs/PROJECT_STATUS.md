@@ -18,11 +18,11 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest verified baseline observed after the 2026-05-05 CLI scrollback progress
+Latest verified baseline observed after the 2026-05-06 adaptive repair workflow
 batch:
 
 ```text
-1060 passed; 0 failed
+1071 passed; 0 failed
 ```
 
 Verified with:
@@ -37,7 +37,7 @@ env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
 Latest live coding workflow smoke:
 
 ```text
-live-eval-20260503-152320 code-change-verification-repair-loop: ok
+live-eval-20260506-134904 code-change-verification-repair-loop: ok
 verification_passed=true stage_validation_passed=true closeout_status=passed
 ```
 

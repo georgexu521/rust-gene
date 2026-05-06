@@ -2490,6 +2490,86 @@ impl ConversationLoop {
                         },
                     });
                     if !Self::patch_synthesis_enabled() {
+                        let deterministic_calls = if Self::deterministic_patch_synthesis_enabled() {
+                            let evidence = Self::patch_synthesis_evidence(&messages);
+                            let deterministic_seed = if last_user_preview.trim().is_empty() {
+                                evidence.clone()
+                            } else if evidence.trim().is_empty() {
+                                format!("TASK:\n{}", last_user_preview.as_str())
+                            } else {
+                                format!(
+                                    "TASK:\n{}\n\nEVIDENCE:\n{}",
+                                    last_user_preview.as_str(),
+                                    evidence
+                                )
+                            };
+                            let cwd = std::env::current_dir()
+                                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                            self.deterministic_patch_tool_calls(&deterministic_seed, &cwd)
+                        } else {
+                            Vec::new()
+                        };
+                        if !deterministic_calls.is_empty() {
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error: format!(
+                                    "deterministic patch synthesis produced {} file_edit action(s)",
+                                    deterministic_calls.len()
+                                ),
+                            });
+                            messages.push(Message::assistant_with_tools(
+                                "Applying deterministic patch from prior evidence.",
+                                deterministic_calls.clone(),
+                            ));
+                            let exposed_synth_tools =
+                                HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
+                            let mut synthesized_results = self
+                                .execute_tools_parallel(
+                                    &deterministic_calls,
+                                    tx,
+                                    std::collections::HashMap::new(),
+                                    Some(trace.clone()),
+                                    &resource_policy,
+                                    &exposed_synth_tools,
+                                    false,
+                                    false,
+                                )
+                                .await;
+                            for (tc, result) in synthesized_results.iter_mut() {
+                                truncate_tool_result(result, &tc.name, &tc.id).await;
+                                let result_content = format!(
+                                    "Result: {}\n{}",
+                                    if result.success { "OK" } else { "ERROR" },
+                                    tool_result_dialog_content(result)
+                                );
+                                tool_results_text.push_str(&result_content);
+                                tool_results_text.push('\n');
+                                messages.push(Message::tool(tc.id.clone(), result_content));
+                                if result.success && Self::is_code_write_tool_name(&tc.name) {
+                                    action_checkpoint_requires_patch_before_validation = false;
+                                    if let Some(path) = tc.arguments["path"].as_str() {
+                                        changed_files.push(std::path::PathBuf::from(path));
+                                    }
+                                }
+                            }
+                            final_tool_calls.extend(deterministic_calls);
+                            if crate::engine::code_change_workflow::is_programming_workflow(
+                                route.workflow,
+                            ) {
+                                for path in Self::git_status_files_since(&baseline_git_status_files)
+                                {
+                                    if !changed_files.iter().any(|existing| existing == &path) {
+                                        changed_files.push(path);
+                                    }
+                                }
+                            }
+                            if !changed_files.is_empty() {
+                                action_checkpoint_active = false;
+                                action_checkpoint_lookup_used = false;
+                                action_checkpoint_no_change_rounds = 0;
+                                no_code_progress_rounds = 0;
+                                continue;
+                            }
+                        }
                         trace.record(TraceEvent::WorkflowFallback {
                             error: "patch synthesis disabled by default; returning control to model-led repair"
                                 .to_string(),
@@ -4322,11 +4402,11 @@ Do not answer in prose unless no safe patch exists."#;
     }
 
     fn deterministic_patch_synthesis_enabled() -> bool {
-        matches!(
+        !matches!(
             std::env::var("PRIORITY_AGENT_DETERMINISTIC_PATCH_SYNTHESIS")
                 .ok()
                 .as_deref(),
-            Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+            Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO")
         )
     }
 

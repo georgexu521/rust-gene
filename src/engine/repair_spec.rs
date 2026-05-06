@@ -4,6 +4,7 @@ use crate::engine::workflow_contract::AcceptanceReview;
 pub struct RepairSpec {
     pub failed_commands: Vec<String>,
     pub failed_command_evidence: Vec<String>,
+    pub residual_command_matches: Vec<String>,
     pub failed_tests: Vec<String>,
     pub required_next_patch: Vec<String>,
     pub forbidden_fixes: Vec<String>,
@@ -18,6 +19,8 @@ impl RepairSpec {
     ) -> Self {
         let failed_tests = extract_failed_tests(evidence);
         let failed_command_evidence = extract_failed_command_evidence(failed_commands, evidence);
+        let residual_command_matches =
+            extract_residual_command_matches(failed_commands, &failed_command_evidence);
         let mut required_next_patch = Vec::new();
         let mut forbidden_fixes = Vec::new();
 
@@ -37,6 +40,12 @@ impl RepairSpec {
             push_unique(
                 &mut required_next_patch,
                 format!("Rerun and satisfy `{command}` after the next patch"),
+            );
+        }
+        for item in &residual_command_matches {
+            push_unique(
+                &mut required_next_patch,
+                format!("Eliminate or explicitly justify residual required-command match: {item}"),
             );
         }
 
@@ -61,6 +70,7 @@ impl RepairSpec {
         Self {
             failed_commands: unique_strings(failed_commands.iter().cloned()),
             failed_command_evidence,
+            residual_command_matches,
             failed_tests,
             required_next_patch,
             forbidden_fixes,
@@ -77,12 +87,17 @@ impl RepairSpec {
             "failed_command_evidence",
             &self.failed_command_evidence,
         );
+        push_section(
+            &mut out,
+            "residual_command_matches",
+            &self.residual_command_matches,
+        );
         push_section(&mut out, "failed_tests", &self.failed_tests);
         push_section(&mut out, "required_next_patch", &self.required_next_patch);
         push_section(&mut out, "forbidden_fixes", &self.forbidden_fixes);
         push_section(&mut out, "validation_commands", &self.validation_commands);
         out.push_str(
-            "Instruction: first state the concrete mismatch shown by failed_command_evidence, then make the smallest code patch that satisfies this spec, then rerun validation. Do not close out until failed_commands pass or you name a concrete blocker.\n",
+            "Instruction: first state the concrete mismatch shown by failed_command_evidence and residual_command_matches, then make the smallest code patch that satisfies this spec, then rerun validation. Do not close out until failed_commands pass or you name a concrete blocker.\n",
         );
         out
     }
@@ -122,6 +137,61 @@ fn extract_failed_command_evidence(failed_commands: &[String], evidence: &[Strin
     }
 
     snippets
+}
+
+fn extract_residual_command_matches(
+    failed_commands: &[String],
+    failed_command_evidence: &[String],
+) -> Vec<String> {
+    let mut matches = Vec::new();
+    for command in failed_commands {
+        let normalized = command.trim();
+        if normalized.is_empty() || !is_required_negative_rg_command(normalized) {
+            continue;
+        }
+        for evidence in failed_command_evidence {
+            if !evidence.contains(normalized) {
+                continue;
+            }
+            for line in evidence.lines() {
+                if let Some(match_line) = parse_required_match_line(line) {
+                    push_unique(
+                        &mut matches,
+                        format!("`{}` matched `{}`", normalized, match_line),
+                    );
+                }
+            }
+        }
+    }
+    matches
+}
+
+fn is_required_negative_rg_command(command: &str) -> bool {
+    let trimmed = command.trim_start();
+    trimmed.starts_with("! rg ") || trimmed.starts_with("! grep ")
+}
+
+fn parse_required_match_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("[error] ") {
+        let (_, message) = rest.split_once(": ")?;
+        let message = message.trim();
+        return (!message.is_empty()).then(|| message.to_string());
+    }
+    if trimmed.is_empty()
+        || trimmed.contains("` output:")
+        || trimmed.starts_with('[')
+        || trimmed.starts_with('$')
+        || trimmed.starts_with("Result:")
+        || trimmed.starts_with("required ")
+        || trimmed.starts_with("... [truncated]")
+    {
+        return None;
+    }
+    if trimmed.contains("[required command failed") || trimmed.contains("found 0 warning") {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 fn extract_failed_tests(evidence: &[String]) -> Vec<String> {
@@ -254,8 +324,29 @@ duplicate_project_fact expected Rejected actual Accepted
         let prompt = spec.format_for_prompt();
 
         assert!(prompt.contains("failed_command_evidence"));
+        assert!(prompt.contains("residual_command_matches"));
         assert!(prompt.contains(r#"&format!("retry: {}", verification_command)"#));
+        assert!(prompt.contains("Eliminate or explicitly justify residual required-command match"));
         assert!(prompt.contains("Before editing, explain why the current diff still fails"));
         assert!(prompt.contains(command));
+    }
+
+    #[test]
+    fn repair_spec_extracts_multiple_required_rg_matches() {
+        let command = r#"! rg '&format!\("retry: \{\}", verification_command\)' src/engine/conversation_loop/mod.rs"#;
+        let evidence = vec![format!(
+            r#"[required verification] {command} found 1 error(s), 0 warning(s):
+  [error] unknown:                         &format!("retry: {{}}", verification_command),
+  [error] unknown:             concat!("&format!(\"retry: {{", "}}\", verification_command)").to_string(),
+  [required command failed: {command}]"#
+        )];
+
+        let spec = RepairSpec::from_failure(&[command.to_string()], &evidence, None);
+
+        assert_eq!(spec.residual_command_matches.len(), 2);
+        assert!(spec
+            .required_next_patch
+            .iter()
+            .any(|item| item.contains("residual required-command match")));
     }
 }
