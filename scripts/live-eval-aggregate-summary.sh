@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 OUTPUT="${1:-docs/benchmarks/live-eval-shortfall-summary.md}"
-REFRESH_SUMMARIES="${LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES:-1}"
+REFRESH_SUMMARIES="${LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES:-0}"
 
 if [[ "$REFRESH_SUMMARIES" == "1" ]]; then
   while IFS= read -r run_dir; do
@@ -30,6 +30,38 @@ def read(path):
 def summary_value(text, label, default="missing"):
     match = re.search(rf"^- {re.escape(label)}: `?([^`\n]+)`?", text, re.MULTILINE)
     return match.group(1).strip() if match else default
+
+def status_value(text, key, default="missing"):
+    match = re.search(rf"^{re.escape(key)}=(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else default
+
+def report_value(text, key, default="missing"):
+    match = re.search(rf"^{re.escape(key)}:\s*(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else default
+
+def report_values(text, key):
+    return [
+        match.group(1).strip()
+        for match in re.finditer(rf"^{re.escape(key)}:\s*(.+)$", text, re.MULTILINE)
+    ]
+
+def status_values(text, key):
+    return [
+        match.group(1).strip()
+        for match in re.finditer(rf"^{re.escape(key)}=(.+)$", text, re.MULTILINE)
+    ]
+
+def has_warning(text, warning):
+    return bool(re.search(rf"^warning={re.escape(warning)}$", text, re.MULTILINE))
+
+def unique_items(items):
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 def parse_count_pair(value):
     match = re.match(r"(\d+)/(\d+)", value)
@@ -58,6 +90,102 @@ def table_rows(text):
                 rows.append(cells[:13])
             elif len(cells) >= 12:
                 rows.append(cells[:9] + ["none"] + cells[9:12])
+    return rows
+
+def report_rows(run_dir):
+    rows = []
+    for report in sorted(run_dir.glob("*/report.md")):
+        task_dir = report.parent
+        task_id = task_dir.name
+        report_text = read(report)
+        quality_text = read(task_dir / "agent-quality-status.txt")
+        test_status = read(task_dir / "test-status.txt").strip() or "missing"
+        diff_stat = read(task_dir / "diff-stat.txt").strip()
+        agent_output = read(task_dir / "agent-output.md")
+        plan_file = task_dir / "minimax-plan.md"
+        plan_lint = task_dir / "plan-lint.txt"
+        api_response = task_dir / "api-response.json"
+        agent_events = task_dir / "agent-events.jsonl"
+        quality_status = status_value(quality_text, "status", "missing")
+        failure_owner = status_value(
+            quality_text,
+            "failure_owner",
+            report_value(report_text, "failure_owner", "missing"),
+        )
+        eval_intent = report_value(report_text, "eval_intent", "missing")
+        closeout = report_value(report_text, "closeout_status", "missing")
+        adaptive_triggers = report_value(report_text, "adaptive_triggers", "none")
+        first_write = report_value(report_text, "first_write_tool_index", "missing")
+        required = report_value(report_text, "required_command_status", test_status)
+        if plan_file.exists():
+            plan_quality = status_value(read(plan_lint), "status", "missing")
+        elif api_response.exists():
+            plan_quality = "api_response"
+        else:
+            plan_quality = "none"
+        if agent_events.exists():
+            tool_boundary = "agent-run"
+        elif plan_file.exists() or api_response.exists():
+            tool_boundary = "plan-only"
+        else:
+            tool_boundary = "collect-only"
+        if closeout == "passed" and required == "ok":
+            verification_status = "passed"
+        elif quality_status == "failed" or test_status == "failed":
+            verification_status = "failed"
+        else:
+            verification_status = "unknown"
+        run_status = (
+            "passed"
+            if quality_status in {"ok", "missing"}
+            and test_status in {"ok", "skipped", "missing"}
+            else "failed"
+        )
+        warnings = []
+        output_warning_markers = {
+            "action_checkpoint_no_patch": "Stopped action checkpoint without patch synthesis",
+            "action_checkpoint_invalid_tools": "Stopped action checkpoint after repeated invalid tool requests",
+            "patch_synthesis_no_change": "Patch synthesis did not produce a file change",
+        }
+        for warning in (
+            "no_code_diff",
+            "audit_no_code_diff",
+            "current_head_no_fixture_already_satisfied",
+            "tool_errors_seen",
+            "action_checkpoint_no_patch",
+            "action_checkpoint_invalid_tools",
+            "patch_synthesis_no_change",
+        ):
+            if (
+                has_warning(quality_text, warning)
+                or warning in report_values(report_text, "warning")
+                or output_warning_markers.get(warning, "\0") in agent_output
+            ):
+                warnings.append(warning)
+        failures = unique_items(
+            status_values(quality_text, "failure")
+            + [
+                warning
+                for warning in report_values(report_text, "warning")
+                if warning not in warnings
+            ]
+        )
+        rows.append({
+            "task": task_id,
+            "status": run_status,
+            "intent": eval_intent,
+            "owner": failure_owner,
+            "required": required,
+            "plan": plan_quality,
+            "boundary": tool_boundary,
+            "verification": verification_status,
+            "closeout": closeout,
+            "triggers": adaptive_triggers,
+            "first_write": first_write,
+            "diff": "yes" if diff_stat else "no",
+            "warnings": ",".join(warnings) if warnings else "none",
+            "failures": failures,
+        })
     return rows
 
 def infer_owner(record):
@@ -102,14 +230,59 @@ agent_flow_stop_modes = {
     "missing_trace_summary",
 }
 
-for summary in sorted(benchmarks.glob("live-*/summary.md")):
-    text = read(summary)
-    run_id = summary.parent.name.removeprefix("live-")
-    passed, total = parse_count_pair(summary_value(text, "Pass rate", "0/0"))
-    failed, _ = parse_count_pair(summary_value(text, "Failure rate", "0/0"))
-    real_code_passes = parse_int(summary_value(text, "Real code-change passes", "0"))
-    plan_only_passes = parse_int(summary_value(text, "Plan-only passes", "0"))
-    seeded_no_diff = parse_int(summary_value(text, "Seeded no-diff failures", "0"))
+for run_dir in sorted(benchmarks.glob("live-*")):
+    if not run_dir.is_dir():
+        continue
+    run_id = run_dir.name.removeprefix("live-")
+    rows = report_rows(run_dir)
+    if not rows:
+        summary = run_dir / "summary.md"
+        text = read(summary)
+        rows = [
+            {
+                "task": task,
+                "status": status,
+                "intent": intent,
+                "owner": owner,
+                "required": required,
+                "plan": plan,
+                "boundary": boundary,
+                "verification": verification,
+                "closeout": closeout,
+                "triggers": triggers,
+                "first_write": first_write,
+                "diff": diff,
+                "warnings": warnings,
+                "failures": [],
+            }
+            for task, status, intent, owner, required, plan, boundary, verification, closeout, triggers, first_write, diff, warnings
+            in table_rows(text)
+        ]
+    if not rows:
+        continue
+    passed = sum(1 for row in rows if row["status"] == "passed")
+    failed = sum(1 for row in rows if row["status"] == "failed")
+    total = len(rows)
+    real_code_passes = sum(
+        1
+        for row in rows
+        if row["status"] == "passed"
+        and row["boundary"] == "agent-run"
+        and row["diff"] == "yes"
+    )
+    plan_only_passes = sum(
+        1
+        for row in rows
+        if row["status"] == "passed"
+        and row["boundary"] == "plan-only"
+    )
+    seeded_no_diff = sum(
+        1
+        for row in rows
+        if row["status"] == "failed"
+        and row["intent"] == "seeded_code_change"
+        and row["diff"] == "no"
+    )
     run_records.append({
         "run": run_id,
         "passed": passed,
@@ -120,38 +293,37 @@ for summary in sorted(benchmarks.glob("live-*/summary.md")):
         "seeded_no_diff": seeded_no_diff,
     })
 
-    for mode, count in re.findall(r"^- `([^`]+)`: `(\d+)`$", text, re.MULTILINE):
-        failure_modes[mode] += int(count)
-        if mode.startswith("warning:"):
-            warning_counts[mode.removeprefix("warning:")] += int(count)
-
-    for task, status, intent, owner, required, plan, boundary, verification, closeout, triggers, first_write, diff, warnings in table_rows(text):
-        if task == "none":
-            continue
+    for row in rows:
+        for failure in row["failures"]:
+            failure_modes[failure] += 1
+        if row["warnings"] != "none":
+            for warning in row["warnings"].split(","):
+                failure_modes[f"warning:{warning}"] += 1
+                warning_counts[warning] += 1
         record = {
             "run": run_id,
-            "task": task,
-            "status": status,
-            "intent": intent,
-            "owner": owner,
-            "required": required,
-            "plan": plan,
-            "boundary": boundary,
-            "verification": verification,
-            "closeout": closeout,
-            "triggers": triggers,
-            "first_write": first_write,
-            "diff": diff,
-            "warnings": warnings,
+            "task": row["task"],
+            "status": row["status"],
+            "intent": row["intent"],
+            "owner": row["owner"],
+            "required": row["required"],
+            "plan": row["plan"],
+            "boundary": row["boundary"],
+            "verification": row["verification"],
+            "closeout": row["closeout"],
+            "triggers": row["triggers"],
+            "first_write": row["first_write"],
+            "diff": row["diff"],
+            "warnings": row["warnings"],
         }
         record["inferred_owner"] = infer_owner(record)
         task_records.append(record)
-        owners[owner] += 1
+        owners[row["owner"]] += 1
         inferred_owners[record["inferred_owner"]] += 1
-        intents[intent] += 1
-        status_counts[status] += 1
-        if triggers != "none":
-            for trigger in triggers.split(","):
+        intents[row["intent"]] += 1
+        status_counts[row["status"]] += 1
+        if row["triggers"] != "none":
+            for trigger in row["triggers"].split(","):
                 trigger = trigger.strip()
                 if trigger:
                     trigger_counts[trigger] += 1
@@ -177,6 +349,18 @@ no_diff_seeded_tasks = [
     and record["status"] == "failed"
     and record["diff"] == "no"
 ]
+instrumented_records = [
+    record
+    for record in task_records
+    if record["owner"] != "missing"
+    or record["intent"] != "missing"
+    or record["triggers"] != "none"
+]
+recent_passes = [
+    record
+    for record in task_records
+    if record["status"] == "passed"
+][-12:]
 
 def pct(part, whole):
     if whole == 0:
@@ -194,6 +378,27 @@ def md_table(headers, rows):
     for row in rows:
         lines.append("| " + " | ".join(str(cell).replace("|", "\\|") for cell in row) + " |")
     return lines
+
+def counter_rows(records, key, limit=12):
+    counter = collections.Counter(record[key] for record in records)
+    total = len(records)
+    return [[k, v, pct(v, total)] for k, v in counter.most_common(limit)]
+
+def failure_mode_rows(records, limit=12):
+    counter = collections.Counter()
+    for record in records:
+        if record["status"] == "failed":
+            if record["required"] == "failed":
+                counter["required_command_failed"] += 1
+            if record["verification"] == "failed":
+                counter["verification_failed"] += 1
+            if record["closeout"] != "passed":
+                counter["closeout_not_successful"] += 1
+            for warning in record["warnings"].split(","):
+                warning = warning.strip()
+                if warning and warning != "none":
+                    counter[f"warning:{warning}"] += 1
+    return counter.most_common(limit)
 
 recent_failures = [
     record
@@ -241,6 +446,82 @@ lines.extend(["", "## Inferred Owners", ""])
 lines.extend(md_table(
     ["owner", "count", "share"],
     [[k, v, pct(v, total_tasks)] for k, v in top(inferred_owners)],
+))
+
+lines.extend(["", "## Metadata Coverage", ""])
+lines.extend(md_table(
+    ["dimension", "count", "share"],
+    [
+        [
+            "structured_failure_owner",
+            total_tasks - owner_metadata_missing,
+            pct(total_tasks - owner_metadata_missing, total_tasks),
+        ],
+        [
+            "structured_eval_intent",
+            total_tasks - intents["missing"],
+            pct(total_tasks - intents["missing"], total_tasks),
+        ],
+        [
+            "adaptive_trigger_metadata",
+            len([record for record in task_records if record["triggers"] != "none"]),
+            pct(len([record for record in task_records if record["triggers"] != "none"]), total_tasks),
+        ],
+        [
+            "instrumented_task_reports",
+            len(instrumented_records),
+            pct(len(instrumented_records), total_tasks),
+        ],
+    ],
+))
+
+lines.extend(["", "## Instrumented Slice", ""])
+instrumented_total = len(instrumented_records)
+instrumented_passed = sum(1 for record in instrumented_records if record["status"] == "passed")
+instrumented_failed = sum(1 for record in instrumented_records if record["status"] == "failed")
+instrumented_required_failed = sum(1 for record in instrumented_records if record["required"] == "failed")
+instrumented_verification_failed = sum(1 for record in instrumented_records if record["verification"] == "failed")
+instrumented_seeded_no_diff = sum(
+    1
+    for record in instrumented_records
+    if record["intent"] == "seeded_code_change"
+    and record["status"] == "failed"
+    and record["diff"] == "no"
+)
+lines.extend(md_table(
+    ["dimension", "count", "share"],
+    [
+        ["task_reports", instrumented_total, pct(instrumented_total, instrumented_total)],
+        ["passed", instrumented_passed, pct(instrumented_passed, instrumented_total)],
+        ["failed", instrumented_failed, pct(instrumented_failed, instrumented_total)],
+        [
+            "required_command_failed",
+            instrumented_required_failed,
+            pct(instrumented_required_failed, instrumented_total),
+        ],
+        [
+            "verification_failed",
+            instrumented_verification_failed,
+            pct(instrumented_verification_failed, instrumented_total),
+        ],
+        [
+            "seeded_no_diff_failed",
+            instrumented_seeded_no_diff,
+            pct(instrumented_seeded_no_diff, instrumented_total),
+        ],
+    ],
+))
+
+lines.extend(["", "### Instrumented Owners", ""])
+lines.extend(md_table(
+    ["owner", "count", "share"],
+    counter_rows(instrumented_records, "owner") or [["none", 0, "0.0%"]],
+))
+
+lines.extend(["", "### Instrumented Failure Modes", ""])
+lines.extend(md_table(
+    ["mode", "count"],
+    failure_mode_rows(instrumented_records) or [["none", 0]],
 ))
 
 lines.extend(["", "## Failure Modes", ""])
@@ -295,6 +576,25 @@ lines.extend(md_table(
     ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
+lines.extend(["", "## Recent Passed Tasks", ""])
+lines.extend(md_table(
+    ["run", "task", "intent", "owner", "required", "verification", "diff", "triggers", "warnings"],
+    [
+        [
+            record["run"],
+            record["task"],
+            record["intent"],
+            record["owner"],
+            record["required"],
+            record["verification"],
+            record["diff"],
+            record["triggers"],
+            record["warnings"],
+        ]
+        for record in recent_passes
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none"]],
+))
+
 lines.extend([
     "",
     "## Reading",
@@ -304,6 +604,7 @@ lines.extend([
     "- `seeded_no_diff_failed` is the strongest signal for agents that inspect but do not patch.",
     "- `inferred_owner` is a conservative backfill for older reports that predate structured `failure_owner` fields.",
     "- `owner_metadata_missing` tracks that historical evidence gap separately from inferred product failures.",
+    "- `instrumented_task_reports` is the cleaner current slice because it excludes reports with no structured owner, intent, or trigger metadata.",
 ])
 
 output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

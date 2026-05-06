@@ -179,13 +179,14 @@ Latest maintenance note:
   counts, plan-only pass counts, seeded no-diff failure counts, and aggregated
   failure modes. `scripts/live-eval-summary-smoke.sh` covers this without
   running an LLM and is part of the quick coding workflow gate.
-- `scripts/live-eval-aggregate-summary.sh` now refreshes existing benchmark
-  summaries and writes `docs/benchmarks/live-eval-shortfall-summary.md`; the
-  current aggregate scans 111 runs / 110 task reports and shows the largest
-  shortfalls are verification/closeout failure, required-command failure, and
-  older report metadata gaps. The aggregate also backfills conservative
-  inferred owners for old reports while keeping `owner_metadata_missing`
-  separate, so historical format gaps do not hide product failure patterns.
+- `scripts/live-eval-aggregate-summary.sh` now reads benchmark `report.md` and
+  quality artifacts directly instead of overwriting per-run `summary.md` files,
+  then writes `docs/benchmarks/live-eval-shortfall-summary.md`; the current
+  aggregate scans 116 task reports and shows the largest all-history shortfalls
+  are verification/closeout failure, required-command failure, and older report
+  metadata gaps. The aggregate also has a cleaner instrumented slice: 24 task
+  reports, 8 passed, 16 failed, with `agent_flow` at 37.5%, `llm_reasoning` at
+  25.0%, and 33.3% required-command failures.
 - Live eval reports now classify action-checkpoint stops separately
   (`action_checkpoint_no_patch`, `action_checkpoint_invalid_tools`,
   `patch_synthesis_no_change`) and the aggregate report has an `Agent Flow
