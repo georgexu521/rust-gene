@@ -216,11 +216,11 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a bash command in the shell. \
-         Use this tool for shell-only operations, validation, and git commands. \
-         Do not use bash output as user-facing communication; summarize results in the assistant response. \
-         Be careful with destructive operations like rm -rf. \
-         Prefer absolute paths when working with files."
+        "Run shell commands for validation, git, package managers, and shell-only work. \
+         Prefer glob, grep, and file_read for file search, listing, and reading. \
+         Do not infer size, item count, or creation time from ls -la. \
+         Do not use bash output as user-facing communication; summarize results. \
+         Be careful with destructive commands."
     }
 
     fn parameters(&self) -> serde_json::Value {

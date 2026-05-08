@@ -10,6 +10,7 @@
 mod action_checkpoint;
 mod approval;
 mod patch_repair_rules;
+mod pseudo_tool_text;
 mod step_executor;
 mod text_sanitizer;
 mod tool_execution;
@@ -707,6 +708,7 @@ pub struct ConversationLoop {
 pub struct LoopResult {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
+    pub tool_calls_made: bool,
     pub iterations: usize,
     /// 流式预执行的只读工具结果（tool_index → result）
     /// execute_tools_parallel 应跳过已有结果的只读工具
@@ -1305,6 +1307,7 @@ impl ConversationLoop {
                 return Ok(LoopResult {
                     content,
                     tool_calls: Vec::new(),
+                    tool_calls_made: false,
                     iterations: 0,
                     pre_executed_results: std::collections::HashMap::new(),
                 });
@@ -1417,6 +1420,7 @@ impl ConversationLoop {
                             return Ok(LoopResult {
                                 content: workflow_report,
                                 tool_calls: Vec::new(),
+                                tool_calls_made: false,
                                 iterations: 0,
                                 pre_executed_results: std::collections::HashMap::new(),
                             });
@@ -1445,11 +1449,13 @@ impl ConversationLoop {
         let base_tools = self.get_tools_for_route(&route);
         let mut final_content = String::new();
         let mut final_tool_calls = Vec::new();
+        let mut tool_calls_made = false;
         let mut iterations_used = 0;
         let mut no_code_progress_rounds = 0usize;
         let mut action_checkpoint_active = false;
         let mut action_checkpoint_lookup_used = false;
         let mut patch_synthesis_recovery_used = false;
+        let mut pseudo_tool_retry_used = false;
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
         let mut successful_required_validation_commands: HashSet<String> = HashSet::new();
@@ -1792,8 +1798,30 @@ impl ConversationLoop {
 
             final_content = content.clone();
             final_tool_calls = tool_calls.clone();
+            if !tool_calls.is_empty() {
+                tool_calls_made = true;
+            }
 
             if tool_calls.is_empty() {
+                if !pseudo_tool_retry_used
+                    && pseudo_tool_text::contains_unexecuted_tool_command(
+                        &content,
+                        &exposed_tool_names,
+                    )
+                {
+                    pseudo_tool_retry_used = true;
+                    trace.record(TraceEvent::WorkflowFallback {
+                        error: "assistant emitted an unexecuted tool-like command; retrying with explicit tool-use correction".to_string(),
+                    });
+                    messages.push(Message::assistant(safe_prefix_by_bytes(&content, 1200)));
+                    messages.push(Message::system(
+                        "You described a shell/tool command in normal text instead of calling an available tool. \
+The user asked for current local state, so do not answer from an unexecuted command. \
+If a command appears in a code block and bash is available, execute it with the bash tool now. \
+Otherwise call the appropriate tool, or state clearly that no tool is available.",
+                    ));
+                    continue;
+                }
                 if let Some(tx) = tx {
                     if should_use_nonstreaming_tools(self.provider.as_ref(), &tools)
                         && !content.is_empty()
@@ -3183,7 +3211,8 @@ impl ConversationLoop {
 
         Ok(LoopResult {
             content: final_content,
-            tool_calls: final_tool_calls,
+            tool_calls: Vec::new(),
+            tool_calls_made,
             iterations: iterations_used,
             pre_executed_results: std::collections::HashMap::new(),
         })
@@ -5799,7 +5828,7 @@ Do not answer in prose unless no safe patch exists."#;
                     "ask_user",
                 ],
                 WorkflowKind::Direct if route.recommended_tools.is_empty() => &[],
-                WorkflowKind::Direct => &["file_read", "glob", "bash", "ask_user"],
+                WorkflowKind::Direct => &["file_read", "glob", "ask_user"],
             },
         };
 
@@ -6783,6 +6812,71 @@ mod tests {
     }
 
     #[test]
+    fn route_scoped_tools_for_local_inspection_prefer_structured_read_tools() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+        env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+        env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+        let route = IntentRouter::new().route("请帮我看看桌面有没有 gex 文件夹");
+        let tools = fake_tools(&[
+            "file_read",
+            "file_write",
+            "file_edit",
+            "glob",
+            "bash",
+            "web_search",
+            "memory_save",
+            "mcp",
+            "agent",
+        ]);
+
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("file_read"));
+        assert!(exposed.contains("glob"));
+        assert!(!exposed.contains("bash"));
+        assert!(!exposed.contains("file_write"));
+        assert!(!exposed.contains("file_edit"));
+        assert!(!exposed.contains("web_search"));
+        assert!(!exposed.contains("memory_save"));
+        assert!(!exposed.contains("mcp"));
+        assert!(!exposed.contains("agent"));
+    }
+
+    #[test]
+    fn route_scoped_tools_for_terminal_operation_include_bash_without_write_tools() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+        env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+        env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+        let route =
+            IntentRouter::new().route("帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧");
+        let tools = fake_tools(&[
+            "file_read",
+            "file_write",
+            "file_edit",
+            "glob",
+            "bash",
+            "web_search",
+            "memory_save",
+            "mcp",
+            "agent",
+        ]);
+
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("bash"));
+        assert!(exposed.contains("file_read"));
+        assert!(exposed.contains("glob"));
+        assert!(!exposed.contains("file_write"));
+        assert!(!exposed.contains("file_edit"));
+        assert!(!exposed.contains("web_search"));
+        assert!(!exposed.contains("memory_save"));
+        assert!(!exposed.contains("mcp"));
+        assert!(!exposed.contains("agent"));
+    }
+
+    #[test]
     fn route_scoped_tools_for_python_creation_include_write_and_validation() {
         let mut env = EnvVarGuard::acquire_blocking();
         env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
@@ -6903,6 +6997,20 @@ mod tests {
             Sample {
                 label: "scoped file delete",
                 prompt: "帮我把这个文件删了吧",
+                intent: IntentKind::DirectAnswer,
+                workflow: WorkflowKind::Direct,
+                max_tools: 4,
+            },
+            Sample {
+                label: "local inspection",
+                prompt: "请帮我看看桌面有没有 gex 文件夹",
+                intent: IntentKind::DirectAnswer,
+                workflow: WorkflowKind::Direct,
+                max_tools: 4,
+            },
+            Sample {
+                label: "terminal operation",
+                prompt: "帮我看看默认 python 有没有安装 pygame，帮我安装一下吧",
                 intent: IntentKind::DirectAnswer,
                 workflow: WorkflowKind::Direct,
                 max_tools: 4,

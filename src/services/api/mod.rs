@@ -264,6 +264,68 @@ pub fn sanitize_assistant_content(content: impl AsRef<str>) -> String {
         .to_string()
 }
 
+/// Keep provider-bound histories compatible with OpenAI-style tool semantics.
+///
+/// A message with `tool_calls` must be followed immediately by matching tool
+/// result messages. Historical UI/session storage can contain final assistant
+/// messages that mistakenly carried stale tool calls; those calls are display
+/// metadata, not provider context. Drop invalid calls and orphan tool results
+/// before sending the request so strict providers do not reject the turn.
+pub fn normalize_tool_message_sequence(messages: Vec<Message>) -> Vec<Message> {
+    let mut normalized = Vec::with_capacity(messages.len());
+    let mut index = 0;
+
+    while index < messages.len() {
+        match messages[index].clone() {
+            Message::Assistant {
+                content,
+                tool_calls: Some(tool_calls),
+            } if !tool_calls.is_empty() => {
+                let mut next = index + 1;
+                let mut tool_result_ids = std::collections::HashSet::new();
+                while next < messages.len() {
+                    let Message::Tool { tool_call_id, .. } = &messages[next] else {
+                        break;
+                    };
+                    if tool_call_id.is_empty() {
+                        break;
+                    }
+                    tool_result_ids.insert(tool_call_id.clone());
+                    next += 1;
+                }
+
+                let expected_ids = tool_calls
+                    .iter()
+                    .map(|call| call.id.clone())
+                    .collect::<std::collections::HashSet<_>>();
+                let has_matching_results = !expected_ids.is_empty()
+                    && expected_ids.iter().all(|id| tool_result_ids.contains(id))
+                    && tool_result_ids.iter().all(|id| expected_ids.contains(id));
+
+                if has_matching_results {
+                    normalized.push(Message::assistant_with_tools(content, tool_calls));
+                    normalized.extend(messages[index + 1..next].iter().cloned());
+                    index = next;
+                } else {
+                    normalized.push(Message::assistant(content));
+                    index += 1;
+                }
+            }
+            Message::Tool { .. } => {
+                // Orphan tool results are not valid provider messages. The UI still
+                // displays them separately; they should not poison the next API turn.
+                index += 1;
+            }
+            other => {
+                normalized.push(other);
+                index += 1;
+            }
+        }
+    }
+
+    normalized
+}
+
 fn strip_tag_block(input: &str, tag: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut rest = input;
@@ -309,7 +371,7 @@ pub struct Usage {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_assistant_content;
+    use super::{normalize_tool_message_sequence, sanitize_assistant_content, Message, ToolCall};
 
     #[test]
     fn sanitizer_removes_think_blocks() {
@@ -340,5 +402,60 @@ mod tests {
         let content =
             "Plan\n<minimax:tool_call><invoke name=\"grep\"></invoke></minimax:tool_call>";
         assert_eq!(sanitize_assistant_content(content), "Plan\n");
+    }
+
+    #[test]
+    fn normalize_tool_sequence_keeps_valid_tool_call_pairs() {
+        let messages = vec![
+            Message::assistant_with_tools(
+                "",
+                vec![ToolCall {
+                    id: "call_1".to_string(),
+                    name: "file_read".to_string(),
+                    arguments: serde_json::json!({"path": "Cargo.toml"}),
+                }],
+            ),
+            Message::tool("call_1", "Result: OK"),
+            Message::assistant("done"),
+        ];
+
+        let normalized = normalize_tool_message_sequence(messages);
+        assert_eq!(normalized.len(), 3);
+        assert!(normalized[0].tool_calls().is_some());
+        assert!(matches!(normalized[1], Message::Tool { .. }));
+    }
+
+    #[test]
+    fn normalize_tool_sequence_drops_dangling_final_tool_call() {
+        let messages = vec![
+            Message::user("write a file"),
+            Message::assistant_with_tools(
+                "Done.",
+                vec![ToolCall {
+                    id: "call_1".to_string(),
+                    name: "file_write".to_string(),
+                    arguments: serde_json::json!({"path": "/tmp/a", "content": "x"}),
+                }],
+            ),
+            Message::user("how do I run it?"),
+        ];
+
+        let normalized = normalize_tool_message_sequence(messages);
+        assert_eq!(normalized.len(), 3);
+        assert!(normalized[1].tool_calls().is_none());
+    }
+
+    #[test]
+    fn normalize_tool_sequence_drops_orphan_tool_result() {
+        let messages = vec![
+            Message::user("hello"),
+            Message::tool("call_orphan", "Result: OK"),
+            Message::assistant("done"),
+        ];
+
+        let normalized = normalize_tool_message_sequence(messages);
+        assert_eq!(normalized.len(), 2);
+        assert!(matches!(normalized[0], Message::User { .. }));
+        assert!(matches!(normalized[1], Message::Assistant { .. }));
     }
 }

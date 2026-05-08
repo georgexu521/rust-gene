@@ -1,5 +1,9 @@
 # Priority Agent 测试指南
 
+> 当前 Agent 能力测试入口见 `docs/AGENT_TESTING_MATRIX_2026-05-08.md`。
+> 本文件保留为通用命令手册；真实 coding-agent 能力、live eval 编排、
+> 手工烟测和 Claude/Codex/opencode 对比口径以该矩阵文档为准。
+
 ## 📋 目录
 1. [快速测试](#快速测试)
 2. [单元测试](#单元测试)

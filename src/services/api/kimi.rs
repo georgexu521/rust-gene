@@ -3,7 +3,8 @@
 //! 支持 OpenAI 兼容格式的 API 调用，支持 extended thinking
 
 use crate::services::api::{
-    sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
+    normalize_tool_message_sequence, sanitize_assistant_content, ChatRequest, ChatResponse,
+    LlmProvider, Message, ToolCall, Usage,
 };
 use anyhow::{Context, Result};
 use async_openai::{
@@ -193,7 +194,10 @@ impl LlmProvider for KimiClient {
         );
 
         let messages: Vec<ChatCompletionRequestMessage> =
-            request.messages.into_iter().map(convert_message).collect();
+            normalize_tool_message_sequence(request.messages)
+                .into_iter()
+                .map(convert_message)
+                .collect();
 
         let mut req = CreateChatCompletionRequest {
             model: request.model.clone(),
@@ -295,7 +299,10 @@ impl LlmProvider for KimiClient {
         );
 
         let messages: Vec<ChatCompletionRequestMessage> =
-            request.messages.into_iter().map(convert_message).collect();
+            normalize_tool_message_sequence(request.messages)
+                .into_iter()
+                .map(convert_message)
+                .collect();
 
         let mut req = CreateChatCompletionRequest {
             model: request.model.clone(),

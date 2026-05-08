@@ -2,7 +2,7 @@
 //!
 //! 使用 glob 模式搜索文件
 
-use crate::tools::file_tool::{is_allowed_absolute_path, resolve_path};
+use crate::tools::file_tool::{is_allowed_read_absolute_path, resolve_read_path};
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -33,7 +33,7 @@ impl Tool for GlobTool {
                 },
                 "path": {
                     "type": "string",
-                    "description": "The directory to search in (default: current working directory)"
+                    "description": "The directory to search in (default: current working directory; supports ~/Desktop for user-approved desktop inspection)"
                 }
             },
             "required": ["pattern"]
@@ -47,7 +47,7 @@ impl Tool for GlobTool {
         }
 
         let search_path = match params["path"].as_str() {
-            Some(path_str) => match resolve_path(path_str, &context.working_dir) {
+            Some(path_str) => match resolve_read_path(path_str, &context.working_dir) {
                 Ok(path) => path,
                 Err(msg) => return ToolResult::error(msg),
             },
@@ -59,7 +59,7 @@ impl Tool for GlobTool {
         // 构建完整路径模式，并校验边界
         let full_pattern = if std::path::Path::new(pattern).is_absolute() {
             let abs = crate::tools::file_tool::normalize_path(std::path::Path::new(pattern));
-            if !is_allowed_absolute_path(&abs, &context.working_dir) {
+            if !is_allowed_read_absolute_path(&abs, &context.working_dir) {
                 return ToolResult::error(format!(
                     "Access denied: absolute pattern '{}' is outside allowed roots",
                     pattern

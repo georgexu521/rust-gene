@@ -16,6 +16,7 @@ use tracing::{debug, error, info, warn};
 const MAX_EDITABLE_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 const DEFAULT_MAX_FILE_EDIT_REPLACEMENTS: usize = 20;
 const MAX_MATCH_CONTEXT_OCCURRENCES: usize = 12;
+const DEFAULT_DIRECTORY_READ_ENTRY_LIMIT: usize = 200;
 
 fn is_unc_or_network_path(path: &str) -> bool {
     path.starts_with("\\\\") || path.starts_with("//")
@@ -143,6 +144,119 @@ struct FileState {
 static FILE_STATES: Lazy<Mutex<HashMap<String, FileState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+async fn read_directory_result(
+    path: &Path,
+    requested_path: &str,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> ToolResult {
+    let mut reader = match tokio::fs::read_dir(path).await {
+        Ok(reader) => reader,
+        Err(e) => {
+            error!("Failed to read directory: {}", e);
+            return ToolResult::error(format!("Failed to read directory: {}", e));
+        }
+    };
+
+    let mut entries = Vec::new();
+    loop {
+        match reader.next_entry().await {
+            Ok(Some(entry)) => {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let entry_path = entry.path();
+                let file_type = entry.file_type().await.ok();
+                let is_dir = file_type
+                    .as_ref()
+                    .map(|kind| kind.is_dir())
+                    .unwrap_or_else(|| entry_path.is_dir());
+                let is_file = file_type
+                    .as_ref()
+                    .map(|kind| kind.is_file())
+                    .unwrap_or_else(|| entry_path.is_file());
+                let is_symlink = file_type
+                    .as_ref()
+                    .map(|kind| kind.is_symlink())
+                    .unwrap_or(false);
+                let display_name = if is_dir {
+                    format!("{name}/")
+                } else {
+                    name.clone()
+                };
+                entries.push((display_name, name, entry_path, is_dir, is_file, is_symlink));
+            }
+            Ok(None) => break,
+            Err(e) => {
+                error!("Failed to read directory entry: {}", e);
+                return ToolResult::error(format!("Failed to read directory entry: {}", e));
+            }
+        }
+    }
+
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let total_entries = entries.len();
+    let start = offset.unwrap_or(0);
+    if start >= total_entries && total_entries > 0 {
+        return ToolResult::error(format!(
+            "Offset {} is beyond end of directory ({} entries total)",
+            start + 1,
+            total_entries
+        ));
+    }
+
+    let entry_limit = limit.unwrap_or(DEFAULT_DIRECTORY_READ_ENTRY_LIMIT);
+    let end = (start + entry_limit).min(total_entries);
+    let selected = if total_entries == 0 {
+        &entries[..0]
+    } else {
+        &entries[start..end]
+    };
+    let truncated = end < total_entries || start > 0;
+    let mut lines = selected
+        .iter()
+        .map(|entry| entry.0.clone())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines.push("(empty)".to_string());
+    }
+
+    let mut content = format!(
+        "Directory: {}\nEntries ({}):\n{}",
+        path.display(),
+        total_entries,
+        lines.join("\n")
+    );
+    if truncated {
+        content.push_str(&format!(
+            "\n\n[{} entries total, showing entries {}-{}]",
+            total_entries,
+            start + 1,
+            end
+        ));
+    }
+
+    ToolResult::success_with_data(
+        content,
+        json!({
+            "path": requested_path,
+            "resolved_path": path.to_string_lossy().to_string(),
+            "kind": "directory",
+            "entry_count": total_entries,
+            "displayed_entries": selected.len(),
+            "truncated": truncated,
+            "entries": selected.iter().map(|entry| {
+                json!({
+                    "name": entry.1,
+                    "display_name": entry.0,
+                    "path": entry.2.to_string_lossy().to_string(),
+                    "is_dir": entry.3,
+                    "is_file": entry.4,
+                    "is_symlink": entry.5,
+                })
+            }).collect::<Vec<_>>(),
+        }),
+    )
+}
+
 fn compute_content_hash(content: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     content.hash(&mut hasher);
@@ -200,8 +314,9 @@ impl Tool for FileReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read the contents of a file. \
-         Use this to view file contents, source code, configuration files, etc. \
+        "Read the contents of a file or list a directory. \
+         Use this to view file contents, source code, configuration files, and directory entries. \
+         For directories, returns entry names only, with trailing '/' for subdirectories. \
          Returns an error if the file doesn't exist or cannot be read."
     }
 
@@ -211,7 +326,7 @@ impl Tool for FileReadTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "The path to the file to read (relative or absolute)"
+                    "description": "The path to the file or directory to read (relative or absolute; supports ~/Desktop for user-approved desktop inspection)"
                 },
                 "limit": {
                     "type": "integer",
@@ -254,7 +369,7 @@ impl Tool for FileReadTool {
             }
         });
 
-        let path = match resolve_path(path_str, &context.working_dir) {
+        let path = match resolve_read_path(path_str, &context.working_dir) {
             Ok(path) => path,
             Err(msg) => return ToolResult::error(msg),
         };
@@ -263,6 +378,10 @@ impl Tool for FileReadTool {
         // 检查文件是否存在
         if !path.exists() {
             return ToolResult::error(format!("File does not exist: {}", path_str));
+        }
+
+        if path.is_dir() {
+            return read_directory_result(&path, path_str, limit, offset).await;
         }
 
         // 检查是否是文件
@@ -1224,7 +1343,25 @@ pub fn resolve_path(
     path: &str,
     working_dir: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    let input = Path::new(path);
+    resolve_path_with_policy(path, working_dir, false)
+}
+
+/// 解析只读路径。相对路径仍限制在工作区内；绝对路径除工作区和临时目录外，
+/// 允许读取用户桌面和 `PRIORITY_AGENT_READ_ROOTS` 声明的只读根目录。
+pub fn resolve_read_path(
+    path: &str,
+    working_dir: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    resolve_path_with_policy(path, working_dir, true)
+}
+
+fn resolve_path_with_policy(
+    path: &str,
+    working_dir: &std::path::Path,
+    read_only: bool,
+) -> Result<std::path::PathBuf, String> {
+    let expanded_input = expand_home_path(path);
+    let input = expanded_input.as_path();
     let normalized_working_dir = normalize_path(working_dir);
 
     let candidate = if input.is_absolute() {
@@ -1234,7 +1371,7 @@ pub fn resolve_path(
     };
 
     if input.is_absolute() {
-        if !is_allowed_absolute_path(&candidate, &normalized_working_dir) {
+        if !is_allowed_path_for_policy(&candidate, &normalized_working_dir, read_only) {
             return Err(format!(
                 "Access denied: absolute path '{}' is outside allowed roots",
                 path
@@ -1257,7 +1394,7 @@ pub fn resolve_path(
     let real_working_dir = canonicalize_or_normalize(&normalized_working_dir);
 
     if input.is_absolute() {
-        if !is_allowed_absolute_path(&real_candidate, &real_working_dir) {
+        if !is_allowed_path_for_policy(&real_candidate, &real_working_dir, read_only) {
             return Err(format!(
                 "Access denied: absolute path '{}' resolves outside allowed roots",
                 path
@@ -1271,6 +1408,27 @@ pub fn resolve_path(
     }
 
     Ok(candidate)
+}
+
+fn is_allowed_path_for_policy(path: &Path, working_dir: &Path, read_only: bool) -> bool {
+    if read_only {
+        is_allowed_read_absolute_path(path, working_dir)
+    } else {
+        is_allowed_absolute_path(path, working_dir)
+    }
+}
+
+fn expand_home_path(path: &str) -> PathBuf {
+    if path == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home);
+        }
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
 }
 
 pub fn is_allowed_absolute_path(path: &std::path::Path, working_dir: &std::path::Path) -> bool {
@@ -1301,6 +1459,39 @@ pub fn is_allowed_absolute_path(path: &std::path::Path, working_dir: &std::path:
     allowed_roots
         .into_iter()
         .any(|root| normalized_path.starts_with(&root) || canonical_path.starts_with(&root))
+}
+
+pub fn is_allowed_read_absolute_path(
+    path: &std::path::Path,
+    working_dir: &std::path::Path,
+) -> bool {
+    if is_allowed_absolute_path(path, working_dir) {
+        return true;
+    }
+
+    let normalized_path = normalize_path(path);
+    let canonical_path = canonicalize_or_normalize(&normalized_path);
+    read_allowed_roots().into_iter().any(|root| {
+        let normalized_root = normalize_path(&root);
+        let canonical_root = canonicalize_or_normalize(&normalized_root);
+        normalized_path.starts_with(&normalized_root) || canonical_path.starts_with(&canonical_root)
+    })
+}
+
+fn read_allowed_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(home).join("Desktop"));
+    }
+    if let Ok(raw) = std::env::var("PRIORITY_AGENT_READ_ROOTS") {
+        roots.extend(
+            raw.split(':')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(expand_home_path),
+        );
+    }
+    roots
 }
 
 pub fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
@@ -1373,6 +1564,58 @@ mod tests {
 
         assert!(result.success);
         assert!(result.content.contains("[package]"));
+    }
+
+    #[tokio::test]
+    async fn file_read_directory_returns_entries_without_shell_metadata() {
+        let tool = FileReadTool;
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join(".DS_Store"), "metadata")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("note.txt"), "hello")
+            .await
+            .unwrap();
+        tokio::fs::create_dir(dir.path().join("nested"))
+            .await
+            .unwrap();
+
+        let result = tool
+            .execute(
+                json!({ "path": dir.path().to_string_lossy().to_string() }),
+                ToolContext::new(".", "test-session-read-dir"),
+            )
+            .await;
+
+        assert!(result.success, "read failed: {:?}", result.error);
+        assert!(result.content.contains(".DS_Store"));
+        assert!(result.content.contains("note.txt"));
+        assert!(result.content.contains("nested/"));
+        assert!(!result.content.contains("created"));
+        assert!(!result.content.contains("size"));
+        let data = result.data.expect("directory read should return metadata");
+        assert_eq!(data["kind"], "directory");
+        assert_eq!(data["entry_count"], 3);
+    }
+
+    #[tokio::test]
+    async fn file_read_empty_directory_is_explicit() {
+        let tool = FileReadTool;
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = tool
+            .execute(
+                json!({ "path": dir.path().to_string_lossy().to_string() }),
+                ToolContext::new(".", "test-session-read-empty-dir"),
+            )
+            .await;
+
+        assert!(result.success, "read failed: {:?}", result.error);
+        assert!(result.content.contains("Entries (0):"));
+        assert!(result.content.contains("(empty)"));
+        let data = result.data.expect("directory read should return metadata");
+        assert_eq!(data["kind"], "directory");
+        assert_eq!(data["entry_count"], 0);
     }
 
     #[tokio::test]
@@ -1452,6 +1695,22 @@ mod tests {
             allowed_tmp,
             std::path::Path::new("/tmp/test_priority_agent_file.txt")
         );
+    }
+
+    #[test]
+    fn resolve_read_path_allows_home_desktop_without_allowing_writes() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        let home = tempfile::tempdir().unwrap();
+        let desktop = home.path().join("Desktop");
+        std::fs::create_dir_all(desktop.join("gex")).unwrap();
+        env.set("HOME", home.path().to_str().unwrap());
+
+        let working = tempfile::tempdir().unwrap();
+        let read_path = resolve_read_path("~/Desktop/gex", working.path()).unwrap();
+        assert_eq!(read_path, normalize_path(&desktop.join("gex")));
+
+        let write_path = resolve_path("~/Desktop/gex", working.path());
+        assert!(write_path.is_err());
     }
 
     #[test]

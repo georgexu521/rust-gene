@@ -671,7 +671,7 @@ impl StreamingQueryEngine {
 
             // 4. 执行查询（带 fallback 支持）
             let mut assistant_content = String::new();
-            let mut assistant_tool_calls = Vec::new();
+            let mut assistant_tool_calls_made = false;
 
             let turn_timeout = turn_execution_timeout();
             let run_result = match tokio::time::timeout(
@@ -690,7 +690,7 @@ impl StreamingQueryEngine {
             match run_result {
                 Ok((content, tool_calls)) => {
                     assistant_content = content;
-                    assistant_tool_calls = tool_calls;
+                    assistant_tool_calls_made = tool_calls;
                 }
                 Err(e) => {
                     let err_str = e.to_string().to_lowercase();
@@ -785,7 +785,7 @@ impl StreamingQueryEngine {
                         {
                             Ok(Ok((content, tool_calls))) => {
                                 assistant_content = content;
-                                assistant_tool_calls = tool_calls;
+                                assistant_tool_calls_made = tool_calls;
                             }
                             Ok(Err(fb_err)) => {
                                 let _ = tx.send(StreamEvent::Error(fb_err.to_string())).await;
@@ -808,29 +808,20 @@ impl StreamingQueryEngine {
             // 5. 添加助手回复到历史
             {
                 let mut hist = history.lock().await;
-                if !assistant_content.is_empty() || !assistant_tool_calls.is_empty() {
-                    let assistant_msg = if assistant_tool_calls.is_empty() {
-                        Message::assistant(&assistant_content)
-                    } else {
-                        Message::assistant_with_tools(&assistant_content, assistant_tool_calls)
-                    };
+                if !assistant_content.is_empty() {
+                    let assistant_msg = Message::assistant(&assistant_content);
                     hist.push(assistant_msg.clone());
 
                     // 持久化助手消息
                     if let (Some(ref store), Some(ref sid)) = (&session_store, &session_id) {
-                        let tool_calls_json = assistant_msg
-                            .tool_calls()
-                            .map(|tc| serde_json::to_value(tc).unwrap_or(serde_json::Value::Null));
-                        if let Err(e) = store.add_message(
-                            sid,
-                            "assistant",
-                            &assistant_content,
-                            tool_calls_json.as_ref(),
-                            None,
-                        ) {
+                        if let Err(e) =
+                            store.add_message(sid, "assistant", &assistant_content, None, None)
+                        {
                             warn!("Failed to persist assistant message: {}", e);
                         }
                     }
+                } else if assistant_tool_calls_made {
+                    warn!("Tool calls were executed but produced no final assistant content to persist");
                 }
             }
 
@@ -1041,7 +1032,7 @@ impl StreamingEngineInner {
         &self,
         messages: Vec<Message>,
         tx: &mpsc::Sender<StreamEvent>,
-    ) -> Result<(String, Vec<crate::services::api::ToolCall>)> {
+    ) -> Result<(String, bool)> {
         let mut builder = super::ConversationLoopBuilder::new(
             self.provider.clone(),
             self.tool_registry.clone(),
@@ -1085,7 +1076,7 @@ impl StreamingEngineInner {
         }
 
         let result = builder.build().run_streaming(messages, tx).await?;
-        Ok((result.content, result.tool_calls))
+        Ok((result.content, result.tool_calls_made))
     }
 }
 
@@ -1093,6 +1084,9 @@ impl StreamingEngineInner {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use futures::StreamExt;
+    use std::collections::VecDeque;
+    use std::sync::Mutex as StdMutex;
 
     struct MockProvider;
 
@@ -1151,6 +1145,41 @@ mod tests {
         }
     }
 
+    struct ToolTurnProvider {
+        responses: StdMutex<VecDeque<crate::services::api::ChatResponse>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for ToolTurnProvider {
+        async fn chat(
+            &self,
+            _request: crate::services::api::ChatRequest,
+        ) -> anyhow::Result<crate::services::api::ChatResponse> {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("no mock response left"))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: crate::services::api::ChatRequest,
+        ) -> anyhow::Result<async_openai::types::ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!(
+                "stream not used for MiniMax-compatible tool turns"
+            ))
+        }
+
+        fn base_url(&self) -> &str {
+            "https://api.minimaxi.com/v1"
+        }
+
+        fn default_model(&self) -> &str {
+            "MiniMax-M2.7"
+        }
+    }
+
     #[test]
     fn test_stream_event_creation() {
         let event = StreamEvent::TextChunk("Hello".to_string());
@@ -1191,5 +1220,74 @@ mod tests {
         assert_eq!(engine.provider_base_url(), "mock://b");
         assert_eq!(engine.model_name(), "model-b");
         assert_eq!(engine.provider().default_model(), "model-b");
+    }
+
+    #[tokio::test]
+    async fn streaming_history_does_not_persist_completed_tool_calls_as_final_assistant_calls() {
+        let target = std::env::temp_dir().join("priority_agent_streaming_history_tool_call.py");
+        let _ = tokio::fs::remove_file(&target).await;
+        let provider = Arc::new(ToolTurnProvider {
+            responses: StdMutex::new(VecDeque::from(vec![
+                crate::services::api::ChatResponse {
+                    content: String::new(),
+                    tool_calls: Some(vec![crate::services::api::ToolCall {
+                        id: "call_write".to_string(),
+                        name: "file_write".to_string(),
+                        arguments: serde_json::json!({
+                            "path": target.to_string_lossy().to_string(),
+                            "content": "print('ok')\n"
+                        }),
+                    }]),
+                    usage: None,
+                },
+                crate::services::api::ChatResponse {
+                    content: "Done.".to_string(),
+                    tool_calls: None,
+                    usage: None,
+                },
+            ])),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(crate::tools::file_tool::FileWriteTool);
+        let engine = StreamingQueryEngine::new(provider, Arc::new(registry), "MiniMax-M2.7")
+            .with_max_iterations(3);
+
+        let mut stream = engine
+            .query_stream("请写一个 python 文件，内容打印 ok")
+            .await;
+        while let Some(event) = stream.next().await {
+            match event {
+                StreamEvent::Complete => break,
+                StreamEvent::Error(error) => panic!("stream failed: {error}"),
+                _ => {}
+            }
+        }
+
+        let history = engine.get_history().await;
+        assert!(history
+            .iter()
+            .any(|message| matches!(message, Message::User { .. })));
+        assert!(
+            history.iter().any(|message| matches!(
+                message,
+                Message::Assistant {
+                    tool_calls: None,
+                    ..
+                }
+            )),
+            "final assistant should be persisted without stale tool calls: {history:?}"
+        );
+        assert!(
+            history.iter().all(|message| !matches!(
+                message,
+                Message::Assistant {
+                    tool_calls: Some(calls),
+                    ..
+                } if !calls.is_empty()
+            )),
+            "completed tool calls must not be persisted as pending provider tool calls: {history:?}"
+        );
+
+        let _ = tokio::fs::remove_file(&target).await;
     }
 }

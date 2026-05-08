@@ -618,7 +618,14 @@ impl CodeChangeWorkflowRunner {
             .step_states
             .iter()
             .filter(|step| step.status != PlanStepRuntimeStatus::Pending)
-            .map(|step| format!("{}: {}", step.description, step.status.label()))
+            .map(|step| {
+                let base = format!("{}: {}", step.description, step.status.label());
+                step.last_evidence
+                    .as_deref()
+                    .and_then(validation_evidence_summary)
+                    .map(|evidence| format!("{base} ({evidence})"))
+                    .unwrap_or(base)
+            })
             .collect::<Vec<_>>();
         if validation.is_empty() {
             if self.policy.require_stage_validation {
@@ -822,7 +829,7 @@ impl CodeChangeWorkflowRunner {
             StageValidationStatus::Partial => PlanStepRuntimeStatus::Active,
             StageValidationStatus::NotVerified => PlanStepRuntimeStatus::Active,
         };
-        let evidence = record.evidence.first().cloned();
+        let evidence = select_validation_evidence(record);
         for step in &mut self.step_states {
             let same = match (record.step_id.as_deref(), step.id.as_deref()) {
                 (Some(id), Some(step_id)) => id == step_id,
@@ -897,6 +904,68 @@ fn preview(text: &str, max_chars: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+fn validation_evidence_summary(evidence: &str) -> Option<String> {
+    let trimmed = evidence.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("[Changed-file diff evidence]")
+        || trimmed.starts_with("[Code review]")
+    {
+        return None;
+    }
+
+    if trimmed.starts_with("[Manual validation passed after code changes]") {
+        let commands = trimmed
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("$ "))
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        if !commands.is_empty() {
+            return Some(preview(&format!("manual: {}", commands.join("; ")), 140));
+        }
+    }
+
+    let normalized = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+    let summary = normalized
+        .split_once("] ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(normalized.as_str());
+    Some(preview(summary.trim_end_matches('.'), 160))
+}
+
+fn select_validation_evidence(record: &StageValidationRecord) -> Option<String> {
+    let usable = record
+        .evidence
+        .iter()
+        .filter(|item| validation_evidence_summary(item).is_some())
+        .collect::<Vec<_>>();
+    if usable.is_empty() {
+        return record.evidence.first().cloned();
+    }
+
+    let changed_labels = record
+        .changed_files
+        .iter()
+        .flat_map(|path| {
+            let file_name = Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string);
+            [Some(path.clone()), file_name]
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    if let Some(matched) = usable.iter().find(|item| {
+        changed_labels
+            .iter()
+            .any(|label| !label.is_empty() && item.contains(label))
+    }) {
+        return Some((*matched).clone());
+    }
+
+    usable.first().map(|item| (*item).clone())
 }
 
 #[allow(dead_code)]
@@ -974,6 +1043,30 @@ mod tests {
             .step_states()
             .iter()
             .any(|step| step.status == PlanStepRuntimeStatus::Failed));
+    }
+
+    #[test]
+    fn concise_closeout_keeps_short_validation_command_evidence() {
+        let route = code_change_route(RiskLevel::Medium);
+        let bundle = TaskContextBundle::new("创建 Python smoke 脚本", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+        runner.activate_trigger(AdaptiveWorkflowTrigger::FirstCodeChange);
+        runner.record_stage_validation(
+            &bundle,
+            &[PathBuf::from("hello.py")],
+            true,
+            &[
+                "[Rust verification] cargo check passed with no issues.".to_string(),
+                "[python verification] python3 -m py_compile hello.py passed with no issues."
+                    .to_string(),
+            ],
+        );
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+        let response = closeout.format_concise_for_final_response();
+
+        assert!(response.contains("Verified:"));
+        assert!(response.contains("python3 -m py_compile hello.py passed with no issues"));
     }
 
     #[test]

@@ -106,9 +106,35 @@ impl IntentRouter {
 
         let has_memory_signal = contains_any(&lower, &["/memory", "remember", "memory", "recall"])
             || contains_any(zh, &["记忆", "记住", "回忆"]);
+        let has_code_creation_signal = is_natural_code_creation_request(&lower, zh);
         let has_code_change_signal = is_code_change_request(&lower, zh);
         let has_debug_signal = is_debug_request(&lower, zh);
         let has_file_mutation_signal = is_file_mutation_request(&lower, zh);
+        let has_local_inspection_signal = is_local_inspection_request(&lower, zh);
+        let has_terminal_operation_signal = is_terminal_operation_request(&lower, zh);
+        let has_error_explanation_signal = is_error_explanation_request(&lower, zh);
+        let has_configuration_signal = contains_any(
+            &lower,
+            &[
+                "config",
+                "settings",
+                "permission",
+                "model",
+                "provider",
+                "mcp",
+            ],
+        ) || contains_any(zh, &["配置", "设置", "权限", "模型"]);
+        let has_delegation_signal =
+            contains_any(&lower, &["delegate", "subagent", "parallel", "swarm"])
+                || contains_any(zh, &["子agent", "子 agent", "并行", "委派"]);
+        let has_research_signal =
+            contains_any(&lower, &["search", "web", "latest", "compare", "research"])
+                || contains_any(zh, &["搜索", "网上", "最新", "对比", "调研"]);
+        let has_planning_signal =
+            contains_any(
+                &lower,
+                &["plan", "roadmap", "design", "architecture", "refactor"],
+            ) || contains_any(zh, &["计划", "路线图", "架构", "重构", "设计"]);
 
         // Memory-related coding tasks, such as fixing memory_save or memory
         // scoring, must not be routed as direct memory lookup/save turns. Treat
@@ -124,6 +150,119 @@ impl IntentRouter {
                 risk: RiskLevel::Low,
                 recommended_tools: vec!["memory_load".into(), "memory_save".into()],
                 reason: "prompt explicitly references memory without code-change intent".into(),
+            };
+        }
+
+        if has_error_explanation_signal {
+            return IntentRoute {
+                intent: IntentKind::DirectAnswer,
+                confidence: 0.78,
+                workflow: WorkflowKind::Direct,
+                retrieval: RetrievalPolicy::Light,
+                reasoning: ReasoningPolicy::Medium,
+                risk: RiskLevel::Low,
+                recommended_tools: Vec::new(),
+                reason: "prompt asks to explain an error without a code or environment action"
+                    .into(),
+            };
+        }
+
+        if has_configuration_signal {
+            return IntentRoute {
+                intent: IntentKind::Configuration,
+                confidence: 0.78,
+                workflow: WorkflowKind::Direct,
+                retrieval: RetrievalPolicy::Light,
+                reasoning: ReasoningPolicy::Medium,
+                risk: RiskLevel::Medium,
+                recommended_tools: vec!["config".into(), "mcp".into()],
+                reason: "prompt asks about runtime configuration or permissions".into(),
+            };
+        }
+
+        if has_delegation_signal {
+            return IntentRoute {
+                intent: IntentKind::Delegation,
+                confidence: 0.76,
+                workflow: WorkflowKind::Delegation,
+                retrieval: RetrievalPolicy::Project,
+                reasoning: ReasoningPolicy::High,
+                risk: RiskLevel::Medium,
+                recommended_tools: vec!["agent".into(), "swarm".into(), "project_list".into()],
+                reason: "prompt asks for delegation or parallel agent work".into(),
+            };
+        }
+
+        if has_research_signal {
+            return IntentRoute {
+                intent: IntentKind::Research,
+                confidence: 0.72,
+                workflow: WorkflowKind::Research,
+                retrieval: RetrievalPolicy::Web,
+                reasoning: ReasoningPolicy::High,
+                risk: RiskLevel::Low,
+                recommended_tools: vec!["web_search".into(), "web_fetch".into()],
+                reason: "prompt asks for external research or comparison".into(),
+            };
+        }
+
+        if has_planning_signal {
+            return IntentRoute {
+                intent: IntentKind::Planning,
+                confidence: 0.74,
+                workflow: WorkflowKind::Planning,
+                retrieval: RetrievalPolicy::Project,
+                reasoning: ReasoningPolicy::High,
+                risk: RiskLevel::Medium,
+                recommended_tools: vec!["project_list".into(), "grep".into(), "plan".into()],
+                reason: "prompt asks for planning or architecture work".into(),
+            };
+        }
+
+        if has_code_creation_signal {
+            return IntentRoute {
+                intent: IntentKind::CodeChange,
+                confidence: 0.8,
+                workflow: WorkflowKind::CodeChange,
+                retrieval: RetrievalPolicy::Project,
+                reasoning: ReasoningPolicy::High,
+                risk: RiskLevel::Medium,
+                recommended_tools: vec![
+                    "project_list".into(),
+                    "grep".into(),
+                    "file_read".into(),
+                    "file_write".into(),
+                    "file_edit".into(),
+                    "bash".into(),
+                ],
+                reason: "prompt asks to create a code artifact".into(),
+            };
+        }
+
+        if has_terminal_operation_signal {
+            return IntentRoute {
+                intent: IntentKind::DirectAnswer,
+                confidence: 0.74,
+                workflow: WorkflowKind::Direct,
+                retrieval: RetrievalPolicy::Light,
+                reasoning: ReasoningPolicy::Medium,
+                risk: RiskLevel::Medium,
+                recommended_tools: vec!["bash".into()],
+                reason: "prompt asks to inspect or change local runtime state through the terminal"
+                    .into(),
+            };
+        }
+
+        if has_local_inspection_signal {
+            return IntentRoute {
+                intent: IntentKind::DirectAnswer,
+                confidence: 0.72,
+                workflow: WorkflowKind::Direct,
+                retrieval: RetrievalPolicy::Light,
+                reasoning: ReasoningPolicy::Medium,
+                risk: RiskLevel::Low,
+                recommended_tools: vec!["glob".into(), "file_read".into()],
+                reason: "prompt asks to inspect local filesystem or workspace state".into(),
             };
         }
 
@@ -151,77 +290,6 @@ impl IntentRouter {
                 recommended_tools: vec!["file_read".into(), "bash".into()],
                 reason: "prompt asks for a scoped file mutation without code workflow intent"
                     .into(),
-            };
-        }
-
-        if contains_any(
-            &lower,
-            &[
-                "config",
-                "settings",
-                "permission",
-                "model",
-                "provider",
-                "mcp",
-            ],
-        ) || contains_any(zh, &["配置", "设置", "权限", "模型"])
-        {
-            return IntentRoute {
-                intent: IntentKind::Configuration,
-                confidence: 0.78,
-                workflow: WorkflowKind::Direct,
-                retrieval: RetrievalPolicy::Light,
-                reasoning: ReasoningPolicy::Medium,
-                risk: RiskLevel::Medium,
-                recommended_tools: vec!["config".into(), "mcp".into()],
-                reason: "prompt asks about runtime configuration or permissions".into(),
-            };
-        }
-
-        if contains_any(&lower, &["delegate", "subagent", "parallel", "swarm"])
-            || contains_any(zh, &["子agent", "子 agent", "并行", "委派"])
-        {
-            return IntentRoute {
-                intent: IntentKind::Delegation,
-                confidence: 0.76,
-                workflow: WorkflowKind::Delegation,
-                retrieval: RetrievalPolicy::Project,
-                reasoning: ReasoningPolicy::High,
-                risk: RiskLevel::Medium,
-                recommended_tools: vec!["agent".into(), "swarm".into(), "project_list".into()],
-                reason: "prompt asks for delegation or parallel agent work".into(),
-            };
-        }
-
-        if contains_any(&lower, &["search", "web", "latest", "compare", "research"])
-            || contains_any(zh, &["搜索", "网上", "最新", "对比", "调研"])
-        {
-            return IntentRoute {
-                intent: IntentKind::Research,
-                confidence: 0.72,
-                workflow: WorkflowKind::Research,
-                retrieval: RetrievalPolicy::Web,
-                reasoning: ReasoningPolicy::High,
-                risk: RiskLevel::Low,
-                recommended_tools: vec!["web_search".into(), "web_fetch".into()],
-                reason: "prompt asks for external research or comparison".into(),
-            };
-        }
-
-        if contains_any(
-            &lower,
-            &["plan", "roadmap", "design", "architecture", "refactor"],
-        ) || contains_any(zh, &["计划", "路线图", "架构", "重构", "设计"])
-        {
-            return IntentRoute {
-                intent: IntentKind::Planning,
-                confidence: 0.74,
-                workflow: WorkflowKind::Planning,
-                retrieval: RetrievalPolicy::Project,
-                reasoning: ReasoningPolicy::High,
-                risk: RiskLevel::Medium,
-                recommended_tools: vec!["project_list".into(), "grep".into(), "plan".into()],
-                reason: "prompt asks for planning or architecture work".into(),
             };
         }
 
@@ -425,6 +493,51 @@ fn is_debug_request(lower: &str, zh: &str) -> bool {
         || (zh.contains("问题") && contains_any(zh, &["运行", "启动", "执行", "测试"]))
 }
 
+fn is_error_explanation_request(lower: &str, zh: &str) -> bool {
+    let has_error_subject = contains_any(
+        lower,
+        &[
+            "error",
+            "exception",
+            "stack trace",
+            "traceback",
+            "bad_request",
+            "status 400",
+            "failed to",
+        ],
+    ) || contains_any(zh, &["报错", "错误", "异常"]);
+    let asks_for_explanation = contains_any(
+        lower,
+        &[
+            "what does",
+            "what is",
+            "what means",
+            "what does this mean",
+            "explain",
+            "why",
+            "原因",
+        ],
+    ) || contains_any(
+        zh,
+        &[
+            "是什么意思",
+            "什么意思",
+            "解释",
+            "原因是什么",
+            "为什么",
+            "怎么回事",
+        ],
+    );
+    let asks_for_repair_or_action = contains_any(
+        lower,
+        &[
+            "fix", "repair", "solve", "resolve", "debug", "change", "edit",
+        ],
+    ) || contains_any(zh, &["修复", "解决", "改", "修改", "调试"]);
+
+    has_error_subject && asks_for_explanation && !asks_for_repair_or_action
+}
+
 fn is_code_change_request(lower: &str, zh: &str) -> bool {
     is_debug_request(lower, zh)
         || is_natural_code_creation_request(lower, zh)
@@ -443,9 +556,7 @@ fn is_code_change_request(lower: &str, zh: &str) -> bool {
         )
         || contains_any(
             zh,
-            &[
-                "实现", "新增", "修改", "优化", "完善", "开发", "重构", "创建", "生成",
-            ],
+            &["实现", "新增", "修改", "优化", "完善", "开发", "重构"],
         )
 }
 
@@ -457,7 +568,17 @@ fn is_natural_code_creation_request(lower: &str, zh: &str) -> bool {
         ],
     ) || contains_any(
         zh,
-        &["做", "写", "创建", "生成", "弄一个", "做一个", "写一个"],
+        &[
+            "做",
+            "写",
+            "弄一个",
+            "做一个",
+            "写一个",
+            "创建一个",
+            "创建一",
+            "生成一个",
+            "生成一",
+        ],
     );
     has_creation_verb && has_code_artifact_signal(lower, zh)
 }
@@ -490,7 +611,6 @@ fn has_code_artifact_signal(lower: &str, zh: &str) -> bool {
             "网页",
             "程序",
             "代码",
-            "工具",
             "应用",
             "贪吃蛇",
         ],
@@ -505,6 +625,132 @@ fn is_file_mutation_request(lower: &str, zh: &str) -> bool {
         &["file", "folder", "directory", ".txt", ".md", ".json", ".py"],
     ) || contains_any(zh, &["文件", "文件夹", "目录"]);
     has_mutation && has_file_scope
+}
+
+fn is_terminal_operation_request(lower: &str, zh: &str) -> bool {
+    let terminal_subject = contains_any(
+        lower,
+        &[
+            "terminal",
+            "shell",
+            "bash",
+            "command",
+            "pip",
+            "pip3",
+            "python",
+            "python3",
+            "npm",
+            "pnpm",
+            "yarn",
+            "node",
+            "cargo",
+            "brew",
+            "docker",
+            "pytest",
+            "venv",
+            "virtualenv",
+        ],
+    ) || contains_any(
+        zh,
+        &[
+            "终端",
+            "命令",
+            "默认的python",
+            "默认 python",
+            "默认python",
+            "依赖",
+            "模块",
+            "环境",
+        ],
+    );
+    let terminal_action = contains_any(
+        lower,
+        &[
+            "install",
+            "uninstall",
+            "run",
+            "execute",
+            "start",
+            "launch",
+            "check",
+            "version",
+            "which ",
+            "where ",
+            "is installed",
+            "package",
+            "dependency",
+        ],
+    ) || contains_any(
+        zh,
+        &[
+            "安装",
+            "卸载",
+            "运行",
+            "执行",
+            "启动",
+            "检查",
+            "查看",
+            "看看",
+            "有没有安装",
+            "怎么运行",
+            "跑一下",
+            "装一下",
+        ],
+    );
+
+    terminal_subject && terminal_action
+}
+
+fn is_local_inspection_request(lower: &str, zh: &str) -> bool {
+    let asks_to_inspect = contains_any(
+        lower,
+        &[
+            "check", "look", "list", "show", "find", "exists", "exist", "is there", "whether",
+            "inside", "contents",
+        ],
+    ) || contains_any(
+        zh,
+        &[
+            "看看",
+            "查看",
+            "检查",
+            "列出",
+            "找找",
+            "找一下",
+            "有没有",
+            "是否存在",
+            "在不在",
+            "有吗",
+            "里面",
+            "有什么",
+            "内容",
+        ],
+    );
+    let local_scope = contains_any(
+        lower,
+        &[
+            "desktop",
+            "~/",
+            "/users/",
+            "workspace",
+            "repo",
+            "folder",
+            "directory",
+            "file",
+            ".txt",
+            ".md",
+            ".json",
+            ".py",
+        ],
+    ) || contains_any(
+        zh,
+        &["桌面", "工作区", "项目", "仓库", "文件夹", "目录", "文件"],
+    );
+    let anaphora_scope = contains_any(
+        lower,
+        &["inside", "there", "that folder", "this folder", "it"],
+    ) || contains_any(zh, &["里面", "其中", "这个", "那里", "刚才"]);
+    asks_to_inspect && (local_scope || anaphora_scope)
 }
 
 #[cfg(test)]
@@ -550,12 +796,90 @@ mod tests {
     }
 
     #[test]
+    fn routes_python_package_install_as_terminal_operation() {
+        let route =
+            IntentRouter::new().route("帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert_eq!(route.risk, RiskLevel::Medium);
+        assert!(route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_run_script_question_as_terminal_operation() {
+        let route = IntentRouter::new().route("我该怎么运行这个 python 程序？帮我跑一下");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert_eq!(route.risk, RiskLevel::Medium);
+        assert!(route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_error_explanation_without_action_as_direct_answer() {
+        let route = IntentRouter::new().route(
+            "这个报错是什么意思？ Error: Failed to get response from MiniMax API: bad_request_error",
+        );
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert_eq!(route.retrieval, RetrievalPolicy::Light);
+        assert!(route.recommended_tools.is_empty());
+    }
+
+    #[test]
+    fn routes_error_fix_request_as_debugging_task() {
+        let route = IntentRouter::new().route("这个报错是什么意思？帮我修复一下");
+        assert_eq!(route.intent, IntentKind::Debugging);
+        assert_eq!(route.workflow, WorkflowKind::BugFix);
+    }
+
+    #[test]
     fn routes_single_file_delete_as_scoped_direct_mutation() {
         let route = IntentRouter::new().route("帮我把这个文件删了吧");
         assert_eq!(route.intent, IntentKind::DirectAnswer);
         assert_eq!(route.workflow, WorkflowKind::Direct);
         assert_eq!(route.risk, RiskLevel::Medium);
         assert!(route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_desktop_folder_existence_as_local_inspection() {
+        let route = IntentRouter::new()
+            .route("请帮我看看桌面有没有 gex 文件夹。不要编造大小、创建时间或内容数量。");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert_eq!(route.retrieval, RetrievalPolicy::Light);
+        assert!(route.recommended_tools.contains(&"glob".to_string()));
+        assert!(route.recommended_tools.contains(&"file_read".to_string()));
+        assert!(!route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_environment_check_with_error_word_as_terminal_operation() {
+        let route = IntentRouter::new().route(
+            "请帮我检查当前电脑默认 python3 能不能 import pygame。如果没安装，只报告实际错误信息。",
+        );
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert!(route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_code_creation_with_run_and_problem_words_as_code_change() {
+        let route = IntentRouter::new().route(
+            "请创建一个简单 Python 脚本。脚本运行后打印 hello，写完后验证 Python 语法没问题。",
+        );
+        assert_eq!(route.intent, IntentKind::CodeChange);
+        assert_eq!(route.workflow, WorkflowKind::CodeChange);
+    }
+
+    #[test]
+    fn routes_followup_inside_question_as_local_inspection() {
+        let route = IntentRouter::new().route("里面有什么东西");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert_eq!(route.retrieval, RetrievalPolicy::Light);
+        assert!(route.recommended_tools.contains(&"file_read".to_string()));
+        assert!(!route.recommended_tools.contains(&"bash".to_string()));
     }
 
     #[test]
@@ -569,6 +893,13 @@ mod tests {
     #[test]
     fn routes_planning_about_how_to_build_without_forcing_code_change() {
         let route = IntentRouter::new().route("计划一下怎么做贪吃蛇");
+        assert_eq!(route.intent, IntentKind::Planning);
+        assert_eq!(route.workflow, WorkflowKind::Planning);
+    }
+
+    #[test]
+    fn planning_signal_wins_over_local_inspection_words() {
+        let route = IntentRouter::new().route("帮我看看这个项目，然后写一个修改计划");
         assert_eq!(route.intent, IntentKind::Planning);
         assert_eq!(route.workflow, WorkflowKind::Planning);
     }

@@ -87,8 +87,8 @@ grep -q '`warning:action_checkpoint_no_patch`: `1`' "$summary_path"
 grep -q '| real_code_change_passed | 1 |' "$summary_path"
 grep -q '| plan_only_passed | 1 |' "$summary_path"
 grep -q '| seeded_no_diff_failed | 1 |' "$summary_path"
-grep -q '| task-code-pass | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | required_validation,first_code_change | 2 | yes | none |' "$summary_path"
-grep -q '| task-seeded-fail | failed | seeded_code_change | agent_flow | failed | none | agent-run | failed | not_verified | repeated_no_code_progress | none | no | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
+grep -q '| task-code-pass | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | missing | required_validation,first_code_change | 2 | yes | none |' "$summary_path"
+grep -q '| task-seeded-fail | failed | seeded_code_change | agent_flow | failed | none | agent-run | failed | not_verified | missing | repeated_no_code_progress | none | no | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
 
 aggregate_path="$RUN_DIR/aggregate-summary.md"
 LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES=0 \

@@ -176,6 +176,7 @@ Canonical current docs:
 - `docs/CLAUDE_CODE_ALIGNMENT_PLAN.md`
 - `docs/REMAINING_CLOSURE_PLAN.md`
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`
+- `docs/AGENT_TESTING_MATRIX_2026-05-08.md`
 - `AGENTS.md`
 
 Historical docs kept for reference:

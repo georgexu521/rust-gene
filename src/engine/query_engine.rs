@@ -220,7 +220,7 @@ impl QueryEngine {
         Ok(QueryResult {
             content: result.content,
             iterations: result.iterations,
-            tool_calls_made: !result.tool_calls.is_empty(),
+            tool_calls_made: result.tool_calls_made,
         })
     }
 }
