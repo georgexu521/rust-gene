@@ -113,7 +113,37 @@ Always write meaningful commit messages."#;
         };
 
         let injection = skill.to_injection();
+        assert!(injection.contains("<skill-context>"));
+        assert!(injection.contains("background guidance"));
+        assert!(injection.contains("not user instruction text"));
         assert!(injection.contains("# Skill: helper"));
         assert!(injection.contains("Do X then Y."));
+    }
+
+    #[test]
+    fn test_skill_discovery_summary_is_compact() {
+        let md = r#"---
+name: helper
+description: "Helps with focused local edits"
+triggers:
+  - edit
+  - patch
+---
+
+Do X then Y. This body should only appear after skill_view or direct skill invocation."#;
+        let (meta, content) = parse_skill_md(md).unwrap();
+        let skill = Skill {
+            meta,
+            content,
+            raw_content: String::new(),
+            skill_dir: PathBuf::from("."),
+            modified: None,
+        };
+
+        let summary = skill.discovery_summary();
+        assert!(summary.contains("helper"));
+        assert!(summary.contains("Helps with focused local edits"));
+        assert!(summary.contains("when task mentions edit, patch"));
+        assert!(!summary.contains("Do X then Y"));
     }
 }

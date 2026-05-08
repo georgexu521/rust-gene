@@ -151,12 +151,57 @@ fn upsert_profile(profiles: &mut Vec<AgentProfile>, profile: AgentProfile) {
 fn builtin_profiles() -> Vec<AgentProfile> {
     vec![
         AgentProfile {
+            name: "default".to_string(),
+            description: "Bounded general sub-agent".to_string(),
+            role: AgentRole::Default,
+            system_prompt: "Complete the assigned task with the narrowest useful tool set. Do not delegate recursively."
+                .to_string(),
+            allowed_tools: vec![
+                "project_list".into(),
+                "glob".into(),
+                "grep".into(),
+                "file_read".into(),
+                "file_edit".into(),
+                "file_write".into(),
+                "bash".into(),
+                "diff".into(),
+                "format".into(),
+            ],
+            context: Some(AgentContextMode::Inherit),
+            risk_policy: Some(AgentRiskPolicy::CodeChange),
+            output_contract: Some(AgentOutputContract::PatchSummary),
+            timeout_secs: Some(300),
+            max_turns: Some(8),
+            max_cost_usd: None,
+        },
+        AgentProfile {
             name: "explorer".to_string(),
             description: "Read-only codebase explorer".to_string(),
             role: AgentRole::Plan,
             system_prompt: "Focus on discovering structure and risks. Do not edit files."
                 .to_string(),
             allowed_tools: vec!["project_list".into(), "grep".into(), "file_read".into()],
+            context: Some(AgentContextMode::Inherit),
+            risk_policy: Some(AgentRiskPolicy::ReadOnly),
+            output_contract: Some(AgentOutputContract::Findings),
+            timeout_secs: Some(300),
+            max_turns: Some(6),
+            max_cost_usd: None,
+        },
+        AgentProfile {
+            name: "planner".to_string(),
+            description: "Read-only implementation planner".to_string(),
+            role: AgentRole::Plan,
+            system_prompt: "Read relevant context and produce a concrete plan. Do not edit files."
+                .to_string(),
+            allowed_tools: vec![
+                "project_list".into(),
+                "glob".into(),
+                "grep".into(),
+                "file_read".into(),
+                "plan".into(),
+                "todo_write".into(),
+            ],
             context: Some(AgentContextMode::Inherit),
             risk_policy: Some(AgentRiskPolicy::ReadOnly),
             output_contract: Some(AgentOutputContract::Findings),
@@ -185,10 +230,14 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             system_prompt: "Make focused edits and report changed files clearly.".to_string(),
             allowed_tools: vec![
                 "project_list".into(),
+                "glob".into(),
                 "grep".into(),
                 "file_read".into(),
+                "file_write".into(),
                 "file_edit".into(),
                 "bash".into(),
+                "diff".into(),
+                "format".into(),
             ],
             context: Some(AgentContextMode::Fork),
             risk_policy: Some(AgentRiskPolicy::CodeChange),
@@ -207,7 +256,9 @@ mod tests {
     #[test]
     fn builtin_profiles_are_available() {
         let profiles = load_profiles(".");
+        assert!(profiles.iter().any(|profile| profile.name == "default"));
         assert!(profiles.iter().any(|profile| profile.name == "explorer"));
+        assert!(profiles.iter().any(|profile| profile.name == "planner"));
         assert!(find_profile(".", "verifier").is_some());
         let implementer = find_profile(".", "implementer").unwrap();
         assert_eq!(implementer.context, Some(AgentContextMode::Fork));
@@ -216,5 +267,37 @@ mod tests {
             implementer.output_contract,
             Some(AgentOutputContract::PatchSummary)
         );
+    }
+
+    #[test]
+    fn builtin_profiles_have_role_scoped_tool_surfaces() {
+        let profiles = load_profiles(".");
+        for profile in profiles {
+            assert!(
+                !profile
+                    .allowed_tools
+                    .iter()
+                    .any(|tool| tool == "agent" || tool == "swarm"),
+                "builtin profile '{}' should not allow recursive delegation by default",
+                profile.name
+            );
+            match profile.name.as_str() {
+                "explorer" | "planner" | "verifier" => {
+                    assert!(
+                        !profile
+                            .allowed_tools
+                            .iter()
+                            .any(|tool| tool == "file_write" || tool == "file_edit"),
+                        "{} profile must not edit files",
+                        profile.name
+                    );
+                }
+                "implementer" => {
+                    assert!(profile.allowed_tools.contains(&"file_edit".to_string()));
+                    assert!(profile.allowed_tools.contains(&"file_write".to_string()));
+                }
+                _ => {}
+            }
+        }
     }
 }

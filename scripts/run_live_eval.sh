@@ -706,8 +706,10 @@ env.update({
     "CARGO_TARGET_DIR": cargo_target_dir,
     "PRIORITY_AGENT_A2A_TRANSCRIPT_PATH": os.path.join(env_base, "a2a-transcript.jsonl"),
     "PRIORITY_AGENT_EVAL_EVENTS": events_file,
+    "PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED": os.environ.get("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED", os.environ.get("PRIORITY_AGENT_WORKFLOW_ENABLED", "1")),
     "PRIORITY_AGENT_WORKFLOW_ENABLED": os.environ.get("PRIORITY_AGENT_WORKFLOW_ENABLED", "1"),
     "PRIORITY_AGENT_WORKFLOW_CONTRACT": os.environ.get("PRIORITY_AGENT_WORKFLOW_CONTRACT", "1"),
+    "PRIORITY_AGENT_CLOSEOUT_VISIBILITY": os.environ.get("PRIORITY_AGENT_CLOSEOUT_VISIBILITY", "full"),
     "PRIORITY_AGENT_AUTO_TEST": os.environ.get("PRIORITY_AGENT_AUTO_TEST", "check_then_test"),
     "PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS": os.environ.get("PRIORITY_AGENT_LIVE_EVAL_BASH_TIMEOUT_FLOOR_SECS", "600"),
     "PRIORITY_AGENT_LLM_MEMORY_EXTRACTION": os.environ.get("PRIORITY_AGENT_LLM_MEMORY_EXTRACTION", "0"),
@@ -995,6 +997,7 @@ stage_validation_events = [event for event in trace_events if event.get("type") 
 acceptance_events = [event for event in trace_events if event.get("type") == "acceptance_review_completed"]
 closeout_events = [event for event in trace_events if event.get("type") == "final_closeout_prepared"]
 adaptive_trigger_events = [event for event in trace_events if event.get("type") == "adaptive_workflow_triggered"]
+runtime_diet_events = [event for event in trace_events if event.get("type") == "runtime_diet_report"]
 adaptive_triggers = []
 for event in adaptive_trigger_events:
     trigger = str(event.get("trigger", "")).strip()
@@ -1004,6 +1007,7 @@ latest_verification = verification_events[-1] if verification_events else {}
 latest_stage_validation = stage_validation_events[-1] if stage_validation_events else {}
 latest_closeout = closeout_events[-1] if closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
+latest_runtime_diet = runtime_diet_events[-1] if runtime_diet_events else {}
 verification_passed = bool(verification_events) and latest_verification.get("passed") is True
 stage_validation_passed = bool(stage_validation_events) and str(latest_stage_validation.get("status", "")).lower() in {"passed", "ok", "success"}
 closeout_status = str(latest_closeout.get("status", "missing")).lower()
@@ -1023,6 +1027,18 @@ print(f"verification_passed: {str(verification_passed).lower()}")
 print(f"stage_validation_passed: {str(stage_validation_passed).lower()}")
 print(f"acceptance_accepted: {accepted}")
 print(f"closeout_status: {closeout_status}")
+if latest_runtime_diet:
+    print(
+        "runtime_diet: "
+        + f"prompt={latest_runtime_diet.get('prompt_tokens', 'missing')} "
+        + f"tool_schema={latest_runtime_diet.get('tool_schema_tokens', 'missing')} "
+        + f"tools={latest_runtime_diet.get('exposed_tools', 'missing')} "
+        + f"workflow={latest_runtime_diet.get('workflow_context', 'missing')} "
+        + f"closeout={latest_runtime_diet.get('closeout_visibility', 'missing')} "
+        + f"validation={latest_runtime_diet.get('validation_evidence', 'missing')}"
+    )
+else:
+    print("runtime_diet: missing")
 print(f"adaptive_triggers: {','.join(adaptive_triggers) if adaptive_triggers else 'none'}")
 if trace_types:
     print("trace_event_types: " + ",".join(trace_types[-12:]))
@@ -1222,6 +1238,7 @@ stage_validation_events = trace_events_of("stage_validation_completed")
 acceptance_events = trace_events_of("acceptance_review_completed")
 closeout_events = trace_events_of("final_closeout_prepared")
 adaptive_trigger_events = trace_events_of("adaptive_workflow_triggered")
+runtime_diet_events = trace_events_of("runtime_diet_report")
 progress_events = [event for event in events if event.get("event") == "tool_execution_progress"]
 memory_tools = [
     event
@@ -1269,6 +1286,7 @@ active_count = sum(1 for value in signals.values() if value)
 latest_plan = weighted_plan_events[-1] if weighted_plan_events else {}
 latest_closeout = closeout_events[-1] if closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
+latest_runtime_diet = runtime_diet_events[-1] if runtime_diet_events else {}
 
 for key, value in signals.items():
     print(f"{key}: {str(value).lower()}")
@@ -1293,6 +1311,16 @@ print(f"latest_top_importance_score: {latest_plan.get('top_importance_score', 'n
 print(f"latest_top_weight_share: {latest_plan.get('top_weight_share', 'none')}")
 print(f"acceptance_accepted: {latest_acceptance.get('accepted', 'missing')}")
 print(f"closeout_status: {latest_closeout.get('status', 'missing')}")
+if latest_runtime_diet:
+    print(
+        "runtime_diet: "
+        + f"prompt={latest_runtime_diet.get('prompt_tokens', 'missing')} "
+        + f"tool_schema={latest_runtime_diet.get('tool_schema_tokens', 'missing')} "
+        + f"tools={latest_runtime_diet.get('exposed_tools', 'missing')} "
+        + f"workflow={latest_runtime_diet.get('workflow_context', 'missing')}"
+    )
+else:
+    print("runtime_diet: missing")
 if required_commands and test_status != "ok":
     print("attention: required commands did not pass in the harness")
 if "guided.debug" not in trace_types:
@@ -1429,14 +1457,14 @@ lines.extend([
     "",
     "## Task Matrix",
     "",
-    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | triggers | first_write | diff | warnings |",
-    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|----------|-------------|------|----------|",
+    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | triggers | first_write | diff | warnings |",
+    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|----------|-------------|------|----------|",
 ])
 
 if rows:
     for row in rows:
         lines.append(
-            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {triggers} | {first_write} | {diff} | {warnings} |".format(
+            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {triggers} | {first_write} | {diff} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )

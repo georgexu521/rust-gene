@@ -1,7 +1,10 @@
 # WorkflowEngine 上线与回滚计划（W12 交付物）
 
-> 目标：确保 WorkflowEngine 可控上线、可观测、可快速回退。
-> 状态：V1
+> 目标：保留 legacy WorkflowEngine 的历史 rollout 记录和回放口径。
+> 状态：legacy/eval-only as of 2026-05-08
+>
+> 该计划不再描述 interactive CLI 的默认产品路径。默认路径已回到 direct
+> conversation loop；legacy workflow 只通过显式环境变量开启。
 
 ---
 
@@ -13,7 +16,8 @@
 
 2. 阶段 B（灰度 10%）
 - 条件：A 阶段 3 天内无 P0/P1。
-- 操作：通过 `PRIORITY_AGENT_WORKFLOW_ENABLED` 对会话灰度开启。
+- 操作：通过 `PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED` 对会话灰度开启；
+  `PRIORITY_AGENT_WORKFLOW_ENABLED` 仅作为历史兼容变量。
 
 3. 阶段 C（灰度 50%）
 - 条件：Mainline Hit Rate 稳定 > 70%。
@@ -38,7 +42,7 @@
 ## 3. 回滚策略
 
 1. 一级回滚（配置回滚）
-- 操作：`PRIORITY_AGENT_WORKFLOW_ENABLED=0`
+- 操作：`PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED=0`
 - 目标：5 分钟内切回 Direct。
 
 2. 二级回滚（功能开关回滚）

@@ -1001,3 +1001,10 @@ pub(crate) fn append_feedback(
         .map_err(|e| format!("{}: {}", path.display(), e))?;
     Ok(path)
 }
+
+pub(crate) fn latest_trace_for_app(app: &TuiApp) -> Option<crate::engine::trace::TurnTrace> {
+    app.streaming_engine
+        .as_ref()
+        .and_then(|engine| engine.trace_store().latest())
+        .or_else(|| app.session_manager.latest_trace().ok().flatten())
+}

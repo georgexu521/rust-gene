@@ -7,19 +7,31 @@
 //! - `session`: Session management, review skills, control commands
 //! - `agents`: System diagnostics, agent generation, git operations
 //! - `permissions`: Permission modes and project/global permission rules
-//! - `config`: Configuration, integrations, tool commands
+//! - `config`: Configuration and runtime settings
+//! - `integrations`: Webhooks, workspace, Slack, desktop, Chrome
+//! - `learning`: Goal, learning, evolution, recovery and feedback commands
+//! - `observability`: Trace, eval, resource, memory and skill inspection
+//! - `runtime`: Runtime preferences and local environment controls
 //! - `utils`: Shared utility functions and types
 
 pub mod agents;
 pub mod config;
+pub mod integrations;
+pub mod learning;
+pub mod observability;
 pub mod permissions;
+pub mod runtime;
 pub mod session;
 pub mod utils;
 
 // Re-export all handler functions so they're accessible via `slash_handler::handle_*`
 pub use agents::*;
 pub use config::*;
+pub use integrations::*;
+pub use learning::*;
+pub use observability::*;
 pub use permissions::*;
+pub use runtime::*;
 pub use session::*;
 
 #[cfg(test)]
@@ -297,6 +309,7 @@ mod tests {
         assert!(msg.contains("Quick Panel"));
         assert!(msg.contains("Status:"));
         assert!(msg.contains("Runtime:"));
+        assert!(msg.contains("Runtime diet:"));
         assert!(msg.contains("Contracts:"));
         assert!(msg.contains("Plan:"));
         assert!(msg.contains("Acceptance:"));
@@ -321,8 +334,8 @@ mod tests {
                 suggested_action: Some("ask_user".to_string()),
             });
 
-        let label = super::config::goal_drift_count_label(&trace);
-        let report = super::config::format_goal_drift_report(&trace, 8);
+        let label = super::learning::goal_drift_count_label(&trace);
+        let report = super::learning::format_goal_drift_report(&trace, 8);
 
         assert_eq!(label, "1 high");
         assert!(report.contains("Goal Drift from trace"));

@@ -79,6 +79,20 @@ impl SkillRuntime {
         matches
     }
 
+    pub fn discovery_summary(&self, query: &str, limit: usize) -> String {
+        let skills = self.search(query);
+        if skills.is_empty() {
+            return "No matching skills found.".to_string();
+        }
+
+        let lines = skills
+            .into_iter()
+            .take(limit)
+            .map(|skill| skill.discovery_summary())
+            .collect::<Vec<_>>();
+        format!("Skills ({} shown):\n{}", lines.len(), lines.join("\n"))
+    }
+
     pub fn invocation(&self, name: &str, task: &str) -> Option<SkillInvocation> {
         let skill = self.get(name)?;
         if !skill.meta.user_invocable {
@@ -161,6 +175,7 @@ mod tests {
             .unwrap();
         assert!(prompt.contains("review this"));
         assert!(prompt.contains("Skill:"));
+        assert!(prompt.contains("not user instruction text"));
     }
 
     #[test]

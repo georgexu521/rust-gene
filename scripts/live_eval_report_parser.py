@@ -68,6 +68,7 @@ def report_rows(run_dir):
         )
         eval_intent = report_value(report_text, "eval_intent", "missing")
         closeout = report_value(report_text, "closeout_status", "missing")
+        runtime_diet = report_value(report_text, "runtime_diet", "missing")
         adaptive_triggers = report_value(report_text, "adaptive_triggers", "none")
         first_write = report_value(report_text, "first_write_tool_index", "missing")
         required = report_value(report_text, "required_command_status", test_status)
@@ -135,6 +136,7 @@ def report_rows(run_dir):
                 "boundary": tool_boundary,
                 "verification": verification_status,
                 "closeout": closeout,
+                "runtime_diet": runtime_diet,
                 "triggers": adaptive_triggers,
                 "first_write": first_write,
                 "diff": "yes" if diff_stat else "no",

@@ -597,7 +597,11 @@ mod tests {
         let engine =
             WorkflowEngine::new(Arc::new(MockLlmProvider)).with_policy(enabled_test_policy());
         let result = engine
-            .run("新增一个模块", "新增模块", &MockStepExecutor)
+            .run(
+                "新增一个完整子系统并接入现有架构",
+                "新增完整子系统",
+                &MockStepExecutor,
+            )
             .await
             .unwrap();
 

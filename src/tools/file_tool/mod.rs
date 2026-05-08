@@ -371,9 +371,9 @@ impl Tool for FileWriteTool {
 
     fn description(&self) -> &str {
         "Write content to a file. \
-         Creates the file if it doesn't exist, overwrites if it does. \
-         Creates parent directories as needed. \
-         Use with caution as this will overwrite existing files."
+         Best for new files or intentional full-file replacement. \
+         Use file_edit for targeted changes to existing files. \
+         Creates parent directories as needed and replaces the entire file when it already exists."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -430,6 +430,8 @@ impl Tool for FileWriteTool {
         };
         info!("Writing file: {:?}", path);
 
+        let existed_before = path.exists();
+
         // 检查父目录是否存在，不存在则创建
         if let Some(parent) = path.parent() {
             if !parent.exists() {
@@ -462,11 +464,22 @@ impl Tool for FileWriteTool {
                     cache.invalidate_metadata(&path);
                 }
                 info!("Successfully wrote {} bytes to {:?}", content.len(), path);
+                let action = if existed_before {
+                    "overwritten"
+                } else {
+                    "written"
+                };
                 ToolResult::success_with_data(
-                    format!("File written successfully: {}", path_str),
+                    format!("File {} successfully: {}", action, path_str),
                     json!({
                         "path": path_str,
-                        "bytes_written": content.len()
+                        "bytes_written": content.len(),
+                        "existed_before": existed_before,
+                        "guidance": if existed_before {
+                            "file_write replaced the entire file; use file_edit for targeted existing-file changes"
+                        } else {
+                            "file_write created a new file"
+                        }
                     }),
                 )
             }
@@ -623,6 +636,26 @@ fn build_match_context(
     parts.join("\n")
 }
 
+fn contains_file_read_line_prefix(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim_start();
+        let Some((digits, rest)) = trimmed.split_once('|') else {
+            return false;
+        };
+        !digits.trim().is_empty()
+            && digits.trim().chars().all(|ch| ch.is_ascii_digit())
+            && rest.starts_with(' ')
+    })
+}
+
+fn file_read_line_prefix_guidance(field: &str) -> String {
+    format!(
+        "{field} appears to include file_read display line prefixes like `12 |`. \
+         Those prefixes are not part of the file content. Retry with text copied after the pipe, \
+         or use line_start/line_end when the line numbers are the evidence you trust."
+    )
+}
+
 /// 保存文件快照
 #[allow(dead_code)]
 async fn save_snapshot(
@@ -730,19 +763,16 @@ impl Tool for FileEditTool {
 
     fn description(&self) -> &str {
         "Edit a file by replacing specific text. \
+         Use after reading the target file. \
          Finds the old_string and replaces it with new_string. \
          Fails if old_string is not found exactly once (unless expected_replacements is set). \
          Supports insert_after and insert_before for adding new lines. \
          \
          CRITICAL: old_string must match EXACTLY, including all whitespace and indentation. \
+         Do not include file_read display prefixes such as `12 |`; those are not file content. \
          If you are unsure about exact whitespace, use line_start + line_end instead: \
          set line_start and line_end (1-indexed, inclusive) and provide new_string. \
-         This replaces the entire line range and is MORE RELIABLE for multi-line edits. \
-         \
-         Examples:\
-         - Exact replace: old_string='    let x = 1;', new_string='    let x = 2;'\
-         - Line range: line_start=5, line_end=10, new_string='new content here'\
-         - Insert after: insert_after='fn main() {', new_string='    println!(\"hello\");'"
+         This replaces the entire line range and is more reliable for multi-line edits."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -1069,6 +1099,9 @@ impl FileEditTool {
         }
 
         if occurrences.is_empty() {
+            if contains_file_read_line_prefix(old_string) {
+                return Err(file_read_line_prefix_guidance("old_string"));
+            }
             // 尝试模糊匹配
             let fuzzy = fuzzy_find_occurrences(&content, old_string);
             if fuzzy.is_empty() {
@@ -1118,6 +1151,13 @@ impl FileEditTool {
         new_string: &str,
         mode: InsertMode,
     ) -> Result<(String, usize), String> {
+        if contains_file_read_line_prefix(anchor) {
+            let field = match mode {
+                InsertMode::After => "insert_after",
+                InsertMode::Before => "insert_before",
+            };
+            return Err(file_read_line_prefix_guidance(field));
+        }
         let occurrences = find_occurrences(&content, anchor);
         if occurrences.is_empty() {
             return Err(format!(
@@ -1361,6 +1401,34 @@ mod tests {
 
         // 清理
         let _ = tokio::fs::remove_file("/tmp/test_priority_agent_file.txt").await;
+    }
+
+    #[tokio::test]
+    async fn test_file_write_existing_file_reports_full_replacement_guidance() {
+        let write_tool = FileWriteTool;
+        let path = "/tmp/test_priority_agent_file_write_existing.txt";
+        tokio::fs::write(path, "old\n").await.unwrap();
+
+        let result = write_tool
+            .execute(
+                json!({
+                    "path": path,
+                    "content": "new\n"
+                }),
+                ToolContext::new(".", "test-session-file-write-existing"),
+            )
+            .await;
+
+        assert!(result.success, "write failed: {:?}", result.error);
+        assert!(result.content.contains("overwritten"));
+        let data = result.data.expect("file_write should return metadata");
+        assert_eq!(data["existed_before"], true);
+        assert!(data["guidance"]
+            .as_str()
+            .unwrap_or("")
+            .contains("file_edit"));
+
+        let _ = tokio::fs::remove_file(path).await;
     }
 
     #[test]
@@ -1677,6 +1745,57 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
         assert!(err.contains("fuzzy matches found"));
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_file_read_line_prefix_in_old_string() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_line_prefix.txt";
+        tokio::fs::write(path, "hello world\n").await.unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "   1 | hello world",
+                    "new_string": "hi world"
+                }),
+                ToolContext::new(".", "test-session-edit-line-prefix"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("file_read display line prefixes"));
+        assert!(err.contains("line_start/line_end"));
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(content, "hello world\n");
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_file_read_line_prefix_in_insert_anchor() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_insert_line_prefix.txt";
+        tokio::fs::write(path, "hello world\n").await.unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "insert_after": "   1 | hello world",
+                    "new_string": "\nhi world"
+                }),
+                ToolContext::new(".", "test-session-edit-insert-line-prefix"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("insert_after appears to include file_read"));
 
         let _ = tokio::fs::remove_file(path).await;
     }

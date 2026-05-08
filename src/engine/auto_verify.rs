@@ -4,7 +4,7 @@
 //! 将编译错误、类型错误、lint 警告、测试失败等反馈注入对话上下文，
 //! 形成"生成→编译→诊断→修复"的闭环。
 //!
-//! 当前支持：Rust (cargo check, cargo test)
+//! 当前支持：Rust (cargo check, cargo test), standalone Python syntax checks
 //! 未来可扩展：JavaScript/TypeScript (tsc, jest), Python (mypy/pyright, pytest), Go (go build, go test)
 
 use std::collections::HashMap;
@@ -165,6 +165,9 @@ pub async fn verify_file_changes(
         if let Some(result) = verify_python(working_dir).await {
             results.push(result);
         }
+    }
+    if let Some(result) = verify_changed_python_files(working_dir, changed_files).await {
+        results.push(result);
     }
 
     // TypeScript/JavaScript 项目检测
@@ -837,6 +840,37 @@ fn is_typescript_project(working_dir: &Path) -> bool {
     working_dir.join("package.json").exists() || working_dir.join("tsconfig.json").exists()
 }
 
+fn changed_python_files(working_dir: &Path, changed_files: &[PathBuf]) -> Vec<PathBuf> {
+    let mut files = changed_files
+        .iter()
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("py"))
+        .filter(|path| {
+            if path.is_absolute() {
+                path.exists()
+            } else {
+                working_dir.join(path).exists()
+            }
+        })
+        .map(|path| {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                working_dir.join(path)
+            }
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn path_arg_for_display(working_dir: &Path, path: &Path) -> String {
+    path.strip_prefix(working_dir)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
 // ────────────────────────────────────────────────
 // Python 验证与测试
 // ────────────────────────────────────────────────
@@ -895,6 +929,67 @@ async fn verify_python(working_dir: &Path) -> Option<VerificationResult> {
 
     warn!("Neither mypy nor pyright available for Python verification");
     None
+}
+
+async fn verify_changed_python_files(
+    working_dir: &Path,
+    changed_files: &[PathBuf],
+) -> Option<VerificationResult> {
+    let files = changed_python_files(working_dir, changed_files);
+    if files.is_empty() {
+        return None;
+    }
+
+    info!("Running Python syntax verification for changed files");
+    let display_files = files
+        .iter()
+        .map(|path| path_arg_for_display(working_dir, path))
+        .collect::<Vec<_>>();
+    let mut cmd = Command::new("python3");
+    cmd.args(["-m", "py_compile"]);
+    cmd.args(&files);
+    cmd.current_dir(working_dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let output = match command_output_with_timeout(cmd, "python3 -m py_compile").await {
+        Ok(output) => output,
+        Err(e) => {
+            warn!("Failed to run python3 -m py_compile: {}", e);
+            return Some(VerificationResult {
+                language: "Python".to_string(),
+                command: format!("python3 -m py_compile {}", display_files.join(" ")),
+                success: false,
+                issues: vec![VerificationIssue {
+                    severity: "error".to_string(),
+                    file: None,
+                    line: None,
+                    message: format!("Failed to run python3 -m py_compile: {}", e),
+                }],
+                raw_output: String::new(),
+                summary: String::new(),
+            });
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let raw = format!("{}{}", stdout, stderr);
+    let issues = parse_py_compile_output(&raw);
+    let summary = if output.status.success() && issues.is_empty() {
+        format!("py_compile passed for {} file(s).", display_files.len())
+    } else {
+        String::new()
+    };
+
+    Some(VerificationResult {
+        language: "Python".to_string(),
+        command: format!("python3 -m py_compile {}", display_files.join(" ")),
+        success: output.status.success() && issues.is_empty(),
+        issues,
+        raw_output: raw,
+        summary,
+    })
 }
 
 async fn run_python_tests(working_dir: &Path) -> Option<VerificationResult> {
@@ -1044,6 +1139,55 @@ fn parse_pytest_output(raw: &str) -> (Vec<VerificationIssue>, String) {
     }
 
     (issues, summary)
+}
+
+fn parse_py_compile_output(raw: &str) -> Vec<VerificationIssue> {
+    let mut issues = Vec::new();
+    let mut current_file = None;
+    let mut current_line = None;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("File \"") {
+            if let Some((file, after_file)) = rest.split_once('"') {
+                current_file = Some(file.to_string());
+                current_line = after_file.split_once("line ").and_then(|(_, line_part)| {
+                    line_part
+                        .split(|ch: char| !ch.is_ascii_digit())
+                        .next()
+                        .and_then(|num| num.parse::<u32>().ok())
+                });
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("SyntaxError:")
+            || trimmed.starts_with("IndentationError:")
+            || trimmed.starts_with("TabError:")
+        {
+            issues.push(VerificationIssue {
+                severity: "error".to_string(),
+                file: current_file.clone(),
+                line: current_line,
+                message: trimmed.to_string(),
+            });
+        }
+    }
+
+    if issues.is_empty() && !raw.trim().is_empty() {
+        issues.push(VerificationIssue {
+            severity: "error".to_string(),
+            file: current_file,
+            line: current_line,
+            message: raw
+                .lines()
+                .next()
+                .unwrap_or("python compile failed")
+                .to_string(),
+        });
+    }
+
+    issues
 }
 
 // ────────────────────────────────────────────────
@@ -1472,6 +1616,32 @@ warning: unused variable: `foo`
         assert!(text.contains("error"));
         assert!(text.contains("mismatched types"));
         assert!(text.contains("src/main.rs:42"));
+    }
+
+    #[test]
+    fn test_changed_python_files_detects_standalone_script() {
+        let root =
+            std::env::temp_dir().join(format!("priority-agent-auto-verify-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("snake.py");
+        std::fs::write(&script, "print('ok')\n").unwrap();
+        let files = changed_python_files(&root, &[script.clone(), root.join("README.md")]);
+        assert_eq!(files, vec![script]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_parse_py_compile_output_syntax_error() {
+        let raw = r#"  File "snake.py", line 12
+    if x ==
+          ^
+SyntaxError: invalid syntax
+"#;
+        let issues = parse_py_compile_output(raw);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].file, Some("snake.py".to_string()));
+        assert_eq!(issues[0].line, Some(12));
+        assert!(issues[0].message.contains("SyntaxError"));
     }
 
     // ── cargo test 解析测试 ─────────────────────────

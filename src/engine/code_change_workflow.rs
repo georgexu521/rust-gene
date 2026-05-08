@@ -185,10 +185,19 @@ pub struct StageValidationRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowCloseout {
     pub status: StageValidationStatus,
+    pub risk: RiskLevel,
     pub changed_files: Vec<String>,
     pub validation: Vec<String>,
     pub acceptance: Vec<String>,
     pub residual_risks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseoutVisibility {
+    Hidden,
+    Concise,
+    Full,
 }
 
 impl WorkflowCloseout {
@@ -260,6 +269,108 @@ impl WorkflowCloseout {
         out.push_str("- Risk:\n");
         append_bullets(&mut out, &self.residual_risks);
         out
+    }
+
+    pub fn default_visibility(&self) -> CloseoutVisibility {
+        if self.risk == RiskLevel::High {
+            return CloseoutVisibility::Full;
+        }
+        if matches!(
+            self.status,
+            StageValidationStatus::Failed | StageValidationStatus::Partial
+        ) {
+            return CloseoutVisibility::Full;
+        }
+        let has_real_risk = self
+            .residual_risks
+            .iter()
+            .any(|item| item != "none recorded");
+        let has_pending_or_rejected_acceptance = self
+            .acceptance
+            .iter()
+            .any(|item| item.starts_with("pending:") || item.contains("accepted=false"));
+
+        match self.status {
+            StageValidationStatus::Passed
+                if !has_real_risk && !has_pending_or_rejected_acceptance =>
+            {
+                CloseoutVisibility::Concise
+            }
+            StageValidationStatus::NotVerified if !has_pending_or_rejected_acceptance => {
+                CloseoutVisibility::Concise
+            }
+            _ => CloseoutVisibility::Full,
+        }
+    }
+
+    pub fn visibility_from_env(&self) -> CloseoutVisibility {
+        match std::env::var("PRIORITY_AGENT_CLOSEOUT_VISIBILITY")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "hidden" | "off" | "none" => CloseoutVisibility::Hidden,
+            "concise" | "quiet" | "summary" => CloseoutVisibility::Concise,
+            "full" | "debug" | "verbose" => CloseoutVisibility::Full,
+            _ => self.default_visibility(),
+        }
+    }
+
+    pub fn format_concise_for_final_response(&self) -> String {
+        let changed = if self.changed_files.is_empty() {
+            "no changed files recorded".to_string()
+        } else {
+            format!("changed {}", self.changed_files.join(", "))
+        };
+        let validation = self
+            .validation
+            .iter()
+            .find(|item| item.contains(": passed"))
+            .or_else(|| self.validation.first())
+            .map(|item| item.as_str())
+            .unwrap_or("validation not recorded");
+        let risks = self
+            .residual_risks
+            .iter()
+            .filter(|item| item.as_str() != "none recorded")
+            .cloned()
+            .collect::<Vec<_>>();
+        match self.status {
+            StageValidationStatus::Passed if risks.is_empty() => {
+                format!("\n\nDone. {}. Verified: {}.\n", changed, validation)
+            }
+            StageValidationStatus::NotVerified => {
+                let risk_text = if risks.is_empty() {
+                    "verification was not recorded".to_string()
+                } else {
+                    risks.join("; ")
+                };
+                format!(
+                    "\n\nDone with caveats. {}. Not verified: {}. Risk: {}.\n",
+                    changed, validation, risk_text
+                )
+            }
+            _ => {
+                let risk_text = if risks.is_empty() {
+                    "none recorded".to_string()
+                } else {
+                    risks.join("; ")
+                };
+                format!(
+                    "\n\nDone with caveats. {}. Verified: {}. Risk: {}.\n",
+                    changed, validation, risk_text
+                )
+            }
+        }
+    }
+
+    pub fn format_for_user_response(&self) -> String {
+        match self.visibility_from_env() {
+            CloseoutVisibility::Hidden => String::new(),
+            CloseoutVisibility::Concise => self.format_concise_for_final_response(),
+            CloseoutVisibility::Full => self.format_for_final_response(),
+        }
     }
 }
 
@@ -435,7 +546,7 @@ impl CodeChangeWorkflowRunner {
                 last_evidence: None,
             });
         }
-        let status = if verify_passed {
+        let status = if verify_passed && !evidence.is_empty() {
             StageValidationStatus::Passed
         } else if evidence.is_empty() {
             StageValidationStatus::NotVerified
@@ -585,6 +696,7 @@ impl CodeChangeWorkflowRunner {
 
         Some(WorkflowCloseout {
             status,
+            risk: bundle.route.risk,
             changed_files: self.changed_files.clone(),
             validation,
             acceptance,
@@ -803,6 +915,7 @@ mod tests {
         AcceptanceStatus, PriorityLabel, ProgrammingWorkflowJudgment, TaskComplexity,
         WorkflowPlanStep,
     };
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     fn code_change_route(risk: RiskLevel) -> IntentRoute {
         IntentRoute {
@@ -867,6 +980,7 @@ mod tests {
     fn closeout_evidence_summary_counts_validation_and_acceptance_states() {
         let closeout = WorkflowCloseout {
             status: StageValidationStatus::Partial,
+            risk: RiskLevel::Medium,
             changed_files: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
             validation: vec![
                 "compile: passed".to_string(),
@@ -990,6 +1104,110 @@ mod tests {
             .residual_risks
             .iter()
             .any(|item| item == "none recorded"));
+    }
+
+    #[test]
+    fn empty_validation_evidence_does_not_pass_code_change_closeout() {
+        let route = code_change_route(RiskLevel::Medium);
+        let bundle = TaskContextBundle::new("写一个 Python 脚本", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        let record =
+            runner.record_stage_validation(&bundle, &[PathBuf::from("snake.py")], true, &[]);
+        let closeout = runner.build_closeout(&bundle).unwrap();
+
+        assert_eq!(record.status, StageValidationStatus::NotVerified);
+        assert_eq!(closeout.status, StageValidationStatus::NotVerified);
+        assert!(closeout
+            .residual_risks
+            .iter()
+            .any(|item| item.contains("unresolved validation")));
+    }
+
+    #[test]
+    fn simple_passed_closeout_formats_concise_user_response_by_default() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_CLOSEOUT_VISIBILITY");
+        let route = code_change_route(RiskLevel::Medium);
+        let bundle = TaskContextBundle::new("写一个 Python 脚本", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+        runner.record_stage_validation(
+            &bundle,
+            &[PathBuf::from("snake.py")],
+            true,
+            &["python3 -m py_compile snake.py passed".to_string()],
+        );
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+        let response = closeout.format_for_user_response();
+
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert_eq!(closeout.default_visibility(), CloseoutVisibility::Concise);
+        assert!(response.contains("Done."));
+        assert!(response.contains("Verified:"));
+        assert!(!response.contains("Closeout:"));
+    }
+
+    #[test]
+    fn low_risk_not_verified_closeout_formats_concise_caveat_by_default() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_CLOSEOUT_VISIBILITY");
+        let route = code_change_route(RiskLevel::Medium);
+        let bundle = TaskContextBundle::new("写一个 Python 脚本", ".", route, None);
+        let runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+        let response = closeout.format_for_user_response();
+
+        assert_eq!(closeout.status, StageValidationStatus::NotVerified);
+        assert_eq!(closeout.default_visibility(), CloseoutVisibility::Concise);
+        assert!(response.contains("Done with caveats."));
+        assert!(response.contains("Not verified:"));
+        assert!(!response.contains("Closeout:"));
+    }
+
+    #[test]
+    fn high_risk_passed_closeout_stays_full_by_default() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_CLOSEOUT_VISIBILITY");
+        let route = code_change_route(RiskLevel::High);
+        let bundle = TaskContextBundle::new("修改权限系统", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+        runner.record_stage_validation(
+            &bundle,
+            &[PathBuf::from("src/permissions/mod.rs")],
+            true,
+            &["cargo test -q permissions passed".to_string()],
+        );
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+        let response = closeout.format_for_user_response();
+
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert_eq!(closeout.default_visibility(), CloseoutVisibility::Full);
+        assert!(response.contains("Closeout:"));
+        assert!(response.contains("Status: passed"));
+    }
+
+    #[test]
+    fn full_closeout_visibility_env_preserves_structured_output() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_CLOSEOUT_VISIBILITY", "full");
+        let route = code_change_route(RiskLevel::Medium);
+        let bundle = TaskContextBundle::new("写一个 Python 脚本", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+        runner.record_stage_validation(
+            &bundle,
+            &[PathBuf::from("snake.py")],
+            true,
+            &["python3 -m py_compile snake.py passed".to_string()],
+        );
+
+        let closeout = runner.build_closeout(&bundle).unwrap();
+        let response = closeout.format_for_user_response();
+
+        assert!(response.contains("Closeout:"));
+        assert!(response.contains("Status: passed"));
     }
 
     #[test]

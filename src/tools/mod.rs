@@ -51,6 +51,7 @@ pub mod team_tool;
 pub mod telemetry_tool;
 pub mod todo_tool;
 pub mod tool_search_tool;
+#[cfg(feature = "voice")]
 pub mod voice_tool;
 pub mod web_tools;
 pub mod workbench_tool;
@@ -105,6 +106,7 @@ pub use team_tool::TeamTool;
 pub use telemetry_tool::TelemetryTool;
 pub use todo_tool::TodoWriteTool;
 pub use tool_search_tool::ToolSearchTool;
+#[cfg(feature = "voice")]
 pub use voice_tool::VoiceTool;
 pub use web_tools::{WebFetchTool, WebSearchTool};
 pub use workbench_tool::WorkbenchTool;
@@ -811,6 +813,26 @@ pub struct ToolRegistry {
     ask_channel: Option<Arc<ask_tool::AskChannel>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRegistryProfile {
+    Core,
+    Full,
+}
+
+impl ToolRegistryProfile {
+    fn from_env() -> Self {
+        match std::env::var("PRIORITY_AGENT_TOOL_PROFILE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "full" | "all" | "experimental" => Self::Full,
+            _ => Self::Core,
+        }
+    }
+}
+
 impl ToolRegistry {
     /// 创建空注册表
     pub fn new() -> Self {
@@ -847,8 +869,18 @@ impl ToolRegistry {
         self.ask_channel.clone()
     }
 
-    /// 创建默认注册表（包含所有标准工具）
+    /// 创建默认注册表。默认只暴露核心工具；需要完整实验工具面时设置
+    /// `PRIORITY_AGENT_TOOL_PROFILE=full`。
     pub fn default_registry() -> Self {
+        Self::with_profile(ToolRegistryProfile::from_env())
+    }
+
+    /// 创建完整注册表（包含实验性、平台相关和低频工具）。
+    pub fn full_registry() -> Self {
+        Self::with_profile(ToolRegistryProfile::Full)
+    }
+
+    pub fn with_profile(profile: ToolRegistryProfile) -> Self {
         let mut registry = Self::new();
 
         // 注册文件工具
@@ -881,7 +913,7 @@ impl ToolRegistry {
         registry.register(MemoryClearTool);
         registry.register(TodoWriteTool);
 
-        // 注册新添加的工具
+        // 注册核心辅助工具
         registry.register(CostTool);
         registry.register(BriefTool);
         registry.register(ClearTool);
@@ -889,7 +921,6 @@ impl ToolRegistry {
         registry.register(ContextTool);
         registry.register(ContextVisTool);
         registry.register(CopyTool);
-        registry.register(DesktopTool);
         registry.register(ResumeTool);
         registry.register(RewindTool);
         registry.register(CalculateTool);
@@ -924,16 +955,22 @@ impl ToolRegistry {
         registry.register(SymbolQueryTool);
         registry.register(WorktreeTool);
         registry.register(WorkbenchTool);
-        registry.register(RemoteTriggerTool);
-        registry.register(RemoteDevTool);
-        registry.register(BrowserTool);
-        registry.register(TeamTool);
-        registry.register(VoiceTool);
-        registry.register(TelemetryTool);
-        registry.register(PluginListTool);
-        registry.register(PluginManageTool);
         registry.register(RefactorTool);
         registry.register(project_tool::ProjectListTool);
+
+        if matches!(profile, ToolRegistryProfile::Full) {
+            registry.register(DesktopTool);
+            registry.register(RemoteTriggerTool);
+            registry.register(RemoteDevTool);
+            registry.register(BrowserTool);
+            registry.register(TeamTool);
+            #[cfg(feature = "voice")]
+            registry.register(VoiceTool);
+            registry.register(TelemetryTool);
+            registry.register(PluginListTool);
+            registry.register(PluginManageTool);
+        }
+
         // Skills 工具
         let skills_dir = dirs::home_dir()
             .unwrap_or_default()
@@ -1172,7 +1209,6 @@ mod tests {
             "symbol_query",
             "worktree",
             "workbench",
-            "remote_trigger",
             "project_list",
             "refactor",
             "skill_manage",
@@ -1191,10 +1227,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_full_registry_includes_low_frequency_tools() {
+        let registry = ToolRegistry::full_registry();
+        let registered = registry.tool_names();
+
+        for &name in &[
+            "desktop",
+            "remote_trigger",
+            "remote_dev",
+            "browser",
+            "team",
+            #[cfg(feature = "voice")]
+            "voice",
+            "telemetry",
+            "plugin_list",
+            "plugin_manage",
+        ] {
+            assert!(
+                registered.contains(&name),
+                "Full registry should include gated tool '{}'.",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn core_tool_contract_descriptions_stay_compact() {
+        let registry = ToolRegistry::default_registry();
+        let budgets = [
+            ("file_read", 320usize),
+            ("file_write", 360usize),
+            ("file_edit", 900usize),
+            ("bash", 420usize),
+            ("agent", 650usize),
+            ("skill_view", 260usize),
+        ];
+
+        for (name, max_chars) in budgets {
+            let tool = registry.get(name).expect("core tool should be registered");
+            let chars = tool.description().chars().count();
+            assert!(
+                chars <= max_chars,
+                "tool contract for '{}' is too large: {} chars > {}. Move rare guidance into failure-specific messages.",
+                name,
+                chars,
+                max_chars
+            );
+        }
+    }
+
     /// 工具数量不能回退
     #[test]
     fn test_tool_count_not_regressed() {
-        let registry = ToolRegistry::default_registry();
+        let registry = ToolRegistry::full_registry();
         let count = registry.tool_names().len();
         assert!(
             count >= 50,

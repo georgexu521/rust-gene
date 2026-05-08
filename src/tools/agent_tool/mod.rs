@@ -14,7 +14,7 @@ use std::path::Path;
 use tracing::{info, warn};
 
 /// 子代理模板
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentTemplate {
     /// 代码探索：分析结构、依赖关系、关键函数
     Explore,
@@ -455,6 +455,67 @@ struct ExecuteParams<'a> {
     profile: Option<crate::agent::profiles::AgentProfile>,
 }
 
+fn default_subagent_allowed_tools(role: AgentRole, template: Option<AgentTemplate>) -> Vec<String> {
+    let names: &[&str] = match template {
+        Some(AgentTemplate::Explore) => &["project_list", "glob", "grep", "file_read"],
+        Some(AgentTemplate::Verify) | Some(AgentTemplate::CodeReview) => {
+            &["project_list", "glob", "grep", "file_read", "bash"]
+        }
+        Some(AgentTemplate::Plan) => &[
+            "project_list",
+            "glob",
+            "grep",
+            "file_read",
+            "plan",
+            "todo_write",
+        ],
+        Some(AgentTemplate::Debug) => &[
+            "project_list",
+            "glob",
+            "grep",
+            "file_read",
+            "file_edit",
+            "file_write",
+            "bash",
+            "diff",
+            "format",
+        ],
+        Some(AgentTemplate::GeneralPurpose) | None => match role {
+            AgentRole::Plan | AgentRole::Advisor | AgentRole::Guide => &[
+                "project_list",
+                "glob",
+                "grep",
+                "file_read",
+                "plan",
+                "todo_write",
+            ],
+            AgentRole::Verification => &["project_list", "glob", "grep", "file_read", "bash"],
+            AgentRole::Specialist | AgentRole::Fast | AgentRole::Teammate | AgentRole::Default => {
+                &[
+                    "project_list",
+                    "glob",
+                    "grep",
+                    "file_read",
+                    "file_edit",
+                    "file_write",
+                    "bash",
+                    "diff",
+                    "format",
+                ]
+            }
+            AgentRole::DreamTask => &[
+                "project_list",
+                "glob",
+                "grep",
+                "file_read",
+                "plan",
+                "todo_write",
+            ],
+        },
+    };
+    names.iter().map(|name| (*name).to_string()).collect()
+}
+
 /// 处理恢复已有代理
 async fn handle_resume(
     agent_manager: &crate::agent::AgentManager,
@@ -845,10 +906,12 @@ impl Tool for AgentTool {
 
     fn description(&self) -> &str {
         "Delegate a task to a sub-agent with memory and fork support. \
-         Use this for parallel execution of independent tasks, \
-         or when a task requires specialized context. \
+         Use this for independent, parallel, non-blocking tasks, \
+         or when a bounded task requires specialized context. \
+         Do not delegate work that blocks the current next step or needs tight coordination. \
          The sub-agent will work independently and report back when done. \
-         Supports built-in templates (explore, verify, plan, review, debug, general), \
+         Built-in profiles: default, explorer, verifier, planner, implementer. \
+         Built-in templates: explore, verify, plan, review, debug, general. \
          file context injection, agent memory (save/load/snapshot), and fork branches."
     }
 
@@ -863,7 +926,7 @@ impl Tool for AgentTool {
                 "prompt": {
                     "type": "string",
                     "description": "Detailed instructions for the sub-agent. \
-                                 Be specific about what needs to be done and expected output."
+                                 Be specific about what needs to be done, expected output, and any files it may change."
                 },
                 "files": {
                     "type": "array",
@@ -889,11 +952,11 @@ impl Tool for AgentTool {
                 "allowed_tools": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional tool whitelist for isolation. If set, sub-agent can only call these tools."
+                    "description": "Optional tool whitelist for isolation. Set this for narrow tasks; if set, sub-agent can only call these tools."
                 },
                 "profile": {
                     "type": "string",
-                    "description": "Named agent profile such as explorer, verifier, or implementer. Project profiles can be defined in .priority-agent/agents/*.toml."
+                    "description": "Named agent profile: default, explorer, verifier, planner, implementer, or a project profile from .priority-agent/agents/*.toml."
                 },
                 "role": {
                     "type": "string",
@@ -1001,6 +1064,14 @@ impl Tool for AgentTool {
         let timeout_secs = requested_timeout_secs
             .or_else(|| profile.as_ref().and_then(|profile| profile.timeout_secs))
             .unwrap_or(300);
+        let role = params["role"]
+            .as_str()
+            .and_then(AgentRole::parse)
+            .or_else(|| profile.as_ref().map(|profile| profile.role))
+            .unwrap_or_default();
+        let template = params["template"]
+            .as_str()
+            .and_then(AgentTemplate::from_str);
         let mut allowed_tools: Vec<String> = params["allowed_tools"]
             .as_array()
             .map(|arr| {
@@ -1010,18 +1081,12 @@ impl Tool for AgentTool {
             })
             .unwrap_or_default();
         if allowed_tools.is_empty() {
-            if let Some(profile) = &profile {
-                allowed_tools = profile.allowed_tools.clone();
-            }
+            allowed_tools = profile
+                .as_ref()
+                .filter(|profile| !profile.allowed_tools.is_empty())
+                .map(|profile| profile.allowed_tools.clone())
+                .unwrap_or_else(|| default_subagent_allowed_tools(role, template));
         }
-        let role = params["role"]
-            .as_str()
-            .and_then(AgentRole::parse)
-            .or_else(|| profile.as_ref().map(|profile| profile.role))
-            .unwrap_or_default();
-        let template = params["template"]
-            .as_str()
-            .and_then(AgentTemplate::from_str);
         let max_turns = profile
             .as_ref()
             .and_then(|profile| profile.max_turns)
@@ -1095,6 +1160,49 @@ impl Tool for AgentTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_tool_contract_discourages_blocking_delegation() {
+        let tool = AgentTool;
+        assert!(tool.description().contains("independent, parallel"));
+        assert!(tool.description().contains("blocks the current next step"));
+        assert!(tool
+            .description()
+            .contains("explorer, verifier, planner, implementer"));
+        assert!(
+            tool.parameters()["properties"]["allowed_tools"]["description"]
+                .as_str()
+                .unwrap_or("")
+                .contains("narrow tasks")
+        );
+    }
+
+    #[test]
+    fn default_subagent_tool_surfaces_are_role_scoped() {
+        let explorer =
+            default_subagent_allowed_tools(AgentRole::Default, Some(AgentTemplate::Explore));
+        assert!(explorer.contains(&"file_read".to_string()));
+        assert!(!explorer.contains(&"file_edit".to_string()));
+        assert!(!explorer.contains(&"file_write".to_string()));
+        assert!(!explorer.contains(&"agent".to_string()));
+
+        let verifier =
+            default_subagent_allowed_tools(AgentRole::Verification, Some(AgentTemplate::Verify));
+        assert!(verifier.contains(&"bash".to_string()));
+        assert!(!verifier.contains(&"file_edit".to_string()));
+        assert!(!verifier.contains(&"file_write".to_string()));
+
+        let implementer = default_subagent_allowed_tools(AgentRole::Specialist, None);
+        assert!(implementer.contains(&"file_edit".to_string()));
+        assert!(implementer.contains(&"file_write".to_string()));
+        assert!(!implementer.contains(&"agent".to_string()));
+        assert!(!implementer.contains(&"swarm".to_string()));
+
+        let planner = default_subagent_allowed_tools(AgentRole::Plan, Some(AgentTemplate::Plan));
+        assert!(planner.contains(&"plan".to_string()));
+        assert!(planner.contains(&"todo_write".to_string()));
+        assert!(!planner.contains(&"bash".to_string()));
+    }
 
     #[tokio::test]
     async fn test_agent_tool_without_manager() {

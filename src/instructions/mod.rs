@@ -5,18 +5,40 @@
 //! 2. Project root: `<repo-root>/AGENTS.md`
 //! 3. Directory-specific: `<repo-root>/.../<cwd>/AGENTS.md`
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
 const FILE_NAME: &str = "AGENTS.md";
 const PER_LAYER_CHAR_LIMIT: usize = 4_000;
 const TOTAL_CHAR_LIMIT: usize = 16_000;
+const RUNTIME_GUIDANCE_HEADING: &str = "Agent Runtime Guidance";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstructionLayerSelection {
+    RuntimeGuidanceSection,
+    FullFileFallback,
+    FullFileEnvOverride,
+}
+
+impl InstructionLayerSelection {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RuntimeGuidanceSection => "runtime-guidance",
+            Self::FullFileFallback => "full-file-fallback",
+            Self::FullFileEnvOverride => "full-file-env",
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct InstructionLayer {
     pub source: String,
     pub path: PathBuf,
     pub content: String,
+    pub selection: InstructionLayerSelection,
+    pub truncated: bool,
+    pub original_chars: usize,
 }
 
 fn global_agents_path() -> Option<PathBuf> {
@@ -35,17 +57,97 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
     }
 }
 
+fn full_agents_loading_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_AGENTS_MD_FULL")
+            .ok()
+            .as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    )
+}
+
+fn markdown_heading(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+    if level == 0 {
+        return None;
+    }
+    let rest = trimmed.get(level..)?;
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    Some((level, rest.trim()))
+}
+
+fn extract_runtime_guidance_section(content: &str) -> Option<String> {
+    let mut in_section = false;
+    let mut selected = Vec::new();
+
+    for line in content.lines() {
+        if let Some((level, title)) = markdown_heading(line) {
+            if in_section && level <= 2 {
+                break;
+            }
+            if level == 2 && title == RUNTIME_GUIDANCE_HEADING {
+                in_section = true;
+                selected.push(line);
+                continue;
+            }
+        }
+        if in_section {
+            selected.push(line);
+        }
+    }
+
+    if selected.is_empty() {
+        None
+    } else {
+        Some(selected.join("\n"))
+    }
+}
+
+fn select_prompt_visible_content(content: &str) -> (Cow<'_, str>, InstructionLayerSelection) {
+    if full_agents_loading_enabled() {
+        return (
+            Cow::Borrowed(content),
+            InstructionLayerSelection::FullFileEnvOverride,
+        );
+    }
+
+    if let Some(section) = extract_runtime_guidance_section(content) {
+        return (
+            Cow::Owned(section),
+            InstructionLayerSelection::RuntimeGuidanceSection,
+        );
+    }
+
+    (
+        Cow::Borrowed(content),
+        InstructionLayerSelection::FullFileFallback,
+    )
+}
+
 fn read_layer(path: &Path, source: impl Into<String>) -> Option<InstructionLayer> {
     let content = std::fs::read_to_string(path).ok()?;
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let clipped: String = trimmed.chars().take(PER_LAYER_CHAR_LIMIT).collect();
+    let (selected, selection) = select_prompt_visible_content(trimmed);
+    let selected = selected.trim();
+    if selected.is_empty() {
+        return None;
+    }
+    let original_chars = selected.chars().count();
+    let clipped: String = selected.chars().take(PER_LAYER_CHAR_LIMIT).collect();
+    let truncated = original_chars > PER_LAYER_CHAR_LIMIT;
     Some(InstructionLayer {
         source: source.into(),
         path: path.to_path_buf(),
         content: clipped,
+        selection,
+        truncated,
+        original_chars,
     })
 }
 
@@ -144,9 +246,12 @@ pub fn compose_system_prompt(base_prompt: &str, working_dir: &Path) -> String {
     let mut used = 0usize;
     for layer in layers {
         debug!(
-            "Applying AGENTS.md layer: [{}] {}",
+            "Applying AGENTS.md layer: [{}:{}] {} truncated={} selected_chars={}",
             layer.source,
-            layer.path.display()
+            layer.selection.label(),
+            layer.path.display(),
+            layer.truncated,
+            layer.original_chars
         );
         if used >= TOTAL_CHAR_LIMIT {
             debug!(
@@ -158,9 +263,12 @@ pub fn compose_system_prompt(base_prompt: &str, working_dir: &Path) -> String {
         let remaining = TOTAL_CHAR_LIMIT.saturating_sub(used);
         let clipped: String = layer.content.chars().take(remaining).collect();
         used += clipped.chars().count();
+        let truncated_label = if layer.truncated { " truncated" } else { "" };
         out.push_str(&format!(
-            "\n### [{}] {}\n{}\n",
+            "\n### [{}:{}{}] {}\n{}\n",
             layer.source,
+            layer.selection.label(),
+            truncated_label,
             layer.path.display(),
             clipped
         ));
@@ -226,6 +334,117 @@ mod tests {
         assert_eq!(layers[0].content.chars().count(), PER_LAYER_CHAR_LIMIT);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_runtime_guidance_section_is_preferred() {
+        let base = std::env::temp_dir().join(format!("agents-section-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(base.join(".git")).unwrap();
+        std::fs::write(
+            base.join(FILE_NAME),
+            "# Project Notes\n\
+             archived intro\n\n\
+             ## Agent Runtime Guidance\n\
+             runtime rule\n\
+             ### Nested Detail\n\
+             keep nested detail\n\n\
+             ## Archive\n\
+             old doctrine",
+        )
+        .unwrap();
+
+        let layers = load_instruction_layers(&base);
+
+        assert_eq!(layers.len(), 1);
+        assert_eq!(
+            layers[0].selection,
+            InstructionLayerSelection::RuntimeGuidanceSection
+        );
+        assert!(layers[0].content.contains("runtime rule"));
+        assert!(layers[0].content.contains("keep nested detail"));
+        assert!(!layers[0].content.contains("archived intro"));
+        assert!(!layers[0].content.contains("old doctrine"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_full_file_fallback_when_runtime_section_absent() {
+        let base = std::env::temp_dir().join(format!("agents-fallback-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(base.join(".git")).unwrap();
+        std::fs::write(base.join(FILE_NAME), "# Project Notes\nproject rules").unwrap();
+
+        let layers = load_instruction_layers(&base);
+
+        assert_eq!(layers.len(), 1);
+        assert_eq!(
+            layers[0].selection,
+            InstructionLayerSelection::FullFileFallback
+        );
+        assert!(layers[0].content.contains("project rules"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn project_agents_runtime_guide_stays_under_prompt_budget() {
+        let root_agents = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FILE_NAME);
+        let content = std::fs::read_to_string(&root_agents).unwrap();
+        let chars = content.trim().chars().count();
+
+        assert!(
+            chars <= PER_LAYER_CHAR_LIMIT,
+            "{} has {chars} chars; keep prompt-visible project guidance under {PER_LAYER_CHAR_LIMIT}",
+            root_agents.display()
+        );
+    }
+
+    #[test]
+    fn project_agents_runtime_guide_excludes_archived_doctrine() {
+        let root_agents = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FILE_NAME);
+        let layer = read_layer(&root_agents, "project").unwrap();
+        let forbidden = [
+            "完整的 Socratic 执行流程",
+            "高密度思考 = 高密度提问-解答",
+            "总计 25 个工具",
+            "Phase 4 进行中",
+        ];
+
+        for phrase in forbidden {
+            assert!(
+                !layer.content.contains(phrase),
+                "archived project-history phrase leaked into prompt-visible AGENTS.md: {phrase}"
+            );
+        }
+    }
+
+    #[test]
+    fn project_agents_uses_runtime_guidance_section() {
+        let root_agents = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FILE_NAME);
+        let layer = read_layer(&root_agents, "project").unwrap();
+
+        assert_eq!(
+            layer.selection,
+            InstructionLayerSelection::RuntimeGuidanceSection
+        );
+        assert!(layer.content.contains("## Agent Runtime Guidance"));
+        assert!(!layer
+            .content
+            .contains("Only the `## Agent Runtime Guidance` section"));
+    }
+
+    #[test]
+    fn archived_agents_project_guide_remains_available() {
+        let archive = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs")
+            .join("archive")
+            .join("AGENTS_PROJECT_GUIDE_PRE_RUNTIME_DIET_2026-05-08.md");
+        let content = std::fs::read_to_string(&archive).unwrap();
+
+        assert!(content.contains("完整的 Socratic 执行流程"));
+        assert!(content.contains("开发记录"));
     }
 
     #[test]

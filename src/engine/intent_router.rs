@@ -43,6 +43,16 @@ pub enum RetrievalPolicy {
     Full,
 }
 
+impl RetrievalPolicy {
+    pub fn allows_memory_context(self) -> bool {
+        matches!(self, Self::Memory | Self::Project | Self::Full)
+    }
+
+    pub fn allows_project_context(self) -> bool {
+        matches!(self, Self::Project | Self::Full)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningPolicy {
@@ -98,6 +108,7 @@ impl IntentRouter {
             || contains_any(zh, &["记忆", "记住", "回忆"]);
         let has_code_change_signal = is_code_change_request(&lower, zh);
         let has_debug_signal = is_debug_request(&lower, zh);
+        let has_file_mutation_signal = is_file_mutation_request(&lower, zh);
 
         // Memory-related coding tasks, such as fixing memory_save or memory
         // scoring, must not be routed as direct memory lookup/save turns. Treat
@@ -129,6 +140,20 @@ impl IntentRouter {
             };
         }
 
+        if has_file_mutation_signal {
+            return IntentRoute {
+                intent: IntentKind::DirectAnswer,
+                confidence: 0.74,
+                workflow: WorkflowKind::Direct,
+                retrieval: RetrievalPolicy::Light,
+                reasoning: ReasoningPolicy::Medium,
+                risk: RiskLevel::Medium,
+                recommended_tools: vec!["file_read".into(), "bash".into()],
+                reason: "prompt asks for a scoped file mutation without code workflow intent"
+                    .into(),
+            };
+        }
+
         if contains_any(
             &lower,
             &[
@@ -153,10 +178,8 @@ impl IntentRouter {
             };
         }
 
-        if contains_any(
-            &lower,
-            &["delegate", "subagent", "agent", "parallel", "swarm"],
-        ) || contains_any(zh, &["子agent", "子 agent", "并行", "委派"])
+        if contains_any(&lower, &["delegate", "subagent", "parallel", "swarm"])
+            || contains_any(zh, &["子agent", "子 agent", "并行", "委派"])
         {
             return IntentRoute {
                 intent: IntentKind::Delegation,
@@ -202,19 +225,7 @@ impl IntentRouter {
             };
         }
 
-        if contains_any(
-            &lower,
-            &[
-                "implement",
-                "add ",
-                "change",
-                "update",
-                "edit",
-                "build",
-                "optimize",
-            ],
-        ) || contains_any(zh, &["实现", "新增", "修改", "优化", "完善", "开发"])
-        {
+        if has_code_change_signal {
             return IntentRoute {
                 intent: IntentKind::CodeChange,
                 confidence: 0.77,
@@ -226,7 +237,9 @@ impl IntentRouter {
                     "project_list".into(),
                     "grep".into(),
                     "file_read".into(),
+                    "file_write".into(),
                     "file_edit".into(),
+                    "bash".into(),
                 ],
                 reason: "prompt asks for code or product changes".into(),
             };
@@ -409,10 +422,12 @@ fn is_debug_request(lower: &str, zh: &str) -> bool {
             "debug",
         ],
     ) || contains_any(zh, &["报错", "错误", "修复", "失败", "调试", "bug"])
+        || (zh.contains("问题") && contains_any(zh, &["运行", "启动", "执行", "测试"]))
 }
 
 fn is_code_change_request(lower: &str, zh: &str) -> bool {
     is_debug_request(lower, zh)
+        || is_natural_code_creation_request(lower, zh)
         || contains_any(
             lower,
             &[
@@ -428,8 +443,68 @@ fn is_code_change_request(lower: &str, zh: &str) -> bool {
         )
         || contains_any(
             zh,
-            &["实现", "新增", "修改", "优化", "完善", "开发", "重构"],
+            &[
+                "实现", "新增", "修改", "优化", "完善", "开发", "重构", "创建", "生成",
+            ],
         )
+}
+
+fn is_natural_code_creation_request(lower: &str, zh: &str) -> bool {
+    let has_creation_verb = contains_any(
+        lower,
+        &[
+            "create", "make", "generate", "write a", "write an", "build a",
+        ],
+    ) || contains_any(
+        zh,
+        &["做", "写", "创建", "生成", "弄一个", "做一个", "写一个"],
+    );
+    has_creation_verb && has_code_artifact_signal(lower, zh)
+}
+
+fn has_code_artifact_signal(lower: &str, zh: &str) -> bool {
+    contains_any(
+        lower,
+        &[
+            "python",
+            ".py",
+            "html",
+            "javascript",
+            "typescript",
+            "rust",
+            "shell",
+            "bash",
+            "script",
+            "game",
+            "app",
+            "program",
+            "code",
+            "snake",
+        ],
+    ) || contains_any(
+        zh,
+        &[
+            "脚本",
+            "游戏",
+            "页面",
+            "网页",
+            "程序",
+            "代码",
+            "工具",
+            "应用",
+            "贪吃蛇",
+        ],
+    )
+}
+
+fn is_file_mutation_request(lower: &str, zh: &str) -> bool {
+    let has_mutation = contains_any(lower, &["delete", "remove", "rename", "move", "trash"])
+        || contains_any(zh, &["删除", "删掉", "删了", "移除", "重命名", "移动"]);
+    let has_file_scope = contains_any(
+        lower,
+        &["file", "folder", "directory", ".txt", ".md", ".json", ".py"],
+    ) || contains_any(zh, &["文件", "文件夹", "目录"]);
+    has_mutation && has_file_scope
 }
 
 #[cfg(test)]
@@ -445,10 +520,57 @@ mod tests {
     }
 
     #[test]
+    fn routes_running_issue_as_debugging_task() {
+        let route = IntentRouter::new().route("我在运行中发现了一个问题，你帮我看看是怎么回事吧");
+        assert_eq!(route.intent, IntentKind::Debugging);
+        assert_eq!(route.workflow, WorkflowKind::BugFix);
+        assert_eq!(route.retrieval, RetrievalPolicy::Project);
+    }
+
+    #[test]
     fn routes_code_change_tasks() {
         let route = IntentRouter::new().route("继续开发 tui 界面，优化状态栏");
         assert_eq!(route.intent, IntentKind::CodeChange);
         assert_eq!(route.retrieval, RetrievalPolicy::Project);
+    }
+
+    #[test]
+    fn routes_natural_chinese_python_game_creation_as_code_change() {
+        let route = IntentRouter::new().route("帮我做一个贪吃蛇游戏吧，用 python 做吧");
+        assert_eq!(route.intent, IntentKind::CodeChange);
+        assert_eq!(route.workflow, WorkflowKind::CodeChange);
+        assert_eq!(route.retrieval, RetrievalPolicy::Project);
+    }
+
+    #[test]
+    fn routes_chinese_html_creation_as_code_change() {
+        let route = IntentRouter::new().route("创建一个简单 html 页面");
+        assert_eq!(route.intent, IntentKind::CodeChange);
+        assert_eq!(route.workflow, WorkflowKind::CodeChange);
+    }
+
+    #[test]
+    fn routes_single_file_delete_as_scoped_direct_mutation() {
+        let route = IntentRouter::new().route("帮我把这个文件删了吧");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert_eq!(route.risk, RiskLevel::Medium);
+        assert!(route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_agent_design_comparison_as_research_not_delegation() {
+        let route = IntentRouter::new().route("帮我对比 claude 和 opencode 的 agent 指令设计");
+        assert_eq!(route.intent, IntentKind::Research);
+        assert_eq!(route.workflow, WorkflowKind::Research);
+        assert_eq!(route.retrieval, RetrievalPolicy::Web);
+    }
+
+    #[test]
+    fn routes_planning_about_how_to_build_without_forcing_code_change() {
+        let route = IntentRouter::new().route("计划一下怎么做贪吃蛇");
+        assert_eq!(route.intent, IntentKind::Planning);
+        assert_eq!(route.workflow, WorkflowKind::Planning);
     }
 
     #[test]

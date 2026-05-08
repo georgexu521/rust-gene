@@ -741,6 +741,13 @@ pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
     }
 }
 pub fn handle_voice() -> String {
+    #[cfg(not(feature = "voice"))]
+    {
+        "Voice module is not enabled in this build. Rebuild with `--features voice` to use TTS/STT."
+            .to_string()
+    }
+
+    #[cfg(feature = "voice")]
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let vm = crate::voice::VoiceManager::new();
         let tts = handle.block_on(vm.tts_available());

@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-06
+Last updated: 2026-05-08
 
 ## Summary
 
@@ -18,21 +18,48 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest verified baseline observed after the 2026-05-06 adaptive repair workflow
-batch:
+Latest full-test baseline observed after the 2026-05-08 runtime instruction
+diet, section-loading, sample-budget gate, tool-contract, role-scoped subagent,
+auxiliary-context gating, and closeout visibility batches:
 
 ```text
-1071 passed; 0 failed
+1090 passed; 0 failed
 ```
 
-Verified with:
+Validated in this pass with:
 
 ```bash
-cargo check --quiet
-cargo test --quiet -- --test-threads=1
-cargo clippy --all-features -- -D warnings
-env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
+cargo test -q
+cargo check -q
+cargo fmt --check
+cargo test -q instructions
+cargo test -q prompt
+cargo test -q prompt_context
+cargo test -q runtime_diet
+cargo test -q route_scoped_tools
+cargo test -q intent_router
+cargo test -q quick
+cargo test -q file_tool
+cargo test -q bash_tool
+cargo test -q agent_tool_contract
+cargo test -q skill_view_contract
+cargo test -q core_tool_contract_descriptions_stay_compact
+cargo test -q agent_tool
+cargo test -q profiles
+cargo test -q retrieval_context
+cargo test -q memory
+cargo test -q skills
+cargo test -q trace
+cargo test -q closeout
+cargo test -q code_change_workflow
+python3 -m py_compile scripts/live_eval_report_parser.py
+bash -n scripts/run_live_eval.sh
+git diff --check
 ```
+
+The previous all-features/clippy and legacy workflow gates were last recorded
+as passing in the 2026-05-06 baseline and should be rerun before a release
+cut.
 
 Latest live coding workflow smoke:
 
@@ -96,6 +123,31 @@ verification_passed=true stage_validation_passed=true closeout_status=passed
   applied into the user skill path.
 - Learning and high-confidence retrieved memory now feed back into workflow
   planning weights with traceable before/after audit records.
+- Root `AGENTS.md` is now a compact runtime guide with historical material
+  archived under `docs/archive/`; instruction loading prefers the
+  `## Agent Runtime Guidance` section instead of prefix-truncating long project
+  notes.
+- Runtime diet gates now cover representative prompt samples for direct answer,
+  scoped file deletion, Python code creation, running-issue debugging, and
+  Claude/opencode instruction-design comparison. Tool-surface tests enforce
+  route-level caps and prompt-context tests enforce a common-turn token budget.
+- Core tool contracts now carry common usage boundaries directly: `file_edit`
+  rejects `file_read` line-prefix copy/paste in edit anchors, `file_write`
+  reports full-file replacement guidance when overwriting, `bash` is scoped to
+  shell/validation work, `agent` discourages blocking delegation, and
+  `skill_view` fences skill text as guidance rather than user instruction.
+- Built-in subagent profiles now have role-scoped default tool surfaces:
+  explorer/planner/verifier stay read-only or validation-only, implementer gets
+  edit/write/validation tools, and no built-in profile exposes recursive
+  `agent` or `swarm` by default.
+- Memory and skill context are now fenced as background guidance. Light/Web/None
+  routes do not receive stale memory context, skill listing is compact
+  discovery-only, and runtime diet traces report memory, retrieval, and skill
+  summary budgets.
+- User-facing closeout now defaults to concise assistant text for ordinary
+  passed or not-verified low/medium-risk code changes, while high-risk,
+  failed, partial, explicit debug/full, and live-eval closeouts retain the full
+  structured `Closeout:` block.
 
 ## Product Surface
 
@@ -123,12 +175,14 @@ Canonical current docs:
 - `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`
 - `docs/CLAUDE_CODE_ALIGNMENT_PLAN.md`
 - `docs/REMAINING_CLOSURE_PLAN.md`
+- `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`
 - `AGENTS.md`
 
 Historical docs kept for reference:
 
 - `PLAN.md`
 - `CAPABILITY_MATRIX.md`
+- `docs/archive/AGENTS_PROJECT_GUIDE_PRE_RUNTIME_DIET_2026-05-08.md`
 - `docs/CLAUDE_GAP_SCORECARD.md`
 - `docs/workflow/*`
 
@@ -149,17 +203,20 @@ not missing foundations:
 
 1. Continue measuring broad code-change first-pass success and repair count
    against the replay matrix and live eval tasks.
-2. Continue hardening long-running command progress around cancellation,
+2. Treat `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` as implemented;
+   choose the next work from live-use gaps, release-hardening gates, or a new
+   reviewed plan.
+3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
-3. Expand rendered command-level smoke tests beyond core panels into broader
+4. Expand rendered command-level smoke tests beyond core panels into broader
    settings and history surfaces.
-4. Populate persisted eval reports with real external Claude/Codex baseline
+5. Populate persisted eval reports with real external Claude/Codex baseline
    data once those baseline runs are available.
-5. Continue CLI polish based on trace-backed state: command palette, statusline,
+6. Continue CLI polish based on trace-backed state: command palette, statusline,
    approval panels, tool expansion, and settings visibility.
-6. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
+7. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
    Discord/Slack adapters if they become product priorities.
-7. Keep docs synchronized with tests and current behavior.
+8. Keep docs synchronized with tests and current behavior.
 
 Latest maintenance note:
 

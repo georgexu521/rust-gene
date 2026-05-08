@@ -3,19 +3,10 @@
 //! 将 Gate / Questioning / Weights 的阈值与开关集中管理，避免策略散落。
 
 /// Gate 策略
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GatePolicy {
     pub workflow_enabled: bool,
     pub llm_classifier_enabled: bool,
-}
-
-impl Default for GatePolicy {
-    fn default() -> Self {
-        Self {
-            workflow_enabled: true,
-            llm_classifier_enabled: false,
-        }
-    }
 }
 
 /// 主动提问式深思策略
@@ -76,7 +67,13 @@ impl WorkflowPolicy {
     /// 从环境变量加载策略（单一入口）
     pub fn from_env() -> Self {
         let mut p = Self::default();
-        p.gate.workflow_enabled = env_bool("PRIORITY_AGENT_WORKFLOW_ENABLED", false);
+        p.gate.workflow_enabled = env_bool_any(
+            &[
+                "PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED",
+                "PRIORITY_AGENT_WORKFLOW_ENABLED",
+            ],
+            false,
+        );
         p.gate.llm_classifier_enabled = env_bool("PRIORITY_AGENT_WORKFLOW_GATE_LLM", false);
 
         p.socratic.max_rounds = env_usize("PRIORITY_AGENT_SOCRATIC_MAX_ROUNDS", 5);
@@ -102,6 +99,15 @@ fn env_bool(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn env_bool_any(names: &[&str], default: bool) -> bool {
+    for name in names {
+        if let Ok(value) = std::env::var(name) {
+            return value != "0" && !value.eq_ignore_ascii_case("false");
+        }
+    }
+    default
+}
+
 fn env_usize(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()
@@ -114,4 +120,31 @@ fn env_f64(name: &str, default: f64) -> f64 {
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
+
+    #[test]
+    fn workflow_policy_disables_legacy_workflow_by_default() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
+
+        assert!(!WorkflowPolicy::from_env().gate.workflow_enabled);
+    }
+
+    #[test]
+    fn workflow_policy_accepts_new_and_legacy_env_switches() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED", "1");
+        env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
+        assert!(WorkflowPolicy::from_env().gate.workflow_enabled);
+
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
+        env.set("PRIORITY_AGENT_WORKFLOW_ENABLED", "1");
+        assert!(WorkflowPolicy::from_env().gate.workflow_enabled);
+    }
 }

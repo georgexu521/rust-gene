@@ -331,6 +331,26 @@ mod tests {
         assert!(prompt.contains("Priority Agent"));
         assert!(prompt.contains("file_read"));
         assert!(prompt.contains("Model-Led Programming Workflow"));
-        assert!(prompt.contains("What acceptance criteria define"));
+        assert!(prompt.contains("acceptance criteria"));
+        assert!(prompt.contains("Verify changed behavior"));
+    }
+
+    #[test]
+    fn default_system_prompt_stays_under_runtime_diet_budget() {
+        let prompt = crate::engine::default_system_prompt();
+        let tokens = crate::engine::context_compressor::estimate_tokens(&prompt);
+        assert!(
+            tokens <= 700,
+            "default system prompt grew past runtime diet budget: {tokens} tokens"
+        );
+    }
+
+    #[test]
+    fn default_system_prompt_keeps_repair_details_out_of_always_on_context() {
+        let prompt = crate::engine::default_system_prompt();
+        assert!(!prompt.contains("\"old_string\""));
+        assert!(!prompt.contains("\"line_start\""));
+        assert!(!prompt.contains("EXACT string matching"));
+        assert!(!prompt.contains("Tool Usage Best Practices"));
     }
 }

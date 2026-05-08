@@ -1,14 +1,19 @@
 # WorkflowEngine 运维手册（W12 交付物）
 
-> 目标：提供日常运行、故障排查、应急处理的标准操作流程。
-> 状态：V1
+> 目标：提供 legacy WorkflowEngine 的验证、故障排查、应急处理流程。
+> 状态：legacy/eval-only as of 2026-05-08
+>
+> 默认 interactive CLI 不再启用这一套 legacy WorkflowEngine。正常代码任务走
+> `conversation_loop` + `CodeChangeWorkflowRunner`。只有回放历史 workflow
+> benchmark 或专项调试时才显式开启。
 
 ---
 
 ## 1. 常用开关
 
 ```bash
-# 总开关
+# legacy/eval-only 总开关。旧变量仍兼容，但新脚本优先使用这个名字。
+export PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED=true
 export PRIORITY_AGENT_WORKFLOW_ENABLED=true
 
 # 深度与预算
@@ -46,7 +51,8 @@ export PRIORITY_AGENT_WEIGHT_DRIFT_MUL=1.0
 3. 比较计划覆盖率是否恶化。
 
 ### 3.3 症状：Workflow 未触发
-1. 检查 `PRIORITY_AGENT_WORKFLOW_ENABLED` 是否为 `0/false`。
+1. 检查 `PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED` 或兼容变量
+   `PRIORITY_AGENT_WORKFLOW_ENABLED` 是否为 `0/false`。
 2. 检查输入是否命中 Fast Lane。
 3. 检查 `Gate::decide()` reason 输出。
 

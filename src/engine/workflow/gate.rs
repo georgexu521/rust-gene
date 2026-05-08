@@ -84,11 +84,23 @@ const HIGH_RISK_KEYWORDS: &[&str] = &[
     "所有文件",
     "批量",
     "全局",
+    "跨模块",
     "cross-module",
     "新增模块",
+    "新增完整",
+    "完整子系统",
+    "完整的用户认证系统",
+    "认证系统",
+    "现有架构",
     "实现系统",
     "添加引擎",
     "引入框架",
+    "协同策略",
+    "发布流程",
+    "改进方向",
+    "稳定性改造",
+    "回退与风控",
+    "优化计划",
     "删除",
     "迁移",
     "升级",
@@ -184,7 +196,7 @@ impl Gate {
     pub fn new() -> Self {
         Self {
             enable_llm_classifier: false,
-            workflow_enabled: true,
+            workflow_enabled: false,
         }
     }
 
@@ -206,7 +218,7 @@ impl Gate {
         // 0. 环境变量全局开关
         if !self.workflow_enabled {
             return GateDecision::Direct {
-                reason: "Workflow disabled by PRIORITY_AGENT_WORKFLOW_ENABLED".into(),
+                reason: "Legacy workflow disabled; set PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED=1 or PRIORITY_AGENT_WORKFLOW_ENABLED=1 to enable".into(),
             };
         }
 
@@ -220,12 +232,10 @@ impl Gate {
             return decision;
         }
 
-        // 3. 默认行为：复杂可能性高，偏向 Workflow
-        // M1 中 LLM Classifier 可选，未启用时默认 Workflow
+        // 3. 默认行为：保持 Direct，避免 legacy workflow 抢占正常交互路径。
         let _ = self.enable_llm_classifier;
-        GateDecision::Workflow {
-            reason: "No fast lane or heuristic match, defaulting to Workflow (M1)".into(),
-            confidence: 0.5,
+        GateDecision::Direct {
+            reason: "No fast lane or heuristic match; staying direct by default".into(),
         }
     }
 
@@ -240,7 +250,7 @@ impl Gate {
     ) -> GateDecision {
         if !self.workflow_enabled {
             return GateDecision::Direct {
-                reason: "Workflow disabled by PRIORITY_AGENT_WORKFLOW_ENABLED".into(),
+                reason: "Legacy workflow disabled; set PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED=1 or PRIORITY_AGENT_WORKFLOW_ENABLED=1 to enable".into(),
             };
         }
 
@@ -253,9 +263,8 @@ impl Gate {
         }
 
         if !self.enable_llm_classifier {
-            return GateDecision::Workflow {
-                reason: "No fast lane or heuristic match, defaulting to Workflow (M1)".into(),
-                confidence: 0.5,
+            return GateDecision::Direct {
+                reason: "No fast lane or heuristic match; staying direct by default".into(),
             };
         }
 
@@ -278,14 +287,12 @@ impl Gate {
 
         match provider.chat(request).await {
             Ok(resp) => {
-                Self::parse_llm_decision(&resp.content).unwrap_or_else(|| GateDecision::Workflow {
-                    reason: "LLM classifier parse failed, defaulting to Workflow".into(),
-                    confidence: 0.5,
+                Self::parse_llm_decision(&resp.content).unwrap_or_else(|| GateDecision::Direct {
+                    reason: "LLM classifier parse failed; staying direct by default".into(),
                 })
             }
-            Err(_) => GateDecision::Workflow {
-                reason: "LLM classifier failed, defaulting to Workflow".into(),
-                confidence: 0.5,
+            Err(_) => GateDecision::Direct {
+                reason: "LLM classifier failed; staying direct by default".into(),
             },
         }
     }
@@ -334,11 +341,19 @@ mod tests {
     use crate::test_utils::env_guard::EnvVarGuard;
     use serde::Deserialize;
 
+    fn enabled_gate() -> Gate {
+        Gate::new().with_policy(GatePolicy {
+            workflow_enabled: true,
+            llm_classifier_enabled: false,
+        })
+    }
+
     #[test]
     fn test_fast_lane_help() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let d = gate.decide("/help");
         assert!(matches!(d, GateDecision::Direct { .. }));
         assert!(d.reason().contains("Fast lane"));
@@ -347,8 +362,9 @@ mod tests {
     #[test]
     fn test_fast_lane_git_status() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let d = gate.decide("git status");
         assert!(matches!(d, GateDecision::Direct { .. }));
     }
@@ -356,8 +372,9 @@ mod tests {
     #[test]
     fn test_fast_lane_greeting() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         assert!(matches!(gate.decide("你好"), GateDecision::Direct { .. }));
         assert!(matches!(gate.decide("hello"), GateDecision::Direct { .. }));
         assert!(matches!(gate.decide("thanks"), GateDecision::Direct { .. }));
@@ -366,8 +383,9 @@ mod tests {
     #[test]
     fn test_heuristic_high_risk() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let d = gate.decide("重构整个模块架构");
         assert!(matches!(d, GateDecision::Workflow { .. }));
         assert!(d.reason().contains("high-risk"));
@@ -376,8 +394,9 @@ mod tests {
     #[test]
     fn test_heuristic_low_risk() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let d = gate.decide("修复一个 typo");
         assert!(matches!(d, GateDecision::Direct { .. }));
         assert!(d.reason().contains("low-risk"));
@@ -386,8 +405,9 @@ mod tests {
     #[test]
     fn test_code_regression_bugfix_routes_to_workflow() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let d =
             gate.decide("修复 memory_save 绕过记忆质量门控的问题，必须通过 cargo test -q memory");
         assert!(
@@ -399,34 +419,38 @@ mod tests {
     }
 
     #[test]
-    fn test_default_to_workflow() {
+    fn test_default_no_match_stays_direct() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         // 既不匹配 Fast Lane 也不匹配 Heuristic
         let d = gate.decide("请帮我分析一下这个项目的代码结构");
-        assert!(matches!(d, GateDecision::Workflow { .. }));
+        assert!(matches!(d, GateDecision::Direct { .. }));
+        assert!(d.reason().contains("staying direct"));
     }
 
     #[test]
     fn test_batch_decide() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let inputs = vec!["/help", "重构模块", "修复 bug", "分析代码"];
         let results = gate.decide_batch(&inputs);
         assert_eq!(results.len(), 4);
         assert!(matches!(results[0], GateDecision::Direct { .. }));
         assert!(matches!(results[1], GateDecision::Workflow { .. }));
         assert!(matches!(results[2], GateDecision::Direct { .. }));
-        assert!(matches!(results[3], GateDecision::Workflow { .. }));
+        assert!(matches!(results[3], GateDecision::Direct { .. }));
     }
 
     #[test]
     fn test_complex_task_workflow() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let cases = vec![
             "新增一个完整的用户认证系统",
             "实现批量重构工具",
@@ -447,8 +471,9 @@ mod tests {
     #[test]
     fn test_simple_task_direct() {
         let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED");
         env.remove("PRIORITY_AGENT_WORKFLOW_ENABLED");
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let cases = vec![
             "更新版本号",
             "查看当前配置",
@@ -491,9 +516,13 @@ mod tests {
     }
 
     #[test]
-    fn test_workflow_enabled_by_default() {
+    fn test_legacy_workflow_disabled_by_default() {
         let d = Gate::new().decide("重构整个模块架构");
-        assert!(d.is_workflow(), "Workflow should be enabled by default");
+        assert!(
+            !d.is_workflow(),
+            "Legacy workflow should not be enabled by default"
+        );
+        assert!(d.reason().contains("Legacy workflow disabled"));
     }
 
     #[derive(Debug, Deserialize)]
@@ -522,7 +551,7 @@ mod tests {
         let (samples, source) = load_replay_samples();
         assert!(!samples.is_empty(), "samples should not be empty");
 
-        let gate = Gate::new();
+        let gate = enabled_gate();
         let mut hits = 0usize;
         for s in &samples {
             let predicted = gate.decide(&s.task_description);

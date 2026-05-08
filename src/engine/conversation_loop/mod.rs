@@ -11,16 +11,28 @@ mod action_checkpoint;
 mod approval;
 mod patch_repair_rules;
 mod step_executor;
+mod text_sanitizer;
 mod tool_execution;
+mod tool_metadata;
+mod turn_recording;
 
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
+use text_sanitizer::{strip_think_blocks, VisibleTextSanitizer};
 pub(crate) use tool_execution::{
     is_read_only, read_only_tool_concurrency, safe_prefix_by_bytes, truncate_tool_result,
     READ_ONLY_TOOLS,
 };
+use tool_metadata::{
+    attach_tool_execution_metadata, persist_tool_outcome_learning_event,
+    tool_execution_start_progress,
+};
+use turn_recording::{
+    persist_turn_learning_event, record_goal_drift_if_needed, record_hook_traces,
+    record_mcp_resource_trace, record_recovery_plan, record_web_retrieval_trace,
+};
 
-use crate::engine::intent_router::IntentRouter;
+use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, Message, ToolCall};
@@ -35,85 +47,10 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, warn};
 
 use super::context_compressor::{
-    estimate_messages_tokens, estimate_tool_schemas_tokens, ContextCompressor,
+    estimate_messages_tokens, estimate_tokens, estimate_tool_schemas_tokens, ContextCompressor,
 };
-use super::hooks::{HookDecision, HookRunRecord, ToolHookManager};
+use super::hooks::{HookDecision, ToolHookManager};
 use super::streaming::StreamEvent;
-
-const THINK_OPEN_TAG: &str = "<think>";
-const THINK_CLOSE_TAG: &str = "</think>";
-
-#[derive(Default)]
-struct VisibleTextSanitizer {
-    buffer: String,
-    in_think_block: bool,
-}
-
-impl VisibleTextSanitizer {
-    fn push_chunk(&mut self, chunk: &str) -> String {
-        self.buffer.push_str(chunk);
-        self.drain_visible(false)
-    }
-
-    fn finish(&mut self) -> String {
-        self.drain_visible(true)
-    }
-
-    fn drain_visible(&mut self, flush_all: bool) -> String {
-        let mut out = String::new();
-        loop {
-            if self.in_think_block {
-                if let Some(end_idx) = self.buffer.find(THINK_CLOSE_TAG) {
-                    let drain_len = end_idx + THINK_CLOSE_TAG.len();
-                    self.buffer.drain(..drain_len);
-                    self.in_think_block = false;
-                    continue;
-                }
-
-                if flush_all {
-                    self.buffer.clear();
-                } else {
-                    let keep = THINK_CLOSE_TAG.len().saturating_sub(1);
-                    if self.buffer.len() > keep {
-                        let drain_len = floor_char_boundary(&self.buffer, self.buffer.len() - keep);
-                        self.buffer.drain(..drain_len);
-                    }
-                }
-                break;
-            }
-
-            if let Some(start_idx) = self.buffer.find(THINK_OPEN_TAG) {
-                out.push_str(&self.buffer[..start_idx]);
-                let drain_len = start_idx + THINK_OPEN_TAG.len();
-                self.buffer.drain(..drain_len);
-                self.in_think_block = true;
-                continue;
-            }
-
-            if flush_all {
-                out.push_str(&self.buffer);
-                self.buffer.clear();
-            } else {
-                let keep = THINK_OPEN_TAG.len().saturating_sub(1);
-                if self.buffer.len() > keep {
-                    let emit_len = floor_char_boundary(&self.buffer, self.buffer.len() - keep);
-                    out.push_str(&self.buffer[..emit_len]);
-                    self.buffer.drain(..emit_len);
-                }
-            }
-            break;
-        }
-
-        out
-    }
-}
-
-fn strip_think_blocks(text: &str) -> String {
-    let mut sanitizer = VisibleTextSanitizer::default();
-    let mut visible = sanitizer.push_chunk(text);
-    visible.push_str(&sanitizer.finish());
-    visible
-}
 
 fn tool_result_dialog_content(result: &ToolResult) -> String {
     if !result.content.is_empty() {
@@ -399,166 +336,9 @@ async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent
     }
 }
 
-fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
-    while idx > 0 && !s.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    idx
-}
-
 fn tool_call_fingerprint(tc: &ToolCall) -> String {
     let args = serde_json::to_string(&tc.arguments).unwrap_or_else(|_| "null".to_string());
     format!("{}|{}", tc.name, args)
-}
-
-fn persist_turn_learning_event(
-    store: &crate::session_store::SessionStore,
-    trace: &crate::engine::trace::TurnTrace,
-) -> rusqlite::Result<i64> {
-    let intent = trace.events.iter().find_map(|event| match event {
-        TraceEvent::IntentRouted { intent, .. } => Some(intent.as_str()),
-        _ => None,
-    });
-    let goal = trace.events.iter().find_map(|event| match event {
-        TraceEvent::SessionGoalUpdated { title, .. } => Some(title.as_str()),
-        _ => None,
-    });
-    let tool_count = trace
-        .events
-        .iter()
-        .filter(|event| matches!(event, TraceEvent::ToolCompleted { .. }))
-        .count();
-    let summary = match (goal, intent) {
-        (Some(goal), Some(intent)) => format!("Turn {:?}: {} ({})", trace.status, goal, intent),
-        (Some(goal), None) => format!("Turn {:?}: {}", trace.status, goal),
-        (None, Some(intent)) => format!("Turn {:?}: intent {}", trace.status, intent),
-        (None, None) => format!("Turn {:?}: no routed intent", trace.status),
-    };
-    let payload = serde_json::json!({
-        "trace_id": trace.trace_id,
-        "turn_index": trace.turn_index,
-        "status": format!("{:?}", trace.status),
-        "intent": intent,
-        "goal": goal,
-        "tool_count": tool_count,
-        "event_count": trace.events.len(),
-        "duration_ms": trace.duration_ms(),
-    });
-    let payload = crate::engine::experience_ledger::attach_experience_payload(
-        payload,
-        crate::engine::experience_ledger::ExperienceRecord::from_turn_trace(trace),
-    );
-    let confidence = if trace.status == TurnStatus::Completed {
-        1.0
-    } else {
-        0.45
-    };
-    store.add_learning_event(
-        &trace.session_id,
-        "turn_outcome",
-        "conversation_loop",
-        &summary,
-        confidence,
-        &payload,
-    )
-}
-
-fn record_recovery_plan(trace: &TraceCollector, plan: &crate::engine::recovery_plan::RecoveryPlan) {
-    trace.record(TraceEvent::RecoveryPlan {
-        plan_id: plan.id.clone(),
-        source: plan.source.clone(),
-        category: plan.category.clone(),
-        action: plan.action.clone(),
-        retryable: plan.retryable,
-        safe_retry: plan.safe_retry,
-        suggested_command: plan.suggested_command.clone(),
-        status: format!("{:?}", plan.status),
-    });
-    trace.record(TraceEvent::RecoveryApplied {
-        error: plan.primary_error.clone(),
-        action: plan.trace_action(),
-    });
-}
-
-fn record_goal_drift_if_needed(
-    trace: &Option<TraceCollector>,
-    goal: Option<&crate::engine::session_goal::SessionGoal>,
-    tool_call: &ToolCall,
-) {
-    let (Some(trace), Some(goal)) = (trace, goal) else {
-        return;
-    };
-    let check = crate::engine::goal_drift::GoalDriftDetector::new().check(goal, tool_call);
-    if check.should_trace() {
-        trace.record(TraceEvent::GoalDriftDetected {
-            goal_id: goal.id.clone(),
-            tool: tool_call.name.clone(),
-            call_id: tool_call.id.clone(),
-            level: format!("{:?}", check.level),
-            reason: check.reason,
-            suggested_action: check.suggested_action,
-        });
-    }
-}
-
-fn record_mcp_resource_trace(
-    trace: &Option<TraceCollector>,
-    tool_call: &ToolCall,
-    result: &ToolResult,
-) {
-    let Some(trace) = trace else {
-        return;
-    };
-    let action = match tool_call.name.as_str() {
-        "list_mcp_resources" => "list",
-        "read_mcp_resource" => "read",
-        _ => return,
-    };
-    let server = tool_call.arguments["server_name"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("all")
-        .to_string();
-    let uri = tool_call.arguments["uri"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("*")
-        .to_string();
-
-    trace.record(TraceEvent::McpResourceAccessed {
-        server: server.clone(),
-        uri: uri.clone(),
-        action: action.to_string(),
-        success: result.success,
-        content_chars: result.content.chars().count(),
-    });
-    trace.record(TraceEvent::RetrievalContextBuilt {
-        policy: "Mcp".to_string(),
-        sources: vec!["Mcp".to_string()],
-        items: usize::from(result.success),
-        estimated_tokens: crate::engine::retrieval_context::estimate_tokens(&result.content),
-        provenance: vec![format!("mcp.resource:{}:{}", server, uri)],
-        conflicts: 0,
-    });
-}
-
-fn record_hook_traces(trace: &Option<TraceCollector>, records: &[HookRunRecord]) {
-    let Some(trace) = trace else {
-        return;
-    };
-    for record in records {
-        trace.record(TraceEvent::HookCompleted {
-            event: record.event.to_string(),
-            hook_name: record.hook_name.clone(),
-            call_id: record.tool_call_id.clone(),
-            tool: record.tool_name.clone(),
-            success: record.success,
-            blocked: record.blocked,
-            duration_ms: record.duration_ms,
-            error: record.error.clone(),
-            output_preview: record.output_preview.clone(),
-        });
-    }
 }
 
 fn tool_allowed_by_context(allowed_tools: &Option<HashSet<String>>, tool_name: &str) -> bool {
@@ -577,63 +357,12 @@ fn tool_not_allowed_result(tool_call: &ToolCall) -> ToolResult {
     result
 }
 
-fn record_web_retrieval_trace(
-    trace: &Option<TraceCollector>,
-    tool_call: &ToolCall,
-    result: &ToolResult,
-) {
-    let Some(trace) = trace else {
-        return;
-    };
-    let (title, provenance) = match tool_call.name.as_str() {
-        "web_search" => (
-            "Web search results",
-            tool_call.arguments["query"]
-                .as_str()
-                .map(|query| format!("web.search:{}", query))
-                .unwrap_or_else(|| "web.search".to_string()),
-        ),
-        "web_fetch" => (
-            "Web fetched content",
-            tool_call.arguments["url"]
-                .as_str()
-                .map(|url| format!("web.fetch:{}", url))
-                .unwrap_or_else(|| "web.fetch".to_string()),
-        ),
-        _ => return,
-    };
-    if let Some(ctx) = crate::engine::retrieval_context::RetrievalContext::from_web_result(
-        &provenance,
-        title,
-        &result.content,
-        provenance.clone(),
-        crate::engine::intent_router::RetrievalPolicy::Web,
-    ) {
-        trace.record(TraceEvent::RetrievalContextBuilt {
-            policy: format!("{:?}", ctx.policy),
-            sources: ctx
-                .items
-                .iter()
-                .map(|item| format!("{:?}", item.source))
-                .collect(),
-            items: ctx.items.len(),
-            estimated_tokens: ctx.token_estimate,
-            provenance: ctx.provenance_summaries(),
-            conflicts: ctx.conflict_count(),
-        });
-    }
-}
-
 async fn build_project_retrieval_context(
     query: &str,
     working_dir: &std::path::Path,
     policy: crate::engine::intent_router::RetrievalPolicy,
 ) -> Option<crate::engine::retrieval_context::RetrievalContext> {
-    if !matches!(
-        policy,
-        crate::engine::intent_router::RetrievalPolicy::Project
-            | crate::engine::intent_router::RetrievalPolicy::Full
-    ) {
+    if !policy.allows_project_context() {
         return None;
     }
     let root = working_dir.to_path_buf();
@@ -658,12 +387,7 @@ async fn build_session_retrieval_context(
     store: Option<Arc<crate::session_store::SessionStore>>,
     policy: crate::engine::intent_router::RetrievalPolicy,
 ) -> Option<crate::engine::retrieval_context::RetrievalContext> {
-    if !matches!(
-        policy,
-        crate::engine::intent_router::RetrievalPolicy::Memory
-            | crate::engine::intent_router::RetrievalPolicy::Project
-            | crate::engine::intent_router::RetrievalPolicy::Full
-    ) {
+    if !policy.allows_memory_context() {
         return None;
     }
     let store = store?;
@@ -720,288 +444,6 @@ fn should_use_nonstreaming_tools(
     let base_url = provider.base_url().to_ascii_lowercase();
     let model = provider.default_model().to_ascii_lowercase();
     base_url.contains("minimax") || model.contains("minimax")
-}
-
-fn tool_error_code_label(result: &ToolResult) -> Option<String> {
-    result.error_code.as_ref().and_then(|code| {
-        serde_json::to_value(code)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string))
-    })
-}
-
-fn merge_tool_result_metadata(result: &mut ToolResult, key: &str, value: serde_json::Value) {
-    match result.data.take() {
-        Some(serde_json::Value::Object(mut object)) => {
-            object.insert(key.to_string(), value);
-            result.data = Some(serde_json::Value::Object(object));
-        }
-        Some(existing) => {
-            result.data = Some(serde_json::json!({
-                "value": existing,
-                key: value,
-            }));
-        }
-        None => {
-            result.data = Some(serde_json::json!({
-                key: value,
-            }));
-        }
-    }
-}
-
-fn build_tool_execution_summary(tool_call: &ToolCall, result: &ToolResult) -> serde_json::Value {
-    let output_chars = result.content.chars().count();
-    let mut summary = serde_json::json!({
-        "tool": tool_call.name,
-        "call_id": tool_call.id,
-        "success": result.success,
-        "output_chars": output_chars,
-        "duration_ms": result.duration_ms,
-    });
-    let Some(object) = summary.as_object_mut() else {
-        return summary;
-    };
-
-    match tool_call.name.as_str() {
-        "bash" => {
-            if let Some(command) = tool_call.arguments["command"].as_str() {
-                let classification =
-                    crate::tools::bash_tool::command_classifier::classify_command(command);
-                object.insert(
-                    "command".to_string(),
-                    serde_json::Value::String(safe_prefix_by_bytes(command, 240).to_string()),
-                );
-                object.insert(
-                    "command_kind".to_string(),
-                    serde_json::to_value(classification.command_kind)
-                        .unwrap_or(serde_json::Value::Null),
-                );
-                object.insert(
-                    "validation_family".to_string(),
-                    serde_json::to_value(classification.validation_family)
-                        .unwrap_or(serde_json::Value::Null),
-                );
-                object.insert(
-                    "safe_for_closeout".to_string(),
-                    serde_json::Value::Bool(classification.safe_for_closeout),
-                );
-            }
-        }
-        "file_edit" => {
-            if let Some(path) = tool_call.arguments["path"].as_str() {
-                object.insert(
-                    "path".to_string(),
-                    serde_json::Value::String(path.to_string()),
-                );
-            }
-            if let Some(replacements) = result
-                .data
-                .as_ref()
-                .and_then(|data| data.get("replacements"))
-                .and_then(|value| value.as_u64())
-            {
-                object.insert(
-                    "replacements".to_string(),
-                    serde_json::Value::Number(replacements.into()),
-                );
-            }
-        }
-        "file_write" | "file_read" => {
-            if let Some(path) = tool_call.arguments["path"].as_str() {
-                object.insert(
-                    "path".to_string(),
-                    serde_json::Value::String(path.to_string()),
-                );
-            }
-        }
-        "grep" => {
-            if let Some(pattern) = tool_call.arguments["pattern"].as_str() {
-                object.insert(
-                    "pattern".to_string(),
-                    serde_json::Value::String(safe_prefix_by_bytes(pattern, 120).to_string()),
-                );
-            }
-            if let Some(path) = tool_call
-                .arguments
-                .get("path")
-                .or_else(|| tool_call.arguments.get("include"))
-                .and_then(|value| value.as_str())
-            {
-                object.insert(
-                    "path".to_string(),
-                    serde_json::Value::String(path.to_string()),
-                );
-            }
-        }
-        "git" => {
-            if let Some(action) = tool_call.arguments["action"].as_str() {
-                object.insert(
-                    "action".to_string(),
-                    serde_json::Value::String(action.to_string()),
-                );
-            }
-        }
-        _ => {}
-    }
-
-    if let Some(error) = result.error.as_deref() {
-        object.insert(
-            "error_preview".to_string(),
-            serde_json::Value::String(safe_prefix_by_bytes(error, 240).to_string()),
-        );
-    }
-
-    summary
-}
-
-fn tool_execution_start_progress(tool_name: &str, arguments: &serde_json::Value) -> String {
-    if tool_name == "bash" {
-        let Some(command) = arguments["command"].as_str() else {
-            return "Executing bash...".to_string();
-        };
-        let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
-        let prefix = match classification.validation_family {
-            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoTest) => {
-                "Running Rust tests"
-            }
-            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoCheck) => {
-                "Running cargo check"
-            }
-            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoClippy) => {
-                "Running cargo clippy"
-            }
-            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NpmTest)
-            | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PnpmTest)
-            | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::YarnTest) => {
-                "Running JS tests"
-            }
-            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::Pytest)
-            | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PythonUnittest) => {
-                "Running Python tests"
-            }
-            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::GoTest) => {
-                "Running Go tests"
-            }
-            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::RgAssertion) => {
-                "Running search assertion"
-            }
-            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NodeScript) => {
-                "Running Node validation"
-            }
-            None => match classification.command_kind {
-                crate::tools::bash_tool::command_classifier::CommandKind::Inspection => {
-                    "Inspecting with shell"
-                }
-                crate::tools::bash_tool::command_classifier::CommandKind::Mutation => {
-                    "Running shell mutation"
-                }
-                crate::tools::bash_tool::command_classifier::CommandKind::Dangerous => {
-                    "Reviewing dangerous shell command"
-                }
-                _ => "Executing shell command",
-            },
-        };
-        let command = safe_prefix_by_bytes(command, 80);
-        return format!("{}: {}", prefix, command);
-    }
-
-    format!("Executing {}...", tool_name)
-}
-
-fn attach_tool_execution_metadata(tool_call: &ToolCall, result: &mut ToolResult) {
-    let summary = build_tool_execution_summary(tool_call, result);
-    merge_tool_result_metadata(result, "tool_summary", summary);
-
-    if result.success {
-        return;
-    }
-    if result.content.trim().is_empty() {
-        result.content = result
-            .error
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("tool failed")
-            .to_string();
-    }
-    let error = result
-        .error
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("tool failed");
-    let code = tool_error_code_label(result);
-    let plan = crate::engine::recovery_plan::RecoveryPlan::tool_failure(
-        &tool_call.name,
-        error,
-        code.as_deref(),
-    );
-    let metadata = serde_json::json!({
-        "recoverable": plan.retryable,
-        "safe_retry": plan.safe_retry,
-        "suggested_command": plan.suggested_command,
-        "user_note": plan.user_note,
-        "recovery_action": plan.action,
-        "recovery_category": plan.category,
-    });
-    merge_tool_result_metadata(result, "recovery", metadata);
-}
-
-fn persist_tool_outcome_learning_event(
-    store: Option<&Arc<crate::session_store::SessionStore>>,
-    session_id: &str,
-    tool_call: &ToolCall,
-    result: &ToolResult,
-) {
-    let Some(store) = store else {
-        return;
-    };
-    let code = tool_error_code_label(result);
-    let recovery = result
-        .data
-        .as_ref()
-        .and_then(|data| data.get("recovery"))
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    let tool_summary = result
-        .data
-        .as_ref()
-        .and_then(|data| data.get("tool_summary"))
-        .cloned()
-        .unwrap_or_else(|| build_tool_execution_summary(tool_call, result));
-    let summary = if result.success {
-        format!("Tool {} succeeded", tool_call.name)
-    } else {
-        format!(
-            "Tool {} failed: {}",
-            tool_call.name,
-            result.error.as_deref().unwrap_or("unknown error")
-        )
-    };
-    let payload = serde_json::json!({
-        "tool": tool_call.name,
-        "call_id": tool_call.id,
-        "success": result.success,
-        "error_code": code,
-        "error": result.error,
-        "duration_ms": result.duration_ms,
-        "output_chars": result.content.chars().count(),
-        "tool_summary": tool_summary,
-        "recovery": recovery,
-    });
-    let payload = crate::engine::experience_ledger::attach_experience_payload(
-        payload,
-        crate::engine::experience_ledger::ExperienceRecord::from_tool_outcome(tool_call, result),
-    );
-    if let Err(e) = store.add_learning_event(
-        session_id,
-        "tool_outcome",
-        "conversation_loop",
-        &summary,
-        if result.success { 1.0 } else { 0.75 },
-        &payload,
-    ) {
-        warn!("Failed to persist tool outcome learning event: {}", e);
-    }
 }
 
 fn persist_workflow_learning_event(
@@ -1112,6 +554,107 @@ fn trace_adaptive_workflow_trigger(
         max_repair_attempts: runner.policy.max_repair_attempts,
         reason: runner.policy.reason.clone(),
     });
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeDietSnapshot {
+    prompt_tokens: u64,
+    tool_schema_tokens: u64,
+    exposed_tools: usize,
+    memory_snapshot_chars: usize,
+    memory_snapshot_tokens: u64,
+    retrieval_items: usize,
+    retrieval_tokens: u64,
+    skill_list_chars: usize,
+    skill_list_tokens: u64,
+    route_scoped_tools: bool,
+    closeout_visibility: String,
+    validation_evidence: String,
+}
+
+impl RuntimeDietSnapshot {
+    fn new(route_scoped_tools: bool) -> Self {
+        Self {
+            prompt_tokens: 0,
+            tool_schema_tokens: 0,
+            exposed_tools: 0,
+            memory_snapshot_chars: 0,
+            memory_snapshot_tokens: 0,
+            retrieval_items: 0,
+            retrieval_tokens: 0,
+            skill_list_chars: 0,
+            skill_list_tokens: 0,
+            route_scoped_tools,
+            closeout_visibility: "none".to_string(),
+            validation_evidence: "none".to_string(),
+        }
+    }
+
+    fn observe_memory_snapshot(&mut self, snapshot: &str) {
+        self.memory_snapshot_chars = self.memory_snapshot_chars.max(snapshot.chars().count());
+        self.memory_snapshot_tokens = self.memory_snapshot_tokens.max(estimate_tokens(snapshot));
+    }
+
+    fn observe_retrieval_context(
+        &mut self,
+        ctx: &crate::engine::retrieval_context::RetrievalContext,
+    ) {
+        self.retrieval_items = self.retrieval_items.max(ctx.items.len());
+        self.retrieval_tokens = self.retrieval_tokens.max(ctx.token_estimate as u64);
+    }
+
+    fn observe_skill_list_summary(&mut self, summary: &str) {
+        self.skill_list_chars = self.skill_list_chars.max(summary.chars().count());
+        self.skill_list_tokens = self.skill_list_tokens.max(estimate_tokens(summary));
+    }
+}
+
+fn trace_runtime_diet_report(
+    trace: &TraceCollector,
+    route: &IntentRoute,
+    runner: &crate::engine::code_change_workflow::CodeChangeWorkflowRunner,
+    snapshot: &RuntimeDietSnapshot,
+) {
+    trace.record(TraceEvent::RuntimeDietReport {
+        prompt_tokens: snapshot.prompt_tokens,
+        tool_schema_tokens: snapshot.tool_schema_tokens,
+        exposed_tools: snapshot.exposed_tools,
+        memory_snapshot_chars: snapshot.memory_snapshot_chars,
+        memory_snapshot_tokens: snapshot.memory_snapshot_tokens,
+        retrieval_items: snapshot.retrieval_items,
+        retrieval_tokens: snapshot.retrieval_tokens,
+        skill_list_chars: snapshot.skill_list_chars,
+        skill_list_tokens: snapshot.skill_list_tokens,
+        route_scoped_tools: snapshot.route_scoped_tools,
+        workflow_context: runtime_workflow_context_label(route, runner).to_string(),
+        closeout_visibility: snapshot.closeout_visibility.clone(),
+        validation_evidence: snapshot.validation_evidence.clone(),
+    });
+}
+
+fn runtime_workflow_context_label(
+    route: &IntentRoute,
+    runner: &crate::engine::code_change_workflow::CodeChangeWorkflowRunner,
+) -> &'static str {
+    if !crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
+        return "none";
+    }
+    if matches!(
+        runner.policy.depth,
+        crate::engine::code_change_workflow::WorkflowDepth::Strict
+    ) {
+        return "strict";
+    }
+    if runner.policy.require_workflow_judgment
+        || runner.policy.require_stage_validation
+        || runner.policy.reflection_blocks
+    {
+        return "guarded";
+    }
+    if !runner.adaptive_trigger_labels().is_empty() {
+        return "adaptive";
+    }
+    "minimal"
 }
 
 /// 统一对话循环
@@ -1444,6 +987,11 @@ impl ConversationLoop {
             reason: resource_policy.reason.clone(),
         });
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let destructive_scope =
+            crate::engine::destructive_scope::DestructiveScopeContract::from_user_request(
+                &last_user_preview,
+                &working_dir,
+            );
         let mut turn_retrieval_context =
             build_project_retrieval_context(&last_user_preview, &working_dir, route.retrieval)
                 .await;
@@ -1460,29 +1008,31 @@ impl ConversationLoop {
                 turn_retrieval_context = Some(session_ctx);
             }
         }
-        if let Some(ref mem_mutex) = self.memory_manager {
-            let mut mem = mem_mutex.lock().await;
-            mem.reset_turn();
-            if let Some(memory_ctx) = mem
-                .prefetch_retrieval_context_with_llm_rerank(
-                    &last_user_preview,
-                    self.provider.as_ref(),
-                    &self.model,
-                    route.retrieval,
-                )
-                .await
-            {
-                trace.record(TraceEvent::MemoryPrefetch {
-                    chars: memory_ctx
-                        .items
-                        .iter()
-                        .map(|item| item.content_preview.chars().count())
-                        .sum(),
-                });
-                if let Some(ref mut ctx) = turn_retrieval_context {
-                    ctx.extend(memory_ctx);
-                } else {
-                    turn_retrieval_context = Some(memory_ctx);
+        if route.retrieval.allows_memory_context() {
+            if let Some(ref mem_mutex) = self.memory_manager {
+                let mut mem = mem_mutex.lock().await;
+                mem.reset_turn();
+                if let Some(memory_ctx) = mem
+                    .prefetch_retrieval_context_with_llm_rerank(
+                        &last_user_preview,
+                        self.provider.as_ref(),
+                        &self.model,
+                        route.retrieval,
+                    )
+                    .await
+                {
+                    trace.record(TraceEvent::MemoryPrefetch {
+                        chars: memory_ctx
+                            .items
+                            .iter()
+                            .map(|item| item.content_preview.chars().count())
+                            .sum(),
+                    });
+                    if let Some(ref mut ctx) = turn_retrieval_context {
+                        ctx.extend(memory_ctx);
+                    } else {
+                        turn_retrieval_context = Some(memory_ctx);
+                    }
                 }
             }
         }
@@ -1892,7 +1442,7 @@ impl ConversationLoop {
             }
         }
 
-        let base_tools = self.get_tools();
+        let base_tools = self.get_tools_for_route(&route);
         let mut final_content = String::new();
         let mut final_tool_calls = Vec::new();
         let mut iterations_used = 0;
@@ -1903,23 +1453,37 @@ impl ConversationLoop {
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
         let mut successful_required_validation_commands: HashSet<String> = HashSet::new();
+        let mut runtime_diet = RuntimeDietSnapshot::new(Self::route_scoped_tools_enabled());
+        if let Some(ref ctx) = turn_retrieval_context {
+            runtime_diet.observe_retrieval_context(ctx);
+        }
+        if base_tools.iter().any(|tool| tool.name == "skills_list") {
+            let skill_summary =
+                crate::skills::SkillRuntime::load(&working_dir).discovery_summary("", 30);
+            runtime_diet.observe_skill_list_summary(&skill_summary);
+        }
 
         // ── 记忆围栏注入：先注入，再让 preflight 统计真实请求大小 ──
-        if let Some(ref mem_mutex) = self.memory_manager {
-            let mem = mem_mutex.lock().await;
-            let snapshot = mem.get_snapshot();
-            if !snapshot.is_empty() && !messages.iter().any(|m| {
-                matches!(m, Message::System { content } if content.contains("<memory-context>"))
-            }) {
-                trace.record(TraceEvent::MemorySnapshotInjected {
-                    chars: snapshot.chars().count(),
-                });
-                let insert_pos = messages
-                    .iter()
-                    .position(|m| !matches!(m, Message::System { .. }))
-                    .unwrap_or(messages.len());
-                messages.insert(insert_pos, Message::system(&snapshot));
-                debug!("Injected memory context fence at position {}", insert_pos);
+        if route.retrieval.allows_memory_context() {
+            if let Some(ref mem_mutex) = self.memory_manager {
+                let mem = mem_mutex.lock().await;
+                let snapshot = mem.get_snapshot();
+                if !snapshot.is_empty()
+                    && !messages.iter().any(|m| {
+                        matches!(m, Message::System { content } if content.contains("<memory-context>"))
+                    })
+                {
+                    runtime_diet.observe_memory_snapshot(&snapshot);
+                    trace.record(TraceEvent::MemorySnapshotInjected {
+                        chars: snapshot.chars().count(),
+                    });
+                    let insert_pos = messages
+                        .iter()
+                        .position(|m| !matches!(m, Message::System { .. }))
+                        .unwrap_or(messages.len());
+                    messages.insert(insert_pos, Message::system(&snapshot));
+                    debug!("Injected memory context fence at position {}", insert_pos);
+                }
             }
         }
 
@@ -2064,7 +1628,7 @@ impl ConversationLoop {
                     ) > 0
                 })
                 .unwrap_or(false);
-            if !memory_already_in_turn_context {
+            if !memory_already_in_turn_context && route.retrieval.allows_memory_context() {
                 if let Some(ref mem_mutex) = self.memory_manager {
                     let mut mem = mem_mutex.lock().await;
                     if let Some(last_user_idx) = request_messages
@@ -2081,6 +1645,7 @@ impl ConversationLoop {
                                 )
                                 .await;
                             if let Some(ref ctx) = retrieval_context {
+                                runtime_diet.observe_retrieval_context(ctx);
                                 trace.record(TraceEvent::MemoryPrefetch {
                                     chars: ctx
                                         .items
@@ -2109,6 +1674,14 @@ impl ConversationLoop {
                     }
                 }
             }
+
+            runtime_diet.prompt_tokens = runtime_diet
+                .prompt_tokens
+                .max(estimate_messages_tokens(&request_messages));
+            runtime_diet.tool_schema_tokens = runtime_diet
+                .tool_schema_tokens
+                .max(estimate_tool_schemas_tokens(&tools));
+            runtime_diet.exposed_tools = runtime_diet.exposed_tools.max(tools.len());
 
             let mut request = ChatRequest::new(&self.model)
                 .with_messages(request_messages)
@@ -2201,6 +1774,8 @@ impl ConversationLoop {
                     trace.record(TraceEvent::Error {
                         message: e.to_string(),
                     });
+                    runtime_diet.validation_evidence = "api_error".to_string();
+                    trace_runtime_diet_report(&trace, &route, &code_workflow, &runtime_diet);
                     self.finish_trace(trace.clone(), TurnStatus::Failed);
                     return Err(e);
                 }
@@ -2244,6 +1819,7 @@ impl ConversationLoop {
                     &exposed_tool_names,
                     action_checkpoint_active,
                     has_changes_before_tools,
+                    &destructive_scope,
                 )
                 .await;
 
@@ -2331,6 +1907,23 @@ impl ConversationLoop {
                         successful_validation_commands.push(command);
                     }
                 }
+            }
+            if let Some(guard) = destructive_scope.completion_guard_for_results(
+                results.iter().map(|(tc, result)| (tc, result.success)),
+                &working_dir,
+            ) {
+                trace.record(TraceEvent::DestructiveScopeChecked {
+                    tool: "assistant_response".to_string(),
+                    call_id: "post_action_guard".to_string(),
+                    operation: "post_action_guard".to_string(),
+                    target: None,
+                    allowed: false,
+                    reason: guard.clone(),
+                });
+                messages.push(Message::system(guard.clone()));
+                tool_results_text.push('\n');
+                tool_results_text.push_str(&guard);
+                tool_results_text.push('\n');
             }
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                 if let Some(correction) =
@@ -2546,6 +2139,7 @@ impl ConversationLoop {
                                     &exposed_synth_tools,
                                     false,
                                     false,
+                                    &destructive_scope,
                                 )
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
@@ -2649,6 +2243,7 @@ impl ConversationLoop {
                                     // to inspect and repair the arguments.
                                     false,
                                     false,
+                                    &destructive_scope,
                                 )
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
@@ -3548,8 +3143,11 @@ impl ConversationLoop {
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
             });
-            let closeout_text = closeout.format_for_final_response();
-            if !final_content.contains("Closeout:") {
+            runtime_diet.closeout_visibility =
+                format!("{:?}", closeout.visibility_from_env()).to_ascii_lowercase();
+            runtime_diet.validation_evidence = closeout.status.label().to_string();
+            let closeout_text = closeout.format_for_user_response();
+            if !closeout_text.is_empty() && !final_content.contains("Closeout:") {
                 final_content.push_str(&closeout_text);
                 if let Some(tx) = tx {
                     let _ = tx.send(StreamEvent::TextChunk(closeout_text)).await;
@@ -3570,6 +3168,8 @@ impl ConversationLoop {
                 error: "tool iteration budget exhausted before final closeout".to_string(),
             });
         }
+
+        trace_runtime_diet_report(&trace, &route, &code_workflow, &runtime_diet);
 
         if let Some(tx) = tx {
             let _ = tx.send(StreamEvent::Complete).await;
@@ -6032,6 +5632,181 @@ Do not answer in prose unless no safe patch exists."#;
             .collect()
     }
 
+    fn get_tools_for_route(&self, route: &IntentRoute) -> Vec<crate::services::api::Tool> {
+        let tools = self.get_tools();
+        Self::route_scoped_tools(&tools, route)
+    }
+
+    fn route_scoped_tools(
+        tools: &[crate::services::api::Tool],
+        route: &IntentRoute,
+    ) -> Vec<crate::services::api::Tool> {
+        if !Self::route_scoped_tools_enabled() {
+            return tools.to_vec();
+        }
+
+        let allowlist = Self::route_tool_allowlist(route);
+        tools
+            .iter()
+            .filter(|tool| allowlist.contains(tool.name.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    fn route_scoped_tools_enabled() -> bool {
+        if Self::env_flag_disabled("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS") {
+            return false;
+        }
+        if Self::env_flag_enabled("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE") {
+            return false;
+        }
+        !matches!(
+            std::env::var("PRIORITY_AGENT_TOOL_PROFILE")
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "full" | "all" | "experimental"
+        )
+    }
+
+    fn env_flag_enabled(name: &str) -> bool {
+        matches!(
+            std::env::var(name)
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    }
+
+    fn env_flag_disabled(name: &str) -> bool {
+        matches!(
+            std::env::var(name)
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    }
+
+    fn route_tool_allowlist(route: &IntentRoute) -> HashSet<String> {
+        let mut allowlist = route
+            .recommended_tools
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+
+        let tools: &[&str] = match route.intent {
+            IntentKind::Memory => &["memory_load", "memory_save", "memory_clear", "ask_user"],
+            IntentKind::Research => &[
+                "web_search",
+                "web_fetch",
+                "project_list",
+                "grep",
+                "file_read",
+                "ask_user",
+            ],
+            IntentKind::Configuration => &[
+                "config",
+                "mcp",
+                "mcp_tool",
+                "mcp_auth",
+                "list_mcp_resources",
+                "read_mcp_resource",
+                "file_read",
+                "bash",
+                "ask_user",
+            ],
+            IntentKind::Delegation => &[
+                "agent",
+                "swarm",
+                "task_create",
+                "task_get",
+                "task_list",
+                "task_update",
+                "task_stop",
+                "task_output",
+                "project_list",
+                "grep",
+                "file_read",
+                "todo_write",
+                "ask_user",
+            ],
+            _ => match route.workflow {
+                WorkflowKind::CodeChange => &[
+                    "project_list",
+                    "glob",
+                    "grep",
+                    "file_read",
+                    "file_write",
+                    "file_edit",
+                    "bash",
+                    "diff",
+                    "git",
+                    "format",
+                    "todo_write",
+                    "ask_user",
+                ],
+                WorkflowKind::BugFix => &[
+                    "project_list",
+                    "glob",
+                    "grep",
+                    "file_read",
+                    "file_write",
+                    "file_edit",
+                    "bash",
+                    "diff",
+                    "git",
+                    "format",
+                    "lsp",
+                    "symbol_query",
+                ],
+                WorkflowKind::Planning => &[
+                    "project_list",
+                    "glob",
+                    "grep",
+                    "file_read",
+                    "plan",
+                    "enter_plan_mode",
+                    "exit_plan_mode",
+                    "todo_write",
+                    "ask_user",
+                ],
+                WorkflowKind::Research => &[
+                    "web_search",
+                    "web_fetch",
+                    "project_list",
+                    "grep",
+                    "file_read",
+                    "ask_user",
+                ],
+                WorkflowKind::Delegation => &[
+                    "agent",
+                    "swarm",
+                    "task_create",
+                    "task_get",
+                    "task_list",
+                    "task_update",
+                    "task_stop",
+                    "task_output",
+                    "project_list",
+                    "grep",
+                    "file_read",
+                    "todo_write",
+                    "ask_user",
+                ],
+                WorkflowKind::Direct if route.recommended_tools.is_empty() => &[],
+                WorkflowKind::Direct => &["file_read", "glob", "bash", "ask_user"],
+            },
+        };
+
+        allowlist.extend(tools.iter().map(|tool| (*tool).to_string()));
+        allowlist
+    }
+
     fn code_action_tools(
         tools: &[crate::services::api::Tool],
         has_changes_before_request: bool,
@@ -6210,6 +5985,7 @@ Do not answer in prose unless no safe patch exists."#;
         exposed_tool_names: &HashSet<String>,
         action_checkpoint_active: bool,
         has_changes_before_tools: bool,
+        destructive_scope: &crate::engine::destructive_scope::DestructiveScopeContract,
     ) -> Vec<(ToolCall, ToolResult)> {
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
@@ -6302,6 +6078,52 @@ Do not answer in prose unless no safe patch exists."#;
                 );
                 denied_results.push((tc.clone(), result));
                 continue;
+            }
+
+            let working_dir =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let destructive_check = destructive_scope.check_tool_call(tc, &working_dir);
+            if destructive_check.applies {
+                if let Some(ref trace) = trace {
+                    trace.record(TraceEvent::DestructiveScopeChecked {
+                        tool: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                        operation: destructive_check.operation.clone(),
+                        target: destructive_check.target.clone(),
+                        allowed: destructive_check.allowed,
+                        reason: destructive_check.reason.clone(),
+                    });
+                }
+                if !destructive_check.allowed {
+                    let mut result = ToolResult::error(format!(
+                        "Destructive scope blocked: {}",
+                        destructive_check.reason
+                    ));
+                    attach_tool_execution_metadata(tc, &mut result);
+                    if let Some(ref trace) = trace {
+                        trace.record(TraceEvent::ToolStarted {
+                            tool: tc.name.clone(),
+                            call_id: tc.id.clone(),
+                            parallel: false,
+                            pre_executed: false,
+                        });
+                        trace.record(TraceEvent::ToolCompleted {
+                            tool: tc.name.clone(),
+                            call_id: tc.id.clone(),
+                            success: false,
+                            duration_ms: Some(0),
+                            output_chars: result.content.chars().count(),
+                        });
+                    }
+                    persist_tool_outcome_learning_event(
+                        self.session_store.as_ref(),
+                        &self.session_id,
+                        tc,
+                        &result,
+                    );
+                    denied_results.push((tc.clone(), result));
+                    continue;
+                }
             }
 
             if action_checkpoint_active
@@ -6834,7 +6656,7 @@ Do not answer in prose unless no safe patch exists."#;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::api::{ChatResponse, ToolCall, Usage};
+    use crate::services::api::{ChatResponse, Tool, ToolCall, Usage};
     use crate::test_utils::env_guard::EnvVarGuard;
     use crate::tools::{BashTool, FileEditTool, FileReadTool, FileWriteTool, GitTool};
     use async_openai::types::ChatCompletionResponseStream;
@@ -6857,6 +6679,314 @@ mod tests {
         assert!(tool_allowed_by_context(&allowed, "file_read"));
         assert!(tool_allowed_by_context(&allowed, "grep"));
         assert!(!tool_allowed_by_context(&allowed, "bash"));
+    }
+
+    fn fake_tools(names: &[&str]) -> Vec<Tool> {
+        names
+            .iter()
+            .map(|name| Tool::new(*name, format!("{} tool", name)))
+            .collect()
+    }
+
+    fn exposed_names(tools: &[Tool]) -> HashSet<String> {
+        tools.iter().map(|tool| tool.name.clone()).collect()
+    }
+
+    fn sorted_tool_names(tools: &[Tool]) -> Vec<String> {
+        let mut names = tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    fn runtime_diet_tool_universe() -> Vec<Tool> {
+        fake_tools(&[
+            "agent",
+            "ask_user",
+            "bash",
+            "calculate",
+            "datetime",
+            "diff",
+            "enter_plan_mode",
+            "exit_plan_mode",
+            "file_edit",
+            "file_read",
+            "file_write",
+            "format",
+            "git",
+            "glob",
+            "grep",
+            "json_query",
+            "list_mcp_resources",
+            "lsp",
+            "mcp",
+            "mcp_auth",
+            "mcp_tool",
+            "memory_load",
+            "memory_save",
+            "plan",
+            "project_list",
+            "read_mcp_resource",
+            "refactor",
+            "repl",
+            "skill_manage",
+            "skills_list",
+            "skill_view",
+            "swarm",
+            "symbol_query",
+            "task_create",
+            "task_get",
+            "task_list",
+            "task_output",
+            "task_stop",
+            "task_update",
+            "todo_write",
+            "web_fetch",
+            "web_search",
+            "workbench",
+            "worktree",
+        ])
+    }
+
+    #[test]
+    fn route_scoped_tools_for_file_delete_keep_destructive_scope_small() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+        env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+        env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+        let route = IntentRouter::new().route("帮我把这个文件删了吧");
+        let tools = fake_tools(&[
+            "file_read",
+            "file_write",
+            "file_edit",
+            "glob",
+            "bash",
+            "web_search",
+            "memory_save",
+            "mcp",
+            "agent",
+        ]);
+
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("file_read"));
+        assert!(exposed.contains("glob"));
+        assert!(exposed.contains("bash"));
+        assert!(!exposed.contains("file_write"));
+        assert!(!exposed.contains("file_edit"));
+        assert!(!exposed.contains("web_search"));
+        assert!(!exposed.contains("memory_save"));
+        assert!(!exposed.contains("mcp"));
+        assert!(!exposed.contains("agent"));
+    }
+
+    #[test]
+    fn route_scoped_tools_for_python_creation_include_write_and_validation() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+        env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+        env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+        let route = IntentRouter::new().route("帮我做一个贪吃蛇游戏吧，用 python 做吧");
+        let tools = fake_tools(&[
+            "project_list",
+            "grep",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "bash",
+            "diff",
+            "web_search",
+            "memory_save",
+            "mcp",
+        ]);
+
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("project_list"));
+        assert!(exposed.contains("grep"));
+        assert!(exposed.contains("file_read"));
+        assert!(exposed.contains("file_write"));
+        assert!(exposed.contains("file_edit"));
+        assert!(exposed.contains("bash"));
+        assert!(exposed.contains("diff"));
+        assert!(!exposed.contains("web_search"));
+        assert!(!exposed.contains("memory_save"));
+        assert!(!exposed.contains("mcp"));
+    }
+
+    #[test]
+    fn route_scoped_tools_for_debugging_include_search_read_shell_and_edit() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+        env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+        env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+        let route = IntentRouter::new().route("cargo test 报错了，帮我修一下");
+        let tools = fake_tools(&[
+            "project_list",
+            "grep",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "bash",
+            "lsp",
+            "symbol_query",
+            "web_search",
+            "memory_load",
+        ]);
+
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("grep"));
+        assert!(exposed.contains("file_read"));
+        assert!(exposed.contains("file_write"));
+        assert!(exposed.contains("file_edit"));
+        assert!(exposed.contains("bash"));
+        assert!(exposed.contains("lsp"));
+        assert!(exposed.contains("symbol_query"));
+        assert!(!exposed.contains("web_search"));
+        assert!(!exposed.contains("memory_load"));
+    }
+
+    #[test]
+    fn route_scoped_tools_hide_skill_tools_without_skill_relevance() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+        env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+        env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+        let route = IntentRouter::new().route("帮我做一个贪吃蛇游戏吧，用 python 做吧");
+        let tools = fake_tools(&[
+            "project_list",
+            "grep",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "bash",
+            "skills_list",
+            "skill_view",
+            "skill_manage",
+        ]);
+
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("file_write"));
+        assert!(exposed.contains("file_edit"));
+        assert!(!exposed.contains("skills_list"));
+        assert!(!exposed.contains("skill_view"));
+        assert!(!exposed.contains("skill_manage"));
+    }
+
+    #[test]
+    fn runtime_diet_sample_prompts_stay_within_route_tool_budgets() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+        env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+        env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+        struct Sample {
+            label: &'static str,
+            prompt: &'static str,
+            intent: IntentKind,
+            workflow: WorkflowKind,
+            max_tools: usize,
+        }
+
+        let samples = [
+            Sample {
+                label: "direct answer",
+                prompt: "简单回答：2+2 等于几？",
+                intent: IntentKind::DirectAnswer,
+                workflow: WorkflowKind::Direct,
+                max_tools: 0,
+            },
+            Sample {
+                label: "scoped file delete",
+                prompt: "帮我把这个文件删了吧",
+                intent: IntentKind::DirectAnswer,
+                workflow: WorkflowKind::Direct,
+                max_tools: 4,
+            },
+            Sample {
+                label: "python code creation",
+                prompt: "帮我做一个贪吃蛇游戏吧，用 python 做吧",
+                intent: IntentKind::CodeChange,
+                workflow: WorkflowKind::CodeChange,
+                max_tools: 12,
+            },
+            Sample {
+                label: "running issue debug",
+                prompt: "我在运行中发现了一个问题，你帮我看看是怎么回事吧",
+                intent: IntentKind::Debugging,
+                workflow: WorkflowKind::BugFix,
+                max_tools: 12,
+            },
+            Sample {
+                label: "reference comparison",
+                prompt: "帮我对比 claude 和 opencode 的 agent 指令设计",
+                intent: IntentKind::Research,
+                workflow: WorkflowKind::Research,
+                max_tools: 6,
+            },
+        ];
+
+        let router = IntentRouter::new();
+        let tools = runtime_diet_tool_universe();
+        for sample in samples {
+            let route = router.route(sample.prompt);
+            assert_eq!(
+                route.intent, sample.intent,
+                "runtime diet sample '{}' routed to unexpected intent: {:?}; reason={}",
+                sample.label, route.intent, route.reason
+            );
+            assert_eq!(
+                route.workflow, sample.workflow,
+                "runtime diet sample '{}' routed to unexpected workflow: {:?}; reason={}",
+                sample.label, route.workflow, route.reason
+            );
+
+            let exposed = sorted_tool_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+            assert!(
+                exposed.len() <= sample.max_tools,
+                "runtime diet sample '{}' exposed {} tools, budget {}; route={}; reason={}; exposed={:?}",
+                sample.label,
+                exposed.len(),
+                sample.max_tools,
+                route.compact_label(),
+                route.reason,
+                exposed
+            );
+        }
+    }
+
+    #[test]
+    fn route_scoped_tools_can_be_disabled_for_full_or_debug_exposure() {
+        let route = IntentRouter::new().route("帮我做一个贪吃蛇游戏吧，用 python 做吧");
+        let tools = fake_tools(&[
+            "file_read",
+            "file_write",
+            "bash",
+            "web_search",
+            "memory_save",
+        ]);
+
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_TOOL_PROFILE", "full");
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("web_search"));
+        assert!(exposed.contains("memory_save"));
+
+        env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+        env.set("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE", "1");
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("web_search"));
+        assert!(exposed.contains("memory_save"));
+
+        env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+        env.set("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS", "0");
+        let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+        assert!(exposed.contains("web_search"));
+        assert!(exposed.contains("memory_save"));
     }
 
     #[test]
@@ -8303,6 +8433,11 @@ mod tests {
         );
         let route = crate::engine::intent_router::IntentRouter::new().route("push the branch");
         let policy = crate::engine::resource_policy::ResourcePolicy::from_route(&route);
+        let destructive_scope =
+            crate::engine::destructive_scope::DestructiveScopeContract::from_user_request(
+                "push the branch",
+                &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            );
         let tool_calls = vec![ToolCall {
             id: "git_push".to_string(),
             name: "git".to_string(),
@@ -8320,6 +8455,7 @@ mod tests {
                 &exposed_tool_names,
                 false,
                 false,
+                &destructive_scope,
             )
             .await;
 
@@ -8348,6 +8484,11 @@ mod tests {
         );
         let route = crate::engine::intent_router::IntentRouter::new().route("push the branch");
         let policy = crate::engine::resource_policy::ResourcePolicy::from_route(&route);
+        let destructive_scope =
+            crate::engine::destructive_scope::DestructiveScopeContract::from_user_request(
+                "push the branch",
+                &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            );
         let tool_calls = vec![ToolCall {
             id: "git_push".to_string(),
             name: "git".to_string(),
@@ -8365,6 +8506,7 @@ mod tests {
                 &exposed_tool_names,
                 false,
                 false,
+                &destructive_scope,
             )
             .await;
 
@@ -8376,6 +8518,57 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("was not exposed"));
+    }
+
+    #[tokio::test]
+    async fn destructive_scope_blocks_parent_delete_before_bash_execution() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(BashTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let route = crate::engine::intent_router::IntentRouter::new().route("删除 abc.txt");
+        let policy = crate::engine::resource_policy::ResourcePolicy::from_route(&route);
+        let destructive_scope =
+            crate::engine::destructive_scope::DestructiveScopeContract::from_user_request(
+                "删除 abc.txt",
+                &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            );
+        let tool_calls = vec![ToolCall {
+            id: "rm_parent".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({"command": "rm -rf /tmp/gex"}),
+        }];
+        let exposed_tool_names = HashSet::from(["bash".to_string()]);
+
+        let results = loop_instance
+            .execute_tools_parallel(
+                &tool_calls,
+                None,
+                Default::default(),
+                None,
+                &policy,
+                &exposed_tool_names,
+                false,
+                false,
+                &destructive_scope,
+            )
+            .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].1.success);
+        assert!(results[0]
+            .1
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Destructive scope blocked"));
     }
 
     #[test]
@@ -8502,6 +8695,84 @@ mod tests {
         fn default_model(&self) -> &str {
             "mock-model"
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_diet_report_is_recorded_for_real_loop_turn() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::from(vec![ChatResponse {
+                content: "hello".to_string(),
+                tool_calls: None,
+                usage: Some(Usage {
+                    prompt_tokens: 12,
+                    completion_tokens: 3,
+                    total_tokens: 15,
+                    reasoning_tokens: None,
+                    cached_tokens: None,
+                }),
+            }])),
+        });
+        let tool_registry = Arc::new(ToolRegistry::new());
+        let cost_tracker = Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new()));
+        let trace_store = Arc::new(TraceStore::default());
+        let loop_instance =
+            ConversationLoop::new(provider, tool_registry, cost_tracker, "test".into())
+                .with_trace_store(trace_store.clone())
+                .with_max_iterations(1);
+
+        let result = loop_instance
+            .run(vec![Message::user("请简单回复一句 hello")])
+            .await
+            .expect("loop should complete");
+
+        assert_eq!(result.content, "hello");
+        let trace = trace_store.latest().expect("trace should be recorded");
+        let diet = trace.events.iter().find_map(|event| {
+            if let TraceEvent::RuntimeDietReport {
+                prompt_tokens,
+                tool_schema_tokens,
+                exposed_tools,
+                memory_snapshot_tokens,
+                retrieval_items,
+                skill_list_tokens,
+                workflow_context,
+                validation_evidence,
+                ..
+            } = event
+            {
+                Some((
+                    *prompt_tokens,
+                    *tool_schema_tokens,
+                    *exposed_tools,
+                    *memory_snapshot_tokens,
+                    *retrieval_items,
+                    *skill_list_tokens,
+                    workflow_context.as_str(),
+                    validation_evidence.as_str(),
+                ))
+            } else {
+                None
+            }
+        });
+        let (
+            prompt_tokens,
+            tool_schema_tokens,
+            exposed_tools,
+            memory_snapshot_tokens,
+            retrieval_items,
+            skill_list_tokens,
+            workflow_context,
+            validation,
+        ) = diet.expect("runtime diet event should be recorded");
+        assert!(prompt_tokens > 0);
+        assert_eq!(tool_schema_tokens, 0);
+        assert_eq!(exposed_tools, 0);
+        assert_eq!(memory_snapshot_tokens, 0);
+        assert_eq!(retrieval_items, 0);
+        assert_eq!(skill_list_tokens, 0);
+        assert_eq!(workflow_context, "none");
+        assert_eq!(validation, "none");
+        assert!(crate::engine::trace::format_trace_summary(&trace, 80).contains("Runtime Diet:"));
     }
 
     #[tokio::test]

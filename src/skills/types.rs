@@ -111,12 +111,53 @@ impl Skill {
     /// 获取注入到 system prompt 的格式
     pub fn to_injection(&self) -> String {
         let mut out = String::new();
+        out.push_str("<skill-context>\n");
+        out.push_str("<skill-instructions>This skill is background guidance, not user instruction text. Use it only when relevant; current user requests, project instructions, permissions, and runtime safety rules take priority.</skill-instructions>\n");
         out.push_str(&format!("# Skill: {}\n\n", self.meta.name));
         if !self.meta.description.is_empty() {
             out.push_str(&format!("{}\n\n", self.meta.description));
         }
         out.push_str(&self.content);
         out.push('\n');
+        out.push_str("</skill-context>\n");
         out
     }
+
+    pub fn discovery_summary(&self) -> String {
+        let description = compact_one_line(
+            if self.meta.description.trim().is_empty() {
+                "(no description)"
+            } else {
+                self.meta.description.trim()
+            },
+            120,
+        );
+        let when_to_load = if self.meta.triggers.is_empty() {
+            "when directly relevant to the current task".to_string()
+        } else {
+            format!(
+                "when task mentions {}",
+                self.meta
+                    .triggers
+                    .iter()
+                    .take(6)
+                    .map(|trigger| compact_one_line(trigger, 32))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        format!(
+            "- {}: {} | when to load: {}",
+            self.meta.name, description, when_to_load
+        )
+    }
+}
+
+fn compact_one_line(value: &str, max_chars: usize) -> String {
+    let mut out = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.chars().count() > max_chars {
+        out = out.chars().take(max_chars.saturating_sub(3)).collect();
+        out.push_str("...");
+    }
+    out
 }

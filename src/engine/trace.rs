@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 const DEFAULT_MAX_TRACES: usize = 100;
 const PREVIEW_CHARS: usize = 120;
+pub const RUNTIME_DIET_PROMPT_TOKEN_BUDGET: u64 = 4_000;
+pub const RUNTIME_DIET_TOOL_COUNT_BUDGET: usize = 24;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -154,6 +156,14 @@ pub enum TraceEvent {
         reason: String,
         suggested_action: Option<String>,
     },
+    DestructiveScopeChecked {
+        tool: String,
+        call_id: String,
+        operation: String,
+        target: Option<String>,
+        allowed: bool,
+        reason: String,
+    },
     WorkflowRouted {
         decision: String,
         reason: String,
@@ -195,6 +205,21 @@ pub enum TraceEvent {
         before_tokens: usize,
         after_tokens: usize,
         strategy: String,
+    },
+    RuntimeDietReport {
+        prompt_tokens: u64,
+        tool_schema_tokens: u64,
+        exposed_tools: usize,
+        memory_snapshot_chars: usize,
+        memory_snapshot_tokens: u64,
+        retrieval_items: usize,
+        retrieval_tokens: u64,
+        skill_list_chars: usize,
+        skill_list_tokens: u64,
+        route_scoped_tools: bool,
+        workflow_context: String,
+        closeout_visibility: String,
+        validation_evidence: String,
     },
     ApiRequestStarted {
         iteration: usize,
@@ -333,6 +358,7 @@ impl TraceEvent {
             TraceEvent::ReflectionPassCompleted { .. } => "reflection.pass",
             TraceEvent::SessionGoalUpdated { .. } => "goal",
             TraceEvent::GoalDriftDetected { .. } => "goal.drift",
+            TraceEvent::DestructiveScopeChecked { .. } => "destructive.scope",
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
@@ -342,6 +368,7 @@ impl TraceEvent {
             TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
             TraceEvent::MemorySynced { .. } => "memory.sync",
             TraceEvent::ContextCompacted { .. } => "context.compact",
+            TraceEvent::RuntimeDietReport { .. } => "runtime.diet",
             TraceEvent::ApiRequestStarted { .. } => "api.start",
             TraceEvent::ApiRequestCompleted { .. } => "api.done",
             TraceEvent::ToolStarted { .. } => "tool.start",
@@ -553,6 +580,22 @@ impl TraceEvent {
                 preview(reason),
                 suggested_action.as_deref().unwrap_or("none")
             ),
+            TraceEvent::DestructiveScopeChecked {
+                tool,
+                call_id,
+                operation,
+                target,
+                allowed,
+                reason,
+            } => format!(
+                "{} {} destructive_scope op={} target={} allowed={} reason={}",
+                tool,
+                short_id(call_id),
+                operation,
+                target.as_deref().map(preview).unwrap_or_else(|| "none".to_string()),
+                allowed,
+                preview(reason)
+            ),
             TraceEvent::WorkflowRouted { decision, reason } => {
                 format!("workflow decision: {} ({})", decision, preview(reason))
             }
@@ -619,6 +662,42 @@ impl TraceEvent {
                 "context compacted: {} -> {} tokens ({})",
                 before_tokens, after_tokens, strategy
             ),
+            TraceEvent::RuntimeDietReport {
+                prompt_tokens,
+                tool_schema_tokens,
+                exposed_tools,
+                memory_snapshot_chars,
+                memory_snapshot_tokens,
+                retrieval_items,
+                retrieval_tokens,
+                skill_list_chars,
+                skill_list_tokens,
+                route_scoped_tools,
+                workflow_context,
+                closeout_visibility,
+                validation_evidence,
+            } => {
+                let total = prompt_tokens.saturating_add(*tool_schema_tokens);
+                let level = runtime_diet_level(*prompt_tokens, *exposed_tools);
+                format!(
+                    "{} prompt={} tool_schema={} total={} tools={} memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={}",
+                    level,
+                    prompt_tokens,
+                    tool_schema_tokens,
+                    total,
+                    exposed_tools,
+                    memory_snapshot_chars,
+                    memory_snapshot_tokens,
+                    retrieval_items,
+                    retrieval_tokens,
+                    skill_list_chars,
+                    skill_list_tokens,
+                    route_scoped_tools,
+                    workflow_context,
+                    closeout_visibility,
+                    validation_evidence
+                )
+            }
             TraceEvent::ApiRequestStarted {
                 iteration,
                 model,
@@ -922,6 +1001,9 @@ pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
         duration,
         trace.user_message_preview
     )];
+    if let Some(diet) = latest_runtime_diet_summary(trace) {
+        lines.push(format!("\nRuntime Diet: {}", diet));
+    }
 
     lines.push("\nEvents:".to_string());
     for (idx, event) in trace.events.iter().take(max_events).enumerate() {
@@ -940,6 +1022,26 @@ pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
     }
 
     lines.join("\n")
+}
+
+pub fn latest_runtime_diet_summary(trace: &TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| {
+        if matches!(event, TraceEvent::RuntimeDietReport { .. }) {
+            Some(event.summary())
+        } else {
+            None
+        }
+    })
+}
+
+fn runtime_diet_level(prompt_tokens: u64, exposed_tools: usize) -> &'static str {
+    if prompt_tokens > RUNTIME_DIET_PROMPT_TOKEN_BUDGET
+        || exposed_tools > RUNTIME_DIET_TOOL_COUNT_BUDGET
+    {
+        "heavy"
+    } else {
+        "light"
+    }
 }
 
 fn preview(text: &str) -> String {
@@ -1001,5 +1103,56 @@ mod tests {
         assert!(summary.contains("mcp.resource"));
         assert!(summary.contains("filesystem"));
         assert!(summary.contains("file:///tmp/a.txt"));
+    }
+
+    #[test]
+    fn trace_summary_includes_runtime_diet_report() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "make a small edit"));
+        collector.record(TraceEvent::RuntimeDietReport {
+            prompt_tokens: 1_200,
+            tool_schema_tokens: 320,
+            exposed_tools: 6,
+            memory_snapshot_chars: 180,
+            memory_snapshot_tokens: 45,
+            retrieval_items: 2,
+            retrieval_tokens: 80,
+            skill_list_chars: 120,
+            skill_list_tokens: 30,
+            route_scoped_tools: true,
+            workflow_context: "minimal".to_string(),
+            closeout_visibility: "concise".to_string(),
+            validation_evidence: "passed".to_string(),
+        });
+
+        let trace = collector.finish(TurnStatus::Completed);
+        let summary = format_trace_summary(&trace, 10);
+        assert!(summary.contains("Runtime Diet: light"));
+        assert!(summary.contains("prompt=1200"));
+        assert!(summary.contains("tools=6"));
+        assert!(summary.contains("memory=180ch/~45t"));
+        assert!(summary.contains("retrieval=2items/~80t"));
+        assert!(summary.contains("skills=120ch/~30t"));
+        assert!(summary.contains("workflow=minimal"));
+    }
+
+    #[test]
+    fn runtime_diet_report_flags_budget_bloat() {
+        let event = TraceEvent::RuntimeDietReport {
+            prompt_tokens: RUNTIME_DIET_PROMPT_TOKEN_BUDGET + 1,
+            tool_schema_tokens: 0,
+            exposed_tools: 1,
+            memory_snapshot_chars: 0,
+            memory_snapshot_tokens: 0,
+            retrieval_items: 0,
+            retrieval_tokens: 0,
+            skill_list_chars: 0,
+            skill_list_tokens: 0,
+            route_scoped_tools: true,
+            workflow_context: "minimal".to_string(),
+            closeout_visibility: "none".to_string(),
+            validation_evidence: "none".to_string(),
+        };
+
+        assert!(event.summary().starts_with("heavy "));
     }
 }

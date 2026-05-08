@@ -20,6 +20,7 @@ pub enum ValidationFamily {
     PnpmTest,
     YarnTest,
     Pytest,
+    PythonCompile,
     PythonUnittest,
     GoTest,
     NodeScript,
@@ -183,6 +184,10 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
         || lower.contains("python -m pytest")
     {
         Some(ValidationFamily::Pytest)
+    } else if lower.starts_with("python3 -m py_compile")
+        || lower.starts_with("python -m py_compile")
+    {
+        Some(ValidationFamily::PythonCompile)
     } else if lower.starts_with("python3 -m unittest") || lower.starts_with("python -m unittest") {
         Some(ValidationFamily::PythonUnittest)
     } else if lower == "go test" || lower.starts_with("go test ") {
@@ -286,6 +291,10 @@ mod tests {
         assert_eq!(
             classify_command("python -m pytest tests").validation_family,
             Some(ValidationFamily::Pytest)
+        );
+        assert_eq!(
+            classify_command("python3 -m py_compile snake.py").validation_family,
+            Some(ValidationFamily::PythonCompile)
         );
         assert_eq!(
             classify_command("go test ./...").validation_family,

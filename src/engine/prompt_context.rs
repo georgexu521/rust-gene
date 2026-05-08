@@ -80,8 +80,14 @@ impl PromptContextAssembler {
         layers.push(layer_report("base system prompt", &self.base_prompt));
 
         for layer in instruction_layers {
+            let truncated = if layer.truncated { ",truncated" } else { "" };
             layers.push(layer_report(
-                format!("AGENTS.md [{}]", layer.source),
+                format!(
+                    "AGENTS.md [{}:{}{}]",
+                    layer.source,
+                    layer.selection.label(),
+                    truncated
+                ),
                 &layer.content,
             ));
         }
@@ -167,5 +173,59 @@ mod tests {
         assert!(report.total_tokens > 0);
         assert_eq!(report.fingerprint.len(), 12);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn report_labels_runtime_guidance_instruction_layers() {
+        let dir = std::env::temp_dir().join(format!("prompt-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(
+            dir.join("AGENTS.md"),
+            "# Project Notes\n\n## Agent Runtime Guidance\nruntime rule\n\n## Archive\nold rule",
+        )
+        .unwrap();
+        let assembler = PromptContextAssembler::new("base prompt", &dir);
+
+        let report = assembler.report_for_turn("hello", &[]);
+
+        assert!(report
+            .layers
+            .iter()
+            .any(|l| l.name == "AGENTS.md [project:runtime-guidance]"));
+        assert!(!report.layers.iter().any(|l| l.name.contains("fallback")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn common_sample_prompts_stay_under_runtime_diet_prompt_budget() {
+        const COMMON_TURN_PROMPT_TOKEN_BUDGET: u64 = 2_500;
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let assembler = PromptContextAssembler::new(crate::engine::default_system_prompt(), &repo);
+        let samples = [
+            "简单回答：2+2 等于几？",
+            "帮我把这个文件删了吧",
+            "帮我做一个贪吃蛇游戏吧，用 python 做吧",
+            "我在运行中发现了一个问题，你帮我看看是怎么回事吧",
+            "帮我对比 claude 和 opencode 的 agent 指令设计",
+        ];
+
+        for prompt in samples {
+            let report = assembler.report_for_turn(prompt, &[]);
+            let layer_summary = report
+                .layers
+                .iter()
+                .map(|layer| format!("{}={}t/{}c", layer.name, layer.tokens, layer.chars))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            assert!(
+                report.total_tokens <= COMMON_TURN_PROMPT_TOKEN_BUDGET,
+                "sample prompt exceeded runtime diet prompt budget: prompt={prompt:?}, tokens={}, budget={}, layers=[{}]",
+                report.total_tokens,
+                COMMON_TURN_PROMPT_TOKEN_BUDGET,
+                layer_summary
+            );
+        }
     }
 }

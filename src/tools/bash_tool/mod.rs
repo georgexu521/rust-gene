@@ -217,7 +217,8 @@ impl Tool for BashTool {
 
     fn description(&self) -> &str {
         "Execute a bash command in the shell. \
-         Use this tool for running commands, file operations, git operations, etc. \
+         Use this tool for shell-only operations, validation, and git commands. \
+         Do not use bash output as user-facing communication; summarize results in the assistant response. \
          Be careful with destructive operations like rm -rf. \
          Prefer absolute paths when working with files."
     }
@@ -232,7 +233,7 @@ impl Tool for BashTool {
                 },
                 "description": {
                     "type": "string",
-                    "description": "A brief description of what this command does (for logging)"
+                    "description": "A brief internal description of what this command does (for logging, not user-facing communication)"
                 },
                 "timeout": {
                     "type": "integer",
@@ -564,6 +565,21 @@ pub use crate::security::is_dangerous_command;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bash_tool_contract_keeps_output_non_user_facing() {
+        let tool = BashTool;
+        assert!(tool.description().contains("shell-only"));
+        assert!(tool
+            .description()
+            .contains("not use bash output as user-facing"));
+        assert!(
+            tool.parameters()["properties"]["description"]["description"]
+                .as_str()
+                .unwrap_or("")
+                .contains("not user-facing communication")
+        );
+    }
 
     #[test]
     fn test_parse_backend() {
