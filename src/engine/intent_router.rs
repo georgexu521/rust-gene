@@ -104,10 +104,12 @@ impl IntentRouter {
             return self.direct("empty prompt", 0.3);
         }
 
+        let has_live_coding_code_change_signal = is_live_coding_code_change_request(&lower);
         let has_memory_signal = contains_any(&lower, &["/memory", "remember", "memory", "recall"])
             || contains_any(zh, &["记忆", "记住", "回忆"]);
         let has_code_creation_signal = is_natural_code_creation_request(&lower, zh);
-        let has_code_change_signal = is_code_change_request(&lower, zh);
+        let has_code_change_signal =
+            has_live_coding_code_change_signal || is_code_change_request(&lower, zh);
         let has_debug_signal = is_debug_request(&lower, zh);
         let has_file_mutation_signal = is_file_mutation_request(&lower, zh);
         let has_local_inspection_signal = is_local_inspection_request(&lower, zh);
@@ -150,6 +152,19 @@ impl IntentRouter {
                 risk: RiskLevel::Low,
                 recommended_tools: vec!["memory_load".into(), "memory_save".into()],
                 reason: "prompt explicitly references memory without code-change intent".into(),
+            };
+        }
+
+        if has_live_coding_code_change_signal {
+            return IntentRoute {
+                intent: IntentKind::CodeChange,
+                confidence: 0.88,
+                workflow: WorkflowKind::CodeChange,
+                retrieval: RetrievalPolicy::Project,
+                reasoning: ReasoningPolicy::High,
+                risk: live_coding_risk(&lower),
+                recommended_tools: code_change_tool_recommendations(),
+                reason: "live coding eval explicitly requires a code diff".into(),
             };
         }
 
@@ -227,14 +242,7 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Project,
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::Medium,
-                recommended_tools: vec![
-                    "project_list".into(),
-                    "grep".into(),
-                    "file_read".into(),
-                    "file_write".into(),
-                    "file_edit".into(),
-                    "bash".into(),
-                ],
+                recommended_tools: code_change_tool_recommendations(),
                 reason: "prompt asks to create a code artifact".into(),
             };
         }
@@ -301,14 +309,7 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Project,
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::Medium,
-                recommended_tools: vec![
-                    "project_list".into(),
-                    "grep".into(),
-                    "file_read".into(),
-                    "file_write".into(),
-                    "file_edit".into(),
-                    "bash".into(),
-                ],
+                recommended_tools: code_change_tool_recommendations(),
                 reason: "prompt asks for code or product changes".into(),
             };
         }
@@ -491,6 +492,34 @@ fn is_debug_request(lower: &str, zh: &str) -> bool {
         ],
     ) || contains_any(zh, &["报错", "错误", "修复", "失败", "调试", "bug"])
         || (zh.contains("问题") && contains_any(zh, &["运行", "启动", "执行", "测试"]))
+}
+
+fn is_live_coding_code_change_request(lower: &str) -> bool {
+    lower.contains("live coding regression task")
+        || (lower.contains("eval intent") && lower.contains("seeded_code_change"))
+        || lower.contains("this is a real code-change evaluation")
+}
+
+fn live_coding_risk(lower: &str) -> RiskLevel {
+    if lower.contains("risk: `high`")
+        || lower.contains("risk: high")
+        || lower.contains("- risk: `high`")
+    {
+        RiskLevel::High
+    } else {
+        RiskLevel::Medium
+    }
+}
+
+fn code_change_tool_recommendations() -> Vec<String> {
+    vec![
+        "project_list".into(),
+        "grep".into(),
+        "file_read".into(),
+        "file_write".into(),
+        "file_edit".into(),
+        "bash".into(),
+    ]
 }
 
 fn is_error_explanation_request(lower: &str, zh: &str) -> bool {
@@ -870,6 +899,44 @@ mod tests {
         );
         assert_eq!(route.intent, IntentKind::CodeChange);
         assert_eq!(route.workflow, WorkflowKind::CodeChange);
+    }
+
+    #[test]
+    fn live_coding_eval_summary_task_routes_as_code_change() {
+        let route = IntentRouter::new().route(
+            "# Live coding regression task: live eval reports should summarize pass rates\n\
+             - Eval intent: `seeded_code_change`\n\
+             当前 seeded worktree 已保留 `scripts/run_live_eval.sh --mode summary` 入口，请修改 summary_task()。",
+        );
+        assert_eq!(route.intent, IntentKind::CodeChange);
+        assert_eq!(route.workflow, WorkflowKind::CodeChange);
+        assert_eq!(route.retrieval, RetrievalPolicy::Project);
+        assert!(route.recommended_tools.contains(&"file_edit".to_string()));
+    }
+
+    #[test]
+    fn live_coding_eval_search_feature_routes_as_code_change_not_research() {
+        let route = IntentRouter::new().route(
+            "# Live coding regression task: build a small book notes frontend with search, tags, and persistence\n\
+             - Eval intent: `seeded_code_change`\n\
+             请完成 `fixtures/live_frontend/book_notes` 里的本地书摘记录网站。",
+        );
+        assert_eq!(route.intent, IntentKind::CodeChange);
+        assert_eq!(route.workflow, WorkflowKind::CodeChange);
+        assert_eq!(route.retrieval, RetrievalPolicy::Project);
+    }
+
+    #[test]
+    fn live_coding_eval_memory_quality_task_routes_as_code_change_not_config() {
+        let route = IntentRouter::new().route(
+            "# Live coding regression task: memory_save should respect quality gates\n\
+             - Eval intent: `seeded_code_change`\n\
+             - Risk: `high`\n\
+             修复 memory_save 绕过记忆质量门控的问题。",
+        );
+        assert_eq!(route.intent, IntentKind::CodeChange);
+        assert_eq!(route.workflow, WorkflowKind::CodeChange);
+        assert_eq!(route.risk, RiskLevel::High);
     }
 
     #[test]
