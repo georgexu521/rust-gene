@@ -9,6 +9,7 @@
 
 mod action_checkpoint;
 mod approval;
+mod closeout_controller;
 mod patch_recovery;
 mod patch_repair_rules;
 mod pseudo_tool_text;
@@ -21,6 +22,7 @@ mod turn_recording;
 mod validation_runner;
 
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
+use closeout_controller::FinalCloseoutContext;
 use patch_recovery::PatchSynthesisAction;
 use repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
@@ -2774,39 +2776,18 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
         }
 
-        if let Some(closeout) = code_workflow.build_closeout(&task_bundle) {
-            trace.record(TraceEvent::FinalCloseoutPrepared {
-                status: closeout.status.label().to_string(),
-                changed_files: closeout.changed_files.len(),
-                validation_items: closeout.validation.len(),
-                acceptance_items: closeout.acceptance.len(),
-                residual_risks: closeout.residual_risks.len(),
-            });
-            runtime_diet.closeout_visibility =
-                format!("{:?}", closeout.visibility_from_env()).to_ascii_lowercase();
-            runtime_diet.validation_evidence = closeout.status.label().to_string();
-            let closeout_text = closeout.format_for_user_response();
-            if !closeout_text.is_empty() && !final_content.contains("Closeout:") {
-                final_content.push_str(&closeout_text);
-                if let Some(tx) = tx {
-                    let _ = tx.send(StreamEvent::TextChunk(closeout_text)).await;
-                }
-            }
-        }
-
-        if iterations_used >= self.max_iterations
-            && !final_tool_calls.is_empty()
-            && !final_content.contains("Closeout:")
-        {
-            let stop_msg = "\n\n[Stopped after reaching the tool-iteration budget before a final closeout. Review the last tool results and continue if the task is not complete.]\n";
-            final_content.push_str(stop_msg);
-            if let Some(tx) = tx {
-                let _ = tx.send(StreamEvent::TextChunk(stop_msg.to_string())).await;
-            }
-            trace.record(TraceEvent::WorkflowFallback {
-                error: "tool iteration budget exhausted before final closeout".to_string(),
-            });
-        }
+        Self::apply_final_closeout(FinalCloseoutContext {
+            trace: &trace,
+            code_workflow: &code_workflow,
+            task_bundle: &task_bundle,
+            runtime_diet: &mut runtime_diet,
+            final_content: &mut final_content,
+            final_tool_calls: &final_tool_calls,
+            iterations_used,
+            max_iterations: self.max_iterations,
+            tx,
+        })
+        .await;
 
         trace_runtime_diet_report(&trace, &route, &code_workflow, &runtime_diet);
 
