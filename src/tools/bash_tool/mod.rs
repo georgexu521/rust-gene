@@ -191,6 +191,27 @@ fn classification_data(command: &str) -> serde_json::Value {
     serde_json::to_value(classify_command(command)).unwrap_or_else(|_| json!({}))
 }
 
+fn shell_compatibility_hint(output: &str) -> Option<&'static str> {
+    if output.contains("declare: -A: invalid option")
+        || (output.contains("declare:")
+            && output.contains("-A")
+            && output.contains("invalid option"))
+    {
+        Some(
+            "Shell compatibility hint: this bash is likely macOS bash 3.x, which does not support associative arrays (`declare -A`). Use POSIX-compatible shell logic, indexed arrays, temp files, awk, or an existing Python helper for map-style aggregation.",
+        )
+    } else {
+        None
+    }
+}
+
+fn append_shell_compatibility_hint(output: String) -> String {
+    match shell_compatibility_hint(&output) {
+        Some(hint) if !output.contains(hint) => format!("{output}\n\n{hint}"),
+        _ => output,
+    }
+}
+
 fn error_with_audit(
     error: impl Into<String>,
     content: Option<String>,
@@ -496,6 +517,7 @@ impl Tool for BashTool {
         } else {
             result_content
         };
+        let truncated = append_shell_compatibility_hint(truncated);
 
         if output.status.success() {
             ToolResult::success_with_data(
@@ -619,6 +641,16 @@ mod tests {
     fn test_shell_single_quote() {
         assert_eq!(shell_single_quote("abc"), "'abc'");
         assert_eq!(shell_single_quote("a'b"), "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn shell_compatibility_hint_explains_macos_bash_associative_arrays() {
+        let output = "[stderr]:\nscripts/run_live_eval.sh: line 1396: declare: -A: invalid option";
+        let with_hint = append_shell_compatibility_hint(output.to_string());
+
+        assert!(with_hint.contains("macOS bash 3.x"));
+        assert!(with_hint.contains("does not support associative arrays"));
+        assert!(with_hint.contains("existing Python helper"));
     }
 
     #[test]

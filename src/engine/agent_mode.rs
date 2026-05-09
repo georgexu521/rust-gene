@@ -6,20 +6,15 @@ use crate::engine::intent_router::{
 ///
 /// This is intentionally small: hard constraints belong in route/tool policy,
 /// while the model keeps freedom to solve the task inside that surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentMode {
+    #[default]
     Auto,
     Build,
     Plan,
     Explore,
     Review,
-}
-
-impl Default for AgentMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl AgentMode {

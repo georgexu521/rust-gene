@@ -22,7 +22,7 @@ Latest deterministic test baseline observed during the 2026-05-09 capability
 live-suite run:
 
 ```text
-1151 passed; 0 failed
+1154 passed; 0 failed
 ```
 
 Validated inside live-eval required commands with:
@@ -47,10 +47,10 @@ Latest recovery commits and planning artifacts:
 | Extract repair controller helpers | this change |
 | Extract closeout controller helpers | this change |
 | Extract tool orchestrator helpers | this change |
+| Surface companion helper context | this change |
 
-The all-features clippy and experimental API checks were last recorded as
-passing in the post-recovery baseline before this docs-only reset. Rerun them
-before a release cut or behavior change merge.
+The all-features clippy and experimental API checks are clean as of this
+runtime companion-context change.
 
 Latest live coding workflow smoke:
 
@@ -213,6 +213,13 @@ current passing run with a real code diff.
 - `grep` now leaves visible match lines as raw source and carries match text in
   structured metadata, preventing Markdown emphasis from contaminating
   file-edit anchors and patch synthesis.
+- Code-change turns now surface concise companion-context hints after targeted
+  `file_read`/`grep` evidence when nearby helper/parser files strongly match
+  the inspected file and task. This keeps helper discovery in runtime evidence
+  instead of adding more always-on prompt rules.
+- Bash command failures now add a concrete compatibility hint for macOS bash
+  3.x associative-array errors (`declare -A`), steering repair toward portable
+  shell, awk/temp-file, or existing Python helper paths.
 
 ## Product Surface
 
@@ -295,7 +302,12 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-09 with `1151 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-09 with `1154 passed; 0 failed`.
+- Latest validation for the companion-context slice: `cargo fmt --check`,
+  `cargo test -q companion_context`, `cargo test -q shell_compatibility_hint`,
+  `cargo test -q agent_mode`, `cargo check -q`, `cargo test -q`,
+  `cargo clippy --all-features -- -D warnings`,
+  `cargo check --features experimental-api-server -q`, and `git diff --check`.
 - Batch 5 product mode work has an explicit runtime `AgentMode`
   (`auto/build/plan/explore/review`) that flows from TUI `/mode` into
   streaming and `ConversationLoop` route/tool exposure. `/status`, `/quick`,

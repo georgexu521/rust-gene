@@ -10,6 +10,7 @@
 mod action_checkpoint;
 mod approval;
 mod closeout_controller;
+mod companion_context;
 mod patch_recovery;
 mod patch_repair_rules;
 mod pseudo_tool_text;
@@ -1303,6 +1304,7 @@ impl ConversationLoop {
         let mut patch_synthesis_recovery_used = false;
         let mut action_checkpoint_reopen_used = false;
         let mut pseudo_tool_retry_used = false;
+        let mut companion_context_keys: HashSet<String> = HashSet::new();
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
         let mut successful_required_validation_commands: HashSet<String> = HashSet::new();
@@ -1759,6 +1761,22 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 tool_results_text.push_str(&result_content);
                 tool_results_text.push('\n');
                 messages.push(Message::tool(tc.id.clone(), result_content));
+
+                if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
+                    if let Some(note) = companion_context::companion_context_note(
+                        &working_dir,
+                        &last_user_preview,
+                        tc,
+                        result,
+                    ) {
+                        if companion_context_keys.insert(note.key) {
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&note.text);
+                            tool_results_text.push('\n');
+                            messages.push(Message::system(note.text));
+                        }
+                    }
+                }
 
                 let fp = tool_call_fingerprint(tc);
                 if result.success {
