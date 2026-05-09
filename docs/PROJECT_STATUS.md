@@ -18,11 +18,11 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic test baseline observed during the 2026-05-09 capability
-live-suite run:
+Latest deterministic test baseline observed during the 2026-05-09 focused
+lookup-budget live-eval run:
 
 ```text
-1154 passed; 0 failed
+1155 passed; 0 failed
 ```
 
 Validated inside live-eval required commands with:
@@ -47,10 +47,11 @@ Latest recovery commits and planning artifacts:
 | Extract repair controller helpers | this change |
 | Extract closeout controller helpers | this change |
 | Extract tool orchestrator helpers | this change |
-| Surface companion helper context | this change |
+| Surface companion helper context | `f33174a` |
+| Give focused repair two targeted lookups | this change |
 
 The all-features clippy and experimental API checks are clean as of this
-runtime companion-context change.
+focused lookup-budget change.
 
 Latest live coding workflow smoke:
 
@@ -107,6 +108,17 @@ model_file_edit=true patch_synthesis_used=false first_write_tool_index=5
 warnings=tool_errors_seen,earlier_verification_failed_before_repair,earlier_stage_validation_failed_before_repair
 rerun_after=8d4658b targeted file-read cache fix, 4f4aa8f/ea337e6/cd31b56 checkpoint deferral and retry
 note=model produced and repaired its own edits; deterministic patch synthesis did not take over
+```
+
+Latest dashboard focused-repair lookup-budget rerun:
+
+```text
+focused-lookup-budget-20260509-212938 live-eval-dashboard-summary: ok
+diff=yes required_command_status=ok verification_passed=true
+stage_validation_passed=true acceptance_accepted=true closeout_status=passed failure_owner=none
+model_file_edit=true patch_synthesis_used=false first_write_tool_index=6
+tool_errors=0 tool_failures=3 changed_files=1
+note=model used two targeted read/search rounds, consumed a line-range correction after a failed edit, then produced its own edit without deterministic patch synthesis
 ```
 
 Latest aggregate live-eval snapshot:
@@ -302,12 +314,21 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-09 with `1154 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-09 with `1155 passed; 0 failed`.
 - Latest validation for the companion-context slice: `cargo fmt --check`,
   `cargo test -q companion_context`, `cargo test -q shell_compatibility_hint`,
   `cargo test -q agent_mode`, `cargo check -q`, `cargo test -q`,
   `cargo clippy --all-features -- -D warnings`,
   `cargo check --features experimental-api-server -q`, and `git diff --check`.
+- Latest validation for the focused lookup-budget slice:
+  `cargo fmt --check`, `cargo test -q focused_repair_prompt`,
+  `cargo test -q file_edit_failure_correction`, `cargo check -q`,
+  `cargo test -q`, `cargo clippy --all-features -- -D warnings`,
+  `cargo check --features experimental-api-server -q`,
+  `bash -n scripts/run_live_eval.sh`,
+  `bash -n scripts/live-eval-aggregate-summary.sh`,
+  `bash scripts/live-eval-summary-smoke.sh`, `git diff --check`,
+  and `scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --label focused-lookup-budget --overlay-working-tree`.
 - Batch 5 product mode work has an explicit runtime `AgentMode`
   (`auto/build/plan/explore/review`) that flows from TUI `/mode` into
   streaming and `ConversationLoop` route/tool exposure. `/status`, `/quick`,
@@ -374,13 +395,13 @@ Latest maintenance note:
   `patch_synthesis_no_change`) and the aggregate report has an `Agent Flow
   Stops` section. This separates model reasoning failures from execution-loop
   failures where the agent never produced an applicable patch.
-- Focused repair prompts now consistently allow exactly one targeted
-  `file_read`/`grep` lookup before patching instead of contradicting that with a
-  blanket read/search ban. Action-checkpoint unexposed-tool errors now list the
-  currently exposed tools and the expected repair path.
+- Focused repair prompts now consistently allow up to two targeted
+  `file_read`/`grep` lookups before patching instead of contradicting that with
+  a blanket read/search ban. Action-checkpoint unexposed-tool errors now list
+  the currently exposed tools and the expected repair path.
 - Action checkpoint now enforces that targeted lookup budget in the exposed
-  tool set: after one successful `file_read`/`grep` lookup, the next focused
-  repair request hides read/search tools and forces patch tools only.
+  tool set: after the budget is used, the next focused repair request hides
+  read/search tools and forces patch tools only.
 - A live A/B on `memory-save-quality-gate` confirmed the lookup-budget change
   moved the run from `agent_flow/action_checkpoint_no_patch` with zero edits to
   a real repair loop with changed files, validation, guided debugging,

@@ -1300,9 +1300,10 @@ impl ConversationLoop {
         let mut iterations_used = 0;
         let mut no_code_progress_rounds = 0usize;
         let mut action_checkpoint_active = false;
-        let mut action_checkpoint_lookup_used = false;
+        let mut action_checkpoint_lookup_count = 0usize;
         let mut patch_synthesis_recovery_used = false;
         let mut action_checkpoint_reopen_used = false;
+        let mut file_edit_failure_retry_used = false;
         let mut pseudo_tool_retry_used = false;
         let mut companion_context_keys: HashSet<String> = HashSet::new();
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
@@ -1451,7 +1452,7 @@ impl ConversationLoop {
                 let action_tools = Self::code_action_tools(
                     &base_tools,
                     validation_allowed_before_request,
-                    !action_checkpoint_lookup_used,
+                    action_checkpoint_lookup_count < Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET,
                 );
                 if action_tools.is_empty() {
                     base_tools.clone()
@@ -1472,7 +1473,7 @@ impl ConversationLoop {
                 exposed_names.sort();
                 request_messages.push(Message::system(Self::focused_repair_mode_prompt(
                     &exposed_names,
-                    action_checkpoint_lookup_used,
+                    action_checkpoint_lookup_count,
                 )));
             }
             let memory_already_in_turn_context = turn_retrieval_context
@@ -1746,6 +1747,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             let mut repeated_failed_tools = Vec::new();
             let mut failed_tool_names_this_round = Vec::new();
             let mut failed_tool_evidence = Vec::new();
+            let mut file_edit_failure_correction_added = false;
             let mut successful_validation_commands = Vec::new();
             let mut should_closeout_after_verified_change = false;
             if used_write_tool && !required_validation_commands.is_empty() {
@@ -1847,6 +1849,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         error: "file_edit failure converted to line-range repair correction"
                             .to_string(),
                     });
+                    file_edit_failure_correction_added = true;
                     tool_results_text.push('\n');
                     tool_results_text.push_str(&correction);
                     messages.push(Message::system(correction));
@@ -1861,6 +1864,21 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
             let has_worktree_changes = !changed_files.is_empty();
 
+            if Self::should_retry_after_file_edit_failure_correction(
+                action_checkpoint_active,
+                file_edit_failure_correction_added,
+                file_edit_failure_retry_used,
+                successful_write_tool,
+            ) {
+                file_edit_failure_retry_used = true;
+                action_checkpoint_no_change_rounds = 0;
+                trace.record(TraceEvent::WorkflowFallback {
+                    error: "file_edit repair correction returned to model before patch synthesis"
+                        .to_string(),
+                });
+                continue;
+            }
+
             let mut force_patch_synthesis_after_no_change = false;
             let mut force_patch_synthesis_reason: Option<&'static str> = None;
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
@@ -1869,7 +1887,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     no_code_progress_rounds = 0;
                     action_checkpoint_no_change_rounds = 0;
                     action_checkpoint_active = false;
-                    action_checkpoint_lookup_used = false;
+                    action_checkpoint_lookup_count = 0;
                 } else if used_write_tool {
                     action_checkpoint_requires_patch_before_validation = true;
                 } else if any_tool_success && !used_write_tool {
@@ -1877,7 +1895,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         no_code_progress_rounds = 0;
                         action_checkpoint_active = false;
                         action_checkpoint_no_change_rounds = 0;
-                        action_checkpoint_lookup_used = false;
+                        action_checkpoint_lookup_count = 0;
                     } else {
                         no_code_progress_rounds += 1;
                     }
@@ -1913,7 +1931,8 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&checkpoint);
                         action_checkpoint_active = true;
-                        action_checkpoint_lookup_used = true;
+                        action_checkpoint_lookup_count =
+                            Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET;
                         action_checkpoint_no_change_rounds = 2;
                         force_patch_synthesis_after_no_change = true;
                         force_patch_synthesis_reason = Some(
@@ -1959,19 +1978,25 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&checkpoint);
                         action_checkpoint_active = true;
-                        action_checkpoint_lookup_used = false;
+                        action_checkpoint_lookup_count = 0;
                         action_checkpoint_no_change_rounds = 2;
                         force_patch_synthesis_after_no_change = false;
                         force_patch_synthesis_reason = None;
                         activated_checkpoint_this_round = true;
                     } else if action_checkpoint_active && used_action_checkpoint_lookup {
-                        action_checkpoint_lookup_used = true;
+                        action_checkpoint_lookup_count = (action_checkpoint_lookup_count + 1)
+                            .min(Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET);
                         action_checkpoint_no_change_rounds = 0;
                         activated_checkpoint_this_round = true;
+                        let lookup_notice = if action_checkpoint_lookup_count
+                            >= Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET
+                        {
+                            "focused repair targeted lookup budget used; next checkpoint request will expose patch tools only"
+                        } else {
+                            "focused repair targeted lookup used; one targeted lookup remains before patch-only mode"
+                        };
                         trace.record(TraceEvent::WorkflowFallback {
-                            error:
-                                "focused repair targeted lookup used; next checkpoint request will expose patch tools only"
-                                    .to_string(),
+                            error: lookup_notice.to_string(),
                         });
                     }
                     if action_checkpoint_active && !activated_checkpoint_this_round {
@@ -2087,7 +2112,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             }
                             if !changed_files.is_empty() {
                                 action_checkpoint_active = false;
-                                action_checkpoint_lookup_used = false;
+                                action_checkpoint_lookup_count = 0;
                                 action_checkpoint_no_change_rounds = 0;
                                 no_code_progress_rounds = 0;
                                 continue;
@@ -2112,7 +2137,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         if !action_checkpoint_reopen_used {
                             action_checkpoint_reopen_used = true;
                             action_checkpoint_active = false;
-                            action_checkpoint_lookup_used = false;
+                            action_checkpoint_lookup_count = 0;
                             action_checkpoint_no_change_rounds = 0;
                             no_code_progress_rounds = 1;
                             trace.record(TraceEvent::WorkflowFallback {
@@ -2210,7 +2235,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             }
                             if !changed_files.is_empty() {
                                 action_checkpoint_active = false;
-                                action_checkpoint_lookup_used = false;
+                                action_checkpoint_lookup_count = 0;
                                 action_checkpoint_no_change_rounds = 0;
                                 no_code_progress_rounds = 0;
                             } else {
@@ -2245,7 +2270,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             {
                                 patch_synthesis_recovery_used = true;
                                 action_checkpoint_active = false;
-                                action_checkpoint_lookup_used = false;
+                                action_checkpoint_lookup_count = 0;
                                 action_checkpoint_no_change_rounds = 0;
                                 no_code_progress_rounds = 1;
                                 let recovery = format!(
@@ -2260,7 +2285,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             if !action_checkpoint_reopen_used {
                                 action_checkpoint_reopen_used = true;
                                 action_checkpoint_active = false;
-                                action_checkpoint_lookup_used = false;
+                                action_checkpoint_lookup_count = 0;
                                 action_checkpoint_no_change_rounds = 0;
                                 no_code_progress_rounds = 1;
                                 trace.record(TraceEvent::WorkflowFallback {
@@ -2720,7 +2745,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         reserved_repair_rounds: &mut reserved_repair_rounds,
                         action_checkpoint_no_change_rounds: &mut action_checkpoint_no_change_rounds,
                         action_checkpoint_active: &mut action_checkpoint_active,
-                        action_checkpoint_lookup_used: &mut action_checkpoint_lookup_used,
+                        action_checkpoint_lookup_count: &mut action_checkpoint_lookup_count,
                         action_checkpoint_requires_patch_before_validation:
                             &mut action_checkpoint_requires_patch_before_validation,
                         should_closeout_after_verified_change,
@@ -4963,16 +4988,19 @@ mod tests {
             "grep".to_string(),
         ];
 
-        let prompt = ConversationLoop::focused_repair_mode_prompt(&exposed, false);
+        let prompt = ConversationLoop::focused_repair_mode_prompt(&exposed, 0);
 
-        assert!(prompt.contains("file_read/grep are allowed only for one targeted lookup"));
+        assert!(prompt.contains("up to two targeted lookups"));
         assert!(prompt.contains("Do not call glob/project_list"));
         assert!(prompt.contains("bash only for a mutating patch command"));
         assert!(!prompt.contains("Do not call grep/glob/file_read/project_list"));
 
-        let prompt_after_lookup = ConversationLoop::focused_repair_mode_prompt(&exposed, true);
-        assert!(prompt_after_lookup.contains("targeted lookup budget has already been used"));
-        assert!(prompt_after_lookup.contains("do not call file_read/grep again"));
+        let prompt_after_one_lookup = ConversationLoop::focused_repair_mode_prompt(&exposed, 1);
+        assert!(prompt_after_one_lookup.contains("One targeted file_read/grep lookup remains"));
+
+        let prompt_after_budget = ConversationLoop::focused_repair_mode_prompt(&exposed, 2);
+        assert!(prompt_after_budget.contains("targeted lookup budget has already been used"));
+        assert!(prompt_after_budget.contains("do not call file_read/grep again"));
     }
 
     #[test]
@@ -4988,6 +5016,30 @@ Expected 1 occurrence(s) of old_string, but found 1487.
         assert!(correction.contains("line_start, line_end"));
         assert!(correction.contains("Do not retry the same broad old_string"));
         assert!(correction.contains("not close out"));
+    }
+
+    #[test]
+    fn file_edit_failure_correction_gets_one_model_retry_before_synthesis() {
+        assert!(
+            ConversationLoop::should_retry_after_file_edit_failure_correction(
+                true, true, false, false,
+            )
+        );
+        assert!(
+            !ConversationLoop::should_retry_after_file_edit_failure_correction(
+                true, true, true, false,
+            )
+        );
+        assert!(
+            !ConversationLoop::should_retry_after_file_edit_failure_correction(
+                true, true, false, true,
+            )
+        );
+        assert!(
+            !ConversationLoop::should_retry_after_file_edit_failure_correction(
+                false, true, false, false,
+            )
+        );
     }
 
     #[test]

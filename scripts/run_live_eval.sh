@@ -1390,7 +1390,7 @@ summary_task() {
   local run_report_dir="$REPORT_DIR/live-$RUN_ID"
   local summary="$run_report_dir/summary.md"
   mkdir -p "$run_report_dir"
-python3 - "$run_report_dir" "$summary" "$RUN_ID" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "$run_report_dir" "$summary" "$RUN_ID" <<'PY'
 import pathlib
 import sys
 from scripts.live_eval_report_parser import report_rows

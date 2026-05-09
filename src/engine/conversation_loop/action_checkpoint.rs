@@ -2,14 +2,20 @@ use super::ConversationLoop;
 use std::collections::HashSet;
 
 impl ConversationLoop {
+    pub(super) const ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET: usize = 2;
+
     pub(super) fn focused_repair_mode_prompt(
         exposed_names: &[String],
-        targeted_lookup_used: bool,
+        targeted_lookups_used: usize,
     ) -> String {
-        let lookup_rule = if targeted_lookup_used {
+        let remaining =
+            Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET.saturating_sub(targeted_lookups_used);
+        let lookup_rule = if remaining == 0 {
             "The targeted lookup budget has already been used; do not call file_read/grep again. Patch from the evidence already gathered."
+        } else if targeted_lookups_used == 0 {
+            "file_read/grep are allowed only for up to two targeted lookups of a specific symbol, test, or call site; do not repeat broad inspection."
         } else {
-            "file_read/grep are allowed only for one targeted lookup of a specific symbol, test, or call site; do not repeat broad inspection."
+            "One targeted file_read/grep lookup remains for a specific missing line range, symbol, test, or call site; after that, patch from the evidence gathered."
         };
         format!(
             "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Patch files as soon as the target line is known, using file_edit/file_write or bash only for a mutating patch command. {} Do not call glob/project_list or any tool that is not in the exposed list. Do not use bash for read-only inspection; after a file changes, bash may run validation. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
@@ -43,6 +49,18 @@ impl ConversationLoop {
             "File edit repair correction:\n{}\nNext action is still a patch, not closeout. The previous file_edit did not modify a file because its anchor was empty, whitespace-only, or non-unique. Use one of these safer forms:\n- If prior file_read/grep output shows the target line number, call file_edit with path, line_start, line_end, and new_string for that exact line.\n- Otherwise copy a multi-line old_string that includes the surrounding function call and is unique exactly once.\nDo not retry the same broad old_string. Do not close out until a file_edit/file_write succeeds and validation runs.",
             relevant.join("\n\n")
         ))
+    }
+
+    pub(super) fn should_retry_after_file_edit_failure_correction(
+        action_checkpoint_active: bool,
+        file_edit_failure_correction_added: bool,
+        file_edit_failure_retry_used: bool,
+        successful_write_tool: bool,
+    ) -> bool {
+        action_checkpoint_active
+            && file_edit_failure_correction_added
+            && !file_edit_failure_retry_used
+            && !successful_write_tool
     }
 
     pub(super) fn action_checkpoint_unexposed_tool_message(

@@ -17,7 +17,7 @@ if [[ "$REFRESH_SUMMARIES" == "1" ]]; then
   done < <(find "$BENCHMARKS_DIR" -maxdepth 3 -name report.md | sort -u)
 fi
 
-python3 - "$OUTPUT" "$BENCHMARKS_DIR" "$RUN_GLOB" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "$OUTPUT" "$BENCHMARKS_DIR" "$RUN_GLOB" <<'PY'
 import collections
 import datetime as dt
 import pathlib
