@@ -1948,6 +1948,8 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         activated_checkpoint_this_round = true;
                     } else if action_checkpoint_active && used_action_checkpoint_lookup {
                         action_checkpoint_lookup_used = true;
+                        action_checkpoint_no_change_rounds = 2;
+                        activated_checkpoint_this_round = true;
                         trace.record(TraceEvent::WorkflowFallback {
                             error:
                                 "focused repair targeted lookup used; next checkpoint request will expose patch tools only"
