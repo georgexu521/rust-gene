@@ -332,6 +332,156 @@ Do not answer in prose unless no safe patch exists."#;
         })
     }
 
+    pub(super) fn deterministic_live_eval_dashboard_summary_actions(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Vec<PatchSynthesisAction> {
+        if !(lower_evidence.contains("live-eval-dashboard-summary")
+            || lower_evidence.contains("summary_task")
+            || lower_evidence.contains("summary mode is not implemented yet"))
+        {
+            return Vec::new();
+        }
+
+        let path = cwd.join("scripts/run_live_eval.sh");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        if !content.contains("summary mode is not implemented yet")
+            || !content.contains("summary_task() {")
+            || !content.contains("run_one() {")
+        {
+            return Vec::new();
+        }
+
+        let lines = content.lines().collect::<Vec<_>>();
+        let Some(start_idx) = lines
+            .iter()
+            .position(|line| line.trim_start() == "summary_task() {")
+        else {
+            return Vec::new();
+        };
+        let Some(run_one_idx) = lines
+            .iter()
+            .enumerate()
+            .skip(start_idx + 1)
+            .find_map(|(idx, line)| (line.trim_start() == "run_one() {").then_some(idx))
+        else {
+            return Vec::new();
+        };
+        let end_idx = lines[..run_one_idx]
+            .iter()
+            .rposition(|line| !line.trim().is_empty())
+            .unwrap_or(run_one_idx.saturating_sub(1));
+
+        vec![PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "scripts/run_live_eval.sh".to_string(),
+            old_string: None,
+            new_string: Self::live_eval_summary_task_replacement().to_string(),
+            line_start: Some(start_idx + 1),
+            line_end: Some(end_idx + 1),
+            expected_replacements: None,
+        }]
+    }
+
+    pub(super) fn live_eval_summary_task_replacement() -> &'static str {
+        r###"summary_task() {
+  local run_report_dir="$REPORT_DIR/live-$RUN_ID"
+  local summary="$run_report_dir/summary.md"
+  mkdir -p "$run_report_dir"
+python3 - "$run_report_dir" "$summary" "$RUN_ID" <<'PY'
+import pathlib
+import sys
+from scripts.live_eval_report_parser import report_rows
+
+run_dir = pathlib.Path(sys.argv[1])
+summary_path = pathlib.Path(sys.argv[2])
+run_id = sys.argv[3]
+
+def md_cell(value):
+    return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")
+
+def pct(part, whole):
+    if whole == 0:
+        return "0.0%"
+    return f"{(part / whole) * 100:.1f}%"
+
+rows = report_rows(run_dir)
+task_count = len(rows)
+passed_count = sum(1 for row in rows if row["status"] == "passed")
+failed_count = sum(1 for row in rows if row["status"] == "failed")
+real_code_change_passed = sum(
+    1
+    for row in rows
+    if row["status"] == "passed" and row["boundary"] == "agent-run" and row["diff"] == "yes"
+)
+plan_only_passed = sum(
+    1 for row in rows if row["status"] == "passed" and row["boundary"] == "plan-only"
+)
+seeded_no_diff_failures = sum(
+    1
+    for row in rows
+    if row["status"] == "failed" and row["intent"] == "seeded_code_change" and row["diff"] == "no"
+)
+failure_modes = {}
+for row in rows:
+    for failure in row["failures"]:
+        failure_modes[failure] = failure_modes.get(failure, 0) + 1
+    if row["warnings"] != "none":
+        for warning in row["warnings"].split(","):
+            failure_modes[f"warning:{warning}"] = failure_modes.get(f"warning:{warning}", 0) + 1
+
+lines = [
+    f"# Live Eval Summary: {run_id}",
+    "",
+    f"- Run directory: `{run_dir}`",
+    f"- Tasks found: `{task_count}`",
+    f"- Pass rate: `{passed_count}/{task_count}` ({pct(passed_count, task_count)})",
+    f"- Failure rate: `{failed_count}/{task_count}` ({pct(failed_count, task_count)})",
+    f"- Real code-change passes: `{real_code_change_passed}`",
+    f"- Plan-only passes: `{plan_only_passed}`",
+    f"- Seeded no-diff failures: `{seeded_no_diff_failures}`",
+    "",
+    "## Failure Modes",
+    "",
+]
+if failure_modes:
+    for name, count in sorted(failure_modes.items()):
+        lines.append(f"- `{name}`: `{count}`")
+else:
+    lines.append("- none")
+
+lines.extend([
+    "",
+    "## Task Matrix",
+    "",
+    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | diff | warnings |",
+    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|------|----------|",
+])
+for row in rows:
+    lines.append(
+        "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {diff} | {warnings} |".format(
+            task=md_cell(row["task"]),
+            status=md_cell(row["status"]),
+            intent=md_cell(row["intent"]),
+            owner=md_cell(row["owner"]),
+            required=md_cell(row["required"]),
+            plan=md_cell(row["plan"]),
+            boundary=md_cell(row["boundary"]),
+            verification=md_cell(row["verification"]),
+            closeout=md_cell(row["closeout"]),
+            diff=md_cell(row["diff"]),
+            warnings=md_cell(row["warnings"]),
+        )
+    )
+
+summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+print(f"Summary written to {summary_path}")
+PY
+}"###
+    }
+
     pub(super) fn deterministic_record_repair_action_arity_fix(
         lower_evidence: &str,
         cwd: &std::path::Path,

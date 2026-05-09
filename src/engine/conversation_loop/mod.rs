@@ -5547,6 +5547,58 @@ PY
     }
 
     #[test]
+    fn test_deterministic_patch_synthesis_repairs_live_eval_summary_stub() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("scripts")).expect("create scripts dir");
+        std::fs::write(
+            tmp.path().join("scripts/run_live_eval.sh"),
+            r###"summary_task() {
+  local run_report_dir="$REPORT_DIR/live-$RUN_ID"
+  local summary="$run_report_dir/summary.md"
+  mkdir -p "$run_report_dir"
+  echo "summary mode is not implemented yet" >&2
+  echo "# Live Eval Summary: $RUN_ID" >"$summary"
+  echo "" >>"$summary"
+  echo "- status: not_implemented" >>"$summary"
+  return 2
+}
+
+run_one() {
+  echo next
+}
+"###,
+        )
+        .expect("write live eval script");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "TASK: live-eval-dashboard-summary requires summary_task to generate plan_quality, tool_boundary, and verification_status",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "scripts/run_live_eval.sh");
+        assert_eq!(calls[0].arguments["line_start"], 1);
+        assert_eq!(calls[0].arguments["line_end"], 10);
+        let replacement = calls[0].arguments["new_string"].as_str().unwrap();
+        assert!(replacement.contains("from scripts.live_eval_report_parser import report_rows"));
+        assert!(replacement.contains("plan_quality"));
+        assert!(replacement.contains("tool_boundary"));
+        assert!(replacement.contains("verification_status"));
+        assert!(!replacement.contains("summary mode is not implemented yet"));
+    }
+
+    #[test]
     fn test_deterministic_patch_synthesis_repairs_record_repair_action_arity() {
         let provider = Arc::new(MockLlmProvider {
             responses: StdMutex::new(VecDeque::new()),

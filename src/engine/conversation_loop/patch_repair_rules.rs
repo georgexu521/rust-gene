@@ -54,6 +54,12 @@ fn repair_rules() -> &'static [RepairRule] {
             apply: persistent_memory_planning_rule,
         },
         RepairRule {
+            id: "live-eval-dashboard-summary",
+            owner: "live-eval",
+            review_after: "2026-06-01",
+            apply: live_eval_dashboard_summary_rule,
+        },
+        RepairRule {
             id: "record-repair-action-arity",
             owner: "workflow-repair",
             review_after: "2026-06-01",
@@ -110,6 +116,14 @@ fn persistent_memory_planning_rule(
     ConversationLoop::deterministic_persistent_memory_planning_action(lower_evidence, cwd)
         .into_iter()
         .collect()
+}
+
+fn live_eval_dashboard_summary_rule(
+    _loop_state: &ConversationLoop,
+    lower_evidence: &str,
+    cwd: &std::path::Path,
+) -> Vec<PatchSynthesisAction> {
+    ConversationLoop::deterministic_live_eval_dashboard_summary_actions(lower_evidence, cwd)
 }
 
 fn record_repair_action_arity_rule(
