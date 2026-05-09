@@ -606,9 +606,13 @@ Fix <case> live eval agent-flow gap
 - `capability-now-20260509-135556/code-change-verification-repair-loop` 已通过：
   `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
   `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`。
-- 当前 aggregate 已刷新到 `36/137`，instrumented slice 为 `14/45`，
-  real code-change passes 为 `9`。
-- 下一例按顺序跑 `backend-todo-api-crud`。
+- `capability-now-20260509-140733/backend-todo-api-crud` 已通过：
+  `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
+  `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`；
+  但过程有 `tool_errors_seen` 和 patch synthesis old_string 不匹配噪音。
+- 当前 aggregate 已刷新到 `37/138`，instrumented slice 为 `15/46`，
+  real code-change passes 为 `10`。
+- 下一例按顺序跑 `frontend-book-notes-localstorage`。
 
 ### Batch 4：conversation loop 抽取
 

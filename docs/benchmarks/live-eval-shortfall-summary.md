@@ -1,11 +1,11 @@
 # Live Eval Shortfall Summary
 
-- Generated: `2026-05-09 14:03:18 +0800`
-- Runs scanned: `137`
-- Task reports scanned: `137`
-- Pass rate: `36/137` (26.3%)
-- Failure rate: `101/137` (73.7%)
-- Real code-change passes: `9`
+- Generated: `2026-05-09 14:14:51 +0800`
+- Runs scanned: `138`
+- Task reports scanned: `138`
+- Pass rate: `37/138` (26.8%)
+- Failure rate: `101/138` (73.2%)
+- Real code-change passes: `10`
 - Plan-only passes: `0`
 - Seeded no-diff failures: `16`
 - Required-command failures: `71`
@@ -15,63 +15,63 @@
 
 | dimension | count | share |
 |---|---|---|
-| failed_tasks | 101 | 73.7% |
-| required_command_failed | 71 | 51.8% |
-| verification_failed | 100 | 73.0% |
-| closeout_not_successful | 96 | 70.1% |
-| recovered_validation_failures | 64 | 46.7% |
-| seeded_no_diff_failed | 16 | 11.7% |
-| owner_metadata_missing | 92 | 67.2% |
-| real_code_change_passed | 9 | 6.6% |
+| failed_tasks | 101 | 73.2% |
+| required_command_failed | 71 | 51.4% |
+| verification_failed | 100 | 72.5% |
+| closeout_not_successful | 96 | 69.6% |
+| recovered_validation_failures | 66 | 47.8% |
+| seeded_no_diff_failed | 16 | 11.6% |
+| owner_metadata_missing | 92 | 66.7% |
+| real_code_change_passed | 10 | 7.2% |
 | plan_only_passed | 0 | 0.0% |
 
 ## Failure Owners
 
 | owner | count | share |
 |---|---|---|
-| missing | 92 | 67.2% |
-| agent_flow | 19 | 13.9% |
-| none | 14 | 10.2% |
-| llm_reasoning | 9 | 6.6% |
+| missing | 92 | 66.7% |
+| agent_flow | 19 | 13.8% |
+| none | 15 | 10.9% |
+| llm_reasoning | 9 | 6.5% |
 | eval_harness | 3 | 2.2% |
 
 ## Inferred Owners
 
 | owner | count | share |
 |---|---|---|
-| agent_flow | 63 | 46.0% |
-| none | 36 | 26.3% |
-| llm_reasoning | 35 | 25.5% |
+| agent_flow | 63 | 45.7% |
+| none | 37 | 26.8% |
+| llm_reasoning | 35 | 25.4% |
 | eval_harness | 3 | 2.2% |
 
 ## Metadata Coverage
 
 | dimension | count | share |
 |---|---|---|
-| structured_failure_owner | 45 | 32.8% |
-| structured_eval_intent | 29 | 21.2% |
-| adaptive_trigger_metadata | 22 | 16.1% |
-| instrumented_task_reports | 45 | 32.8% |
+| structured_failure_owner | 46 | 33.3% |
+| structured_eval_intent | 30 | 21.7% |
+| adaptive_trigger_metadata | 23 | 16.7% |
+| instrumented_task_reports | 46 | 33.3% |
 
 ## Instrumented Slice
 
 | dimension | count | share |
 |---|---|---|
-| task_reports | 45 | 100.0% |
-| passed | 14 | 31.1% |
-| failed | 31 | 68.9% |
-| required_command_failed | 22 | 48.9% |
-| verification_failed | 31 | 68.9% |
-| seeded_no_diff_failed | 16 | 35.6% |
+| task_reports | 46 | 100.0% |
+| passed | 15 | 32.6% |
+| failed | 31 | 67.4% |
+| required_command_failed | 22 | 47.8% |
+| verification_failed | 31 | 67.4% |
+| seeded_no_diff_failed | 16 | 34.8% |
 
 ### Instrumented Owners
 
 | owner | count | share |
 |---|---|---|
-| agent_flow | 19 | 42.2% |
-| none | 14 | 31.1% |
-| llm_reasoning | 9 | 20.0% |
-| eval_harness | 3 | 6.7% |
+| agent_flow | 19 | 41.3% |
+| none | 15 | 32.6% |
+| llm_reasoning | 9 | 19.6% |
+| eval_harness | 3 | 6.5% |
 
 ### Instrumented Failure Modes
 
@@ -96,40 +96,40 @@
 | acceptance_review_rejected | 35 |
 | stage_validation_failed | 35 |
 | verification_failed | 35 |
-| earlier_verification_failed_before_repair | 32 |
-| earlier_stage_validation_failed_before_repair | 32 |
+| earlier_verification_failed_before_repair | 33 |
+| earlier_stage_validation_failed_before_repair | 33 |
 | warning:action_checkpoint_invalid_tools | 29 |
 | expected_code_diff_missing | 27 |
-| warning:tool_errors_seen | 22 |
+| warning:tool_errors_seen | 23 |
 | empty_agent_output | 17 |
 
 ## Agent Flow Stops
 
 | mode | count | share |
 |---|---|---|
-| action_checkpoint_invalid_tools | 33 | 24.1% |
-| action_checkpoint_no_patch | 12 | 8.8% |
-| empty_agent_output | 17 | 12.4% |
+| action_checkpoint_invalid_tools | 33 | 23.9% |
+| action_checkpoint_no_patch | 12 | 8.7% |
+| empty_agent_output | 17 | 12.3% |
 | missing_trace_summary | 15 | 10.9% |
-| patch_synthesis_no_change | 2 | 1.5% |
-| tool_run_without_closeout | 17 | 12.4% |
+| patch_synthesis_no_change | 2 | 1.4% |
+| tool_run_without_closeout | 17 | 12.3% |
 
 ## Adaptive Workflow Triggers
 
 | trigger | count | share |
 |---|---|---|
-| required_validation | 22 | 16.1% |
-| repeated_no_code_progress | 18 | 13.1% |
-| first_code_change | 11 | 8.0% |
-| verification_failed | 6 | 4.4% |
-| acceptance_rejected | 6 | 4.4% |
+| required_validation | 23 | 16.7% |
+| repeated_no_code_progress | 19 | 13.8% |
+| first_code_change | 12 | 8.7% |
+| verification_failed | 7 | 5.1% |
+| acceptance_rejected | 7 | 5.1% |
 
 ## Eval Intents
 
 | intent | count | share |
 |---|---|---|
-| missing | 108 | 78.8% |
-| seeded_code_change | 29 | 21.2% |
+| missing | 108 | 78.3% |
+| seeded_code_change | 30 | 21.7% |
 
 ## Seeded No-Diff Tasks
 
