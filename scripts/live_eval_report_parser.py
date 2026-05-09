@@ -91,6 +91,8 @@ def int_text(value, default=0):
 
 def specialty_metrics(task_dir, report_text):
     events = jsonl_events(task_dir / "agent-events.jsonl")
+    task_name = task_dir.name.lower()
+    report_lower = report_text.lower()
     event_types = trace_event_types(events)
     trace_items = trace_events(events)
     tool_starts = [
@@ -134,17 +136,23 @@ def specialty_metrics(task_dir, report_text):
         else bool(memory_sync_events or memory_tools or memory_retrievals)
     )
     report_skill_active = report_value(report_text, "skill_active", "")
+    skill_promotion_signal = (
+        "skill-promotion" in task_name
+        or "promotion gate" in report_lower
+        or "compare_skill_versions_for_promotion" in report_lower
+        or "validate_skill_promotion_for_apply" in report_lower
+    )
     skill_active = (
         parse_boolish(report_skill_active)
         if report_skill_active
-        else bool(skill_tools or "skill" in " ".join(event_types))
+        else bool(skill_tools or "skill" in " ".join(event_types) or skill_promotion_signal)
     )
     memory_changed_plan = parse_boolish(
         report_value(report_text, "memory_changed_plan", "")
     ) or learning_adjusted or plan_reweighted
     skill_promotion_evidence = parse_boolish(
         report_value(report_text, "skill_promotion_evidence", "")
-    ) or bool(skill_tools)
+    ) or bool(skill_tools or skill_promotion_signal)
 
     memory_summary = "active={active}, recalled={recalled}, conflicts={conflicts}, changed_plan={changed}".format(
         active=bool_text(memory_active),

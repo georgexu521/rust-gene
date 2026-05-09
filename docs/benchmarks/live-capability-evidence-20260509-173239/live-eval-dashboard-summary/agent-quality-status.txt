@@ -1,0 +1,7 @@
+status=ok
+failure_owner=none
+warning=recovered_action_checkpoint_invalid_tools
+warning=recovered_closeout_not_successful
+warning=recovered_acceptance_review_rejected
+warning=recovered_stage_validation_failed
+warning=recovered_verification_failed

@@ -1,0 +1,7 @@
+2026-05-09T17:40:53+08:00	code-change-verification-repair-loop	ok
+2026-05-09T17:48:55+08:00	live-eval-dashboard-summary	ok
+2026-05-09T17:52:23+08:00	backend-todo-api-crud	ok
+2026-05-09T17:54:52+08:00	frontend-book-notes-localstorage	ok
+2026-05-09T17:59:48+08:00	memory-save-quality-gate	ok
+2026-05-09T17:59:50+08:00	skill-promotion-gate	failed
+2026-05-09T18:11:52+08:00	skill-promotion-gate-rerun	ok

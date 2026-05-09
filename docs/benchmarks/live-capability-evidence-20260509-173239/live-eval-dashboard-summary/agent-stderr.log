@@ -1,0 +1,6 @@
+[required validation still running after 30s] cargo test -q -- --test-threads=1
+[required validation still running after 60s] cargo test -q -- --test-threads=1
+[required validation still running after 90s] cargo test -q -- --test-threads=1
+[required validation still running after 120s] cargo test -q -- --test-threads=1
+2026-05-09T09:47:29.688161Z  WARN priority_agent::engine::conversation_loop::patch_recovery: Patch synthesis JSON actions were not directly applicable: run_live_eval.sh patch contains Markdown emphasis markers (`**`), likely copied from highlighted tool output rather than source code; patch synthesis declined without a reason
+2026-05-09T09:48:06.164786Z  WARN priority_agent::engine::conversation_loop::patch_recovery: Patch synthesis JSON actions were not directly applicable: patch synthesis declined without a reason; patch synthesis declined without a reason

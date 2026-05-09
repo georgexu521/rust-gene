@@ -18,14 +18,14 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic test baseline observed after the 2026-05-09 Batch 4
-`patch_recovery` extraction:
+Latest deterministic test baseline observed during the 2026-05-09 capability
+live-suite run:
 
 ```text
-1140 passed; 0 failed
+1147 passed; 0 failed
 ```
 
-Validated in this pass with:
+Validated inside live-eval required commands with:
 
 ```bash
 cargo test -q
@@ -83,6 +83,18 @@ warnings=tool_errors_seen,earlier_verification_failed_before_repair
 capability-now-20260509-135556 code-change-verification-repair-loop: ok
 diff=yes required_command_status=ok verification_passed=true
 stage_validation_passed=true closeout_status=passed failure_owner=none
+```
+
+Latest capability live-suite run:
+
+```text
+capability-evidence-20260509-173239: 6/6 passed, all real code-change passes
+cases=code-change-verification-repair-loop, live-eval-dashboard-summary,
+backend-todo-api-crud, frontend-book-notes-localstorage,
+memory-save-quality-gate, skill-promotion-gate
+memory_active_tasks=6 memory_changed_plan_tasks=5
+skill_active_tasks=1 skill_promotion_evidence_tasks=1
+note=live-eval-dashboard-summary recovered from invalid action checkpoint before passing
 ```
 
 Latest aggregate live-eval snapshot:
@@ -254,8 +266,9 @@ The remaining work is now product maturity, not missing foundations:
    conversation-loop extraction are now landed. Batch 5 has started with
    explicit coding agent modes, mode-visible status, and stronger `/doctor`
    tool-exposure diagnostics. Batch 6 report-layer memory/skill evidence is
-   now landed in live summary and aggregate reporting; next is deeper
-   behavior-level memory/skill validation against real live runs.
+   now landed in live summary and aggregate reporting, and has a first
+   six-case live baseline; next is reducing recovered failure noise and adding
+   behavior-level memory/skill assertions where the evidence is still indirect.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -291,6 +304,12 @@ Latest maintenance note:
   `bash scripts/live-eval-summary-smoke.sh`, `cargo test -q memory`,
   `cargo test -q retrieval_context`, `cargo test -q skills`,
   `bash scripts/coding-workflow-gates.sh standard`, and `cargo check -q`.
+- The latest six-case live capability suite is
+  `docs/benchmarks/live-capability-evidence-20260509-173239/summary.md` with
+  `6/6` passed real code-change tasks. During this pass, stale live-eval
+  fixtures were refreshed for the extracted repair controller and learning
+  slash-handler modules, and skill-promotion evidence detection was widened so
+  `skill-promotion-gate` is counted as a skill-specific task.
 - `conversation_loop/mod.rs` is down to 6744 lines after moving patch synthesis,
   deterministic patch recovery, synthesized patch validation, required
   validation commands, validation command classification, verification source
