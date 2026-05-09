@@ -185,12 +185,10 @@ impl Tool for GrepTool {
                 current_file = Some(file.to_string());
             }
 
-            // 高亮匹配部分
-            let highlighted = regex.replace_all(content, |caps: &regex::Captures| {
-                format!("**{}**", &caps[0])
-            });
-
-            output_lines.push(format!("{:4}: {}", line, highlighted));
+            // Keep visible lines as raw source. Match metadata is available in
+            // structured data; inline markdown highlighting can pollute patch
+            // anchors when the model copies grep output into file_edit.
+            output_lines.push(format!("{:4}: {}", line, content));
         }
 
         let mut output = output_lines.join("\n");
@@ -320,6 +318,35 @@ mod tests {
         let result = tool.execute(params, context).await;
 
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn grep_output_keeps_source_lines_raw_without_markdown_highlight() {
+        let tool = GrepTool;
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("script.sh");
+        tokio::fs::write(
+            &file_path,
+            "summary_task() {\n  echo \"summary mode is not implemented yet\"\n}\n",
+        )
+        .await
+        .unwrap();
+        let params = json!({
+            "pattern": "summary_task",
+            "path": dir.path(),
+            "include": "*.sh"
+        });
+        let context = ToolContext::new(".", "test-session");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(result.success);
+        assert!(result.content.contains("summary_task() {"));
+        assert!(!result.content.contains("**summary_task**"));
+        assert_eq!(
+            result.data.as_ref().unwrap()["matches"][0]["match"],
+            "summary_task"
+        );
     }
 
     #[tokio::test]
