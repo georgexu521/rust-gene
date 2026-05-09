@@ -1942,10 +1942,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         tool_results_text.push_str(&checkpoint);
                         action_checkpoint_active = true;
                         action_checkpoint_lookup_used = false;
-                        action_checkpoint_no_change_rounds = 1;
-                        force_patch_synthesis_after_no_change = true;
-                        force_patch_synthesis_reason =
-                            Some("no code diff after repeated inspection");
+                        action_checkpoint_no_change_rounds = 2;
+                        force_patch_synthesis_after_no_change = false;
+                        force_patch_synthesis_reason = None;
                         activated_checkpoint_this_round = true;
                     } else if action_checkpoint_active && used_action_checkpoint_lookup {
                         action_checkpoint_lookup_used = true;
