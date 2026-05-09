@@ -497,6 +497,19 @@ fn is_high_risk_workflow(
             .unwrap_or(false)
 }
 
+fn is_local_filesystem_inspection_route(route: &IntentRoute) -> bool {
+    matches!(route.intent, IntentKind::DirectAnswer)
+        && matches!(route.workflow, WorkflowKind::Direct)
+        && route
+            .recommended_tools
+            .iter()
+            .any(|tool| matches!(tool.as_str(), "file_read" | "glob"))
+        && !route
+            .recommended_tools
+            .iter()
+            .any(|tool| tool.as_str() == "bash")
+}
+
 fn apply_workflow_feedback_and_trace(
     task_bundle: &mut crate::engine::task_context::TaskContextBundle,
     trace: &TraceCollector,
@@ -1821,23 +1834,44 @@ impl ConversationLoop {
             }
 
             if tool_calls.is_empty() {
-                if !pseudo_tool_retry_used
-                    && pseudo_tool_text::contains_unexecuted_tool_command(
+                let needs_bash_tool_retry = pseudo_tool_text::contains_unexecuted_tool_command(
+                    &content,
+                    &exposed_tool_names,
+                )
+                    || pseudo_tool_text::contains_false_bash_unavailable_claim(
                         &content,
                         &exposed_tool_names,
-                    )
+                    );
+                let needs_filesystem_tool_retry = !tool_calls_made
+                    && is_local_filesystem_inspection_route(&route)
+                    && pseudo_tool_text::contains_local_filesystem_claim_without_tool(
+                        &content,
+                        &exposed_tool_names,
+                    );
+                if !pseudo_tool_retry_used && (needs_bash_tool_retry || needs_filesystem_tool_retry)
                 {
                     pseudo_tool_retry_used = true;
+                    let fallback_error = if needs_filesystem_tool_retry {
+                        "assistant answered local filesystem state without a tool; retrying with explicit filesystem tool-use correction"
+                    } else {
+                        "assistant emitted an unexecuted or false-unavailable shell response; retrying with explicit bash tool-use correction"
+                    };
                     trace.record(TraceEvent::WorkflowFallback {
-                        error: "assistant emitted an unexecuted tool-like command; retrying with explicit tool-use correction".to_string(),
+                        error: fallback_error.to_string(),
                     });
                     messages.push(Message::assistant(safe_prefix_by_bytes(&content, 1200)));
-                    messages.push(Message::system(
-                        "You described a shell/tool command in normal text instead of calling an available tool. \
-The user asked for current local state, so do not answer from an unexecuted command. \
-If a command appears in a code block and bash is available, execute it with the bash tool now. \
-Otherwise call the appropriate tool, or state clearly that no tool is available.",
-                    ));
+                    let correction = if needs_filesystem_tool_retry {
+                        "file_read and glob are currently exposed to you as callable tools. \
+The user asked for current local filesystem state, so do not answer from memory or inference. \
+Inspect the requested path with file_read or glob now, then answer only from that tool output. \
+Do not invent size, item count, creation time, or contents that are not present in tool output."
+                    } else {
+                        "Bash is currently exposed to you as a callable tool. \
+The user asked for current local/runtime state, so do not answer from an unexecuted command and do not claim bash is unavailable. \
+If a command appears in a code block or your answer asks the user to run a shell command manually, execute it with the bash tool now. \
+Only report a tool as unavailable when it is not exposed in the current tool list."
+                    };
+                    messages.push(Message::system(correction));
                     continue;
                 }
                 if let Some(tx) = tx {
@@ -7232,6 +7266,16 @@ mod tests {
         assert!(!exposed.contains("memory_save"));
         assert!(!exposed.contains("mcp"));
         assert!(!exposed.contains("agent"));
+    }
+
+    #[test]
+    fn local_filesystem_inspection_route_is_distinct_from_terminal_route() {
+        let local_route = IntentRouter::new().route("请帮我看看桌面有没有 gex 文件夹");
+        let terminal_route =
+            IntentRouter::new().route("帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧");
+
+        assert!(is_local_filesystem_inspection_route(&local_route));
+        assert!(!is_local_filesystem_inspection_route(&terminal_route));
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::tools::file_tool::{is_allowed_read_absolute_path, resolve_read_path};
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::collections::HashSet;
 use tracing::{debug, info};
 
 /// Glob 文件搜索工具
@@ -70,42 +71,59 @@ impl Tool for GlobTool {
             search_path.join(pattern).to_string_lossy().to_string()
         };
 
-        // 使用 glob crate 进行搜索
+        // 使用 glob crate 进行搜索。`**/` should behave as "zero or more"
+        // directories for agent-facing patterns like `src/**/*.rs`.
         let mut matches = Vec::new();
-        match glob::glob(&full_pattern) {
-            Ok(paths) => {
-                for entry in paths {
-                    match entry {
-                        Ok(path) => {
-                            // 返回相对路径（如果可能）
-                            let display_path = if let Ok(relative) = path.strip_prefix(&search_path)
-                            {
-                                relative.to_string_lossy().to_string()
-                            } else {
-                                path.to_string_lossy().to_string()
-                            };
+        let mut seen_paths = HashSet::new();
+        for candidate_pattern in glob_candidate_patterns(&full_pattern) {
+            match glob::glob(&candidate_pattern) {
+                Ok(paths) => {
+                    for entry in paths {
+                        match entry {
+                            Ok(path) => {
+                                if !seen_paths.insert(path.clone()) {
+                                    continue;
+                                }
+                                // 返回相对路径（如果可能）
+                                let display_path =
+                                    if let Ok(relative) = path.strip_prefix(&search_path) {
+                                        relative.to_string_lossy().to_string()
+                                    } else {
+                                        path.to_string_lossy().to_string()
+                                    };
 
-                            // 区分文件和目录
-                            let is_file = path.is_file();
-                            let is_dir = path.is_dir();
+                                // 区分文件和目录
+                                let is_file = path.is_file();
+                                let is_dir = path.is_dir();
 
-                            matches.push(json!({
-                                "path": display_path,
-                                "is_file": is_file,
-                                "is_dir": is_dir,
-                                "absolute": path.to_string_lossy().to_string()
-                            }));
-                        }
-                        Err(e) => {
-                            debug!("Glob error: {}", e);
+                                matches.push(json!({
+                                    "path": display_path,
+                                    "is_file": is_file,
+                                    "is_dir": is_dir,
+                                    "absolute": path.to_string_lossy().to_string()
+                                }));
+                            }
+                            Err(e) => {
+                                debug!("Glob error: {}", e);
+                            }
                         }
                     }
                 }
-            }
-            Err(e) => {
-                return ToolResult::error(format!("Invalid glob pattern: {}", e));
-            }
-        };
+                Err(e) => {
+                    return ToolResult::error(format!("Invalid glob pattern: {}", e));
+                }
+            };
+        }
+
+        matches.sort_by(|a, b| {
+            let a_path = a["path"].as_str().unwrap_or("");
+            let b_path = b["path"].as_str().unwrap_or("");
+            a_path
+                .split('/')
+                .count()
+                .cmp(&b_path.split('/').count())
+                .then_with(|| a_path.cmp(b_path))
+        });
 
         // 限制结果数量
         const MAX_RESULTS: usize = 100;
@@ -154,6 +172,17 @@ impl Tool for GlobTool {
     }
 }
 
+fn glob_candidate_patterns(pattern: &str) -> Vec<String> {
+    let mut patterns = vec![pattern.to_string()];
+    if pattern.contains("**/") {
+        let zero_depth = pattern.replace("**/", "");
+        if zero_depth != pattern {
+            patterns.push(zero_depth);
+        }
+    }
+    patterns
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +199,14 @@ mod tests {
 
         assert!(result.success);
         // 应该能找到 main.rs
-        assert!(result.content.contains("main.rs"));
+        assert!(result.content.contains("main.rs"), "{}", result.content);
+    }
+
+    #[test]
+    fn recursive_glob_candidate_includes_zero_depth_variant() {
+        assert_eq!(
+            glob_candidate_patterns("src/**/*.rs"),
+            vec!["src/**/*.rs".to_string(), "src/*.rs".to_string()]
+        );
     }
 }
