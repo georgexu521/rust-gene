@@ -6029,7 +6029,7 @@ Do not answer in prose unless no safe patch exists."#;
             .collect()
     }
 
-    fn route_scoped_tools_enabled() -> bool {
+    pub(crate) fn route_scoped_tools_enabled() -> bool {
         if Self::env_flag_disabled("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS") {
             return false;
         }
@@ -6068,7 +6068,7 @@ Do not answer in prose unless no safe patch exists."#;
         )
     }
 
-    fn route_tool_allowlist(route: &IntentRoute) -> HashSet<String> {
+    pub(crate) fn route_tool_allowlist(route: &IntentRoute) -> HashSet<String> {
         let mut allowlist = route
             .recommended_tools
             .iter()

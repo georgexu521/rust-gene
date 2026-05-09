@@ -50,6 +50,7 @@ pub mod streaming;
 pub mod swarm;
 pub mod symbol_index;
 pub mod task_context;
+pub mod tool_exposure;
 pub mod tool_orchestration;
 pub mod trace;
 pub mod turn_state;

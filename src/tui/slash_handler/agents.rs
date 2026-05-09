@@ -78,11 +78,50 @@ pub async fn handle_status(app: &TuiApp) -> String {
         lines.push("Model: unavailable".to_string());
     }
 
+    let bash_exposure = terminal_bash_exposure_report(app).await;
+    lines.push(format!(
+        "Bash exposure: {}",
+        format_terminal_bash_exposure(&bash_exposure)
+    ));
+
     // 查询状态
     lines.push(format!("Querying: {}", app.is_querying));
 
     lines.join("\n")
 }
+
+const TERMINAL_EXPOSURE_PROMPT: &str = "帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧";
+
+async fn terminal_bash_exposure_report(
+    app: &TuiApp,
+) -> crate::engine::tool_exposure::ToolExposureReport {
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut registry = crate::tools::ToolRegistry::default_registry();
+    let _ = crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
+    let context = app.build_tool_context().await;
+    let route = crate::engine::intent_router::IntentRouter::new().route(TERMINAL_EXPOSURE_PROMPT);
+    crate::engine::tool_exposure::diagnose_tool_exposure(&registry, &context, &route, "bash")
+}
+
+fn format_terminal_bash_exposure(
+    report: &crate::engine::tool_exposure::ToolExposureReport,
+) -> String {
+    let scope = if report.route_scoped_tools {
+        "route_scoped=on"
+    } else {
+        "route_scoped=off"
+    };
+    if report.model_exposed {
+        format!("exposed for terminal requests ({})", scope)
+    } else {
+        format!(
+            "hidden for terminal requests: {} ({})",
+            report.hidden_reason.as_deref().unwrap_or("unknown reason"),
+            scope
+        )
+    }
+}
+
 pub async fn handle_tasks(app: &TuiApp) -> String {
     if let Some(manager) = app.streaming_engine.as_ref().and_then(|e| e.task_manager()) {
         let tasks = manager.list_tasks(None).await;
@@ -241,6 +280,27 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
             injected
         ),
     ));
+
+    let bash_exposure = terminal_bash_exposure_report(app).await;
+    let bash_message = format_terminal_bash_exposure(&bash_exposure);
+    if bash_exposure.model_exposed {
+        report.checks.push(crate::diagnostics::CheckResult::ok(
+            "bash_model_exposure",
+            bash_message,
+        ));
+    } else if !bash_exposure.registered || !bash_exposure.available {
+        report.checks.push(crate::diagnostics::CheckResult::error(
+            "bash_model_exposure",
+            bash_message,
+            "Register the bash tool or fix its runtime availability before terminal tasks.",
+        ));
+    } else {
+        report.checks.push(crate::diagnostics::CheckResult::warn(
+            "bash_model_exposure",
+            bash_message,
+            "Check /permissions mode and rules, or disable route scoped tools only for debugging.",
+        ));
+    }
 
     if let Some(ref engine) = app.streaming_engine {
         report.checks.push(crate::diagnostics::CheckResult::ok(
@@ -1780,4 +1840,47 @@ pub fn handle_about(_app: &TuiApp) -> String {
         "Priority Agent v{}\nWeighted priority desktop Agent.\nType /help for available commands.",
         env!("CARGO_PKG_VERSION")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exposure_report(
+        model_exposed: bool,
+        hidden_reason: Option<&str>,
+    ) -> crate::engine::tool_exposure::ToolExposureReport {
+        crate::engine::tool_exposure::ToolExposureReport {
+            tool_name: "bash".to_string(),
+            registered: true,
+            available: true,
+            availability_reason: None,
+            permission_exposed: model_exposed,
+            permission_reason: hidden_reason.map(str::to_string),
+            route_scoped_tools: true,
+            route_exposed: true,
+            route_reason: None,
+            model_exposed,
+            hidden_reason: hidden_reason.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn bash_exposure_status_names_exposed_state() {
+        let line = format_terminal_bash_exposure(&exposure_report(true, None));
+
+        assert!(line.contains("exposed for terminal requests"));
+        assert!(line.contains("route_scoped=on"));
+    }
+
+    #[test]
+    fn bash_exposure_status_names_hidden_reason() {
+        let line = format_terminal_bash_exposure(&exposure_report(
+            false,
+            Some("permission mode is read_only"),
+        ));
+
+        assert!(line.contains("hidden for terminal requests"));
+        assert!(line.contains("permission mode is read_only"));
+    }
 }

@@ -2032,6 +2032,23 @@ impl TuiApp {
         }
         context = context.with_file_cache(crate::tools::file_cache::GLOBAL_FILE_CACHE.clone());
         if let Some(ref engine) = self.streaming_engine {
+            context.permission_context.mode = engine.permission_mode();
+            let session_rules = engine.session_permission_rules();
+            context
+                .permission_context
+                .rules
+                .always_allow
+                .extend(session_rules.always_allow);
+            context
+                .permission_context
+                .rules
+                .always_deny
+                .extend(session_rules.always_deny);
+            context
+                .permission_context
+                .rules
+                .always_ask
+                .extend(session_rules.always_ask);
             context = context.with_cost_tracker(engine.cost_tracker().clone());
             context = context
                 .with_llm_provider(engine.provider())
