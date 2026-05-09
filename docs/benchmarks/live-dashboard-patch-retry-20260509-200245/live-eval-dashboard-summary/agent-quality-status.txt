@@ -1,0 +1,5 @@
+status=ok
+failure_owner=none
+warning=tool_errors_seen
+warning=earlier_verification_failed_before_repair
+warning=earlier_stage_validation_failed_before_repair

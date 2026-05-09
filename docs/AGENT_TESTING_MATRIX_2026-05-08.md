@@ -55,7 +55,7 @@ evidence run:
 
 | Signal | Current evidence |
 | --- | --- |
-| Deterministic tests | `cargo test -q` -> `1150 passed; 0 failed` |
+| Deterministic tests | `cargo test -q` -> `1151 passed; 0 failed` |
 | Live aggregate | `40/142` task reports passed; `102/142` failed |
 | Instrumented slice | `18/50` passed; `32/50` failed |
 | Real code-change passes | `13` reports with non-empty diffs |
@@ -194,12 +194,14 @@ case by default. Start with this five-case suite:
 
 Current evidence for this suite is passing. The previous dashboard recovered
 warning and the residual workflow-judgment JSON parse stderr warning both have
-focused clean reruns.
+focused clean reruns. The latest dashboard rerun also proves the model-led
+repair path can write and repair the case without deterministic patch synthesis,
+though it still records repair warnings from an initially failing shell patch.
 
 | Case | Current evidence | Next action |
 | --- | --- | --- |
 | `code-change-verification-repair-loop` | `capability-evidence-20260509-173239` passed with real diff, required commands ok, full `cargo test` ok, and `failure_owner=none`. | Keep as a regression guard for verification-repair closeout. |
-| `live-eval-dashboard-summary` | `dashboard-json5-fix-20260509-191615` passed with real diff, required commands ok, `verification_passed=true`, `stage_validation_passed=true`, `acceptance_accepted=true`, `closeout_status=passed`, `failure_owner=none`, `action_checkpoint_invalid_tools=false`, and no workflow judgment parse stderr warning. | Keep as the main guard for evidence-display contamination, no-diff agent-flow failures, deterministic summary repair, and workflow contract JSON tolerance. |
+| `live-eval-dashboard-summary` | `dashboard-patch-retry-20260509-200245` passed with real diff, required commands ok, `verification_passed=true`, `stage_validation_passed=true`, `acceptance_accepted=true`, `closeout_status=passed`, `failure_owner=none`, `model_file_edit=true`, and `patch_synthesis_used=false`. It still records `tool_errors_seen` and earlier verification/stage-validation failures before model repair. | Keep as the main guard for evidence-display contamination, no-diff agent-flow failures, workflow contract JSON tolerance, and model-led focused repair without deterministic patch takeover. Next improvement is reducing low-quality first patches. |
 | `backend-todo-api-crud` | `capability-evidence-20260509-173239` passed with real diff, required commands ok, and `failure_owner=none`. | Keep as a backend implementation guard. |
 | `frontend-book-notes-localstorage` | `capability-evidence-20260509-173239` passed with real diff, required Node test ok, and `failure_owner=none`. | Keep as a frontend persistence guard. |
 | `memory-save-quality-gate` | `capability-evidence-20260509-173239` passed with real diff, memory tests and full test suite ok, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
