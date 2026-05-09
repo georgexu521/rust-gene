@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 ## Summary
 
@@ -18,55 +18,54 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest full-test baseline observed after the 2026-05-08 runtime instruction
-diet, section-loading, sample-budget gate, tool-contract, role-scoped subagent,
-auxiliary-context gating, and closeout visibility batches:
+Latest deterministic test baseline observed after the 2026-05-09 live-eval
+recovery and baseline-reset pass:
 
 ```text
-1090 passed; 0 failed
+1128 passed; 0 failed
 ```
 
 Validated in this pass with:
 
 ```bash
-cargo test -q
-cargo check -q
-cargo fmt --check
-cargo test -q instructions
-cargo test -q prompt
-cargo test -q prompt_context
-cargo test -q runtime_diet
-cargo test -q route_scoped_tools
-cargo test -q intent_router
-cargo test -q quick
-cargo test -q file_tool
-cargo test -q bash_tool
-cargo test -q agent_tool_contract
-cargo test -q skill_view_contract
-cargo test -q core_tool_contract_descriptions_stay_compact
-cargo test -q agent_tool
-cargo test -q profiles
-cargo test -q retrieval_context
-cargo test -q memory
-cargo test -q skills
-cargo test -q trace
-cargo test -q closeout
-cargo test -q code_change_workflow
-python3 -m py_compile scripts/live_eval_report_parser.py
-bash -n scripts/run_live_eval.sh
-git diff --check
+cargo test -q -- --test-threads=1
+bash scripts/live-eval-aggregate-summary.sh
 ```
 
-The previous all-features/clippy and legacy workflow gates were last recorded
-as passing in the 2026-05-06 baseline and should be rerun before a release
-cut.
+Latest recovery commits and planning artifacts:
+
+| Area | Commit |
+|------|--------|
+| Route live coding evals as code changes | `e18de91` |
+| Harden live eval patch recovery | `b2ff20c` |
+| Record live eval recovery evidence | `6df0039` |
+| Add next development plan | `467c3b0` |
+
+The all-features clippy and experimental API checks were last recorded as
+passing in the post-recovery baseline before this docs-only reset. Rerun them
+before a release cut or behavior change merge.
 
 Latest live coding workflow smoke:
 
 ```text
-live-eval-20260506-142145 code-change-verification-repair-loop: ok
-verification_passed=true stage_validation_passed=true closeout_status=passed
+checkpoint-function-anchor-20260509-120047 live-eval-dashboard-summary: ok
+diff=yes required_command_status=ok verification_passed=true
+stage_validation_passed=true closeout_status=passed failure_owner=none
 ```
+
+Latest aggregate live-eval snapshot:
+
+```text
+generated=2026-05-09 13:04:15 +0800
+runs_scanned=136 task_reports=136 pass_rate=35/136
+instrumented_slice=13/44 passed
+real_code_change_passes=8 seeded_no_diff_failures=16
+```
+
+Read this aggregate as historical plus current evidence. It still includes many
+older reports from before structured `failure_owner`, `eval_intent`, and
+adaptive-trigger metadata, while the newest dashboard-summary recovery is a
+current passing run with a real code diff.
 
 ## Completed Runtime Spine
 
@@ -176,6 +175,7 @@ Canonical current docs:
 - `docs/CLAUDE_CODE_ALIGNMENT_PLAN.md`
 - `docs/REMAINING_CLOSURE_PLAN.md`
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`
+- `docs/NEXT_DEVELOPMENT_PLAN_2026-05-09.md`
 - `docs/AGENT_TESTING_MATRIX_2026-05-08.md`
 - `AGENTS.md`
 
@@ -199,14 +199,17 @@ than useful.
 ## Remaining Work
 
 The latest 5-item closure plan is complete, and the first Claude-gap P0/P1
-implementation batch is now landed. The remaining work is now product maturity,
-not missing foundations:
+implementation batch is now landed. The current plan is
+`docs/NEXT_DEVELOPMENT_PLAN_2026-05-09.md`: treat Priority Agent as a reliable
+LLM execution environment, move hard constraints into runtime/tool contracts,
+and measure progress with current live-eval evidence instead of prompt length.
+The remaining work is now product maturity, not missing foundations:
 
 1. Continue measuring broad code-change first-pass success and repair count
    against the replay matrix and live eval tasks.
-2. Treat `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` as implemented;
-   choose the next work from live-use gaps, release-hardening gates, or a new
-   reviewed plan.
+2. Execute the next plan in order: baseline hygiene first, then terminal/tool
+   truth, filesystem grounding, live-eval flywheel, and conversation-loop
+   decomposition.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -221,7 +224,10 @@ not missing foundations:
 
 Latest maintenance note:
 
-- `cargo clippy --all-features -- -D warnings` is clean as of 2026-05-05.
+- `cargo test -q -- --test-threads=1` is clean as of 2026-05-09 with
+  `1128 passed; 0 failed`.
+- `cargo clippy --all-features -- -D warnings` was last recorded clean in the
+  post-recovery baseline before this docs-only reset.
 - `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command
   constants, then passed all required docs, all-features build, and the
   workflow-enabled full test suite.
@@ -234,10 +240,10 @@ Latest maintenance note:
 - Live eval task parsing no longer depends on PyYAML for prepare/collect paths,
   and the dashboard-summary seeded fixture now preserves the summary entrypoint
   while stubbing only `summary_task()`.
-- A fresh dashboard-summary agent-run on 2026-05-05 confirmed the harness-side
-  PyYAML traceback is gone; the remaining failure is a clean `llm_reasoning`
-  signal because the agent produced no code diff and left the seeded
-  `summary_task()` stub failing.
+- The latest dashboard-summary agent-run,
+  `checkpoint-function-anchor-20260509-120047`, produced a real diff, passed
+  required commands, passed verification/stage validation, and ended with
+  `failure_owner=none`.
 - Live eval summaries now include pass/failure rates, real code-change pass
   counts, plan-only pass counts, seeded no-diff failure counts, and aggregated
   failure modes. `scripts/live-eval-summary-smoke.sh` covers this without
@@ -245,11 +251,10 @@ Latest maintenance note:
 - `scripts/live-eval-aggregate-summary.sh` now reads benchmark `report.md` and
   quality artifacts directly instead of overwriting per-run `summary.md` files,
   then writes `docs/benchmarks/live-eval-shortfall-summary.md`; the current
-  aggregate scans 116 task reports and shows the largest all-history shortfalls
-  are verification/closeout failure, required-command failure, and older report
-  metadata gaps. The aggregate also has a cleaner instrumented slice: 24 task
-  reports, 8 passed, 16 failed, with `agent_flow` at 37.5%, `llm_reasoning` at
-  25.0%, and 33.3% required-command failures.
+  aggregate scans 136 task reports, with 35 passed and 101 failed. The cleaner
+  instrumented slice has 44 reports, 13 passed, 31 failed, and shows
+  `agent_flow` at 43.2%, `llm_reasoning` at 20.5%, and eval-harness failures at
+  6.8%.
 - Live eval reports now classify action-checkpoint stops separately
   (`action_checkpoint_no_patch`, `action_checkpoint_invalid_tools`,
   `patch_synthesis_no_change`) and the aggregate report has an `Agent Flow
