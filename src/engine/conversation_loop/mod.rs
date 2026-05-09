@@ -5614,7 +5614,7 @@ PY
         std::fs::create_dir_all(tmp.path().join("src/tui/slash_handler"))
             .expect("create slash handler dir");
         std::fs::write(
-            tmp.path().join("src/tui/slash_handler/config.rs"),
+            tmp.path().join("src/tui/slash_handler/learning.rs"),
             r#"fn validate_skill_promotion_for_apply() {}
 fn skill_fitness_from_bound_eval() {}
 fn estimate_skill_semantic_drift() {}
@@ -5670,7 +5670,7 @@ fn handle_apply() {
         std::fs::create_dir_all(tmp.path().join("src/tui/slash_handler"))
             .expect("create slash handler dir");
         std::fs::write(
-            tmp.path().join("src/tui/slash_handler/config.rs"),
+            tmp.path().join("src/tui/slash_handler/learning.rs"),
             r#"fn validate_skill_promotion_for_apply() {}
 fn skill_fitness_from_bound_eval() {}
 fn estimate_skill_semantic_drift() {}

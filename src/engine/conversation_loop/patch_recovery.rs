@@ -421,7 +421,7 @@ Do not answer in prose unless no safe patch exists."#;
             return Vec::new();
         }
 
-        let path = cwd.join("src/tui/slash_handler/config.rs");
+        let path = cwd.join("src/tui/slash_handler/learning.rs");
         let Ok(content) = std::fs::read_to_string(&path) else {
             return Vec::new();
         };
@@ -446,7 +446,7 @@ Do not answer in prose unless no safe patch exists."#;
 "#;
             actions.push(PatchSynthesisAction {
                 tool: "file_edit".to_string(),
-                path: "src/tui/slash_handler/config.rs".to_string(),
+                path: "src/tui/slash_handler/learning.rs".to_string(),
                 old_string: Some(apply_root_anchor.to_string()),
                 new_string: format!("{gate_block}{apply_root_anchor}"),
                 line_start: None,
@@ -473,7 +473,7 @@ Do not answer in prose unless no safe patch exists."#;
 "#;
             actions.push(PatchSynthesisAction {
                 tool: "file_edit".to_string(),
-                path: "src/tui/slash_handler/config.rs".to_string(),
+                path: "src/tui/slash_handler/learning.rs".to_string(),
                 old_string: Some(apply_reload_anchor.to_string()),
                 new_string: format!("{cooldown_block}{apply_reload_anchor}"),
                 line_start: None,
