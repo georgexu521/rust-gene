@@ -21,8 +21,8 @@ pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use text_sanitizer::{strip_think_blocks, VisibleTextSanitizer};
 pub(crate) use tool_execution::{
-    is_read_only, read_only_tool_concurrency, safe_prefix_by_bytes, truncate_tool_result,
-    READ_ONLY_TOOLS,
+    is_read_only, read_only_tool_concurrency, safe_prefix_by_bytes, safe_suffix_by_bytes,
+    truncate_tool_result, READ_ONLY_TOOLS,
 };
 use tool_metadata::{
     attach_tool_execution_metadata, persist_tool_outcome_learning_event,
@@ -83,6 +83,22 @@ fn should_run_default_auto_tests(required_validation_commands: &[String]) -> boo
     required_validation_commands.is_empty()
 }
 
+fn sanitize_required_validation_env(cmd: &mut tokio::process::Command) {
+    for key in [
+        "PRIORITY_AGENT_A2A_TRANSCRIPT_PATH",
+        "PRIORITY_AGENT_AUTO_REVIEW",
+        "PRIORITY_AGENT_AUTO_TEST",
+        "PRIORITY_AGENT_CLOSEOUT_VISIBILITY",
+        "PRIORITY_AGENT_EVAL_EVENTS",
+        "PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED",
+        "PRIORITY_AGENT_LLM_MEMORY_EXTRACTION",
+        "PRIORITY_AGENT_WORKFLOW_CONTRACT",
+        "PRIORITY_AGENT_WORKFLOW_ENABLED",
+    ] {
+        cmd.env_remove(key);
+    }
+}
+
 async fn shell_output_with_timeout(
     command: &str,
     working_dir: &std::path::Path,
@@ -90,6 +106,7 @@ async fn shell_output_with_timeout(
 ) -> std::io::Result<std::process::Output> {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-lc").arg(command).current_dir(working_dir);
+    sanitize_required_validation_env(&mut cmd);
     #[cfg(unix)]
     cmd.process_group(0);
     cmd.stdout(std::process::Stdio::piped());
@@ -1455,6 +1472,7 @@ impl ConversationLoop {
         let mut action_checkpoint_active = false;
         let mut action_checkpoint_lookup_used = false;
         let mut patch_synthesis_recovery_used = false;
+        let mut action_checkpoint_reopen_used = false;
         let mut pseudo_tool_retry_used = false;
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
@@ -2214,9 +2232,26 @@ Otherwise call the appropriate tool, or state clearly that no tool is available.
                             patch_synthesis_recovery_used = true;
                             action_checkpoint_no_change_rounds = 0;
                             let recovery = format!(
-                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe file_edit/file_write patch from the evidence already gathered. If file_read or grep is still exposed, you may use exactly one targeted lookup before patching; otherwise patch from the evidence already gathered. Do not call tools that are not exposed.",
+                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe patch from the evidence already gathered. Prefer file_edit/file_write; bash is allowed only for a mutating patch command here. If file_read or grep is still exposed, you may use exactly one targeted lookup before patching; otherwise patch from the evidence already gathered. Do not call tools that are not exposed.",
                                 exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", ")
                             );
+                            messages.push(Message::system(recovery.clone()));
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&recovery);
+                            continue;
+                        }
+                        if !action_checkpoint_reopen_used {
+                            action_checkpoint_reopen_used = true;
+                            action_checkpoint_active = false;
+                            action_checkpoint_lookup_used = false;
+                            action_checkpoint_no_change_rounds = 0;
+                            no_code_progress_rounds = 1;
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error: "focused repair did not produce a patch; reopening normal code-change tools once"
+                                    .to_string(),
+                            });
+                            let recovery = "Focused repair did not produce a file change. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write or mutating bash patch before running validation. Do not close out until a file change succeeds or a concrete blocker is proven."
+                                .to_string();
                             messages.push(Message::system(recovery.clone()));
                             tool_results_text.push('\n');
                             tool_results_text.push_str(&recovery);
@@ -2346,6 +2381,26 @@ Otherwise call the appropriate tool, or state clearly that no tool is available.
                                 no_code_progress_rounds = 1;
                                 let recovery = format!(
                                     "Patch synthesis declined because evidence was insufficient: {}. Perform exactly one targeted read/search for the missing symbol, call site, or test, then make the smallest safe edit. Do not repeat broad inspection.",
+                                    safe_prefix_by_bytes(&err_text, 500)
+                                );
+                                messages.push(Message::system(recovery.clone()));
+                                tool_results_text.push('\n');
+                                tool_results_text.push_str(&recovery);
+                                continue;
+                            }
+                            if !action_checkpoint_reopen_used {
+                                action_checkpoint_reopen_used = true;
+                                action_checkpoint_active = false;
+                                action_checkpoint_lookup_used = false;
+                                action_checkpoint_no_change_rounds = 0;
+                                no_code_progress_rounds = 1;
+                                trace.record(TraceEvent::WorkflowFallback {
+                                    error:
+                                        "patch synthesis failed; reopening normal code-change tools once"
+                                            .to_string(),
+                                });
+                                let recovery = format!(
+                                    "Patch synthesis could not produce an executable edit: {}. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write or mutating bash patch before validation.",
                                     safe_prefix_by_bytes(&err_text, 500)
                                 );
                                 messages.push(Message::system(recovery.clone()));
@@ -3802,6 +3857,8 @@ Rules:
 - Keep actions minimal. Return one to six actions when the evidence shows multiple independent acceptance-critical bypasses or one Rust type change that requires updating every initializer/pattern. Otherwise return one safest next edit. Every action must have expected_replacements=1.
 - For Rust compiler errors like "missing field `x` in initializer" or "pattern does not mention field `x`", fix every constructor and match pattern shown in the validation evidence, not just the enum definition.
 - For memory quality gate tasks, if evidence shows both a model-facing save tool path and a quality/status override path, fix both paths in the same plan.
+- For Python heredocs inside shell scripts, remember they run from stdin. Do not rely on pathlib.Path(__file__).parent. For repo-local modules under scripts/, import them as package paths such as `from scripts.live_eval_report_parser import report_rows`.
+- Tool evidence may mark search hits with Markdown emphasis like **symbol**. Those asterisks are display highlighting, not source code; never copy ** markers into a patch.
 - Never edit .git, target, cache, generated benchmark output, or files outside the working tree."#
         );
 
@@ -3887,6 +3944,8 @@ Use the file_edit tool to apply the smallest safe patch from the evidence.
 Do not call read/search tools.
 Do not invent enum variants, struct fields, functions, or APIs not visible in evidence.
 If a scorer/decision object already returns final status, use that status directly; do not re-promote with explicit_override or score checks in the caller.
+For Python heredocs inside shell scripts, import repo-local scripts modules with package paths such as `from scripts.live_eval_report_parser import report_rows`; do not rely on pathlib.Path(__file__).parent under python stdin.
+Tool evidence may contain Markdown search highlighting like **symbol**; strip those markers before using text as source code.
 Do not answer in prose unless no safe patch exists."#;
         let tool_request = ChatRequest::new(&self.model)
             .with_messages(vec![
@@ -3928,11 +3987,11 @@ Do not answer in prose unless no safe patch exists."#;
     }
 
     fn patch_synthesis_enabled() -> bool {
-        matches!(
+        !matches!(
             std::env::var("PRIORITY_AGENT_PATCH_SYNTHESIS")
                 .ok()
                 .as_deref(),
-            Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+            Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO")
         )
     }
 
@@ -4898,7 +4957,11 @@ Do not answer in prose unless no safe patch exists."#;
                     } else {
                         "FAILED TOOL RESULT"
                     };
-                    format!("{}:\n{}", label, safe_prefix_by_bytes(content, 3500))
+                    format!(
+                        "{}:\n{}",
+                        label,
+                        Self::patch_synthesis_tool_excerpt(content)
+                    )
                 }
                 Message::Assistant { content, .. } if !content.trim().is_empty() => {
                     format!("ASSISTANT:\n{}", safe_prefix_by_bytes(content, 1200))
@@ -4907,12 +4970,98 @@ Do not answer in prose unless no safe patch exists."#;
             };
             total += chunk.len();
             chunks.push(chunk);
-            if total >= 10_000 {
+            if total >= 18_000 {
                 break;
             }
         }
         chunks.reverse();
         chunks.join("\n\n---\n\n")
+    }
+
+    fn patch_synthesis_tool_excerpt(content: &str) -> String {
+        if content.len() <= 7_000 {
+            return content.to_string();
+        }
+
+        let mut sections = vec![format!(
+            "[start of tool result]\n{}",
+            safe_prefix_by_bytes(content, 1_800)
+        )];
+        for window in Self::patch_synthesis_relevant_windows(content, 4) {
+            sections.push(format!("[relevant excerpt]\n{}", window));
+        }
+        sections.push(format!(
+            "[end of tool result]\n{}",
+            safe_suffix_by_bytes(content, 2_400)
+        ));
+
+        let joined = sections.join("\n\n[...]\n\n");
+        if joined.len() <= 10_000 {
+            joined
+        } else {
+            format!(
+                "{}\n\n[...]\n\n{}",
+                safe_prefix_by_bytes(&joined, 7_000),
+                safe_suffix_by_bytes(&joined, 2_500)
+            )
+        }
+    }
+
+    fn patch_synthesis_relevant_windows(content: &str, max_windows: usize) -> Vec<String> {
+        const KEYWORDS: &[&str] = &[
+            "todo",
+            "fixme",
+            "stub",
+            "not implemented",
+            "unimplemented",
+            "panic!",
+            "summary_task",
+            "required_commands",
+            "plan_quality",
+            "tool_boundary",
+            "verification_status",
+            "memory_save",
+            "assess_memory_candidate",
+            "memorystatus::accepted",
+            "duplicate",
+            "sensitive",
+            "assertionerror",
+            "[exit status:",
+            "error",
+            "failed",
+        ];
+
+        let lines = content.lines().collect::<Vec<_>>();
+        let mut matches = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| {
+                let lower = line.to_ascii_lowercase();
+                KEYWORDS
+                    .iter()
+                    .any(|keyword| lower.contains(keyword))
+                    .then_some(idx)
+            })
+            .collect::<Vec<_>>();
+        matches.sort_unstable();
+        matches.dedup();
+
+        let mut windows = Vec::new();
+        let mut covered_until = 0usize;
+        for idx in matches {
+            let start = idx.saturating_sub(10);
+            let end = (idx + 24).min(lines.len());
+            if !windows.is_empty() && start <= covered_until {
+                covered_until = covered_until.max(end);
+                continue;
+            }
+            windows.push(lines[start..end].join("\n"));
+            covered_until = end;
+            if windows.len() >= max_windows {
+                break;
+            }
+        }
+        windows
     }
 
     fn parse_patch_synthesis_plan(content: &str) -> Option<PatchSynthesisPlan> {
@@ -5029,6 +5178,8 @@ Do not answer in prose unless no safe patch exists."#;
             ));
         }
 
+        let is_rust_file =
+            canonical_candidate.extension().and_then(|ext| ext.to_str()) == Some("rs");
         let mut normalized_new_string = action.new_string.clone();
         let mut params = serde_json::json!({
             "path": tool_path,
@@ -5039,11 +5190,6 @@ Do not answer in prose unless no safe patch exists."#;
                     "synthesized patch line_start and line_end must be provided together"
                 ));
             };
-            if action.old_string.is_some() {
-                return Err(anyhow::anyhow!(
-                    "synthesized patch line ranges must not also include old_string"
-                ));
-            }
             if line_start == 0 || line_end == 0 || line_start > line_end {
                 return Err(anyhow::anyhow!(
                     "synthesized patch line range is invalid: {}..={}",
@@ -5051,9 +5197,8 @@ Do not answer in prose unless no safe patch exists."#;
                     line_end
                 ));
             }
-            let line_count = std::fs::read_to_string(&canonical_candidate)
-                .map(|content| content.lines().count())
-                .unwrap_or(0);
+            let file_content = std::fs::read_to_string(&canonical_candidate).unwrap_or_default();
+            let line_count = file_content.lines().count();
             if line_start > line_count || line_end > line_count {
                 return Err(anyhow::anyhow!(
                     "synthesized patch line range {}..={} is outside {} line file",
@@ -5062,14 +5207,21 @@ Do not answer in prose unless no safe patch exists."#;
                     line_count
                 ));
             }
-            if line_end - line_start > 24 {
+            let line_span = line_end - line_start + 1;
+            let max_line_span = Self::max_synthesized_line_range(&canonical_candidate);
+            if line_span > max_line_span {
                 return Err(anyhow::anyhow!(
-                    "synthesized patch line range is too broad: {}..={}",
+                    "synthesized patch line range is too broad: {}..={} ({} lines, max {})",
                     line_start,
-                    line_end
+                    line_end,
+                    line_span,
+                    max_line_span
                 ));
             }
-            if !Self::balanced_delimiters_rough(&normalized_new_string) {
+            if canonical_candidate.extension().and_then(|ext| ext.to_str()) == Some("sh") {
+                Self::validate_shell_line_range_scope(&file_content, line_start, line_end)?;
+            }
+            if is_rust_file && !Self::balanced_delimiters_rough(&normalized_new_string) {
                 return Err(anyhow::anyhow!(
                     "synthesized patch replacement has unbalanced delimiters"
                 ));
@@ -5092,7 +5244,8 @@ Do not answer in prose unless no safe patch exists."#;
                     &canonical_candidate,
                 )?;
             normalized_new_string = replacement;
-            if Self::balanced_delimiters_rough(&normalized_old_string)
+            if is_rust_file
+                && Self::balanced_delimiters_rough(&normalized_old_string)
                 && !Self::balanced_delimiters_rough(&normalized_new_string)
             {
                 return Err(anyhow::anyhow!(
@@ -5126,11 +5279,13 @@ Do not answer in prose unless no safe patch exists."#;
                 ));
             }
         }
-        if canonical_candidate.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+        if is_rust_file {
             Self::validate_rust_patch_semantics(&canonical_candidate, &action.new_string)?;
             if let Some(err) = Self::unknown_rust_enum_variant_in_patch(&action.new_string, cwd) {
                 return Err(anyhow::anyhow!("{}", err));
             }
+        } else if canonical_candidate.extension().and_then(|ext| ext.to_str()) == Some("sh") {
+            Self::validate_shell_patch_semantics(&canonical_candidate, &normalized_new_string)?;
         }
 
         Ok(ToolCall {
@@ -5138,6 +5293,113 @@ Do not answer in prose unless no safe patch exists."#;
             name: "file_edit".to_string(),
             arguments: params,
         })
+    }
+
+    fn max_synthesized_line_range(path: &std::path::Path) -> usize {
+        let normalized_path = path.to_string_lossy();
+        if normalized_path.ends_with("scripts/run_live_eval.sh") {
+            return 96;
+        }
+
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("rs") => 25,
+            Some("sh" | "py" | "md" | "toml" | "yaml" | "yml") => 80,
+            _ => 40,
+        }
+    }
+
+    fn validate_shell_line_range_scope(
+        file_content: &str,
+        line_start: usize,
+        line_end: usize,
+    ) -> Result<()> {
+        let selected = file_content
+            .lines()
+            .enumerate()
+            .filter(|(idx, _)| {
+                let line_no = idx + 1;
+                line_no >= line_start && line_no <= line_end
+            })
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>();
+        let Some(first_fn_index) = selected
+            .iter()
+            .position(|line| Self::shell_top_level_function_name(line).is_some())
+        else {
+            return Ok(());
+        };
+        let first_fn = Self::shell_top_level_function_name(selected[first_fn_index])
+            .unwrap_or("function")
+            .to_string();
+        if let Some(next_fn) = selected
+            .iter()
+            .skip(first_fn_index + 1)
+            .find_map(|line| Self::shell_top_level_function_name(line))
+        {
+            return Err(anyhow::anyhow!(
+                "synthesized shell patch line range crosses function boundary: {} into {}",
+                first_fn,
+                next_fn
+            ));
+        }
+        Ok(())
+    }
+
+    fn shell_top_level_function_name(line: &str) -> Option<&str> {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            return None;
+        }
+        let trimmed = line.trim_end();
+        let name = trimmed.strip_suffix("() {")?;
+        let mut chars = name.chars();
+        let first = chars.next()?;
+        if !(first == '_' || first.is_ascii_alphabetic()) {
+            return None;
+        }
+        if chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+    fn validate_shell_patch_semantics(path: &std::path::Path, new_string: &str) -> Result<()> {
+        let normalized_path = path.to_string_lossy();
+        if !normalized_path.ends_with("scripts/run_live_eval.sh") {
+            return Ok(());
+        }
+
+        if new_string.contains("**") {
+            return Err(anyhow::anyhow!(
+                "run_live_eval.sh patch contains Markdown emphasis markers (`**`), likely copied from highlighted tool output rather than source code"
+            ));
+        }
+
+        let uses_bare_parser_import = new_string.contains("from live_eval_report_parser import")
+            || new_string.contains("import live_eval_report_parser");
+        let uses_package_parser_import = new_string
+            .contains("from scripts.live_eval_report_parser import")
+            || new_string.contains("import scripts.live_eval_report_parser");
+        let adds_scripts_to_python_path = new_string.contains("sys.path")
+            && new_string.contains("scripts")
+            && new_string.contains("live_eval_report_parser");
+        if uses_bare_parser_import && !uses_package_parser_import && !adds_scripts_to_python_path {
+            return Err(anyhow::anyhow!(
+                "run_live_eval.sh Python heredocs execute from stdin; import live_eval_report_parser as `from scripts.live_eval_report_parser import ...` or add the scripts directory to sys.path explicitly"
+            ));
+        }
+
+        if new_string.contains("Path(__file__).parent")
+            && new_string.contains("live_eval_report_parser")
+            && !uses_package_parser_import
+            && !adds_scripts_to_python_path
+        {
+            return Err(anyhow::anyhow!(
+                "run_live_eval.sh Python heredocs must not rely on pathlib.Path(__file__).parent for repo-local imports; use the scripts package path"
+            ));
+        }
+
+        Ok(())
     }
 
     fn validate_rust_patch_semantics(path: &std::path::Path, new_string: &str) -> Result<()> {
@@ -5207,6 +5469,15 @@ Do not answer in prose unless no safe patch exists."#;
             ));
         }
         if new_string.lines().count() > 1 {
+            if path.extension().and_then(|ext| ext.to_str()) == Some("sh") {
+                if let Some((recovered_old, recovered_new)) =
+                    Self::recover_shell_function_replacement_anchor(
+                        old_string, new_string, &content, path,
+                    )?
+                {
+                    return Ok((recovered_old, recovered_new));
+                }
+            }
             return Err(anyhow::anyhow!(
                 "synthesized patch old_string was not found exactly in {}; refusing inexact multi-line replacement",
                 path.display()
@@ -5248,6 +5519,82 @@ Do not answer in prose unless no safe patch exists."#;
             new_string.to_string()
         };
         Ok((recovered_old, recovered_new))
+    }
+
+    fn recover_shell_function_replacement_anchor(
+        old_string: &str,
+        new_string: &str,
+        content: &str,
+        path: &std::path::Path,
+    ) -> Result<Option<(String, String)>> {
+        let Some(function_name) = Self::shell_function_name_in_text(old_string)
+            .or_else(|| Self::shell_function_name_in_text(new_string))
+        else {
+            return Ok(None);
+        };
+        if let Some(new_function_name) = Self::shell_function_name_in_text(new_string) {
+            if new_function_name != function_name {
+                return Err(anyhow::anyhow!(
+                    "synthesized shell patch tries to replace function `{}` with `{}`",
+                    function_name,
+                    new_function_name
+                ));
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "synthesized shell patch for `{}` must include the replacement function header",
+                function_name
+            ));
+        }
+
+        let Some(recovered_old) = Self::shell_function_block(content, &function_name) else {
+            return Err(anyhow::anyhow!(
+                "synthesized shell patch could not recover function `{}` in {}",
+                function_name,
+                path.display()
+            ));
+        };
+        Ok(Some((recovered_old, new_string.to_string())))
+    }
+
+    fn shell_function_name_in_text(input: &str) -> Option<String> {
+        input.lines().find_map(|line| {
+            let line = line.replace("**", "");
+            let stripped = Self::strip_tool_line_prefix(line.trim_start());
+            Self::shell_top_level_function_name(stripped).map(str::to_string)
+        })
+    }
+
+    fn strip_tool_line_prefix(line: &str) -> &str {
+        let stripped_digits = line.trim_start_matches(|ch: char| ch.is_ascii_digit());
+        let stripped_digits = stripped_digits.trim_start();
+        stripped_digits
+            .strip_prefix(':')
+            .or_else(|| stripped_digits.strip_prefix('|'))
+            .map(str::trim_start)
+            .unwrap_or(line)
+    }
+
+    fn shell_function_block(content: &str, function_name: &str) -> Option<String> {
+        let lines = content.lines().collect::<Vec<_>>();
+        let start = lines
+            .iter()
+            .position(|line| Self::shell_top_level_function_name(line) == Some(function_name))?;
+        let mut end = None;
+        for (idx, line) in lines.iter().enumerate().skip(start + 1) {
+            if line.starts_with(' ') || line.starts_with('\t') {
+                continue;
+            }
+            if line.trim_end() == "}" {
+                end = Some(idx);
+                break;
+            }
+            if Self::shell_top_level_function_name(line).is_some() {
+                return None;
+            }
+        }
+        let end = end?;
+        Some(lines[start..=end].join("\n") + "\n")
     }
 
     fn balanced_delimiters_rough(input: &str) -> bool {
@@ -5838,7 +6185,7 @@ Do not answer in prose unless no safe patch exists."#;
 
     fn code_action_tools(
         tools: &[crate::services::api::Tool],
-        has_changes_before_request: bool,
+        _has_changes_before_request: bool,
         allow_targeted_lookup: bool,
     ) -> Vec<crate::services::api::Tool> {
         tools
@@ -5846,7 +6193,7 @@ Do not answer in prose unless no safe patch exists."#;
             .filter(|tool| {
                 Self::is_code_write_tool_name(&tool.name)
                     || (allow_targeted_lookup && matches!(tool.name.as_str(), "file_read" | "grep"))
-                    || (has_changes_before_request && tool.name == "bash")
+                    || tool.name == "bash"
             })
             .cloned()
             .collect()
@@ -6700,6 +7047,50 @@ mod tests {
         assert!(result.content.contains("Output truncated"));
     }
 
+    #[tokio::test]
+    async fn test_required_validation_shell_strips_agent_runtime_env() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_AUTO_TEST", "check_then_test");
+        env.set(
+            "PRIORITY_AGENT_EVAL_EVENTS",
+            "/tmp/priority-agent-events.jsonl",
+        );
+
+        let tmp = tempdir().expect("create temp dir");
+        let output = shell_output_with_timeout(
+            "printf '%s:%s' \"${PRIORITY_AGENT_AUTO_TEST:-unset}\" \"${PRIORITY_AGENT_EVAL_EVENTS:-unset}\"",
+            tmp.path(),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("run shell command");
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "unset:unset");
+    }
+
+    #[test]
+    fn test_extract_required_validation_commands_keeps_live_eval_script_checks() {
+        let prompt = r#"
+## Acceptance checks
+- `bash -n scripts/run_live_eval.sh`
+- `scripts/run_live_eval.sh --list`
+- `scripts/run_live_eval.sh --mode summary --run-id live-summary-smoke`
+- `cargo test -q -- --test-threads=1`
+"#;
+
+        let commands = ConversationLoop::extract_required_validation_commands(prompt);
+        assert_eq!(
+            commands,
+            vec![
+                "bash -n scripts/run_live_eval.sh",
+                "scripts/run_live_eval.sh --list",
+                "scripts/run_live_eval.sh --mode summary --run-id live-summary-smoke",
+                "cargo test -q -- --test-threads=1",
+            ]
+        );
+    }
+
     #[test]
     fn test_allowed_tool_context_enforces_subagent_tool_scope() {
         assert!(tool_allowed_by_context(&None, "bash"));
@@ -7427,7 +7818,7 @@ mod tests {
     }
 
     #[test]
-    fn test_code_action_tools_hide_bash_until_files_change() {
+    fn test_code_action_tools_keep_bash_visible_but_guarded() {
         let tools = vec![
             crate::services::api::Tool {
                 name: "file_edit".to_string(),
@@ -7458,7 +7849,7 @@ mod tests {
         assert!(before_change.contains("file_edit"));
         assert!(before_change.contains("file_read"));
         assert!(before_change.contains("grep"));
-        assert!(!before_change.contains("bash"));
+        assert!(before_change.contains("bash"));
 
         let after_change = ConversationLoop::code_action_tools(&tools, true, true)
             .into_iter()
@@ -7471,6 +7862,7 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
         assert!(after_lookup.contains("file_edit"));
+        assert!(after_lookup.contains("bash"));
         assert!(!after_lookup.contains("file_read"));
         assert!(!after_lookup.contains("grep"));
     }
@@ -7487,6 +7879,7 @@ mod tests {
 
         assert!(prompt.contains("file_read/grep are allowed only for one targeted lookup"));
         assert!(prompt.contains("Do not call glob/project_list"));
+        assert!(prompt.contains("bash only for a mutating patch command"));
         assert!(!prompt.contains("Do not call grep/glob/file_read/project_list"));
 
         let prompt_after_lookup = ConversationLoop::focused_repair_mode_prompt(&exposed, true);
@@ -7522,18 +7915,18 @@ Expected 1 occurrence(s) of old_string, but found 1487.
 
         assert!(message.contains("project_list"));
         assert!(message.contains("Exposed tools: file_edit, file_read, grep"));
-        assert!(message.contains("Use file_edit/file_write for the patch"));
+        assert!(message.contains("Use file_edit/file_write or a mutating bash command"));
         assert!(message.contains("one targeted lookup"));
     }
 
     #[test]
-    fn test_patch_synthesis_is_explicit_opt_in() {
+    fn test_patch_synthesis_is_default_on_with_opt_out() {
         let mut guard = EnvVarGuard::acquire_blocking();
         guard.remove("PRIORITY_AGENT_PATCH_SYNTHESIS");
-        assert!(!ConversationLoop::patch_synthesis_enabled());
-
-        guard.set("PRIORITY_AGENT_PATCH_SYNTHESIS", "1");
         assert!(ConversationLoop::patch_synthesis_enabled());
+
+        guard.set("PRIORITY_AGENT_PATCH_SYNTHESIS", "0");
+        assert!(!ConversationLoop::patch_synthesis_enabled());
     }
 
     #[test]
@@ -7609,6 +8002,304 @@ Expected 1 occurrence(s) of old_string, but found 1487.
     }
 
     #[test]
+    fn test_patch_synthesis_line_range_ignores_extra_old_string_for_shell_script() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("scripts")).expect("create scripts dir");
+        std::fs::write(
+            tmp.path().join("scripts/run_live_eval.sh"),
+            "summary_task() {\n  echo \"summary mode is not implemented yet\" >&2\n  return 2\n}\n",
+        )
+        .expect("write script");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "scripts/run_live_eval.sh".to_string(),
+            old_string: Some("summary_task() {".to_string()),
+            new_string: "summary_task() {\n  echo \"# Live Eval Summary: ${RUN_ID}\" >\"$summary\"\n  return 0\n}\n".to_string(),
+            line_start: Some(1),
+            line_end: Some(4),
+            expected_replacements: Some(1),
+        };
+
+        let call = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect("line-range shell patch should be accepted");
+
+        assert_eq!(call.arguments["path"], "scripts/run_live_eval.sh");
+        assert_eq!(call.arguments["line_start"], 1);
+        assert_eq!(call.arguments["line_end"], 4);
+        assert!(call.arguments["old_string"].is_null());
+    }
+
+    #[test]
+    fn test_patch_synthesis_accepts_function_sized_shell_line_range() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("scripts")).expect("create scripts dir");
+        let source = (0..70)
+            .map(|idx| format!("  echo line-{idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            tmp.path().join("scripts/run_live_eval.sh"),
+            format!("summary_task() {{\n{source}\n}}\n"),
+        )
+        .expect("write script");
+        let replacement = (0..70)
+            .map(|idx| format!("  printf '%s\\n' item-{idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "scripts/run_live_eval.sh".to_string(),
+            old_string: None,
+            new_string: format!("summary_task() {{\n{replacement}\n}}\n"),
+            line_start: Some(1),
+            line_end: Some(72),
+            expected_replacements: None,
+        };
+
+        let call = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect("function-sized shell replacement should be accepted");
+
+        assert_eq!(call.arguments["line_start"], 1);
+        assert_eq!(call.arguments["line_end"], 72);
+    }
+
+    #[test]
+    fn test_patch_synthesis_rejects_shell_line_range_crossing_next_function() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("scripts")).expect("create scripts dir");
+        std::fs::write(
+            tmp.path().join("scripts/run_live_eval.sh"),
+            "summary_task() {\n  echo stub\n}\n\nrun_one() {\n  echo next\n}\n",
+        )
+        .expect("write script");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "scripts/run_live_eval.sh".to_string(),
+            old_string: None,
+            new_string: "summary_task() {\n  echo ok\n}\n".to_string(),
+            line_start: Some(1),
+            line_end: Some(6),
+            expected_replacements: None,
+        };
+
+        let err = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect_err("cross-function shell replacement should be rejected");
+
+        assert!(err.to_string().contains("crosses function boundary"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_recovers_shell_function_anchor_from_highlighted_old_string() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("scripts")).expect("create scripts dir");
+        std::fs::write(
+            tmp.path().join("scripts/run_live_eval.sh"),
+            "summary_task() {\n  echo \"summary mode is not implemented yet\" >&2\n  return 2\n}\n\nrun_one() {\n  echo next\n}\n",
+        )
+        .expect("write script");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "scripts/run_live_eval.sh".to_string(),
+            old_string: Some(
+                "1359: **summary_task**() {\n  echo \"summary mode is not implemented yet\"\n}"
+                    .to_string(),
+            ),
+            new_string: "summary_task() {\n  echo ok\n}\n".to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        };
+
+        let call = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect("highlighted shell function anchor should recover safely");
+
+        assert!(call.arguments["old_string"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("summary mode is not implemented yet"));
+        assert!(!call.arguments["old_string"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("run_one()"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_rejects_bare_live_eval_parser_import_in_shell_heredoc() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("scripts")).expect("create scripts dir");
+        std::fs::write(
+            tmp.path().join("scripts/run_live_eval.sh"),
+            "summary_task() {\n  echo \"summary mode is not implemented yet\" >&2\n  return 2\n}\n",
+        )
+        .expect("write script");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "scripts/run_live_eval.sh".to_string(),
+            old_string: None,
+            new_string: r#"summary_task() {
+python3 - <<'PY'
+import pathlib
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from live_eval_report_parser import report_rows
+PY
+}
+"#
+            .to_string(),
+            line_start: Some(1),
+            line_end: Some(4),
+            expected_replacements: Some(1),
+        };
+
+        let err = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect_err("bare live_eval_report_parser import should be rejected");
+
+        assert!(err
+            .to_string()
+            .contains("Python heredocs execute from stdin"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_rejects_markdown_highlight_in_shell_patch() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("scripts")).expect("create scripts dir");
+        std::fs::write(
+            tmp.path().join("scripts/run_live_eval.sh"),
+            "summary_task() {\n  echo \"summary mode is not implemented yet\" >&2\n  return 2\n}\n",
+        )
+        .expect("write script");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "scripts/run_live_eval.sh".to_string(),
+            old_string: None,
+            new_string: "**summary_task()** {\n  echo ok\n}\n".to_string(),
+            line_start: Some(1),
+            line_end: Some(4),
+            expected_replacements: Some(1),
+        };
+
+        let err = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect_err("markdown highlighting should be rejected");
+
+        assert!(err.to_string().contains("Markdown emphasis markers"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_accepts_scripts_package_import_in_shell_heredoc() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("scripts")).expect("create scripts dir");
+        std::fs::write(
+            tmp.path().join("scripts/run_live_eval.sh"),
+            "summary_task() {\n  echo \"summary mode is not implemented yet\" >&2\n  return 2\n}\n",
+        )
+        .expect("write script");
+        let action = PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "scripts/run_live_eval.sh".to_string(),
+            old_string: None,
+            new_string: r#"summary_task() {
+python3 - <<'PY'
+from scripts.live_eval_report_parser import report_rows
+PY
+}
+"#
+            .to_string(),
+            line_start: Some(1),
+            line_end: Some(4),
+            expected_replacements: Some(1),
+        };
+
+        let call = loop_instance
+            .validate_patch_synthesis_action(&action, tmp.path())
+            .expect("package import should be accepted");
+
+        assert_eq!(call.arguments["path"], "scripts/run_live_eval.sh");
+    }
+
+    #[test]
     fn test_patch_synthesis_path_resolves_root_relative_src_path() {
         let tmp = tempdir().expect("create temp dir");
         std::fs::create_dir_all(tmp.path().join("src")).expect("create src");
@@ -7675,6 +8366,27 @@ Expected 1 occurrence(s) of old_string, but found 1487.
 
         assert!(evidence.contains("FAILED TOOL RESULT"));
         assert!(evidence.contains("error[E0596]"));
+    }
+
+    #[test]
+    fn test_patch_synthesis_large_file_evidence_keeps_relevant_late_function() {
+        let mut content = String::from("Result: OK\n");
+        for idx in 0..600 {
+            content.push_str(&format!("{idx:4} | echo filler_{idx}\n"));
+        }
+        content.push_str(
+            "1359 | summary_task() {\n1360 |   echo \"summary mode is not implemented yet\" >&2\n1361 |   return 2\n1362 | }\n",
+        );
+        for idx in 601..900 {
+            content.push_str(&format!("{idx:4} | echo tail_{idx}\n"));
+        }
+        let messages = vec![Message::tool("file_read", content)];
+
+        let evidence = ConversationLoop::patch_synthesis_evidence(&messages);
+
+        assert!(evidence.contains("summary_task()"));
+        assert!(evidence.contains("summary mode is not implemented yet"));
+        assert!(evidence.contains("[relevant excerpt]"));
     }
 
     #[test]

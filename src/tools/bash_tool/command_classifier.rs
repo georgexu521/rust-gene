@@ -13,6 +13,7 @@ pub enum CommandKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidationFamily {
+    BashSyntax,
     CargoTest,
     CargoCheck,
     CargoClippy,
@@ -24,6 +25,7 @@ pub enum ValidationFamily {
     PythonUnittest,
     GoTest,
     NodeScript,
+    ProjectScript,
     RgAssertion,
 }
 
@@ -164,7 +166,11 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
     if is_safe_rg_assertion(command) {
         return Some(ValidationFamily::RgAssertion);
     }
-    if lower.contains("cargo test") {
+    if lower.starts_with("bash -n ") || lower.starts_with("sh -n ") {
+        Some(ValidationFamily::BashSyntax)
+    } else if is_project_validation_script(command) {
+        Some(ValidationFamily::ProjectScript)
+    } else if lower.contains("cargo test") {
         Some(ValidationFamily::CargoTest)
     } else if lower.contains("cargo check") {
         Some(ValidationFamily::CargoCheck)
@@ -199,6 +205,34 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
     } else {
         None
     }
+}
+
+fn is_project_validation_script(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty()
+        || command.contains('\n')
+        || command.contains(';')
+        || command.contains('|')
+        || command.contains("&&")
+        || command.contains("||")
+        || command.contains('`')
+        || command.contains("$(")
+        || command.contains('>')
+        || command.contains('<')
+    {
+        return false;
+    }
+
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    let Some(first) = tokens.first().copied() else {
+        return false;
+    };
+    let script = match first {
+        "bash" | "sh" => tokens.get(1).copied().unwrap_or_default(),
+        _ => first,
+    };
+    let script = script.strip_prefix("./").unwrap_or(script);
+    script.starts_with("scripts/") && script.ends_with(".sh")
 }
 
 fn is_safe_rg_assertion(command: &str) -> bool {
@@ -280,6 +314,19 @@ mod tests {
 
     #[test]
     fn classifies_test_families() {
+        assert_eq!(
+            classify_command("bash -n scripts/run_live_eval.sh").validation_family,
+            Some(ValidationFamily::BashSyntax)
+        );
+        assert_eq!(
+            classify_command("scripts/run_live_eval.sh --mode summary --run-id smoke")
+                .validation_family,
+            Some(ValidationFamily::ProjectScript)
+        );
+        assert_eq!(
+            classify_command("bash scripts/live-eval-summary-smoke.sh").validation_family,
+            Some(ValidationFamily::ProjectScript)
+        );
         assert_eq!(
             classify_command("npm test").validation_family,
             Some(ValidationFamily::NpmTest)

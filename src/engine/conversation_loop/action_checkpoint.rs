@@ -12,7 +12,7 @@ impl ConversationLoop {
             "file_read/grep are allowed only for one targeted lookup of a specific symbol, test, or call site; do not repeat broad inspection."
         };
         format!(
-            "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Use file_edit/file_write to patch files as soon as the target line is known. {} Do not call glob/project_list or any tool that is not in the exposed list. If bash is exposed, use it only to run validation after a patch. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
+            "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Patch files as soon as the target line is known, using file_edit/file_write or bash only for a mutating patch command. {} Do not call glob/project_list or any tool that is not in the exposed list. Do not use bash for read-only inspection; after a file changes, bash may run validation. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
             exposed_names.join(", "),
             lookup_rule
         )
@@ -52,7 +52,7 @@ impl ConversationLoop {
         let mut exposed = exposed_tool_names.iter().cloned().collect::<Vec<_>>();
         exposed.sort();
         format!(
-            "Tool '{tool_name}' was not exposed in the current focused repair request and cannot be executed. Exposed tools: {}. Use file_edit/file_write for the patch. Use file_read or grep only for one targeted lookup of a missing symbol, test, or call site. Do not call glob/project_list or repeat broad inspection.",
+            "Tool '{tool_name}' was not exposed in the current focused repair request and cannot be executed. Exposed tools: {}. Use file_edit/file_write or a mutating bash command for the patch. Use file_read or grep only for one targeted lookup of a missing symbol, test, or call site. Do not call glob/project_list or repeat broad inspection.",
             exposed.join(", ")
         )
     }

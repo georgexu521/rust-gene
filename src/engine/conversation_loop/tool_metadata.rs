@@ -177,6 +177,12 @@ pub(super) fn tool_execution_start_progress(
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::GoTest) => {
                 "Running Go tests"
             }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::BashSyntax) => {
+                "Checking shell syntax"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::ProjectScript) => {
+                "Running project validation"
+            }
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::RgAssertion) => {
                 "Running search assertion"
             }

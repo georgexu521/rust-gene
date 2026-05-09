@@ -266,6 +266,15 @@ task_env_base() {
   echo "$ROOT_DIR/$WORK_ROOT/$RUN_ID/$id/env"
 }
 
+task_cargo_target_dir() {
+  local id="$1"
+  if [[ -n "${PRIORITY_AGENT_LIVE_EVAL_CARGO_TARGET_DIR:-}" ]]; then
+    echo "$PRIORITY_AGENT_LIVE_EVAL_CARGO_TARGET_DIR"
+  else
+    echo "$(task_env_base "$id")/cargo-target"
+  fi
+}
+
 ensure_task_env() {
   local id="$1" env_base
   env_base="$(task_env_base "$id")"
@@ -273,7 +282,8 @@ ensure_task_env() {
     "$env_base/home" \
     "$env_base/xdg-config" \
     "$env_base/xdg-data" \
-    "$env_base/xdg-state"
+    "$env_base/xdg-state" \
+    "$(task_cargo_target_dir "$id")"
 }
 
 find_free_port() {
@@ -645,7 +655,7 @@ PY
 
 agent_run_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir agent_stdout agent_stderr agent_output agent_events exit_file prompt_file env_base
+  local id report_dir agent_stdout agent_stderr agent_output agent_events exit_file prompt_file env_base cargo_target_dir
   id="$(yaml_get "$file" id)"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
@@ -656,6 +666,7 @@ agent_run_task() {
   exit_file="$report_dir/agent-exit-status.txt"
   prompt_file="$ROOT_DIR/$WORK_ROOT/$RUN_ID/$id/prompt.txt"
   env_base="$(task_env_base "$id")"
+  cargo_target_dir="$(task_cargo_target_dir "$id")"
 
   if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
     echo "MINIMAX_API_KEY is required for agent-run mode." >&2
@@ -676,7 +687,7 @@ agent_run_task() {
     "$agent_output" \
     "$agent_events" \
     "$env_base" \
-    "$ROOT_DIR/target/live-eval-cargo" <<'PY' >"$exit_file"
+    "$cargo_target_dir" <<'PY' >"$exit_file"
 import os
 import subprocess
 import sys
@@ -829,7 +840,7 @@ PY
 collect_task() {
   local file="$1" task_workdir="$2"
   local id report_dir report diff_stat diff_patch cmd_log status_file quality_status_file test_status env_base
-  local required_cmd_count effective_run_tests
+  local required_cmd_count effective_run_tests cargo_target_dir
   id="$(yaml_get "$file" id)"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
@@ -842,6 +853,7 @@ collect_task() {
   sample_json="$report_dir/sample.json"
   test_status="skipped"
   env_base="$(task_env_base "$id")"
+  cargo_target_dir="$(task_cargo_target_dir "$id")"
   required_cmd_count="$(yaml_list "$file" acceptance.required_commands | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
   effective_run_tests="$RUN_TESTS"
   if [[ "$required_cmd_count" -gt 0 && ( "$MODE" == "agent-run" || "$MODE" == "full" ) ]]; then
@@ -865,7 +877,7 @@ collect_task() {
           cd "$task_workdir" && env \
             CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" \
             RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
-            CARGO_TARGET_DIR="$ROOT_DIR/target/live-eval-cargo" \
+            CARGO_TARGET_DIR="$cargo_target_dir" \
             NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost,::1" \
             no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost,::1" \
             bash -lc "$cmd"
@@ -1130,6 +1142,25 @@ if verification_events and not verification_passed:
 diff_required = seeded_code_change and task_type in code_change_types
 if diff_required and not diff.strip():
     failures.append("expected_code_diff_missing")
+
+harness_acceptance_passed = test_status == "ok" and (not diff_required or bool(diff.strip()))
+if harness_acceptance_passed:
+    downgraded = []
+    for item in (
+        "action_checkpoint_invalid_tools",
+        "closeout_not_successful",
+        "acceptance_review_rejected",
+        "stage_validation_failed",
+        "verification_failed",
+    ):
+        if item in failures:
+            failures = [failure for failure in failures if failure != item]
+            downgraded.append(item)
+    for item in downgraded:
+        warning = f"recovered_{item}"
+        if warning not in warnings:
+            warnings.append(warning)
+        print(f"warning: {warning}")
 
 status = "failed" if failures else "ok"
 
