@@ -1,0 +1,4 @@
+2026-05-09T10:53:00.093299Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: key must be a string at line 1 column 2
+[required validation still running after 30s] cargo test -q -- --test-threads=1
+[required validation still running after 60s] cargo test -q -- --test-threads=1
+[required validation still running after 90s] cargo test -q -- --test-threads=1

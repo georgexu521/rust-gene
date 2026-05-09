@@ -55,7 +55,7 @@ evidence run:
 
 | Signal | Current evidence |
 | --- | --- |
-| Deterministic tests | `cargo test -q` -> `1147 passed; 0 failed` |
+| Deterministic tests | `cargo test -q` -> `1148 passed; 0 failed` |
 | Live aggregate | `40/142` task reports passed; `102/142` failed |
 | Instrumented slice | `18/50` passed; `32/50` failed |
 | Real code-change passes | `13` reports with non-empty diffs |
@@ -192,13 +192,14 @@ case by default. Start with this five-case suite:
 | 5 | `memory-save-quality-gate` | Tests the project's memory/quality-gate differentiator. |
 | 6 | `skill-promotion-gate` | Tests skill promotion gate repair and skill evidence reporting. |
 
-Current evidence for this suite is passing, with one recovered-warning to keep
-tracking:
+Current evidence for this suite is passing. The previous dashboard recovered
+warning has a focused clean rerun; keep the residual workflow-judgment parse
+stderr warning on the follow-up list.
 
 | Case | Current evidence | Next action |
 | --- | --- | --- |
 | `code-change-verification-repair-loop` | `capability-evidence-20260509-173239` passed with real diff, required commands ok, full `cargo test` ok, and `failure_owner=none`. | Keep as a regression guard for verification-repair closeout. |
-| `live-eval-dashboard-summary` | `capability-evidence-20260509-173239` passed with real diff and required commands ok, but recovered from invalid action checkpoint and failed closeout/validation before passing. | Keep as the main guard for evidence-display contamination, no-diff agent-flow failures, and recovered-warning noise. |
+| `live-eval-dashboard-summary` | `dashboard-deterministic-fix-20260509-185127` passed with real diff, required commands ok, `verification_passed=true`, `stage_validation_passed=true`, `closeout_status=passed`, `failure_owner=none`, and `action_checkpoint_invalid_tools=false`. | Keep as the main guard for evidence-display contamination, no-diff agent-flow failures, and deterministic summary repair. Track the remaining workflow judgment JSON parse stderr warning separately. |
 | `backend-todo-api-crud` | `capability-evidence-20260509-173239` passed with real diff, required commands ok, and `failure_owner=none`. | Keep as a backend implementation guard. |
 | `frontend-book-notes-localstorage` | `capability-evidence-20260509-173239` passed with real diff, required Node test ok, and `failure_owner=none`. | Keep as a frontend persistence guard. |
 | `memory-save-quality-gate` | `capability-evidence-20260509-173239` passed with real diff, memory tests and full test suite ok, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
