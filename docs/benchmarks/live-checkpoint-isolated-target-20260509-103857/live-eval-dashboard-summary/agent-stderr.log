@@ -1,0 +1,14 @@
+2026-05-09T02:39:58.403602Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: response was not valid patch JSON; response was not valid patch JSON
+[required validation still running after 30s] cargo test -q -- --test-threads=1
+[required validation still running after 60s] cargo test -q -- --test-threads=1
+[required validation still running after 90s] cargo test -q -- --test-threads=1
+[required validation still running after 120s] cargo test -q -- --test-threads=1
+[required validation still running after 150s] cargo test -q -- --test-threads=1
+[required validation still running after 180s] cargo test -q -- --test-threads=1
+[required validation still running after 210s] cargo test -q -- --test-threads=1
+[required validation still running after 240s] cargo test -q -- --test-threads=1
+[required validation still running after 270s] cargo test -q -- --test-threads=1
+[required validation still running after 300s] cargo test -q -- --test-threads=1
+[required validation still running after 330s] cargo test -q -- --test-threads=1
+[required validation still running after 360s] cargo test -q -- --test-threads=1
+[required validation still running after 390s] cargo test -q -- --test-threads=1

@@ -1,0 +1,7 @@
+status=failed
+failure_owner=agent_flow
+failure=action_checkpoint_invalid_tools
+failure=required_commands_not_passing
+failure=closeout_not_successful
+failure=expected_code_diff_missing
+warning=no_code_diff
