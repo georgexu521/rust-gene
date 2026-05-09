@@ -57,6 +57,9 @@ stage_validation_passed=true closeout_status=passed failure_owner=none
 Latest Batch 3 live-suite run:
 
 ```text
+capability-now-20260509-141759 frontend-book-notes-localstorage: ok
+diff=yes required_command_status=ok verification_passed=true
+stage_validation_passed=true closeout_status=passed failure_owner=none
 capability-now-20260509-140733 backend-todo-api-crud: ok
 diff=yes required_command_status=ok verification_passed=true
 stage_validation_passed=true closeout_status=passed failure_owner=none
@@ -69,10 +72,10 @@ stage_validation_passed=true closeout_status=passed failure_owner=none
 Latest aggregate live-eval snapshot:
 
 ```text
-generated=2026-05-09 14:14:51 +0800
-runs_scanned=138 task_reports=138 pass_rate=37/138
-instrumented_slice=15/46 passed
-real_code_change_passes=10 seeded_no_diff_failures=16
+generated=2026-05-09 14:20:59 +0800
+runs_scanned=139 task_reports=139 pass_rate=38/139
+instrumented_slice=16/47 passed
+real_code_change_passes=11 seeded_no_diff_failures=16
 ```
 
 Read this aggregate as historical plus current evidence. It still includes many

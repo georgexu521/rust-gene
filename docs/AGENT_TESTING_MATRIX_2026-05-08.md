@@ -55,12 +55,12 @@ baseline reset, and terminal/filesystem grounding pass:
 | Signal | Current evidence |
 | --- | --- |
 | Deterministic tests | `cargo test -q` -> `1139 passed; 0 failed` |
-| Live aggregate | `37/138` task reports passed; `101/138` failed |
-| Instrumented slice | `15/46` passed; `31/46` failed |
-| Real code-change passes | `10` reports with non-empty diffs |
+| Live aggregate | `38/139` task reports passed; `101/139` failed |
+| Instrumented slice | `16/47` passed; `31/47` failed |
+| Real code-change passes | `11` reports with non-empty diffs |
 | Seeded no-diff failures | `16` reports |
 | Latest recovered dashboard run | `checkpoint-function-anchor-20260509-120047`: required commands ok, real diff, closeout passed, `failure_owner=none` |
-| Latest Batch 3 runs | `capability-now-20260509-135556/code-change-verification-repair-loop` and `capability-now-20260509-140733/backend-todo-api-crud`: required commands ok, real diff, closeout passed, `failure_owner=none` |
+| Latest Batch 3 runs | `capability-now-20260509-135556/code-change-verification-repair-loop`, `capability-now-20260509-140733/backend-todo-api-crud`, and `capability-now-20260509-141759/frontend-book-notes-localstorage`: required commands ok, real diff, closeout passed, `failure_owner=none` |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 
 The aggregate intentionally includes older runs that predate structured
@@ -195,7 +195,7 @@ Current evidence for this suite is mixed and should be refreshed case by case:
 | `code-change-verification-repair-loop` | Fresh `capability-now-20260509-135556` run passed with real diff, required commands ok, and `failure_owner=none`. | Keep as a regression guard while running the remaining four suite cases. |
 | `live-eval-dashboard-summary` | `checkpoint-function-anchor-20260509-120047` passed with a real diff and required commands ok. | Keep in the suite as a regression guard, but do not rerun first unless related code changes. |
 | `backend-todo-api-crud` | Fresh `capability-now-20260509-140733` run passed with real diff, required commands ok, and `failure_owner=none`; it still showed `tool_errors_seen` during repair. | Keep as passed but track patch-synthesis old_string mismatch noise. |
-| `frontend-book-notes-localstorage` | Latest recommended-suite evidence is a no-diff `llm_reasoning` failure. | Keep as a priority product-completeness pressure case. |
+| `frontend-book-notes-localstorage` | Fresh `capability-now-20260509-141759` run passed with real diff, required Node test ok, no tool failures, and `failure_owner=none`. | Keep as a regression guard for the prior no-diff failure mode. |
 | `memory-save-quality-gate` | Latest recommended-suite evidence is still failing; later repair-flow work improved execution but did not prove final task success. | Keep as the memory/quality-gate differentiator case. |
 
 Run one case:

@@ -610,9 +610,13 @@ Fix <case> live eval agent-flow gap
   `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
   `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`；
   但过程有 `tool_errors_seen` 和 patch synthesis old_string 不匹配噪音。
-- 当前 aggregate 已刷新到 `37/138`，instrumented slice 为 `15/46`，
-  real code-change passes 为 `10`。
-- 下一例按顺序跑 `frontend-book-notes-localstorage`。
+- `capability-now-20260509-141759/frontend-book-notes-localstorage` 已通过：
+  `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
+  `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`；
+  这次修掉了该案例此前的 no-diff 失败形态。
+- 当前 aggregate 已刷新到 `38/139`，instrumented slice 为 `16/47`，
+  real code-change passes 为 `11`。
+- 下一例按顺序跑 `memory-save-quality-gate`。
 
 ### Batch 4：conversation loop 抽取
 

@@ -1,11 +1,11 @@
 # Live Eval Shortfall Summary
 
-- Generated: `2026-05-09 14:14:51 +0800`
-- Runs scanned: `138`
-- Task reports scanned: `138`
-- Pass rate: `37/138` (26.8%)
-- Failure rate: `101/138` (73.2%)
-- Real code-change passes: `10`
+- Generated: `2026-05-09 14:20:59 +0800`
+- Runs scanned: `139`
+- Task reports scanned: `139`
+- Pass rate: `38/139` (27.3%)
+- Failure rate: `101/139` (72.7%)
+- Real code-change passes: `11`
 - Plan-only passes: `0`
 - Seeded no-diff failures: `16`
 - Required-command failures: `71`
@@ -15,23 +15,23 @@
 
 | dimension | count | share |
 |---|---|---|
-| failed_tasks | 101 | 73.2% |
-| required_command_failed | 71 | 51.4% |
-| verification_failed | 100 | 72.5% |
-| closeout_not_successful | 96 | 69.6% |
-| recovered_validation_failures | 66 | 47.8% |
-| seeded_no_diff_failed | 16 | 11.6% |
-| owner_metadata_missing | 92 | 66.7% |
-| real_code_change_passed | 10 | 7.2% |
+| failed_tasks | 101 | 72.7% |
+| required_command_failed | 71 | 51.1% |
+| verification_failed | 100 | 71.9% |
+| closeout_not_successful | 96 | 69.1% |
+| recovered_validation_failures | 66 | 47.5% |
+| seeded_no_diff_failed | 16 | 11.5% |
+| owner_metadata_missing | 92 | 66.2% |
+| real_code_change_passed | 11 | 7.9% |
 | plan_only_passed | 0 | 0.0% |
 
 ## Failure Owners
 
 | owner | count | share |
 |---|---|---|
-| missing | 92 | 66.7% |
-| agent_flow | 19 | 13.8% |
-| none | 15 | 10.9% |
+| missing | 92 | 66.2% |
+| agent_flow | 19 | 13.7% |
+| none | 16 | 11.5% |
 | llm_reasoning | 9 | 6.5% |
 | eval_harness | 3 | 2.2% |
 
@@ -39,39 +39,39 @@
 
 | owner | count | share |
 |---|---|---|
-| agent_flow | 63 | 45.7% |
-| none | 37 | 26.8% |
-| llm_reasoning | 35 | 25.4% |
+| agent_flow | 63 | 45.3% |
+| none | 38 | 27.3% |
+| llm_reasoning | 35 | 25.2% |
 | eval_harness | 3 | 2.2% |
 
 ## Metadata Coverage
 
 | dimension | count | share |
 |---|---|---|
-| structured_failure_owner | 46 | 33.3% |
-| structured_eval_intent | 30 | 21.7% |
-| adaptive_trigger_metadata | 23 | 16.7% |
-| instrumented_task_reports | 46 | 33.3% |
+| structured_failure_owner | 47 | 33.8% |
+| structured_eval_intent | 31 | 22.3% |
+| adaptive_trigger_metadata | 24 | 17.3% |
+| instrumented_task_reports | 47 | 33.8% |
 
 ## Instrumented Slice
 
 | dimension | count | share |
 |---|---|---|
-| task_reports | 46 | 100.0% |
-| passed | 15 | 32.6% |
-| failed | 31 | 67.4% |
-| required_command_failed | 22 | 47.8% |
-| verification_failed | 31 | 67.4% |
-| seeded_no_diff_failed | 16 | 34.8% |
+| task_reports | 47 | 100.0% |
+| passed | 16 | 34.0% |
+| failed | 31 | 66.0% |
+| required_command_failed | 22 | 46.8% |
+| verification_failed | 31 | 66.0% |
+| seeded_no_diff_failed | 16 | 34.0% |
 
 ### Instrumented Owners
 
 | owner | count | share |
 |---|---|---|
-| agent_flow | 19 | 41.3% |
-| none | 15 | 32.6% |
-| llm_reasoning | 9 | 19.6% |
-| eval_harness | 3 | 6.5% |
+| agent_flow | 19 | 40.4% |
+| none | 16 | 34.0% |
+| llm_reasoning | 9 | 19.1% |
+| eval_harness | 3 | 6.4% |
 
 ### Instrumented Failure Modes
 
@@ -107,29 +107,29 @@
 
 | mode | count | share |
 |---|---|---|
-| action_checkpoint_invalid_tools | 33 | 23.9% |
-| action_checkpoint_no_patch | 12 | 8.7% |
-| empty_agent_output | 17 | 12.3% |
-| missing_trace_summary | 15 | 10.9% |
+| action_checkpoint_invalid_tools | 33 | 23.7% |
+| action_checkpoint_no_patch | 12 | 8.6% |
+| empty_agent_output | 17 | 12.2% |
+| missing_trace_summary | 15 | 10.8% |
 | patch_synthesis_no_change | 2 | 1.4% |
-| tool_run_without_closeout | 17 | 12.3% |
+| tool_run_without_closeout | 17 | 12.2% |
 
 ## Adaptive Workflow Triggers
 
 | trigger | count | share |
 |---|---|---|
-| required_validation | 23 | 16.7% |
-| repeated_no_code_progress | 19 | 13.8% |
-| first_code_change | 12 | 8.7% |
-| verification_failed | 7 | 5.1% |
-| acceptance_rejected | 7 | 5.1% |
+| required_validation | 24 | 17.3% |
+| repeated_no_code_progress | 19 | 13.7% |
+| first_code_change | 13 | 9.4% |
+| verification_failed | 7 | 5.0% |
+| acceptance_rejected | 7 | 5.0% |
 
 ## Eval Intents
 
 | intent | count | share |
 |---|---|---|
-| missing | 108 | 78.3% |
-| seeded_code_change | 30 | 21.7% |
+| missing | 108 | 77.7% |
+| seeded_code_change | 31 | 22.3% |
 
 ## Seeded No-Diff Tasks
 
