@@ -244,9 +244,9 @@ The remaining work is now product maturity, not missing foundations:
 
 1. Continue measuring broad code-change first-pass success and repair count
    against the replay matrix and live eval tasks.
-2. Execute the next plan in order: Batch 1 baseline hygiene and Batch 2
-   terminal/filesystem truth are now landed; next is the five-case live-eval
-   flywheel before conversation-loop decomposition.
+2. Execute the next plan in order: Batch 1 baseline hygiene, Batch 2
+   terminal/filesystem truth, and Batch 3 five-case live suite are now landed;
+   next is Batch 4 conversation-loop decomposition.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
