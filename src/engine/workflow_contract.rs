@@ -1188,9 +1188,7 @@ impl<'a> WorkflowContractAnalyzer<'a> {
 }
 
 pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkflowJudgment> {
-    let json = extract_json_object(content)
-        .ok_or_else(|| anyhow::anyhow!("workflow judgment response did not contain JSON"))?;
-    let mut value: serde_json::Value = serde_json::from_str(json)?;
+    let mut value = parse_json_object_value(content, "workflow judgment")?;
     sanitize_workflow_judgment_value(&mut value);
     let mut judgment: ProgrammingWorkflowJudgment = serde_json::from_value(value)?;
     normalize_judgment(&mut judgment);
@@ -1198,9 +1196,7 @@ pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkf
 }
 
 pub fn parse_acceptance_review(content: &str) -> anyhow::Result<AcceptanceReview> {
-    let json = extract_json_object(content)
-        .ok_or_else(|| anyhow::anyhow!("acceptance review response did not contain JSON"))?;
-    let mut value: serde_json::Value = serde_json::from_str(json)?;
+    let mut value = parse_json_object_value(content, "acceptance review")?;
     sanitize_acceptance_review_value(&mut value);
     let mut review: AcceptanceReview = serde_json::from_value(value)?;
     normalize_acceptance_review(&mut review);
@@ -1220,9 +1216,10 @@ fn normalize_acceptance_review(review: &mut AcceptanceReview) {
 }
 
 pub fn parse_guided_debugging_analysis(content: &str) -> anyhow::Result<GuidedDebuggingAnalysis> {
-    let json = extract_json_object(content)
-        .ok_or_else(|| anyhow::anyhow!("guided debugging response did not contain JSON"))?;
-    Ok(serde_json::from_str(json)?)
+    Ok(serde_json::from_value(parse_json_object_value(
+        content,
+        "guided debugging",
+    )?)?)
 }
 
 fn normalize_judgment(judgment: &mut ProgrammingWorkflowJudgment) {
@@ -1556,6 +1553,20 @@ fn extract_json_object(content: &str) -> Option<&str> {
     (end > start).then_some(&content[start..=end])
 }
 
+fn parse_json_object_value(content: &str, label: &str) -> anyhow::Result<serde_json::Value> {
+    let json = extract_json_object(content)
+        .ok_or_else(|| anyhow::anyhow!("{label} response did not contain JSON"))?;
+
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(value) => Ok(value),
+        Err(strict_err) => json5::from_str::<serde_json::Value>(json).map_err(|json5_err| {
+            anyhow::anyhow!(
+                "{label} response was not parseable as JSON: strict JSON error: {strict_err}; JSON5 fallback error: {json5_err}"
+            )
+        }),
+    }
+}
+
 fn bullet_list(items: &[String]) -> String {
     if items.is_empty() {
         return "- none".to_string();
@@ -1640,6 +1651,46 @@ mod tests {
         assert_eq!(judgment.plan[0].computed_weight_share(), 1.0);
         assert_eq!(judgment.acceptance.criteria.len(), 1);
         assert_eq!(judgment.sorted_plan()[0].priority, PriorityLabel::P0);
+    }
+
+    #[test]
+    fn parse_judgment_accepts_json5_model_output() {
+        let content = r#"{
+  task_type: 'feature',
+  complexity: 'medium',
+  risk: 'medium',
+  requirement_complete_enough: true,
+  needs_user_questions: false,
+  question_reason: null,
+  questions: [],
+  assumptions: ['Use the existing live-eval script layout'],
+  guided_reasoning_required: false,
+  guided_reasoning_triggers: [],
+  plan: [
+    {
+      id: 'summary',
+      description: 'Implement summary mode',
+      priority: 'p0',
+      importance_score: 0.9,
+      weight_share: 1.0,
+      reason: 'Required summary command is blocked',
+      acceptance_criteria: ['summary command passes'],
+    },
+  ],
+  acceptance: {
+    original_user_goal: 'Add live eval summary mode',
+    assumptions: [],
+    criteria: [],
+    unresolved_items: [],
+    residual_risks: [],
+  },
+}"#;
+
+        let judgment = parse_workflow_judgment(content).unwrap();
+
+        assert_eq!(judgment.task_type, "feature");
+        assert_eq!(judgment.plan[0].id.as_deref(), Some("summary"));
+        assert_eq!(judgment.acceptance.criteria.len(), 1);
     }
 
     #[test]
@@ -2068,6 +2119,30 @@ mod tests {
         assert!(!review.accepted);
         assert_eq!(review.unresolved_count(), 2);
         assert_eq!(review.next_action, AcceptanceNextAction::ContinueRepair);
+    }
+
+    #[test]
+    fn parse_acceptance_review_accepts_json5_model_output() {
+        let content = r#"{
+  accepted: true,
+  confidence: 'high',
+  criteria: [
+    {
+      criterion: 'Required command passed',
+      status: 'passed',
+      evidence: 'cargo test passed',
+    },
+  ],
+  unresolved_items: [],
+  residual_risks: [],
+  next_action: 'finish',
+}"#;
+
+        let review = parse_acceptance_review(content).unwrap();
+
+        assert!(review.accepted);
+        assert_eq!(review.confidence, AcceptanceConfidence::High);
+        assert_eq!(review.next_action, AcceptanceNextAction::Finish);
     }
 
     #[test]
