@@ -12,6 +12,7 @@ mod approval;
 mod patch_recovery;
 mod patch_repair_rules;
 mod pseudo_tool_text;
+mod repair_controller;
 mod step_executor;
 mod text_sanitizer;
 mod tool_execution;
@@ -21,6 +22,9 @@ mod validation_runner;
 
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use patch_recovery::PatchSynthesisAction;
+use repair_controller::{
+    AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
+};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use text_sanitizer::{strip_think_blocks, VisibleTextSanitizer};
 pub(crate) use tool_execution::{
@@ -2623,47 +2627,19 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     review_passed: review_result.success,
                     failed_commands: failed_commands.clone(),
                 });
-                let mut post_edit_reflection =
-                    crate::engine::reflection_pass::ReflectionPass::from_post_edit(
-                        task_bundle.task_id.clone(),
-                        &changed_files,
+                let post_edit_reflection =
+                    Self::record_verification_repair_context(VerificationRepairContext {
+                        trace: &trace,
+                        code_workflow: &mut code_workflow,
+                        task_id: task_bundle.task_id.clone(),
+                        changed_files: &changed_files,
                         verify_passed,
-                        &post_edit_evidence,
-                    );
-                if !verify_passed {
-                    if code_workflow.activate_trigger(
-                        crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::VerificationFailed,
-                    ) {
-                        trace_adaptive_workflow_trigger(
-                            &trace,
-                            crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::VerificationFailed,
-                            &code_workflow,
-                        );
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "adaptive workflow trigger activated: verification_failed"
-                                .to_string(),
-                        });
-                    }
-                    let verification_command = failed_commands
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| "post-edit verification".to_string());
-                    post_edit_reflection.record_repair_action(
-                        acceptance_repair_attempts + 1,
-                        "repair failed verification before closeout",
-                        changed_files.first().map(|path| path.display().to_string()),
-                        verification_command,
-                    );
-                    let repair_spec = crate::engine::repair_spec::RepairSpec::from_failure(
-                        &failed_commands,
-                        &post_edit_evidence,
-                        None,
-                    );
-                    let repair_spec_text = repair_spec.format_for_prompt();
-                    tool_results_text.push('\n');
-                    tool_results_text.push_str(&repair_spec_text);
-                    messages.push(Message::system(repair_spec_text));
-                }
+                        post_edit_evidence: &post_edit_evidence,
+                        failed_commands: &failed_commands,
+                        acceptance_repair_attempts,
+                        tool_results_text: &mut tool_results_text,
+                        messages: &mut messages,
+                    });
                 trace.record(TraceEvent::ReflectionPassCompleted {
                     pass_id: post_edit_reflection.pass_id.clone(),
                     task_id: post_edit_reflection.task_id.clone(),
@@ -2681,303 +2657,51 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 if let Some(feedback) = stage_record.feedback.clone() {
                     apply_workflow_feedback_and_trace(&mut task_bundle, &trace, feedback);
                 }
-                if !verify_passed && workflow_contract_enabled(self.provider.as_ref()) {
-                    let analyzer = crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
-                        self.provider.as_ref(),
-                        self.model.clone(),
-                    );
-                    let prompt = crate::engine::workflow_contract::GuidedDebuggingPrompt::new(
-                        last_user_preview.as_str(),
-                        task_bundle
-                            .workflow_judgment
-                            .as_ref()
-                            .map(|judgment| judgment.to_turn_context()),
-                        vec!["stage_validation".to_string()],
-                        post_edit_evidence.clone(),
-                    );
-                    match analyzer.analyze_debugging(prompt).await {
-                        Ok(debugging) => {
-                            trace.record(TraceEvent::GuidedDebuggingCompleted {
-                                blocker: debugging.blocker,
-                                next_action: format!("{:?}", debugging.next_action),
-                                causes: debugging.likely_causes.len(),
-                                evidence_items: debugging.evidence_to_collect.len(),
-                                ask_user: debugging.ask_user,
-                            });
-                            persist_workflow_learning_event(
-                                self.session_store.as_ref(),
-                                &self.session_id,
-                                "guided_debugging",
-                                format!(
-                                    "Guided validation debugging selected {:?}: {}",
-                                    debugging.next_action, debugging.symptom
-                                ),
-                                if debugging.blocker { 0.85 } else { 0.7 },
-                                serde_json::json!({
-                                    "blocker": debugging.blocker,
-                                    "symptom": debugging.symptom.clone(),
-                                    "likely_causes": debugging.likely_causes.clone(),
-                                    "evidence_to_collect": debugging.evidence_to_collect.clone(),
-                                    "smallest_safe_action": debugging.smallest_safe_action.clone(),
-                                    "ask_user": debugging.ask_user,
-                                    "questions": debugging.questions.clone(),
-                                    "next_action": format!("{:?}", debugging.next_action),
-                                    "source": "stage_validation",
-                                }),
-                            );
-                            let debugging_text = debugging.format_for_prompt();
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&debugging_text);
-                            messages.push(Message::system(debugging_text));
-                        }
-                        Err(err) => {
-                            warn!("Guided validation debugging failed: {}", err);
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: format!("guided validation debugging failed: {}", err),
-                            });
-                        }
-                    }
+                if !verify_passed {
+                    self.run_guided_validation_debugging(GuidedValidationDebuggingContext {
+                        trace: &trace,
+                        last_user_preview: last_user_preview.as_str(),
+                        task_bundle: &task_bundle,
+                        post_edit_evidence: &post_edit_evidence,
+                        tool_results_text: &mut tool_results_text,
+                        messages: &mut messages,
+                    })
+                    .await;
                 }
-                if let Some(judgment) = task_bundle.workflow_judgment.as_ref() {
-                    if verify_passed && !required_validation_commands.is_empty() {
-                        let evidence = format!(
-                            "Required validation commands passed: {}",
-                            required_validation_commands.join("; ")
-                        );
-                        let criteria = judgment
-                            .acceptance
-                            .criteria
-                            .iter()
-                            .map(|criterion| {
-                                let mut passed = criterion.clone();
-                                passed.status =
-                                    crate::engine::workflow_contract::AcceptanceStatus::Passed;
-                                passed.evidence = Some(evidence.clone());
-                                passed
-                            })
-                            .collect::<Vec<_>>();
-                        let review = crate::engine::workflow_contract::AcceptanceReview {
-                            accepted: true,
-                            confidence:
-                                crate::engine::workflow_contract::AcceptanceConfidence::High,
-                            criteria,
-                            unresolved_items: Vec::new(),
-                            residual_risks: Vec::new(),
-                            next_action:
-                                crate::engine::workflow_contract::AcceptanceNextAction::Finish,
-                        };
-                        trace.record(TraceEvent::AcceptanceReviewCompleted {
-                            accepted: true,
-                            confidence: "High".to_string(),
-                            criteria: review.criteria.len(),
-                            unresolved: 0,
-                            next_action: "Finish".to_string(),
-                        });
-                        code_workflow.record_acceptance_review(review);
-                        should_closeout_after_verified_change = true;
-                        trace.record(TraceEvent::WorkflowPlanProgress {
-                            total_steps: judgment.plan.len(),
-                            completed_steps: judgment.plan.len(),
-                            active_step: None,
-                            top_priority: None,
-                            top_importance_score: None,
-                            top_weight_share: None,
-                            weight_source: None,
-                            reweighted: true,
-                        });
-                    } else if code_workflow.should_run_acceptance_review(
+                let acceptance_repair_outcome = self
+                    .run_acceptance_repair_review(AcceptanceRepairContext {
+                        trace: &trace,
+                        route: &route,
+                        code_workflow: &mut code_workflow,
+                        task_bundle: &mut task_bundle,
+                        changed_files: &changed_files,
                         verify_passed,
-                        review_result.success,
-                        !required_validation_commands.is_empty(),
-                        judgment.acceptance.criteria.len(),
-                    ) && workflow_contract_enabled(self.provider.as_ref())
-                    {
-                        let analyzer =
-                            crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
-                                self.provider.as_ref(),
-                                self.model.clone(),
-                            );
-                        let prompt = crate::engine::workflow_contract::AcceptanceReviewPrompt::new(
-                            judgment.acceptance.clone(),
-                            changed_files
-                                .iter()
-                                .map(|path| path.display().to_string())
-                                .collect(),
-                            verify_passed,
-                            acceptance_evidence.clone(),
-                        );
-                        match analyzer.review_acceptance(prompt).await {
-                            Ok(review) => {
-                                let high_risk = is_high_risk_workflow(&route, Some(judgment));
-                                let review_next_action = review.next_action;
-                                let review_accepted = review.accepted;
-                                let review_unresolved = review.unresolved_count();
-                                trace.record(TraceEvent::AcceptanceReviewCompleted {
-                                    accepted: review_accepted,
-                                    confidence: format!("{:?}", review.confidence),
-                                    criteria: review.criteria.len(),
-                                    unresolved: review_unresolved,
-                                    next_action: format!("{:?}", review.next_action),
-                                });
-                                code_workflow.record_acceptance_review(review.clone());
-                                if review_accepted {
-                                    should_closeout_after_verified_change = true;
-                                    trace.record(TraceEvent::WorkflowPlanProgress {
-                                        total_steps: judgment.plan.len(),
-                                        completed_steps: judgment.plan.len(),
-                                        active_step: None,
-                                        top_priority: None,
-                                        top_importance_score: None,
-                                        top_weight_share: None,
-                                        weight_source: None,
-                                        reweighted: true,
-                                    });
-                                }
-                                persist_workflow_learning_event(
-                                    self.session_store.as_ref(),
-                                    &self.session_id,
-                                    "acceptance_review",
-                                    format!(
-                                        "Acceptance review accepted={} next={:?}",
-                                        review_accepted, review_next_action
-                                    ),
-                                    if review_accepted { 0.95 } else { 0.85 },
-                                    serde_json::json!({
-                                        "accepted": review_accepted,
-                                        "confidence": format!("{:?}", review.confidence),
-                                        "criteria": review.criteria.clone(),
-                                        "unresolved_items": review.unresolved_items.clone(),
-                                        "residual_risks": review.residual_risks.clone(),
-                                        "next_action": format!("{:?}", review_next_action),
-                                        "high_risk": high_risk,
-                                        "changed_files": changed_files.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
-                                    }),
-                                );
-                                let review_text = review.format_for_prompt();
-                                tool_results_text.push('\n');
-                                tool_results_text.push_str(&review_text);
-                                messages.push(Message::system(review_text.clone()));
-                                if !review_accepted
-                                    && matches!(
-                                        review_next_action,
-                                        crate::engine::workflow_contract::AcceptanceNextAction::ContinueRepair
-                                            | crate::engine::workflow_contract::AcceptanceNextAction::Stop
-                                    )
-                                {
-                                    if code_workflow.activate_trigger(
-                                        crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::AcceptanceRejected,
-                                    ) {
-                                        trace_adaptive_workflow_trigger(
-                                            &trace,
-                                            crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::AcceptanceRejected,
-                                            &code_workflow,
-                                        );
-                                        trace.record(TraceEvent::WorkflowFallback {
-                                            error:
-                                                "adaptive workflow trigger activated: acceptance_rejected"
-                                                    .to_string(),
-                                        });
-                                    }
-                                    should_closeout_after_verified_change = false;
-                                    apply_workflow_feedback_and_trace(
-                                        &mut task_bundle,
-                                        &trace,
-                                        crate::engine::workflow_contract::WeightFeedbackEvent {
-                                            kind: crate::engine::workflow_contract::WeightFeedbackKind::AcceptanceGap,
-                                            severity: if high_risk || review_unresolved > 1 {
-                                                crate::engine::workflow_contract::WeightFeedbackSeverity::High
-                                            } else {
-                                                crate::engine::workflow_contract::WeightFeedbackSeverity::Medium
-                                            },
-                                            confidence: 0.90,
-                                            reason: Some(format!(
-                                                "acceptance review unresolved items: {}",
-                                                review_unresolved
-                                            )),
-                                        },
-                                    );
-                                    acceptance_repair_attempts += 1;
-                                    let repair_spec =
-                                        crate::engine::repair_spec::RepairSpec::from_failure(
-                                            &failed_commands,
-                                            &post_edit_evidence,
-                                            Some(&review),
-                                        );
-                                    let repair_spec_text = repair_spec.format_for_prompt();
-                                    tool_results_text.push('\n');
-                                    tool_results_text.push_str(&repair_spec_text);
-                                    messages.push(Message::system(repair_spec_text));
-                                    messages.push(Message::system(
-                                        "Acceptance review did not pass. If verification or compile errors are present, fix those first using the latest verification source context; only then address the unresolved acceptance items. Continue repair if possible; otherwise report the unresolved items clearly."
-                                            .to_string(),
-                                    ));
-                                    if high_risk
-                                        && (acceptance_repair_attempts
-                                            > code_workflow.max_repair_attempts()
-                                            || matches!(
-                                                review_next_action,
-                                                crate::engine::workflow_contract::AcceptanceNextAction::Stop
-                                            ))
-                                    {
-                                        final_content = format!(
-                                            "Stopped before final closeout because high-risk acceptance review did not pass ({} unresolved item(s)).",
-                                            review_unresolved
-                                        );
-                                        break;
-                                    }
-                                    if matches!(
-                                        review_next_action,
-                                        crate::engine::workflow_contract::AcceptanceNextAction::ContinueRepair
-                                    ) {
-                                        let validation_failed = !failed_commands.is_empty()
-                                            || !verify_passed
-                                            || !required_validation_passed;
-                                        let compile_or_review_failed =
-                                            !check_passed || !review_result.success || validation_failed;
-                                        let needs_acceptance_investigation =
-                                            review_unresolved > 0 && !compile_or_review_failed;
-                                        reserved_repair_rounds = reserved_repair_rounds.max(
-                                            if needs_acceptance_investigation { 2 } else { 1 },
-                                        );
-                                        action_checkpoint_no_change_rounds = 0;
-                                        if needs_acceptance_investigation {
-                                            action_checkpoint_active = false;
-                                            action_checkpoint_lookup_used = false;
-                                            messages.push(Message::system(
-                                                "Acceptance review gaps remain after compile/code review checks. Restore investigation mode: inspect the unresolved acceptance items against the implementation, identify every acceptance-critical bypass or missing call site, then make the smallest targeted fix. If multiple independent acceptance-critical bypasses are visible, fix them together."
-                                                    .to_string(),
-                                            ));
-                                            trace.record(TraceEvent::WorkflowFallback {
-                                                error:
-                                                    "acceptance review requested broader repair; restored read/search tools for acceptance-gap investigation"
-                                                        .to_string(),
-                                            });
-                                        } else {
-                                            action_checkpoint_active = true;
-                                            action_checkpoint_lookup_used = true;
-                                            action_checkpoint_requires_patch_before_validation =
-                                                true;
-                                            messages.push(Message::system(
-                                                "Repair must patch before validation: the latest verification/acceptance evidence already shows the current diff is invalid. Use file_edit/file_write first; run bash validation only after that new patch succeeds."
-                                                    .to_string(),
-                                            ));
-                                            trace.record(TraceEvent::WorkflowFallback {
-                                                error:
-                                                    "acceptance review requested repair; switching to action-only repair mode"
-                                                        .to_string(),
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                warn!("Acceptance review failed: {}", err);
-                                trace.record(TraceEvent::WorkflowFallback {
-                                    error: format!("acceptance review failed: {}", err),
-                                });
-                            }
-                        }
-                    }
+                        review_success: review_result.success,
+                        required_validation_commands: &required_validation_commands,
+                        failed_commands: &failed_commands,
+                        post_edit_evidence: &post_edit_evidence,
+                        acceptance_evidence: &acceptance_evidence,
+                        required_validation_passed,
+                        check_passed,
+                        acceptance_repair_attempts: &mut acceptance_repair_attempts,
+                        reserved_repair_rounds: &mut reserved_repair_rounds,
+                        action_checkpoint_no_change_rounds: &mut action_checkpoint_no_change_rounds,
+                        action_checkpoint_active: &mut action_checkpoint_active,
+                        action_checkpoint_lookup_used: &mut action_checkpoint_lookup_used,
+                        action_checkpoint_requires_patch_before_validation:
+                            &mut action_checkpoint_requires_patch_before_validation,
+                        should_closeout_after_verified_change,
+                        tool_results_text: &mut tool_results_text,
+                        messages: &mut messages,
+                    })
+                    .await;
+                should_closeout_after_verified_change =
+                    acceptance_repair_outcome.should_closeout_after_verified_change;
+                if let Some(content) = acceptance_repair_outcome.final_content {
+                    final_content = content;
+                }
+                if acceptance_repair_outcome.break_loop {
+                    break;
                 }
                 {
                     let mut tracker = self.cost_tracker.lock().await;

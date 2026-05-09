@@ -44,6 +44,7 @@ Latest recovery commits and planning artifacts:
 | Keep grep evidence raw for patching | `3344363` |
 | Extract patch recovery module | this change |
 | Extract validation runner helpers | this change |
+| Extract repair controller helpers | this change |
 
 The all-features clippy and experimental API checks were last recorded as
 passing in the post-recovery baseline before this docs-only reset. Rerun them
@@ -248,8 +249,8 @@ The remaining work is now product maturity, not missing foundations:
    against the replay matrix and live eval tasks.
 2. Execute the next plan in order: Batch 1 baseline hygiene, Batch 2
    terminal/filesystem truth, Batch 3 five-case live suite, and Batch 4
-   `patch_recovery` / `validation_runner` extraction are now landed; next is
-   Batch 4 `repair_controller` extraction.
+   `patch_recovery` / `validation_runner` / `repair_controller` extraction
+   are now landed; next is Batch 4 `closeout_controller` extraction.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -265,10 +266,11 @@ The remaining work is now product maturity, not missing foundations:
 Latest maintenance note:
 
 - `cargo test -q` is clean as of 2026-05-09 with `1140 passed; 0 failed`.
-- `conversation_loop/mod.rs` is down to 7253 lines after moving patch synthesis,
+- `conversation_loop/mod.rs` is down to 6977 lines after moving patch synthesis,
   deterministic patch recovery, synthesized patch validation, required
-  validation commands, validation command classification, and verification
-  source context into dedicated conversation-loop modules.
+  validation commands, validation command classification, verification source
+  context, guided validation debugging, and acceptance repair review into
+  dedicated conversation-loop modules.
 - `cargo clippy --all-features -- -D warnings` was last recorded clean in the
   post-recovery baseline before this docs-only reset.
 - `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command
