@@ -614,9 +614,12 @@ Fix <case> live eval agent-flow gap
   `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
   `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`；
   这次修掉了该案例此前的 no-diff 失败形态。
-- 当前 aggregate 已刷新到 `38/139`，instrumented slice 为 `16/47`，
-  real code-change passes 为 `11`。
-- 下一例按顺序跑 `memory-save-quality-gate`。
+- `capability-now-20260509-142349/memory-save-quality-gate` 已通过：
+  `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
+  `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`。
+- 当前 aggregate 已刷新到 `39/140`，instrumented slice 为 `17/48`，
+  real code-change passes 为 `12`。
+- 下一例按顺序跑 `live-eval-dashboard-summary`。
 
 ### Batch 4：conversation loop 抽取
 
