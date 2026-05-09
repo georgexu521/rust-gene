@@ -55,11 +55,12 @@ baseline reset, and terminal/filesystem grounding pass:
 | Signal | Current evidence |
 | --- | --- |
 | Deterministic tests | `cargo test -q` -> `1139 passed; 0 failed` |
-| Live aggregate | `35/136` task reports passed; `101/136` failed |
-| Instrumented slice | `13/44` passed; `31/44` failed |
-| Real code-change passes | `8` reports with non-empty diffs |
+| Live aggregate | `36/137` task reports passed; `101/137` failed |
+| Instrumented slice | `14/45` passed; `31/45` failed |
+| Real code-change passes | `9` reports with non-empty diffs |
 | Seeded no-diff failures | `16` reports |
 | Latest recovered dashboard run | `checkpoint-function-anchor-20260509-120047`: required commands ok, real diff, closeout passed, `failure_owner=none` |
+| Latest Batch 3 run | `capability-now-20260509-135556/code-change-verification-repair-loop`: required commands ok, real diff, closeout passed, `failure_owner=none` |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 
 The aggregate intentionally includes older runs that predate structured
@@ -191,7 +192,7 @@ Current evidence for this suite is mixed and should be refreshed case by case:
 
 | Case | Current evidence | Next action |
 | --- | --- | --- |
-| `code-change-verification-repair-loop` | Historical passing smoke exists, but several older seeded no-diff and repair failures remain in the aggregate. | Rerun as a fresh `capability-now` case after baseline docs are clean. |
+| `code-change-verification-repair-loop` | Fresh `capability-now-20260509-135556` run passed with real diff, required commands ok, and `failure_owner=none`. | Keep as a regression guard while running the remaining four suite cases. |
 | `live-eval-dashboard-summary` | `checkpoint-function-anchor-20260509-120047` passed with a real diff and required commands ok. | Keep in the suite as a regression guard, but do not rerun first unless related code changes. |
 | `backend-todo-api-crud` | Latest recorded recommended-suite evidence has a real-diff pass. | Rerun in Batch 3 after the terminal/filesystem grounding commits. |
 | `frontend-book-notes-localstorage` | Latest recommended-suite evidence is a no-diff `llm_reasoning` failure. | Keep as a priority product-completeness pressure case. |

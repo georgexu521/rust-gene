@@ -601,6 +601,15 @@ Record live suite baseline
 Fix <case> live eval agent-flow gap
 ```
 
+当前进展：
+
+- `capability-now-20260509-135556/code-change-verification-repair-loop` 已通过：
+  `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
+  `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`。
+- 当前 aggregate 已刷新到 `36/137`，instrumented slice 为 `14/45`，
+  real code-change passes 为 `9`。
+- 下一例按顺序跑 `backend-todo-api-crud`。
+
 ### Batch 4：conversation loop 抽取
 
 Batch 2 完成并且至少跑过一轮 suite 后再开始，避免无证据重构。
