@@ -22,7 +22,7 @@ Latest deterministic test baseline observed during the 2026-05-09 capability
 live-suite run:
 
 ```text
-1148 passed; 0 failed
+1150 passed; 0 failed
 ```
 
 Validated inside live-eval required commands with:
@@ -97,15 +97,16 @@ skill_active_tasks=1 skill_promotion_evidence_tasks=1
 note=live-eval-dashboard-summary recovered from invalid action checkpoint before passing
 ```
 
-Latest dashboard recovered-warning rerun:
+Latest dashboard JSON-tolerance rerun:
 
 ```text
-dashboard-deterministic-fix-20260509-185127 live-eval-dashboard-summary: ok
+dashboard-json5-fix-20260509-191615 live-eval-dashboard-summary: ok
 diff=yes required_command_status=ok verification_passed=true
-stage_validation_passed=true closeout_status=passed failure_owner=none
+stage_validation_passed=true acceptance_accepted=true closeout_status=passed failure_owner=none
 action_checkpoint_invalid_tools=false warnings=none
-rerun_after=7e15739 action-checkpoint validation marker fix and 4979069 deterministic summary repair
-remaining_note=workflow judgment JSON parse warning is visible in stderr but did not affect validation or closeout
+workflow_judgment_completed=true acceptance_review_completed=true
+rerun_after=7f7eebe JSON5 workflow contract response tolerance
+stderr_note=only required validation progress messages; no workflow judgment parse warning
 ```
 
 Latest aggregate live-eval snapshot:
@@ -294,7 +295,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-09 with `1148 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-09 with `1150 passed; 0 failed`.
 - Batch 5 product mode work has an explicit runtime `AgentMode`
   (`auto/build/plan/explore/review`) that flows from TUI `/mode` into
   streaming and `ConversationLoop` route/tool exposure. `/status`, `/quick`,
