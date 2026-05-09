@@ -4876,6 +4876,14 @@ mod tests {
             &serde_json::json!({"command": "cargo test -q"}),
             true,
         ));
+        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+            &serde_json::json!({"command": "scripts/run_live_eval.sh --mode summary --run-id live-summary-smoke"}),
+            true,
+        ));
+        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+            &serde_json::json!({"command": "bash -n scripts/run_live_eval.sh"}),
+            true,
+        ));
     }
 
     #[test]

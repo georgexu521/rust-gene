@@ -90,13 +90,17 @@ impl ConversationLoop {
             return true;
         }
         let validation_markers = [
+            "bash -n",
             "cargo test",
             "cargo check",
             "cargo fmt",
+            "cargo clippy",
             "npm test",
+            "npm run test",
             "pnpm test",
             "pytest",
             "make test",
+            "scripts/run_live_eval.sh",
         ];
         has_changes_before_tools
             && validation_markers
