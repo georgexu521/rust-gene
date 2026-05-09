@@ -5572,10 +5572,11 @@ PY
 "#
         );
         std::fs::write(
-            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+            tmp.path()
+                .join("src/engine/conversation_loop/repair_controller.rs"),
             damaged_call,
         )
-        .expect("write module file");
+        .expect("write repair controller file");
 
         let calls = loop_instance.deterministic_patch_tool_calls(
             "error[E0061]: this method takes 4 arguments but 3 arguments were supplied\nargument #4 is missing\nrecord_repair_action",
@@ -5585,11 +5586,12 @@ PY
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0].arguments["path"],
-            "src/engine/conversation_loop/mod.rs"
+            "src/engine/conversation_loop/repair_controller.rs"
         );
         assert_eq!(calls[0].arguments["line_start"], 7);
         assert_eq!(calls[0].arguments["line_end"], 11);
         let replacement = calls[0].arguments["new_string"].as_str().unwrap();
+        assert!(replacement.contains("context.acceptance_repair_attempts + 1"));
         assert!(replacement.contains("\"repair failed verification before closeout\""));
         assert!(replacement.contains("verification_command,"));
         assert!(!replacement.contains(ConversationLoop::retry_format_marker().as_str()));

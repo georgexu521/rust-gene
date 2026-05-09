@@ -345,7 +345,7 @@ Do not answer in prose unless no safe patch exists."#;
             return None;
         }
 
-        let path = cwd.join("src/engine/conversation_loop/mod.rs");
+        let path = cwd.join("src/engine/conversation_loop/repair_controller.rs");
         let content = std::fs::read_to_string(path).ok()?;
         if !content.contains("post_edit_reflection.record_repair_action(") {
             return None;
@@ -387,12 +387,15 @@ Do not answer in prose unless no safe patch exists."#;
 
         Some(PatchSynthesisAction {
             tool: "file_edit".to_string(),
-            path: "src/engine/conversation_loop/mod.rs".to_string(),
+            path: "src/engine/conversation_loop/repair_controller.rs".to_string(),
             old_string: None,
             new_string: r#"                    post_edit_reflection.record_repair_action(
-                        acceptance_repair_attempts + 1,
+                        context.acceptance_repair_attempts + 1,
                         "repair failed verification before closeout",
-                        changed_files.first().map(|path| path.display().to_string()),
+                        context
+                            .changed_files
+                            .first()
+                            .map(|path| path.display().to_string()),
                         verification_command,
                     );"#
             .to_string(),

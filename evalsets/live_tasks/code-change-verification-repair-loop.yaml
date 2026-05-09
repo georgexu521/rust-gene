@@ -14,22 +14,22 @@ repo:
       from pathlib import Path
       import re
 
-      path = Path("src/engine/conversation_loop/mod.rs")
+      path = Path("src/engine/conversation_loop/repair_controller.rs")
       text = path.read_text()
       pattern = re.compile(
           r'post_edit_reflection\.record_repair_action\(\s*'
-          r'acceptance_repair_attempts \+ 1,\s*'
+          r'context\.acceptance_repair_attempts \+ 1,\s*'
           r'"repair failed verification before closeout",\s*'
-          r'changed_files\.first\(\)\.map\(\|path\| path\.display\(\)\.to_string\(\)\),\s*'
+          r'context\s*\.\s*changed_files\s*\.\s*first\(\)\s*\.\s*map\(\|path\| path\.display\(\)\.to_string\(\)\),\s*'
           r'verification_command,\s*'
           r'\);',
           re.MULTILINE,
       )
       new = '''post_edit_reflection.record_repair_action(
-                        acceptance_repair_attempts + 1,
-                        &format!("retry: {}", verification_command),
-                        changed_files.first().map(|path| path.display().to_string()),
-                    );'''
+                context.acceptance_repair_attempts + 1,
+                &format!("retry: {}", verification_command),
+                context.changed_files.first().map(|path| path.display().to_string()),
+            );'''
       text, count = pattern.subn(new, text, count=1)
       if count != 1:
           raise SystemExit("expected record_repair_action call shape was not found")
@@ -41,7 +41,7 @@ repo:
 prompt: |
   修复真实 code-change workflow 的验证-修复闭环回归。
 
-  当前 fixture 故意引入了一个编译错误：`record_repair_action` 调用缺少 verification command 参数。
+  当前 fixture 故意在 repair controller 中引入了一个编译错误：`record_repair_action` 调用缺少 verification command 参数。
   请先修复这个回归，再确认验证失败会被记录为 repair action，且不会在失败时给出成功 closeout。
 
   要求：
@@ -68,8 +68,8 @@ acceptance:
   required_commands:
     - cargo test -q reflection_pass -- --test-threads=1
     - cargo test -q evalset -- --test-threads=1
-    - "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs"
-    - "rg 'record_repair_action\\(' src/engine/conversation_loop/mod.rs"
+    - "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/repair_controller.rs"
+    - "rg 'record_repair_action\\(' src/engine/conversation_loop/repair_controller.rs"
     - cargo test -q -- --test-threads=1
   diff_constraints:
     max_files_changed: 12
