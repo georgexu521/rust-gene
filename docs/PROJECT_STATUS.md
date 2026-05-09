@@ -22,7 +22,7 @@ Latest deterministic test baseline observed after the 2026-05-09 terminal and
 filesystem grounding pass:
 
 ```text
-1139 passed; 0 failed
+1140 passed; 0 failed
 ```
 
 Validated in this pass with:
@@ -41,6 +41,7 @@ Latest recovery commits and planning artifacts:
 | Add next development plan | `467c3b0` |
 | Add bash exposure diagnostics | `d025d6a` |
 | Guard terminal and filesystem grounding | `2b1852e` |
+| Keep grep evidence raw for patching | `3344363` |
 
 The all-features clippy and experimental API checks were last recorded as
 passing in the post-recovery baseline before this docs-only reset. Rerun them
@@ -57,6 +58,13 @@ stage_validation_passed=true closeout_status=passed failure_owner=none
 Latest Batch 3 live-suite run:
 
 ```text
+capability-now-20260509-144729 live-eval-dashboard-summary: ok
+diff=yes required_command_status=ok verification_passed=true
+stage_validation_passed=true closeout_status=passed failure_owner=none
+rerun_after=3344363 grep raw evidence fix
+capability-now-20260509-143251 live-eval-dashboard-summary: failed
+diff=no required_command_status=failed closeout_status=not_verified failure_owner=agent_flow
+root_cause=grep markdown highlighting polluted patch anchors
 capability-now-20260509-142349 memory-save-quality-gate: ok
 diff=yes required_command_status=ok verification_passed=true
 stage_validation_passed=true closeout_status=passed failure_owner=none
@@ -75,10 +83,10 @@ stage_validation_passed=true closeout_status=passed failure_owner=none
 Latest aggregate live-eval snapshot:
 
 ```text
-generated=2026-05-09 14:29:47 +0800
-runs_scanned=140 task_reports=140 pass_rate=39/140
-instrumented_slice=17/48 passed
-real_code_change_passes=12 seeded_no_diff_failures=16
+generated=2026-05-09 14:58:04 +0800
+runs_scanned=142 task_reports=142 pass_rate=40/142
+instrumented_slice=18/50 passed
+real_code_change_passes=13 seeded_no_diff_failures=17
 ```
 
 Read this aggregate as historical plus current evidence. It still includes many
@@ -173,6 +181,9 @@ current passing run with a real code diff.
 - `glob` now treats `**/` as zero-or-more directories for agent-facing patterns
   and sorts shallow paths first before truncation, so broad local inspection is
   less likely to hide top-level entry files.
+- `grep` now leaves visible match lines as raw source and carries match text in
+  structured metadata, preventing Markdown emphasis from contaminating
+  file-edit anchors and patch synthesis.
 
 ## Product Surface
 
@@ -250,7 +261,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-09 with `1139 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-09 with `1140 passed; 0 failed`.
 - `cargo clippy --all-features -- -D warnings` was last recorded clean in the
   post-recovery baseline before this docs-only reset.
 - `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command

@@ -110,7 +110,7 @@ trace、closeout、patch recovery、workflow state，导致任何行为修复都
   `checkpoint-function-anchor-20260509-120047`，
   `test-status=ok`，`agent-quality-status=status=ok`。
 - 最新本地测试基线：
-  `cargo test -q` -> `1139 passed; 0 failed`。
+  `cargo test -q` -> `1140 passed; 0 failed`。
 
 ### 仍然薄弱的部分
 
@@ -203,7 +203,7 @@ Priority Agent 应该成为可信的本地编码伙伴：
    - 记录最新提交：
      - `b2ff20c Harden live eval patch recovery`
      - `6df0039 Record live eval recovery evidence`
-   - 记录最新测试基线：`1139 passed; 0 failed`。
+   - 记录最新测试基线：`1140 passed; 0 failed`。
    - 记录 dashboard-summary 最新恢复通过。
 
 2. 重新生成 live-eval aggregate。
@@ -617,9 +617,17 @@ Fix <case> live eval agent-flow gap
 - `capability-now-20260509-142349/memory-save-quality-gate` 已通过：
   `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
   `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`。
-- 当前 aggregate 已刷新到 `39/140`，instrumented slice 为 `17/48`，
-  real code-change passes 为 `12`。
-- 下一例按顺序跑 `live-eval-dashboard-summary`。
+- `capability-now-20260509-143251/live-eval-dashboard-summary` 先失败：
+  `failure_owner=agent_flow`，`action_checkpoint_invalid_tools`，`diff=no`。
+  根因是 grep 可见输出用 Markdown `**...**` 高亮源码命中，污染了 patch anchor。
+- `3344363 Keep grep evidence raw for patching` 已修复 grep 输出：可见内容保留原始源码行，
+  match 信息放在 structured data。
+- `capability-now-20260509-144729/live-eval-dashboard-summary` 随后通过：
+  `diff=yes`，`required_command_status=ok`，`verification_passed=true`，
+  `stage_validation_passed=true`，`closeout_status=passed`，`failure_owner=none`。
+- 当前 aggregate 已刷新到 `40/142`，instrumented slice 为 `18/50`，
+  real code-change passes 为 `13`。
+- 五案例当前 suite 已全部有 passing evidence；其中 dashboard case 保留一次失败和一次修复后通过的证据。
 
 ### Batch 4：conversation loop 抽取
 

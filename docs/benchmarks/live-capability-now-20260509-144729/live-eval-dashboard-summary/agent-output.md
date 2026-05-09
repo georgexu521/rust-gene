@@ -1,0 +1,13 @@
+
+
+Closeout:
+- Status: passed
+- Evidence: changed_files=1 validation_passed=1 validation_failed=0 validation_partial=0 validation_not_verified=0 acceptance_passed=0 acceptance_rejected=0 acceptance_pending=0
+- Changed: scripts/run_live_eval.sh
+- Verified:
+  - file-change validation: passed (required command passed: scripts/run_live_eval.sh --mode summary --run-id live-summary-smoke)
+  - Adaptive triggers: required_validation, repeated_no_code_progress, first_code_change, verification_failed
+- Acceptance:
+  - No explicit acceptance criteria were recorded
+- Risk:
+  - none recorded

@@ -54,14 +54,15 @@ baseline reset, and terminal/filesystem grounding pass:
 
 | Signal | Current evidence |
 | --- | --- |
-| Deterministic tests | `cargo test -q` -> `1139 passed; 0 failed` |
-| Live aggregate | `39/140` task reports passed; `101/140` failed |
-| Instrumented slice | `17/48` passed; `31/48` failed |
-| Real code-change passes | `12` reports with non-empty diffs |
-| Seeded no-diff failures | `16` reports |
+| Deterministic tests | `cargo test -q` -> `1140 passed; 0 failed` |
+| Live aggregate | `40/142` task reports passed; `102/142` failed |
+| Instrumented slice | `18/50` passed; `32/50` failed |
+| Real code-change passes | `13` reports with non-empty diffs |
+| Seeded no-diff failures | `17` reports |
 | Latest recovered dashboard run | `checkpoint-function-anchor-20260509-120047`: required commands ok, real diff, closeout passed, `failure_owner=none` |
-| Latest Batch 3 runs | `capability-now-20260509-135556/code-change-verification-repair-loop`, `capability-now-20260509-140733/backend-todo-api-crud`, `capability-now-20260509-141759/frontend-book-notes-localstorage`, and `capability-now-20260509-142349/memory-save-quality-gate`: required commands ok, real diff, closeout passed, `failure_owner=none` |
+| Latest Batch 3 runs | Five current suite cases now have passing evidence; `live-eval-dashboard-summary` first failed as `agent_flow` in `capability-now-20260509-143251`, then passed in `capability-now-20260509-144729` after `3344363` removed Markdown highlighting from grep evidence. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
+| Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 
 The aggregate intentionally includes older runs that predate structured
 `failure_owner`, `eval_intent`, and adaptive-trigger metadata. Use it for
@@ -193,7 +194,7 @@ Current evidence for this suite is mixed and should be refreshed case by case:
 | Case | Current evidence | Next action |
 | --- | --- | --- |
 | `code-change-verification-repair-loop` | Fresh `capability-now-20260509-135556` run passed with real diff, required commands ok, and `failure_owner=none`. | Keep as a regression guard while running the remaining four suite cases. |
-| `live-eval-dashboard-summary` | `checkpoint-function-anchor-20260509-120047` passed with a real diff and required commands ok. | Keep in the suite as a regression guard, but do not rerun first unless related code changes. |
+| `live-eval-dashboard-summary` | `capability-now-20260509-143251` failed with no diff because Markdown-highlighted grep output polluted patch anchors; after `3344363`, `capability-now-20260509-144729` passed with real diff and required commands ok. | Keep as a regression guard for evidence-display contamination and no-diff agent-flow failures. |
 | `backend-todo-api-crud` | Fresh `capability-now-20260509-140733` run passed with real diff, required commands ok, and `failure_owner=none`; it still showed `tool_errors_seen` during repair. | Keep as passed but track patch-synthesis old_string mismatch noise. |
 | `frontend-book-notes-localstorage` | Fresh `capability-now-20260509-141759` run passed with real diff, required Node test ok, no tool failures, and `failure_owner=none`. | Keep as a regression guard for the prior no-diff failure mode. |
 | `memory-save-quality-gate` | Fresh `capability-now-20260509-142349` run passed with three-file diff, memory tests and full test suite ok, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
