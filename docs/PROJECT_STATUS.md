@@ -18,18 +18,17 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic test baseline observed after the 2026-05-09 live-eval
-recovery and baseline-reset pass:
+Latest deterministic test baseline observed after the 2026-05-09 terminal and
+filesystem grounding pass:
 
 ```text
-1128 passed; 0 failed
+1139 passed; 0 failed
 ```
 
 Validated in this pass with:
 
 ```bash
-cargo test -q -- --test-threads=1
-bash scripts/live-eval-aggregate-summary.sh
+cargo test -q
 ```
 
 Latest recovery commits and planning artifacts:
@@ -40,6 +39,8 @@ Latest recovery commits and planning artifacts:
 | Harden live eval patch recovery | `b2ff20c` |
 | Record live eval recovery evidence | `6df0039` |
 | Add next development plan | `467c3b0` |
+| Add bash exposure diagnostics | `d025d6a` |
+| Guard terminal and filesystem grounding | `2b1852e` |
 
 The all-features clippy and experimental API checks were last recorded as
 passing in the post-recovery baseline before this docs-only reset. Rerun them
@@ -147,6 +148,13 @@ current passing run with a real code diff.
   passed or not-verified low/medium-risk code changes, while high-risk,
   failed, partial, explicit debug/full, and live-eval closeouts retain the full
   structured `Closeout:` block.
+- Terminal and filesystem truth guards now catch two high-trust UX failures:
+  claiming bash is unavailable when it is exposed, and answering current local
+  filesystem state without first using exposed read/list tools. The correction
+  stays runtime-owned instead of adding longer always-on prompt rules.
+- `glob` now treats `**/` as zero-or-more directories for agent-facing patterns
+  and sorts shallow paths first before truncation, so broad local inspection is
+  less likely to hide top-level entry files.
 
 ## Product Surface
 
@@ -207,9 +215,9 @@ The remaining work is now product maturity, not missing foundations:
 
 1. Continue measuring broad code-change first-pass success and repair count
    against the replay matrix and live eval tasks.
-2. Execute the next plan in order: baseline hygiene first, then terminal/tool
-   truth, filesystem grounding, live-eval flywheel, and conversation-loop
-   decomposition.
+2. Execute the next plan in order: Batch 1 baseline hygiene and Batch 2
+   terminal/filesystem truth are now landed; next is the five-case live-eval
+   flywheel before conversation-loop decomposition.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -224,8 +232,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q -- --test-threads=1` is clean as of 2026-05-09 with
-  `1128 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-09 with `1139 passed; 0 failed`.
 - `cargo clippy --all-features -- -D warnings` was last recorded clean in the
   post-recovery baseline before this docs-only reset.
 - `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command

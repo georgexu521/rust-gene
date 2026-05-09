@@ -110,7 +110,7 @@ trace、closeout、patch recovery、workflow state，导致任何行为修复都
   `checkpoint-function-anchor-20260509-120047`，
   `test-status=ok`，`agent-quality-status=status=ok`。
 - 最新本地测试基线：
-  `cargo test -q -- --test-threads=1` -> `1128 passed; 0 failed`。
+  `cargo test -q` -> `1139 passed; 0 failed`。
 
 ### 仍然薄弱的部分
 
@@ -203,7 +203,7 @@ Priority Agent 应该成为可信的本地编码伙伴：
    - 记录最新提交：
      - `b2ff20c Harden live eval patch recovery`
      - `6df0039 Record live eval recovery evidence`
-   - 记录最新测试基线：`1128 passed; 0 failed`。
+   - 记录最新测试基线：`1139 passed; 0 failed`。
    - 记录 dashboard-summary 最新恢复通过。
 
 2. 重新生成 live-eval aggregate。
@@ -569,6 +569,16 @@ Refresh current agent baseline docs
 ```text
 Harden terminal and filesystem truth contracts
 ```
+
+当前进展：
+
+- `d025d6a Add bash exposure diagnostics` 已落地 `/status`/诊断侧的 bash 暴露信息。
+- `2b1852e Guard terminal and filesystem grounding` 已落地 runtime 保护：
+  bash 已暴露时不允许声称 bash 不可用；本地文件系统事实问答不能在未调用
+  `file_read`/`glob` 时直接编造答案。
+- 同批修复了 `glob` 的 `**/` 零层匹配和浅层优先排序，避免宽泛搜索截断时隐藏
+  `src/main.rs` 这类入口文件。
+- 最新确定性验证：`cargo test -q` -> `1139 passed; 0 failed`。
 
 ### Batch 3：五案例 live suite
 

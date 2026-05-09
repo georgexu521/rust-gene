@@ -49,17 +49,18 @@ code is broken. Separate product validation from agent closeout.
 
 ## Current Baseline Snapshot
 
-This is the current evidence baseline after the 2026-05-09 recovery and
-baseline reset pass:
+This is the current evidence baseline after the 2026-05-09 recovery,
+baseline reset, and terminal/filesystem grounding pass:
 
 | Signal | Current evidence |
 | --- | --- |
-| Deterministic tests | `cargo test -q -- --test-threads=1` -> `1128 passed; 0 failed` |
+| Deterministic tests | `cargo test -q` -> `1139 passed; 0 failed` |
 | Live aggregate | `35/136` task reports passed; `101/136` failed |
 | Instrumented slice | `13/44` passed; `31/44` failed |
 | Real code-change passes | `8` reports with non-empty diffs |
 | Seeded no-diff failures | `16` reports |
 | Latest recovered dashboard run | `checkpoint-function-anchor-20260509-120047`: required commands ok, real diff, closeout passed, `failure_owner=none` |
+| Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 
 The aggregate intentionally includes older runs that predate structured
 `failure_owner`, `eval_intent`, and adaptive-trigger metadata. Use it for
@@ -192,7 +193,7 @@ Current evidence for this suite is mixed and should be refreshed case by case:
 | --- | --- | --- |
 | `code-change-verification-repair-loop` | Historical passing smoke exists, but several older seeded no-diff and repair failures remain in the aggregate. | Rerun as a fresh `capability-now` case after baseline docs are clean. |
 | `live-eval-dashboard-summary` | `checkpoint-function-anchor-20260509-120047` passed with a real diff and required commands ok. | Keep in the suite as a regression guard, but do not rerun first unless related code changes. |
-| `backend-todo-api-crud` | Latest recorded recommended-suite evidence has a real-diff pass. | Rerun after terminal/tool changes. |
+| `backend-todo-api-crud` | Latest recorded recommended-suite evidence has a real-diff pass. | Rerun in Batch 3 after the terminal/filesystem grounding commits. |
 | `frontend-book-notes-localstorage` | Latest recommended-suite evidence is a no-diff `llm_reasoning` failure. | Keep as a priority product-completeness pressure case. |
 | `memory-save-quality-gate` | Latest recommended-suite evidence is still failing; later repair-flow work improved execution but did not prove final task success. | Keep as the memory/quality-gate differentiator case. |
 
