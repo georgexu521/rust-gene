@@ -21,6 +21,7 @@ python3 - "$OUTPUT" "$BENCHMARKS_DIR" "$RUN_GLOB" <<'PY'
 import collections
 import datetime as dt
 import pathlib
+import re
 import sys
 from scripts.live_eval_report_parser import read, report_rows
 
@@ -41,11 +42,29 @@ def table_rows(text):
             if not line.startswith("|"):
                 break
             cells = [cell.strip() for cell in line.strip("|").split("|")]
-            if len(cells) >= 13:
-                rows.append(cells[:13])
+            if len(cells) >= 16:
+                rows.append(cells[:16])
+            elif len(cells) >= 14:
+                rows.append(cells[:13] + [
+                    "active=false, recalled=0, conflicts=0, changed_plan=false",
+                    "active=false, tool_calls=0, usage_events=0, promotion=false",
+                    cells[13],
+                ])
             elif len(cells) >= 12:
-                rows.append(cells[:9] + ["none"] + cells[9:12])
+                rows.append(cells[:9] + ["none"] + cells[9:12] + [
+                    "active=false, recalled=0, conflicts=0, changed_plan=false",
+                    "active=false, tool_calls=0, usage_events=0, promotion=false",
+                    cells[12] if len(cells) > 12 else "none",
+                ])
     return rows
+
+def specialty_flag(summary, key):
+    match = re.search(rf"{re.escape(key)}=(true|false)", summary)
+    return match.group(1) if match else "false"
+
+def specialty_int(summary, key):
+    match = re.search(rf"{re.escape(key)}=(\d+)", summary)
+    return int(match.group(1)) if match else 0
 
 def infer_owner(record):
     if record["owner"] != "missing":
@@ -108,13 +127,16 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
                 "boundary": boundary,
                 "verification": verification,
                 "closeout": closeout,
+                "runtime_diet": runtime_diet,
                 "triggers": triggers,
                 "first_write": first_write,
                 "diff": diff,
+                "memory": memory,
+                "skill": skill,
                 "warnings": warnings,
                 "failures": [],
             }
-            for task, status, intent, owner, required, plan, boundary, verification, closeout, triggers, first_write, diff, warnings
+            for task, status, intent, owner, required, plan, boundary, verification, closeout, runtime_diet, triggers, first_write, diff, memory, skill, warnings
             in table_rows(text)
         ]
     if not rows:
@@ -174,7 +196,17 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
             "first_write": row["first_write"],
             "diff": row["diff"],
             "warnings": row["warnings"],
+            "memory": row.get("memory", "active=false, recalled=0, conflicts=0, changed_plan=false"),
+            "skill": row.get("skill", "active=false, tool_calls=0, usage_events=0, promotion=false"),
         }
+        record["memory_active"] = row.get("memory_active", specialty_flag(record["memory"], "active"))
+        record["memory_recalled_items"] = int(row.get("memory_recalled_items", specialty_int(record["memory"], "recalled")))
+        record["memory_conflicts"] = int(row.get("memory_conflicts", specialty_int(record["memory"], "conflicts")))
+        record["memory_changed_plan"] = row.get("memory_changed_plan", specialty_flag(record["memory"], "changed_plan"))
+        record["skill_active"] = row.get("skill_active", specialty_flag(record["skill"], "active"))
+        record["skill_tool_calls"] = int(row.get("skill_tool_calls", specialty_int(record["skill"], "tool_calls")))
+        record["skill_usage_events"] = int(row.get("skill_usage_events", specialty_int(record["skill"], "usage_events")))
+        record["skill_promotion_evidence"] = row.get("skill_promotion_evidence", specialty_flag(record["skill"], "promotion"))
         record["inferred_owner"] = infer_owner(record)
         task_records.append(record)
         owners[row["owner"]] += 1
@@ -195,6 +227,14 @@ plan_only_passes = sum(record["plan_only_passes"] for record in run_records)
 seeded_no_diff = sum(record["seeded_no_diff"] for record in run_records)
 required_failed = sum(1 for record in task_records if record["required"] == "failed")
 verification_failed = sum(1 for record in task_records if record["verification"] == "failed")
+memory_active_tasks = sum(1 for record in task_records if record["memory_active"] == "true")
+memory_changed_plan_tasks = sum(1 for record in task_records if record["memory_changed_plan"] == "true")
+memory_recalled_items = sum(record["memory_recalled_items"] for record in task_records)
+memory_conflicts = sum(record["memory_conflicts"] for record in task_records)
+skill_active_tasks = sum(1 for record in task_records if record["skill_active"] == "true")
+skill_tool_calls = sum(record["skill_tool_calls"] for record in task_records)
+skill_usage_events = sum(record["skill_usage_events"] for record in task_records)
+skill_promotion_tasks = sum(1 for record in task_records if record["skill_promotion_evidence"] == "true")
 closeout_not_successful = failure_modes["closeout_not_successful"]
 owner_metadata_missing = owners["missing"]
 recovered_validation_failures = (
@@ -334,6 +374,21 @@ lines.extend(md_table(
     ],
 ))
 
+lines.extend(["", "## Memory And Skill Evidence", ""])
+lines.extend(md_table(
+    ["dimension", "count", "share"],
+    [
+        ["memory_active_tasks", memory_active_tasks, pct(memory_active_tasks, total_tasks)],
+        ["memory_changed_plan_tasks", memory_changed_plan_tasks, pct(memory_changed_plan_tasks, total_tasks)],
+        ["memory_recalled_items", memory_recalled_items, "n/a"],
+        ["memory_conflicts", memory_conflicts, "n/a"],
+        ["skill_active_tasks", skill_active_tasks, pct(skill_active_tasks, total_tasks)],
+        ["skill_tool_calls", skill_tool_calls, "n/a"],
+        ["skill_usage_events", skill_usage_events, "n/a"],
+        ["skill_promotion_evidence_tasks", skill_promotion_tasks, pct(skill_promotion_tasks, total_tasks)],
+    ],
+))
+
 lines.extend(["", "## Instrumented Slice", ""])
 instrumented_total = len(instrumented_records)
 instrumented_passed = sum(1 for record in instrumented_records if record["status"] == "passed")
@@ -417,7 +472,7 @@ lines.extend(md_table(
 
 lines.extend(["", "## Recent Failed Tasks", ""])
 lines.extend(md_table(
-    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "triggers", "warnings"],
+    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "memory", "skill", "triggers", "warnings"],
     [
         [
             record["run"],
@@ -428,16 +483,18 @@ lines.extend(md_table(
             record["required"],
             record["verification"],
             record["diff"],
+            record["memory"],
+            record["skill"],
             record["triggers"],
             record["warnings"],
         ]
         for record in recent_failures
-    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
 lines.extend(["", "## Recent Passed Tasks", ""])
 lines.extend(md_table(
-    ["run", "task", "intent", "owner", "required", "verification", "diff", "triggers", "warnings"],
+    ["run", "task", "intent", "owner", "required", "verification", "diff", "memory", "skill", "triggers", "warnings"],
     [
         [
             record["run"],
@@ -447,11 +504,13 @@ lines.extend(md_table(
             record["required"],
             record["verification"],
             record["diff"],
+            record["memory"],
+            record["skill"],
             record["triggers"],
             record["warnings"],
         ]
         for record in recent_passes
-    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none"]],
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
 lines.extend([
@@ -464,6 +523,7 @@ lines.extend([
     "- `inferred_owner` is a conservative backfill for older reports that predate structured `failure_owner` fields.",
     "- `owner_metadata_missing` tracks that historical evidence gap separately from inferred product failures.",
     "- `instrumented_task_reports` is the cleaner current slice because it excludes reports with no structured owner, intent, or trigger metadata.",
+    "- `memory` and `skill` columns show evidence signals only; they are not success labels.",
 ])
 
 output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

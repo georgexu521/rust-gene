@@ -1448,6 +1448,12 @@ seeded_no_diff_failures = sum(
     and row["intent"] == "seeded_code_change"
     and row["diff"] == "no"
 )
+memory_active_tasks = sum(1 for row in rows if row["memory_active"] == "true")
+memory_changed_plan_tasks = sum(1 for row in rows if row["memory_changed_plan"] == "true")
+memory_recalled_items = sum(int(row["memory_recalled_items"]) for row in rows)
+memory_conflicts = sum(int(row["memory_conflicts"]) for row in rows)
+skill_active_tasks = sum(1 for row in rows if row["skill_active"] == "true")
+skill_promotion_tasks = sum(1 for row in rows if row["skill_promotion_evidence"] == "true")
 
 lines = [
     f"# Live Eval Summary: {run_id}",
@@ -1459,6 +1465,12 @@ lines = [
     f"- Real code-change passes: `{real_code_change_passed}`",
     f"- Plan-only passes: `{plan_only_passed}`",
     f"- Seeded no-diff failures: `{seeded_no_diff_failures}`",
+    f"- Memory active tasks: `{memory_active_tasks}`",
+    f"- Memory changed-plan tasks: `{memory_changed_plan_tasks}`",
+    f"- Memory recalled items: `{memory_recalled_items}`",
+    f"- Memory conflicts: `{memory_conflicts}`",
+    f"- Skill active tasks: `{skill_active_tasks}`",
+    f"- Skill promotion-evidence tasks: `{skill_promotion_tasks}`",
     "- Status counts: "
     + (", ".join(f"{key}={value}" for key, value in sorted(totals.items())) if totals else "none"),
     "- Failure owners: "
@@ -1478,6 +1490,17 @@ else:
 
 lines.extend([
     "",
+    "## Memory And Skill Evidence",
+    "",
+    "| dimension | count | meaning |",
+    "|-----------|-------|---------|",
+    f"| memory_active_tasks | {memory_active_tasks} | Tasks where retrieval, sync, or memory tools were active. |",
+    f"| memory_changed_plan_tasks | {memory_changed_plan_tasks} | Tasks where memory or learning signals reweighted planning. |",
+    f"| memory_recalled_items | {memory_recalled_items} | Retrieved memory-backed context items across tasks. |",
+    f"| memory_conflicts | {memory_conflicts} | Retrieval-context conflict count from memory-backed context. |",
+    f"| skill_active_tasks | {skill_active_tasks} | Tasks where skill tools or skill-specific signals were active. |",
+    f"| skill_promotion_evidence_tasks | {skill_promotion_tasks} | Tasks with promotion-related skill evidence. |",
+    "",
     "## Outcome Classes",
     "",
     "| class | count | meaning |",
@@ -1488,19 +1511,19 @@ lines.extend([
     "",
     "## Task Matrix",
     "",
-    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | triggers | first_write | diff | warnings |",
-    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|----------|-------------|------|----------|",
+    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | triggers | first_write | diff | memory | skill | warnings |",
+    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|----------|-------------|------|--------|-------|----------|",
 ])
 
 if rows:
     for row in rows:
         lines.append(
-            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {triggers} | {first_write} | {diff} | {warnings} |".format(
+            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | none | missing | no | none |")
+    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | none | missing | none | no | none | none | none |")
 
 lines.extend([
     "",
@@ -1510,6 +1533,7 @@ lines.extend([
     "- `tool_boundary` separates plan-only, collect-only, and real agent-run reports.",
     "- `verification_status` combines closeout and required-command evidence; it is not a human-quality score.",
     "- `real_code_change_passed` requires an agent-run report with a non-empty diff; plan-only success is tracked separately.",
+    "- `memory` and `skill` summarize evidence signals; they do not by themselves mean the task succeeded.",
 ])
 
 summary_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

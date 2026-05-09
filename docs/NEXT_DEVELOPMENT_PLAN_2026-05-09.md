@@ -724,6 +724,23 @@ live suite 当前报告稳定后做。
 - skill promotion evidence。
 - aggregate memory/skill reporting。
 
+当前实现状态：
+
+- `scripts/live_eval_report_parser.py` 已从 task report 和
+  `agent-events.jsonl` 提取 memory/skill 证据信号。
+- 单次 live summary 已输出 memory active、changed-plan、recalled items、
+  conflict count、skill active 和 promotion evidence 统计。
+- aggregate summary 已增加 `Memory And Skill Evidence` section，并在最近
+  pass/fail 表格中显示 task-level memory/skill 摘要。
+- `scripts/live-eval-summary-smoke.sh` 已覆盖 memory/skill summary 和
+  aggregate 输出格式。
+- 已验证：`python3 -m py_compile scripts/live_eval_report_parser.py`、
+  `bash -n scripts/run_live_eval.sh`、
+  `bash -n scripts/live-eval-aggregate-summary.sh`、
+  `bash scripts/live-eval-summary-smoke.sh`、`cargo test -q memory`、
+  `cargo test -q retrieval_context`、`cargo test -q skills`、
+  `bash scripts/coding-workflow-gates.sh standard`、`cargo check -q`。
+
 预期提交：
 
 ```text

@@ -253,8 +253,9 @@ The remaining work is now product maturity, not missing foundations:
    terminal/filesystem truth, Batch 3 five-case live suite, and Batch 4
    conversation-loop extraction are now landed. Batch 5 has started with
    explicit coding agent modes, mode-visible status, and stronger `/doctor`
-   tool-exposure diagnostics; next is broader command-output polish and Batch 6
-   memory/skill evidence reporting.
+   tool-exposure diagnostics. Batch 6 report-layer memory/skill evidence is
+   now landed in live summary and aggregate reporting; next is deeper
+   behavior-level memory/skill validation against real live runs.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -280,6 +281,16 @@ Latest maintenance note:
   `cargo test -q doctor_route_summary_applies_agent_mode_before_exposure_checks`,
   `cargo test -q status`, `cargo test -q quick`, `cargo test -q tool_view`,
   `cargo check -q`, and `cargo test -q`.
+- Batch 6 reporting now surfaces memory/skill evidence in
+  `scripts/run_live_eval.sh --mode summary` and
+  `scripts/live-eval-aggregate-summary.sh`: memory active tasks, recalled
+  items, conflict counts, changed-plan signals, skill active tasks, usage
+  events, and promotion-evidence tasks. Validation: `python3 -m py_compile
+  scripts/live_eval_report_parser.py`, `bash -n scripts/run_live_eval.sh`,
+  `bash -n scripts/live-eval-aggregate-summary.sh`,
+  `bash scripts/live-eval-summary-smoke.sh`, `cargo test -q memory`,
+  `cargo test -q retrieval_context`, `cargo test -q skills`,
+  `bash scripts/coding-workflow-gates.sh standard`, and `cargo check -q`.
 - `conversation_loop/mod.rs` is down to 6744 lines after moving patch synthesis,
   deterministic patch recovery, synthesized patch validation, required
   validation commands, validation command classification, verification source
