@@ -401,9 +401,12 @@ impl Tool for FileReadTool {
             }
         };
 
-        // 文件缓存优化：如果文件在本会话中已读过且未变更，返回短信提示
+        let targeted_read = limit.is_some() || offset.is_some();
+
+        // 文件缓存优化：如果文件在本会话中已读过且未变更，返回短信提示。
+        // 但 offset/limit 读取是新的局部证据，不能被上一次全文读取短路掉。
         if let Some(ref cache) = context.file_cache {
-            if cache.is_unchanged_since_last_read(&path) {
+            if !targeted_read && cache.is_unchanged_since_last_read(&path) {
                 let lines_count = content.lines().count();
                 return ToolResult::success_with_data(
                     format!(
@@ -1756,6 +1759,62 @@ mod tests {
         assert!(result.error.unwrap_or_default().contains("Offset"));
 
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn file_read_targeted_range_is_not_hidden_by_unchanged_cache() {
+        let read_tool = FileReadTool;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.rs");
+        tokio::fs::write(
+            &path,
+            "fn first() {}\n\nfn summary_task() {\n    todo!();\n}\n\nfn run_one() {}\n",
+        )
+        .await
+        .unwrap();
+
+        let cache = std::sync::Arc::new(crate::tools::file_cache::FileStateCache::new());
+        let context = ToolContext::new(".", "test-session-targeted-cache").with_file_cache(cache);
+
+        let full_read = read_tool
+            .execute(
+                json!({ "path": path.to_string_lossy().to_string() }),
+                context.clone(),
+            )
+            .await;
+        assert!(full_read.success, "full read failed: {:?}", full_read.error);
+
+        let targeted_read = read_tool
+            .execute(
+                json!({
+                    "path": path.to_string_lossy().to_string(),
+                    "offset": 3,
+                    "limit": 3
+                }),
+                context.clone(),
+            )
+            .await;
+        assert!(
+            targeted_read.success,
+            "targeted read failed: {:?}",
+            targeted_read.error
+        );
+        assert!(targeted_read.content.contains("summary_task"));
+        assert!(targeted_read.content.contains("todo!();"));
+        assert!(!targeted_read
+            .content
+            .contains("File unchanged since last read"));
+
+        let broad_repeat = read_tool
+            .execute(
+                json!({ "path": path.to_string_lossy().to_string() }),
+                context,
+            )
+            .await;
+        assert!(broad_repeat.success);
+        assert!(broad_repeat
+            .content
+            .contains("File unchanged since last read"));
     }
 
     // ===== FileEditTool 增强测试 =====
