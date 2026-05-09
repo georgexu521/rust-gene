@@ -199,11 +199,15 @@ impl ToolRunView {
             } else if self.status == ToolRunStatus::Queued {
                 format!("{} · waiting", self.summary())
             } else if self.result_body.is_some() {
+                let output_stats = self
+                    .result_stats()
+                    .unwrap_or_else(|| "output: unavailable".to_string());
                 format!(
-                    "{} · {}{} · {} · ctrl+t output",
+                    "{} · {}{} · {} · {} · ctrl+t output",
                     self.summary(),
                     status_hint,
                     elapsed,
+                    output_stats,
                     details_hint
                 )
             } else {
@@ -271,9 +275,11 @@ impl ToolRunView {
         if line_count == 0 && char_count == 0 {
             Some("output: empty".to_string())
         } else {
+            let line_unit = if line_count == 1 { "line" } else { "lines" };
+            let char_unit = if char_count == 1 { "char" } else { "chars" };
             Some(format!(
-                "output: {} lines, {} chars",
-                line_count, char_count
+                "output: {} {}, {} {}",
+                line_count, line_unit, char_count, char_unit
             ))
         }
     }
@@ -719,6 +725,7 @@ mod tests {
 
         assert_eq!(run.summary(), "Found 1 matches");
         assert!(run.render_lines(false)[0].contains("done"));
+        assert!(run.render_lines(false)[0].contains("output: 1 line"));
         assert!(run.render_lines(false)[0].contains("ctrl+t output"));
     }
 

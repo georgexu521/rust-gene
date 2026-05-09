@@ -742,8 +742,8 @@ pub const CMD_MODE: CommandDef = CommandDef::new(
     "/mode",
     &[],
     "General",
-    "/mode [chat|settings|vim]",
-    "Switch interaction mode",
+    "/mode [auto|build|plan|explore|review]",
+    "Switch coding agent mode",
 );
 
 pub const CMD_PACKAGE: CommandDef = CommandDef::new(

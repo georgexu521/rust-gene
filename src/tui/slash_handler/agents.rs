@@ -1,6 +1,7 @@
 // Agent, system, and integration slash command handlers
 
 use super::utils::*;
+use crate::engine::agent_mode::AgentMode;
 use crate::tools::Tool;
 use crate::tui::app::{AppMode, TuiApp};
 
@@ -10,6 +11,7 @@ pub async fn handle_status(app: &TuiApp) -> String {
 
     // 基本信息
     lines.push(format!("Messages: {}", msg_count));
+    lines.push(format!("Agent mode: {}", app.current_agent_mode_label()));
 
     if let Some(ref engine) = app.streaming_engine {
         let history_len = engine.get_history().await.len();
@@ -99,8 +101,90 @@ async fn terminal_bash_exposure_report(
     let mut registry = crate::tools::ToolRegistry::default_registry();
     let _ = crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
     let context = app.build_tool_context().await;
-    let route = crate::engine::intent_router::IntentRouter::new().route(TERMINAL_EXPOSURE_PROMPT);
+    let route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, app.agent_mode);
     crate::engine::tool_exposure::diagnose_tool_exposure(&registry, &context, &route, "bash")
+}
+
+fn route_for_agent_mode(
+    prompt: &str,
+    mode: AgentMode,
+) -> crate::engine::intent_router::IntentRoute {
+    let mut route = crate::engine::intent_router::IntentRouter::new().route(prompt);
+    mode.apply_to_route(&mut route);
+    route
+}
+
+fn format_current_mode_route_exposure(
+    app: &TuiApp,
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+) -> String {
+    let route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, app.agent_mode);
+    let bash =
+        crate::engine::tool_exposure::diagnose_tool_exposure(registry, context, &route, "bash");
+    let file_edit = crate::engine::tool_exposure::diagnose_tool_exposure(
+        registry,
+        context,
+        &route,
+        "file_edit",
+    );
+    let file_write = crate::engine::tool_exposure::diagnose_tool_exposure(
+        registry,
+        context,
+        &route,
+        "file_write",
+    );
+    format!(
+        "mode={} route={} route_scoped={} bash={} file_edit={} file_write={}",
+        app.current_agent_mode_label(),
+        route.compact_label(),
+        crate::engine::conversation_loop::ConversationLoop::route_scoped_tools_enabled(),
+        exposure_label(&bash),
+        exposure_label(&file_edit),
+        exposure_label(&file_write)
+    )
+}
+
+fn format_agent_mode_exposure_matrix(
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+) -> String {
+    [
+        AgentMode::Auto,
+        AgentMode::Build,
+        AgentMode::Plan,
+        AgentMode::Explore,
+        AgentMode::Review,
+    ]
+    .into_iter()
+    .map(|mode| {
+        let route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, mode);
+        let bash =
+            crate::engine::tool_exposure::diagnose_tool_exposure(registry, context, &route, "bash");
+        let file_edit = crate::engine::tool_exposure::diagnose_tool_exposure(
+            registry,
+            context,
+            &route,
+            "file_edit",
+        );
+        format!(
+            "{}: route={} bash={} file_edit={}",
+            mode.label(),
+            route.compact_label(),
+            exposure_label(&bash),
+            exposure_label(&file_edit)
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("; ")
+}
+
+fn exposure_label(report: &crate::engine::tool_exposure::ToolExposureReport) -> &'static str {
+    if report.model_exposed {
+        "exposed"
+    } else {
+        "hidden"
+    }
 }
 
 fn format_terminal_bash_exposure(
@@ -298,9 +382,18 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
         report.checks.push(crate::diagnostics::CheckResult::warn(
             "bash_model_exposure",
             bash_message,
-            "Check /permissions mode and rules, or disable route scoped tools only for debugging.",
+            "Check /mode, /permissions mode and rules, or disable route scoped tools only for debugging.",
         ));
     }
+    let context = app.build_tool_context().await;
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "agent_mode_route",
+        format_current_mode_route_exposure(app, &registry, &context),
+    ));
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "agent_mode_matrix",
+        format_agent_mode_exposure_matrix(&registry, &context),
+    ));
 
     if let Some(ref engine) = app.streaming_engine {
         report.checks.push(crate::diagnostics::CheckResult::ok(
@@ -1073,23 +1166,32 @@ pub fn handle_history(app: &TuiApp, args: &str) -> String {
 }
 /// /mode - 切换交互模式
 pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
-    let current = format!("{:?}", app.mode);
+    let current_agent_mode = app.current_agent_mode_label();
+    let current_ui_mode = format!("{:?}", app.mode);
     if args.is_empty() {
         return format!(
-            "Current mode: {}\n\nAvailable modes:\n\
-             - chat: Normal chat mode\n\
-             - settings: Settings configuration mode\n\
-             - vim_normal: Vim-style navigation mode\n\n\
-             Usage: /mode <mode_name>",
-            current
+            "Current agent mode: {}\nUI mode: {}\n\nAgent modes:\n\
+             - auto: Route each request from its content\n\
+             - build: Bias ambiguous coding requests toward implementation\n\
+             - plan: Inspect and plan before implementation\n\
+             - explore: Inspect and answer from evidence\n\
+             - review: Findings-first code review stance\n\n\
+             UI modes: chat, settings, vim\n\
+             Usage: /mode <auto|build|plan|explore|review>",
+            current_agent_mode, current_ui_mode
         );
     }
 
     let new_mode = args.trim().to_lowercase();
+    if let Some(mode) = AgentMode::parse(&new_mode) {
+        app.set_agent_mode(mode);
+        return format!("Agent mode switched to {}.", mode.label());
+    }
+
     match new_mode.as_str() {
         "chat" => {
             app.mode = AppMode::Chat;
-            "Switched to chat mode.".to_string()
+            "UI mode switched to chat.".to_string()
         }
         "settings" => {
             let config = crate::services::config::AppConfig::load().unwrap_or_default();
@@ -1098,14 +1200,17 @@ pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
                 app.keybindings.clone(),
             ));
             app.mode = AppMode::Settings;
-            "Switched to settings mode.".to_string()
+            "UI mode switched to settings.".to_string()
         }
         "vim" | "vim_normal" => {
             app.mode = AppMode::VimNormal;
-            "Switched to vim_normal mode. Use j/k to navigate, i to return to insert mode."
+            "UI mode switched to vim_normal. Use j/k to navigate, i to return to insert mode."
                 .to_string()
         }
-        _ => format!("Unknown mode: {}. Available: chat, settings, vim", new_mode),
+        _ => format!(
+            "Unknown mode: {}. Agent modes: auto, build, plan, explore, review. UI modes: chat, settings, vim",
+            new_mode
+        ),
     }
 }
 /// /package - 包管理相关操作
@@ -1783,9 +1888,10 @@ pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
     }
 }
 /// /status - Detailed status
-pub fn handle_status_detailed(_app: &TuiApp) -> String {
+pub fn handle_status_detailed(app: &TuiApp) -> String {
     let mut lines = vec!["Detailed Status:".to_string()];
-    lines.push("  Mode: Priority Agent CLI".to_string());
+    lines.push(format!("  Agent mode: {}", app.current_agent_mode_label()));
+    lines.push(format!("  UI mode: {:?}", app.mode));
     lines.push(format!("  Rust version: {}", std::env::consts::OS));
     format!(
         "{}\n{}",
@@ -1882,5 +1988,48 @@ mod tests {
 
         assert!(line.contains("hidden for terminal requests"));
         assert!(line.contains("permission mode is read_only"));
+    }
+
+    #[test]
+    fn mode_switches_product_agent_mode_without_changing_ui_mode() {
+        let mut app = TuiApp::new();
+
+        let msg = handle_mode(&mut app, "build");
+
+        assert!(msg.contains("Agent mode switched to build"));
+        assert_eq!(app.agent_mode, AgentMode::Build);
+        assert!(matches!(app.mode, AppMode::Chat | AppMode::Onboarding));
+    }
+
+    #[test]
+    fn mode_keeps_legacy_ui_mode_aliases() {
+        let mut app = TuiApp::new();
+
+        let msg = handle_mode(&mut app, "vim");
+
+        assert!(msg.contains("UI mode switched to vim_normal"));
+        assert_eq!(app.agent_mode, AgentMode::Auto);
+        assert_eq!(app.mode, AppMode::VimNormal);
+    }
+
+    #[test]
+    fn doctor_route_summary_applies_agent_mode_before_exposure_checks() {
+        let auto_route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, AgentMode::Auto);
+        let plan_route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, AgentMode::Plan);
+        let build_route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, AgentMode::Build);
+
+        let auto_allowlist =
+            crate::engine::conversation_loop::ConversationLoop::route_tool_allowlist(&auto_route);
+        let plan_allowlist =
+            crate::engine::conversation_loop::ConversationLoop::route_tool_allowlist(&plan_route);
+        let build_allowlist =
+            crate::engine::conversation_loop::ConversationLoop::route_tool_allowlist(&build_route);
+
+        assert!(auto_allowlist.contains("bash"));
+        assert!(!auto_allowlist.contains("file_edit"));
+        assert!(!plan_allowlist.contains("bash"));
+        assert!(!plan_allowlist.contains("file_edit"));
+        assert!(build_allowlist.contains("bash"));
+        assert!(build_allowlist.contains("file_edit"));
     }
 }

@@ -2,6 +2,7 @@
 //!
 //! 对应 Claude Code 中的 AppState 概念
 
+use crate::engine::agent_mode::AgentMode;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::{PermissionMode, PermissionRules, RuleSource, SourcedRule};
 use crate::state::{AppContext, MessageItem, MessageRole, TaskItem};
@@ -246,7 +247,10 @@ fn dedupe_palette_commands(commands: Vec<String>) -> Vec<String> {
 
 fn build_welcome_content(is_first_run: bool) -> String {
     if is_first_run {
-        return "Priority Agent\n\nWelcome. Press Enter to start onboarding, or type /skip to skip.\n\nGetting started:\n- Ctrl+P opens the command palette\n- Ctrl+M changes model; Ctrl+L changes provider\n- Type ? on an empty prompt for shortcuts\n- Use /init <name> to create a project scaffold".to_string();
+        return format!(
+            "Priority Agent\n\nWelcome. Press Enter to start onboarding, or type /skip to skip.\n\nRuntime:\n- Agent mode: {}\n\nGetting started:\n- Ctrl+P opens the command palette\n- Ctrl+M changes model; Ctrl+L changes provider\n- Type ? on an empty prompt for shortcuts\n- Use /init <name> to create a project scaffold",
+            AgentMode::Auto.label()
+        );
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -285,9 +289,10 @@ fn build_welcome_content(is_first_run: bool) -> String {
     };
 
     format!(
-        "Priority Agent\n\nWelcome back.\n\nProject overview:\n- Name: {}\n- Path: {}\n- {}\n- {}\n- Detected: {}\n{}\n\n{}\n\nNext actions:\n1. Ask a question about this codebase\n2. Run /quick for the command dashboard\n3. Run /init <name> to scaffold a new project\n4. Press Ctrl+P for commands, Ctrl+M for model, Ctrl+L for provider",
+        "Priority Agent\n\nWelcome back.\n\nProject overview:\n- Name: {}\n- Path: {}\n- Agent mode: {}\n- {}\n- {}\n- Detected: {}\n{}\n\n{}\n\nNext actions:\n1. Ask a question about this codebase\n2. Run /quick for the command dashboard\n3. Run /init <name> to scaffold a new project\n4. Press Ctrl+P for commands, Ctrl+M for model, Ctrl+L for provider",
         project_name,
         cwd.display(),
+        AgentMode::Auto.label(),
         branch
             .map(|b| format!("Branch: {}", b))
             .unwrap_or_else(|| "Branch: none".to_string()),
@@ -654,6 +659,8 @@ impl StatusBarDensity {
 pub struct TuiApp {
     /// 当前模式
     pub mode: AppMode,
+    /// 当前 coding agent 产品模式
+    pub agent_mode: AgentMode,
     /// 输入状态
     pub input: InputState,
     /// 消息列表
@@ -876,6 +883,7 @@ impl TuiApp {
             } else {
                 AppMode::Chat
             },
+            agent_mode: AgentMode::Auto,
             input: InputState::new(),
             messages: vec![welcome_message],
             tasks: Vec::new(),
@@ -1518,9 +1526,12 @@ impl TuiApp {
             let usage_clone = self.stream_usage.clone();
             let done_flag = self.stream_done.clone();
             let user_msg = content.clone();
+            let agent_mode = self.agent_mode;
 
             let handle = tokio::spawn(async move {
-                let mut stream = engine_clone.query_stream(user_msg).await;
+                let mut stream = engine_clone
+                    .query_stream_with_agent_mode(user_msg, agent_mode)
+                    .await;
 
                 while let Some(event) = stream.next().await {
                     match event {
@@ -3115,6 +3126,14 @@ impl TuiApp {
         } else {
             "unknown".to_string()
         }
+    }
+
+    pub fn current_agent_mode_label(&self) -> &'static str {
+        self.agent_mode.label()
+    }
+
+    pub fn set_agent_mode(&mut self, mode: AgentMode) {
+        self.agent_mode = mode;
     }
 
     pub fn workspace_status_label(&self) -> String {

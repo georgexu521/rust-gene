@@ -3,6 +3,7 @@
 //! 核心 AI 交互循环，管理消息历史、工具调用、流式响应
 //! 对应 Claude Code 中的 QueryEngine.ts
 
+pub mod agent_mode;
 pub mod auto_verify;
 pub mod batch_refactor;
 pub mod checkpoint;
@@ -134,6 +135,7 @@ pub struct ConversationLoopBuilder {
     compressor: Option<
         std::sync::Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
     >,
+    agent_mode: self::agent_mode::AgentMode,
 }
 
 impl ConversationLoopBuilder {
@@ -165,6 +167,7 @@ impl ConversationLoopBuilder {
             session_store: None,
             session_id: None,
             compressor: None,
+            agent_mode: self::agent_mode::AgentMode::Auto,
         }
     }
 
@@ -287,6 +290,11 @@ impl ConversationLoopBuilder {
         self
     }
 
+    pub fn with_agent_mode(mut self, mode: self::agent_mode::AgentMode) -> Self {
+        self.agent_mode = mode;
+        self
+    }
+
     pub fn build(self) -> self::conversation_loop::ConversationLoop {
         let mut lp = self::conversation_loop::ConversationLoop::new(
             self.provider,
@@ -297,7 +305,8 @@ impl ConversationLoopBuilder {
         .with_max_iterations(self.max_iterations)
         .with_permission_mode(self.permission_mode)
         .with_session_permission_rules(self.session_permission_rules)
-        .with_llm_memory_extraction(self.llm_memory_extraction);
+        .with_llm_memory_extraction(self.llm_memory_extraction)
+        .with_agent_mode(self.agent_mode);
 
         if let Some(manager) = self.agent_manager {
             lp = lp.with_agent_manager(manager);

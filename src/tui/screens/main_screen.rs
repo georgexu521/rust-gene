@@ -300,6 +300,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
                 ));
             }
             parts.push(Span::styled(
+                format!("mode:{}", app.current_agent_mode_label()),
+                Style::default().fg(app.theme.info),
+            ));
+            parts.push(Span::styled(
                 app.current_permission_label(),
                 Style::default().fg(app.theme.warning),
             ));
@@ -373,6 +377,10 @@ fn push_normal_status_parts<'a>(app: &'a TuiApp, parts: &mut Vec<Span<'a>>) {
     if app.focus_mode {
         parts.push(Span::styled("focus", Style::default().fg(app.theme.info)));
     }
+    parts.push(Span::styled(
+        format!("mode:{}", app.current_agent_mode_label()),
+        Style::default().fg(app.theme.info),
+    ));
     parts.push(Span::styled(
         app.workspace_status_label(),
         Style::default().fg(app.theme.text_dim),

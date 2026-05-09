@@ -673,6 +673,7 @@ fn check_eq<T>(
 fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRoute) -> TurnTrace {
     let mut trace = TurnTrace::new(session_id, 1, &scenario.prompt);
     trace.events.push(TraceEvent::IntentRouted {
+        agent_mode: Some("auto".to_string()),
         intent: format!("{:?}", route.intent),
         workflow: format!("{:?}", route.workflow),
         retrieval: format!("{:?}", route.retrieval),

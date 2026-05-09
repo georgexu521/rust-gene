@@ -251,8 +251,10 @@ The remaining work is now product maturity, not missing foundations:
    against the replay matrix and live eval tasks.
 2. Execute the next plan in order: Batch 1 baseline hygiene, Batch 2
    terminal/filesystem truth, Batch 3 five-case live suite, and Batch 4
-   conversation-loop extraction are now landed; next is Batch 5 product mode
-   and UX work.
+   conversation-loop extraction are now landed. Batch 5 has started with
+   explicit coding agent modes, mode-visible status, and stronger `/doctor`
+   tool-exposure diagnostics; next is broader command-output polish and Batch 6
+   memory/skill evidence reporting.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -267,7 +269,17 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-09 with `1140 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-09 with `1147 passed; 0 failed`.
+- Batch 5 product mode work has an explicit runtime `AgentMode`
+  (`auto/build/plan/explore/review`) that flows from TUI `/mode` into
+  streaming and `ConversationLoop` route/tool exposure. `/status`, `/quick`,
+  status bar, and `/doctor` now show the current mode; `/doctor` also reports
+  how the current mode affects bash and write-tool visibility.
+- Validation for the Batch 5 mode slice: `cargo fmt --check`,
+  `cargo test -q agent_mode`, `cargo test -q mode_`,
+  `cargo test -q doctor_route_summary_applies_agent_mode_before_exposure_checks`,
+  `cargo test -q status`, `cargo test -q quick`, `cargo test -q tool_view`,
+  `cargo check -q`, and `cargo test -q`.
 - `conversation_loop/mod.rs` is down to 6744 lines after moving patch synthesis,
   deterministic patch recovery, synthesized patch validation, required
   validation commands, validation command classification, verification source

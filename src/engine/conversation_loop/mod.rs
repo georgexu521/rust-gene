@@ -525,6 +525,8 @@ pub struct ConversationLoop {
     workflow_triggered_this_turn: std::sync::atomic::AtomicBool,
     /// Workflow 策略（默认从环境变量读取，可覆盖）
     workflow_policy: WorkflowPolicy,
+    /// Product-level coding agent mode selected by the user.
+    agent_mode: crate::engine::agent_mode::AgentMode,
     /// 拒绝追踪器
     denial_tracker: Option<Arc<crate::security::DenialTracker>>,
     /// 安全审计日志
@@ -577,6 +579,7 @@ impl ConversationLoop {
             allowed_tools: None,
             workflow_triggered_this_turn: std::sync::atomic::AtomicBool::new(false),
             workflow_policy: WorkflowPolicy::from_env(),
+            agent_mode: crate::engine::agent_mode::AgentMode::Auto,
             session_id: format!("session-{}", uuid::Uuid::new_v4()),
             denial_tracker: None,
             audit_log: None,
@@ -673,6 +676,11 @@ impl ConversationLoop {
 
     pub fn with_workflow_policy(mut self, policy: WorkflowPolicy) -> Self {
         self.workflow_policy = policy;
+        self
+    }
+
+    pub fn with_agent_mode(mut self, mode: crate::engine::agent_mode::AgentMode) -> Self {
+        self.agent_mode = mode;
         self
     }
 
@@ -803,8 +811,11 @@ impl ConversationLoop {
             .as_ref()
             .and_then(|store| store.recent_learning_events(&self.session_id, 20).ok())
             .unwrap_or_default();
-        let route = IntentRouter::new().route_with_learning(&last_user_preview, &learning_events);
+        let mut route =
+            IntentRouter::new().route_with_learning(&last_user_preview, &learning_events);
+        self.agent_mode.apply_to_route(&mut route);
         trace.record(TraceEvent::IntentRouted {
+            agent_mode: Some(self.agent_mode.label().to_string()),
             intent: format!("{:?}", route.intent),
             workflow: format!("{:?}", route.workflow),
             retrieval: format!("{:?}", route.retrieval),

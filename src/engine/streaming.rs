@@ -573,6 +573,15 @@ impl StreamingQueryEngine {
         &self,
         user_message: impl Into<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        self.query_stream_with_agent_mode(user_message, crate::engine::agent_mode::AgentMode::Auto)
+            .await
+    }
+
+    pub async fn query_stream_with_agent_mode(
+        &self,
+        user_message: impl Into<String>,
+        agent_mode: crate::engine::agent_mode::AgentMode,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         let user_msg = user_message.into();
         let (tx, rx) = mpsc::channel(100);
 
@@ -659,11 +668,15 @@ impl StreamingQueryEngine {
             let messages_for_query = {
                 let hist = history.lock().await;
                 // 构建完整消息：stable system prompt + history
-                let prompt_context =
+                let mut prompt_context =
                     crate::engine::prompt_context::PromptContextAssembler::from_current_dir(
                         &engine.system_prompt,
                     )
                     .build_for_turn(&user_msg, &hist);
+                if let Some(mode_context) = agent_mode.runtime_context() {
+                    prompt_context.system_prompt.push_str("\n\n");
+                    prompt_context.system_prompt.push_str(mode_context);
+                }
                 let mut msgs = vec![Message::system(prompt_context.system_prompt)];
                 msgs.extend(hist.clone());
                 msgs
@@ -676,7 +689,7 @@ impl StreamingQueryEngine {
             let turn_timeout = turn_execution_timeout();
             let run_result = match tokio::time::timeout(
                 turn_timeout,
-                engine.run_query_with_messages(messages_for_query.clone(), &tx),
+                engine.run_query_with_messages(messages_for_query.clone(), &tx, agent_mode),
             )
             .await
             {
@@ -779,7 +792,11 @@ impl StreamingQueryEngine {
                         let turn_timeout = turn_execution_timeout();
                         match tokio::time::timeout(
                             turn_timeout,
-                            fb_engine.run_query_with_messages(messages_for_query.clone(), &tx),
+                            fb_engine.run_query_with_messages(
+                                messages_for_query.clone(),
+                                &tx,
+                                agent_mode,
+                            ),
                         )
                         .await
                         {
@@ -1032,6 +1049,7 @@ impl StreamingEngineInner {
         &self,
         messages: Vec<Message>,
         tx: &mpsc::Sender<StreamEvent>,
+        agent_mode: crate::engine::agent_mode::AgentMode,
     ) -> Result<(String, bool)> {
         let mut builder = super::ConversationLoopBuilder::new(
             self.provider.clone(),
@@ -1050,7 +1068,8 @@ impl StreamingEngineInner {
         .with_llm_memory_extraction(self.llm_memory_extraction)
         .with_compressor(self.compressor.clone())
         .with_trace_store(self.trace_store.clone())
-        .with_session_goal_manager(self.goal_manager.clone());
+        .with_session_goal_manager(self.goal_manager.clone())
+        .with_agent_mode(agent_mode);
 
         if let (Some(ref store), Some(ref session_id)) = (&self.session_store, &self.session_id) {
             builder = builder.with_session_store(store.clone(), session_id.clone());

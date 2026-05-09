@@ -686,6 +686,30 @@ Extract repair controller from conversation loop
 - stronger `/doctor`。
 - command output polish。
 
+当前实现状态：
+
+- 已新增 runtime `AgentMode`：`auto`、`build`、`plan`、`explore`、
+  `review`。
+- TUI `/mode` 已切换产品 agent mode，并保留旧 UI mode alias：
+  `chat`、`settings`、`vim`。
+- Streaming path 会把当前 agent mode 传入 `ConversationLoop`，route/tool
+  exposure 按 mode 轻量调整；除短 mode context 外，不增加长篇 prompt 规则。
+- 启动 welcome、状态栏、`/status`、`/quick` 已显示当前 agent mode。
+- `/doctor` 已按当前 mode 诊断 terminal/bash 和写入工具暴露情况，并输出
+  auto/build/plan/explore/review 的对比矩阵。
+- Trace 的 `IntentRouted` 事件已记录并展示 agent mode。
+- Collapsed tool-run output now includes concise output size stats while keeping
+  full output behind `ctrl+t`。
+- 已验证：`cargo fmt --check`、`cargo test -q agent_mode`、
+  `cargo test -q mode_`、
+  `cargo test -q doctor_route_summary_applies_agent_mode_before_exposure_checks`、
+  `cargo test -q status`、`cargo test -q quick`、`cargo test -q tool_view`、
+  `cargo check -q`、`cargo test -q`。
+
+剩余 UX 小项：
+
+- command output 继续补 cwd/exit-code 等更细证据，但默认仍要保持折叠。
+
 预期提交：
 
 ```text

@@ -68,6 +68,8 @@ pub enum TraceEvent {
         chars: usize,
     },
     IntentRouted {
+        #[serde(default)]
+        agent_mode: Option<String>,
         intent: String,
         workflow: String,
         retrieval: String,
@@ -394,21 +396,29 @@ impl TraceEvent {
         match self {
             TraceEvent::UserPromptSubmitted { chars } => format!("user prompt: {} chars", chars),
             TraceEvent::IntentRouted {
+                agent_mode,
                 intent,
                 workflow,
                 retrieval,
                 confidence,
                 risk,
                 reason,
-            } => format!(
-                "intent={} workflow={} retrieval={} risk={} confidence={:.2}: {}",
-                intent,
-                workflow,
-                retrieval,
-                risk,
-                confidence,
-                preview(reason)
-            ),
+            } => {
+                let mode = agent_mode
+                    .as_deref()
+                    .filter(|mode| !mode.is_empty())
+                    .unwrap_or("auto");
+                format!(
+                    "mode={} intent={} workflow={} retrieval={} risk={} confidence={:.2}: {}",
+                    mode,
+                    intent,
+                    workflow,
+                    retrieval,
+                    risk,
+                    confidence,
+                    preview(reason)
+                )
+            }
             TraceEvent::ResourcePolicySelected {
                 latency,
                 target_ms,
