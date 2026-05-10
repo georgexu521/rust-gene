@@ -135,6 +135,77 @@ impl EvidenceLedger {
         &self.validation_facts
     }
 
+    pub fn unsupported_filesystem_claims(&self, answer: &str) -> Vec<String> {
+        if self.file_facts.is_empty() && self.command_facts.is_empty() {
+            return Vec::new();
+        }
+
+        let evidence = self
+            .file_facts
+            .iter()
+            .map(|fact| fact.summary.as_str())
+            .chain(self.command_facts.iter().map(|fact| fact.summary.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_ascii_lowercase();
+        let answer_lower = answer.to_ascii_lowercase();
+        let mut gaps = Vec::new();
+
+        if contains_any(answer, &["创建时间", "创建于"])
+            || contains_any(&answer_lower, &["created", "creation time", "created at"])
+        {
+            let supported = contains_any(
+                &evidence,
+                &[
+                    "birth",
+                    "created",
+                    "creation",
+                    "created at",
+                    "stat -f",
+                    "stat --format",
+                    "getfileinfo",
+                    "创建时间",
+                ],
+            );
+            if !supported {
+                gaps.push("creation_time".to_string());
+            }
+        }
+
+        if contains_any(answer, &["内容数", "项目数", "个项目", "个条目"])
+            || contains_any(&answer_lower, &["item count", "entries", "items"])
+        {
+            let supported = contains_any(
+                &evidence,
+                &[
+                    "total_entries",
+                    "entries",
+                    "item count",
+                    "find ",
+                    "wc -l",
+                    "ls -1",
+                ],
+            );
+            if !supported {
+                gaps.push("item_count".to_string());
+            }
+        }
+
+        if contains_any(answer, &["大小：", "大小:", " 字节"])
+            || contains_any(&answer_lower, &["size:", " bytes", " byte"])
+        {
+            let supported = contains_any(
+                &evidence,
+                &["size", "bytes", "byte", "stat -f", "stat --format"],
+            );
+            if !supported {
+                gaps.push("size".to_string());
+            }
+        }
+
+        gaps
+    }
+
     fn record_bash_tool_result(&mut self, tool_call: &ToolCall, result: &ToolResult) {
         let Some(command) = tool_call.arguments["command"].as_str() else {
             return;
@@ -200,6 +271,10 @@ fn preview(text: &str) -> String {
     out
 }
 
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +329,37 @@ mod tests {
             Some("failed:1/1")
         );
         assert_eq!(ledger.validation_facts()[0].summary, "compile error");
+    }
+
+    #[test]
+    fn filesystem_grounding_flags_creation_time_without_evidence() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call(
+                "bash",
+                serde_json::json!({"command": "ls -la ~/Desktop | grep -i gex"}),
+            ),
+            &ToolResult::success("drwxr-xr-x  3 gex  staff  96 May 8  2024 gex"),
+        );
+
+        let gaps = ledger.unsupported_filesystem_claims("创建时间：2024 年 5 月 8 日");
+
+        assert_eq!(gaps, vec!["creation_time".to_string()]);
+    }
+
+    #[test]
+    fn filesystem_grounding_allows_creation_time_with_stat_evidence() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call(
+                "bash",
+                serde_json::json!({"command": "stat -f '%SB' ~/Desktop/gex"}),
+            ),
+            &ToolResult::success("May 8 00:00:00 2024\ncreated at"),
+        );
+
+        let gaps = ledger.unsupported_filesystem_claims("创建时间：May 8 00:00:00 2024");
+
+        assert!(gaps.is_empty());
     }
 }

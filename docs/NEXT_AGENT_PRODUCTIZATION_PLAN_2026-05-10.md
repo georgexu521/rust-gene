@@ -883,6 +883,14 @@ First completed slice:
   runtime validation evidence label while keeping the user-facing closeout
   compact.
 
+Second completed slice:
+
+- Added filesystem grounding checks to catch answers that add unsupported
+  metadata such as creation time, item count, or size after a local filesystem
+  inspection. If the ledger does not contain evidence for those fields,
+  `ConversationLoop` requests one evidence-grounded retry instead of letting the
+  model present inferred metadata as fact.
+
 验证：
 
 ```bash

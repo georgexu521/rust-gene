@@ -1307,6 +1307,7 @@ impl ConversationLoop {
         let mut action_checkpoint_reopen_used = false;
         let mut file_edit_failure_retry_used = false;
         let mut pseudo_tool_retry_used = false;
+        let mut filesystem_grounding_retry_used = false;
         let mut companion_context_keys: HashSet<String> = HashSet::new();
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
@@ -1669,19 +1670,42 @@ impl ConversationLoop {
                         &content,
                         &exposed_tool_names,
                     );
-                if !pseudo_tool_retry_used && (needs_bash_tool_retry || needs_filesystem_tool_retry)
+                let filesystem_grounding_gaps = if is_local_filesystem_inspection_route(&route) {
+                    evidence_ledger.unsupported_filesystem_claims(&content)
+                } else {
+                    Vec::new()
+                };
+                let needs_filesystem_grounding_retry = !filesystem_grounding_gaps.is_empty();
+                if (!pseudo_tool_retry_used
+                    && (needs_bash_tool_retry || needs_filesystem_tool_retry))
+                    || (!filesystem_grounding_retry_used && needs_filesystem_grounding_retry)
                 {
-                    pseudo_tool_retry_used = true;
-                    let fallback_error = if needs_filesystem_tool_retry {
+                    if needs_filesystem_grounding_retry {
+                        filesystem_grounding_retry_used = true;
+                    } else {
+                        pseudo_tool_retry_used = true;
+                    }
+                    let fallback_error = if needs_filesystem_grounding_retry {
+                        format!(
+                            "assistant included unsupported filesystem claim(s): {}; retrying with evidence-grounded correction",
+                            filesystem_grounding_gaps.join(", ")
+                        )
+                    } else if needs_filesystem_tool_retry {
                         "assistant answered local filesystem state without a tool; retrying with explicit filesystem tool-use correction"
+                            .to_string()
                     } else {
                         "assistant emitted an unexecuted or false-unavailable shell response; retrying with explicit bash tool-use correction"
+                            .to_string()
                     };
                     trace.record(TraceEvent::WorkflowFallback {
-                        error: fallback_error.to_string(),
+                        error: fallback_error,
                     });
                     messages.push(Message::assistant(safe_prefix_by_bytes(&content, 1200)));
-                    let correction = if needs_filesystem_tool_retry {
+                    let correction = if needs_filesystem_grounding_retry {
+                        "Your previous answer added filesystem metadata that was not explicitly supported by tool output. \
+Re-answer from the evidence already gathered. Do not state size, item count, creation time, or exact contents unless the tool output directly contains that fact. \
+If the user did not ask for those metadata fields, omit them."
+                    } else if needs_filesystem_tool_retry {
                         "file_read and glob are currently exposed to you as callable tools. \
 The user asked for current local filesystem state, so do not answer from memory or inference. \
 Inspect the requested path with file_read or glob now, then answer only from that tool output. \
