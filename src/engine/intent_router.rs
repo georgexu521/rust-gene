@@ -488,9 +488,16 @@ fn is_debug_request(lower: &str, zh: &str) -> bool {
 }
 
 fn is_live_coding_code_change_request(lower: &str) -> bool {
-    lower.contains("live coding regression task")
+    (lower.contains("live coding regression task") && !is_no_diff_eval_intent(lower))
         || (lower.contains("eval intent") && lower.contains("seeded_code_change"))
         || lower.contains("this is a real code-change evaluation")
+}
+
+fn is_no_diff_eval_intent(lower: &str) -> bool {
+    lower.contains("eval intent: `audit_or_regression_check`")
+        || lower.contains("eval intent: audit_or_regression_check")
+        || lower.contains("eval intent: `stale_or_already_satisfied`")
+        || lower.contains("eval intent: stale_or_already_satisfied")
 }
 
 fn live_coding_risk(lower: &str) -> RiskLevel {
@@ -930,6 +937,20 @@ mod tests {
         assert_eq!(route.intent, IntentKind::CodeChange);
         assert_eq!(route.workflow, WorkflowKind::CodeChange);
         assert_eq!(route.risk, RiskLevel::High);
+    }
+
+    #[test]
+    fn audit_eval_does_not_claim_diff_is_required() {
+        let route = IntentRouter::new().route(
+            "# Live coding regression task: memory recall should demote only relevant conflicts\n\
+             - Type: `bug_fix`\n\
+             - Eval intent: `audit_or_regression_check`\n\
+             If the requested behavior is already present, prove it with direct evidence.",
+        );
+        assert_ne!(
+            route.reason,
+            "live coding eval explicitly requires a code diff"
+        );
     }
 
     #[test]

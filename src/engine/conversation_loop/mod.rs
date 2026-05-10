@@ -536,6 +536,8 @@ impl ConversationLoop {
             .to_string();
         let required_validation_commands =
             Self::extract_required_validation_commands(&last_user_preview);
+        let no_diff_audit_closeout_allowed =
+            Self::allows_no_diff_audit_closeout(&last_user_preview);
         let turn_index = self
             .trace_store
             .as_ref()
@@ -1058,6 +1060,7 @@ impl ConversationLoop {
         let mut action_checkpoint_lookup_count = 0usize;
         let mut patch_synthesis_recovery_used = false;
         let mut action_checkpoint_reopen_used = false;
+        let mut no_diff_audit_validation_checkpoint_sent = false;
         let mut file_edit_failure_retry_used = false;
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
@@ -1676,10 +1679,35 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         action_checkpoint_active = false;
                         action_checkpoint_no_change_rounds = 0;
                         action_checkpoint_lookup_count = 0;
+                    } else if no_diff_audit_closeout_allowed
+                        && !has_worktree_changes
+                        && !successful_validation_commands.is_empty()
+                    {
+                        no_code_progress_rounds = 0;
+                        action_checkpoint_active = false;
+                        action_checkpoint_no_change_rounds = 0;
+                        action_checkpoint_lookup_count = 0;
                     } else {
                         no_code_progress_rounds += 1;
                     }
-                    if has_worktree_changes
+                    if no_diff_audit_closeout_allowed
+                        && !has_worktree_changes
+                        && no_code_progress_rounds >= 2
+                        && !action_checkpoint_active
+                        && !no_diff_audit_validation_checkpoint_sent
+                    {
+                        let checkpoint = "Audit/regression checkpoint: this task allows a no-diff closeout when the requested behavior is already present. Do not force an arbitrary edit. Run the required validation commands now; if they pass, provide a Closeout with direct evidence and changed files as none. If a concrete missing behavior is proven, then make the smallest focused edit."
+                            .to_string();
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error: "audit/regression task should validate before forcing edits"
+                                .to_string(),
+                        });
+                        messages.push(Message::system(checkpoint.clone()));
+                        tool_results_text.push('\n');
+                        tool_results_text.push_str(&checkpoint);
+                        no_diff_audit_validation_checkpoint_sent = true;
+                        no_code_progress_rounds = 0;
+                    } else if has_worktree_changes
                         && successful_validation_commands.is_empty()
                         && no_code_progress_rounds >= 2
                         && !action_checkpoint_active
@@ -2737,6 +2765,16 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         let path = path.rsplit_once(" -> ").map(|(_, new)| new).unwrap_or(path);
         Some(std::path::PathBuf::from(path.trim_matches('"')))
     }
+
+    fn allows_no_diff_audit_closeout(prompt: &str) -> bool {
+        let lower = prompt.to_ascii_lowercase();
+        lower.contains("eval intent: `audit_or_regression_check`")
+            || lower.contains("eval intent: audit_or_regression_check")
+            || lower.contains("eval intent: `stale_or_already_satisfied`")
+            || lower.contains("eval intent: stale_or_already_satisfied")
+            || lower.contains("if the requested behavior is already present")
+            || lower.contains("do not force an arbitrary edit")
+    }
 }
 
 #[cfg(test)]
@@ -2799,6 +2837,23 @@ mod tests {
                 "cargo test -q -- --test-threads=1",
             ]
         );
+    }
+
+    #[test]
+    fn test_audit_eval_allows_no_diff_closeout() {
+        let audit_prompt = r#"
+# Live coding regression task: memory recall should demote only relevant conflicts
+- Eval intent: `audit_or_regression_check`
+## Closeout requirements
+- This is an audit/regression evaluation. If the requested behavior is already present, prove it with direct evidence and required commands instead of forcing an arbitrary edit.
+"#;
+
+        assert!(ConversationLoop::allows_no_diff_audit_closeout(
+            audit_prompt
+        ));
+        assert!(!ConversationLoop::allows_no_diff_audit_closeout(
+            "- Eval intent: `seeded_code_change`\n- This is a real code-change evaluation."
+        ));
     }
 
     #[test]
