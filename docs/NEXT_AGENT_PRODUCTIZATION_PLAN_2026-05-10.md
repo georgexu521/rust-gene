@@ -1074,6 +1074,17 @@ Eighth completed slice:
   `closeout_status=passed`, and `failure_owner=none`. The first six
   recommended live-eval cases now have current post-split passing evidence.
 
+Ninth completed slice:
+
+- Fixed the stale prepare anchor in `persistent-memory-planning-context` and
+  tightened the focused-repair budget path so budget exhaustion immediately
+  enters patch synthesis instead of giving the model one extra free-form patch
+  turn. The first successful rerun, `batch6-smoke-20260510-163831`, passed with
+  a real persistent-memory planning diff, required learning/retrieval/Python
+  checks ok, full `1178 passed; 0 failed`, memory active, memory changed
+  planning, `closeout_status=passed`, and `failure_owner=none`. The first seven
+  recommended live-eval cases now have current post-split passing evidence.
+
 验证：
 
 ```bash
@@ -1091,6 +1102,7 @@ scripts/run_live_eval.sh --case backend-todo-api-crud --mode agent-run --run-tes
 scripts/run_live_eval.sh --case frontend-book-notes-localstorage --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case memory-save-quality-gate --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case skill-promotion-gate --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
+scripts/run_live_eval.sh --case persistent-memory-planning-context --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1099,6 +1111,7 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-143451
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-144053
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-152513
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-154614
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-163831
 ```
 
 ## 验收指标
