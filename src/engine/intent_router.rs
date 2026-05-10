@@ -105,11 +105,13 @@ impl IntentRouter {
         }
 
         let has_live_coding_code_change_signal = is_live_coding_code_change_request(&lower);
+        let has_live_coding_audit_signal = is_live_coding_audit_request(&lower);
         let has_memory_signal = contains_any(&lower, &["/memory", "remember", "memory", "recall"])
             || contains_any(zh, &["记忆", "记住", "回忆"]);
         let has_code_creation_signal = is_natural_code_creation_request(&lower, zh);
-        let has_code_change_signal =
-            has_live_coding_code_change_signal || is_code_change_request(&lower, zh);
+        let has_code_change_signal = has_live_coding_code_change_signal
+            || has_live_coding_audit_signal
+            || is_code_change_request(&lower, zh);
         let has_debug_signal = is_debug_request(&lower, zh);
         let has_file_mutation_signal = is_file_mutation_request(&lower, zh);
         let has_local_inspection_signal = is_local_inspection_request(&lower, zh);
@@ -165,6 +167,19 @@ impl IntentRouter {
                 risk: live_coding_risk(&lower),
                 recommended_tools: code_change_tool_recommendations(),
                 reason: "live coding eval explicitly requires a code diff".into(),
+            };
+        }
+
+        if has_live_coding_audit_signal {
+            return IntentRoute {
+                intent: IntentKind::CodeChange,
+                confidence: 0.84,
+                workflow: WorkflowKind::CodeChange,
+                retrieval: RetrievalPolicy::Project,
+                reasoning: ReasoningPolicy::High,
+                risk: live_coding_risk(&lower),
+                recommended_tools: code_change_tool_recommendations(),
+                reason: "live coding audit/regression eval requires project verification; code diff is optional".into(),
             };
         }
 
@@ -491,6 +506,10 @@ fn is_live_coding_code_change_request(lower: &str) -> bool {
     (lower.contains("live coding regression task") && !is_no_diff_eval_intent(lower))
         || (lower.contains("eval intent") && lower.contains("seeded_code_change"))
         || lower.contains("this is a real code-change evaluation")
+}
+
+fn is_live_coding_audit_request(lower: &str) -> bool {
+    lower.contains("live coding regression task") && is_no_diff_eval_intent(lower)
 }
 
 fn is_no_diff_eval_intent(lower: &str) -> bool {
@@ -947,10 +966,30 @@ mod tests {
              - Eval intent: `audit_or_regression_check`\n\
              If the requested behavior is already present, prove it with direct evidence.",
         );
+        assert_eq!(route.intent, IntentKind::CodeChange);
+        assert_eq!(route.workflow, WorkflowKind::CodeChange);
+        assert_eq!(route.retrieval, RetrievalPolicy::Project);
         assert_ne!(
             route.reason,
             "live coding eval explicitly requires a code diff"
         );
+        assert!(route.reason.contains("code diff is optional"));
+    }
+
+    #[test]
+    fn audit_eval_memory_safety_task_routes_as_code_change_not_config() {
+        let route = IntentRouter::new().route(
+            "# Live coding regression task: explicit memory saves must not persist sensitive data\n\
+             - Type: `bug_fix`\n\
+             - Eval intent: `audit_or_regression_check`\n\
+             - Risk: `high`\n\
+             要求：即使用户显式 /save，也不能保存 API key、token、password、private key 等敏感内容。",
+        );
+        assert_eq!(route.intent, IntentKind::CodeChange);
+        assert_eq!(route.workflow, WorkflowKind::CodeChange);
+        assert_eq!(route.retrieval, RetrievalPolicy::Project);
+        assert_eq!(route.risk, RiskLevel::High);
+        assert!(route.recommended_tools.contains(&"file_edit".to_string()));
     }
 
     #[test]
