@@ -930,6 +930,13 @@ Second completed slice:
   writes the matching `Message::Tool`. This keeps repeated tool-result plumbing
   out of the main loop while leaving streaming UI completion events unchanged.
 
+Third completed slice:
+
+- Added `conversation_loop/workflow_trace.rs` and moved workflow feedback,
+  stage-validation, and adaptive-trigger trace helpers out of the main loop.
+  This keeps trace serialization near workflow telemetry instead of embedding it
+  in turn execution control flow.
+
 验证：
 
 ```bash
