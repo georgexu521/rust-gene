@@ -161,7 +161,7 @@ fn candidates_for_subject(
         read_limited(subject).unwrap_or_default()
     ));
     let subject_content = read_limited(subject).unwrap_or_default();
-    let subject_imports = imported_names(&subject_content);
+    let subject_references = imported_or_sourced_names(&subject_content);
 
     let mut entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries.filter_map(Result::ok).collect::<Vec<_>>(),
@@ -182,7 +182,7 @@ fn candidates_for_subject(
             &subject_ext,
             &subject_tokens,
             task_tokens,
-            &subject_imports,
+            &subject_references,
         );
         if candidate.score >= MIN_SCORE {
             candidates.push(candidate);
@@ -197,7 +197,7 @@ fn score_candidate(
     subject_ext: &str,
     subject_tokens: &HashSet<String>,
     task_tokens: &HashSet<String>,
-    subject_imports: &HashSet<String>,
+    subject_references: &HashSet<String>,
 ) -> CompanionCandidate {
     let name = path
         .file_name()
@@ -226,9 +226,9 @@ fn score_candidate(
         reasons.push(format!("shares task tokens {}", shared_task.join("/")));
     }
 
-    if subject_imports.contains(&stem.to_ascii_lowercase()) {
+    if subject_references.contains(&stem.to_ascii_lowercase()) {
         score += 6;
-        reasons.push("referenced by the inspected file".to_string());
+        reasons.push("referenced by an import/source statement".to_string());
     }
 
     let helper_tokens = helper_tokens(&candidate_tokens);
@@ -379,28 +379,77 @@ fn helper_tokens(tokens: &HashSet<String>) -> Vec<String> {
     found
 }
 
-fn imported_names(content: &str) -> HashSet<String> {
+fn imported_or_sourced_names(content: &str) -> HashSet<String> {
     let mut names = HashSet::new();
-    for token in content.split(|ch: char| {
-        !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '-' || ch == '/')
-    }) {
-        let token = token.trim_matches('.');
-        if token.is_empty() {
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
             continue;
         }
-        let token = token
-            .rsplit(['/', '.'])
-            .next()
-            .unwrap_or(token)
-            .trim_end_matches(".py")
-            .trim_end_matches(".rs")
-            .trim_end_matches(".sh")
-            .to_ascii_lowercase();
-        if token.len() > 2 {
-            names.insert(token);
+
+        let code = line.split('#').next().unwrap_or("").trim();
+        if code.is_empty() {
+            continue;
+        }
+
+        if let Some(rest) = code.strip_prefix("from ") {
+            if let Some((module, _)) = rest.split_once(" import ") {
+                push_reference_name(&mut names, module);
+            }
+            continue;
+        }
+
+        if let Some(rest) = code.strip_prefix("import ") {
+            for module in rest.split(',') {
+                let module = module.split_whitespace().next().unwrap_or("");
+                push_reference_name(&mut names, module);
+            }
+            continue;
+        }
+
+        if let Some(rest) = code.strip_prefix("use ") {
+            let rest = rest.trim_end_matches(';');
+            for part in rest.split(|ch: char| {
+                !(ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' || ch == '.')
+            }) {
+                push_reference_name(&mut names, part);
+            }
+            continue;
+        }
+
+        if let Some(rest) = code.strip_prefix("mod ") {
+            let module = rest.trim_end_matches(';').trim();
+            push_reference_name(&mut names, module);
+            continue;
+        }
+
+        if let Some(rest) = code
+            .strip_prefix("source ")
+            .or_else(|| code.strip_prefix(". "))
+        {
+            let path = rest.split_whitespace().next().unwrap_or("");
+            push_reference_name(&mut names, path);
         }
     }
     names
+}
+
+fn push_reference_name(names: &mut HashSet<String>, raw: &str) {
+    let raw = raw
+        .trim()
+        .trim_matches(['"', '\'', ';', '{', '}'])
+        .trim_end_matches(".py")
+        .trim_end_matches(".rs")
+        .trim_end_matches(".sh");
+    if raw.is_empty() {
+        return;
+    }
+    for part in raw.split(['/', '.', ':']) {
+        let part = part.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_');
+        if part.len() > 2 {
+            names.insert(part.to_ascii_lowercase());
+        }
+    }
 }
 
 fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -506,5 +555,20 @@ mod tests {
         .expect("companion context");
 
         assert!(note.key.contains("scripts/live_eval_report_parser.py"));
+    }
+
+    #[test]
+    fn import_detection_ignores_plain_text_mentions() {
+        let plain = imported_or_sourced_names(
+            "echo live_eval_report_parser\n# import commented_out\nlet live_eval_report_parser = 1",
+        );
+        assert!(!plain.contains("live_eval_report_parser"));
+
+        let referenced = imported_or_sourced_names(
+            "from scripts.live_eval_report_parser import report_rows\nuse crate::engine::companion_context;\nsource scripts/shared_helpers.sh",
+        );
+        assert!(referenced.contains("live_eval_report_parser"));
+        assert!(referenced.contains("companion_context"));
+        assert!(referenced.contains("shared_helpers"));
     }
 }

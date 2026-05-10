@@ -4,19 +4,23 @@ use std::collections::HashSet;
 impl ConversationLoop {
     pub(super) const ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET: usize = 2;
 
+    pub(super) fn targeted_lookup_budget_rule(targeted_lookups_used: usize) -> String {
+        let remaining =
+            Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET.saturating_sub(targeted_lookups_used);
+        match remaining {
+            0 => "The targeted lookup budget has already been used; do not call file_read/grep again. Patch from the evidence already gathered.".to_string(),
+            1 => "One targeted file_read/grep lookup remains for a specific missing line range, symbol, test, or call site; after that, patch from the evidence gathered.".to_string(),
+            remaining => format!(
+                "Up to {remaining} targeted file_read/grep lookups remain for specific missing line ranges, symbols, tests, or call sites; do not repeat broad inspection."
+            ),
+        }
+    }
+
     pub(super) fn focused_repair_mode_prompt(
         exposed_names: &[String],
         targeted_lookups_used: usize,
     ) -> String {
-        let remaining =
-            Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET.saturating_sub(targeted_lookups_used);
-        let lookup_rule = if remaining == 0 {
-            "The targeted lookup budget has already been used; do not call file_read/grep again. Patch from the evidence already gathered."
-        } else if targeted_lookups_used == 0 {
-            "file_read/grep are allowed only for up to two targeted lookups of a specific symbol, test, or call site; do not repeat broad inspection."
-        } else {
-            "One targeted file_read/grep lookup remains for a specific missing line range, symbol, test, or call site; after that, patch from the evidence gathered."
-        };
+        let lookup_rule = Self::targeted_lookup_budget_rule(targeted_lookups_used);
         format!(
             "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Patch files as soon as the target line is known, using file_edit/file_write or bash only for a mutating patch command. {} Do not call glob/project_list or any tool that is not in the exposed list. Do not use bash for read-only inspection; after a file changes, bash may run validation. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
             exposed_names.join(", "),
@@ -66,12 +70,14 @@ impl ConversationLoop {
     pub(super) fn action_checkpoint_unexposed_tool_message(
         tool_name: &str,
         exposed_tool_names: &HashSet<String>,
+        targeted_lookups_used: usize,
     ) -> String {
         let mut exposed = exposed_tool_names.iter().cloned().collect::<Vec<_>>();
         exposed.sort();
         format!(
-            "Tool '{tool_name}' was not exposed in the current focused repair request and cannot be executed. Exposed tools: {}. Use file_edit/file_write or a mutating bash command for the patch. Use file_read or grep only for one targeted lookup of a missing symbol, test, or call site. Do not call glob/project_list or repeat broad inspection.",
-            exposed.join(", ")
+            "Tool '{tool_name}' was not exposed in the current focused repair request and cannot be executed. Exposed tools: {}. Use file_edit/file_write or a mutating bash command for the patch. Use file_read or grep only when it is exposed and the focused repair lookup budget still has room. {} Do not call glob/project_list or repeat broad inspection.",
+            exposed.join(", "),
+            Self::targeted_lookup_budget_rule(targeted_lookups_used)
         )
     }
 

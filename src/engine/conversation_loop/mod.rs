@@ -1717,6 +1717,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     &resource_policy,
                     &exposed_tool_names,
                     action_checkpoint_active,
+                    action_checkpoint_lookup_count,
                     has_changes_before_tools,
                     &destructive_scope,
                 )
@@ -1888,6 +1889,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     action_checkpoint_no_change_rounds = 0;
                     action_checkpoint_active = false;
                     action_checkpoint_lookup_count = 0;
+                    file_edit_failure_retry_used = false;
                 } else if used_write_tool {
                     action_checkpoint_requires_patch_before_validation = true;
                 } else if any_tool_success && !used_write_tool {
@@ -1933,6 +1935,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         action_checkpoint_active = true;
                         action_checkpoint_lookup_count =
                             Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET;
+                        file_edit_failure_retry_used = false;
                         action_checkpoint_no_change_rounds = 2;
                         force_patch_synthesis_after_no_change = true;
                         force_patch_synthesis_reason = Some(
@@ -1940,9 +1943,10 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         );
                         activated_checkpoint_this_round = true;
                     } else if no_code_progress_rounds == 2 && !action_checkpoint_active {
+                        let lookup_rule = Self::targeted_lookup_budget_rule(0);
                         let checkpoint = format!(
-                            "Workflow progress checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. Keep investigation focused: on the next response either make the smallest safe file_edit/file_write patch, or perform exactly one targeted read/search if a required symbol, test, or call site is still missing. Do not repeat broad inspection. If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates.",
-                            route.workflow, no_code_progress_rounds
+                            "Workflow progress checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. Keep investigation focused: on the next response either make the smallest safe file_edit/file_write patch, or use the focused lookup budget if a required symbol, test, or call site is still missing. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates.",
+                            route.workflow, no_code_progress_rounds, lookup_rule
                         );
                         trace.record(TraceEvent::WorkflowFallback {
                             error: "code-change task needs an edit after repeated inspection"
@@ -1966,9 +1970,10 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                         .to_string(),
                             });
                         }
+                        let lookup_rule = Self::targeted_lookup_budget_rule(0);
                         let checkpoint = format!(
-                            "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not call glob/project_list or repeat broad inspection. If a specific symbol, test, or call site is still missing, use exactly one targeted file_read or grep, then patch. If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
-                            route.workflow, no_code_progress_rounds
+                            "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not call glob/project_list or repeat broad inspection. If a specific symbol, test, or call site is still missing, use the focused lookup budget, then patch. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
+                            route.workflow, no_code_progress_rounds, lookup_rule
                         );
                         trace.record(TraceEvent::WorkflowFallback {
                             error: "code-change task made no edit after repeated inspection"
@@ -1979,6 +1984,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         tool_results_text.push_str(&checkpoint);
                         action_checkpoint_active = true;
                         action_checkpoint_lookup_count = 0;
+                        file_edit_failure_retry_used = false;
                         action_checkpoint_no_change_rounds = 2;
                         force_patch_synthesis_after_no_change = false;
                         force_patch_synthesis_reason = None;
@@ -2019,9 +2025,11 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     || force_patch_synthesis_after_no_change)
             {
                 action_checkpoint_no_change_rounds += 1;
+                let lookup_rule = Self::targeted_lookup_budget_rule(action_checkpoint_lookup_count);
                 let reminder = format!(
-                    "Focused repair correction: the last tool call did not execute. The current request only permits these tools: {}. Use file_edit/file_write for exact replacements or line_start/line_end replacements from earlier line-numbered output. If a specific symbol or call site is missing, use exactly one targeted file_read/grep, then patch.",
-                    exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", ")
+                    "Focused repair correction: the last tool call did not execute. The current request only permits these tools: {}. Use file_edit/file_write for exact replacements or line_start/line_end replacements from earlier line-numbered output. If a specific symbol or call site is missing, use the focused lookup budget, then patch. {}",
+                    exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", "),
+                    lookup_rule
                 );
                 if action_checkpoint_no_change_rounds >= 2 {
                     trace.record(TraceEvent::WorkflowFallback {
@@ -2078,6 +2086,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                     &resource_policy,
                                     &exposed_synth_tools,
                                     false,
+                                    0,
                                     false,
                                     &destructive_scope,
                                 )
@@ -2125,9 +2134,12 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         if !patch_synthesis_recovery_used {
                             patch_synthesis_recovery_used = true;
                             action_checkpoint_no_change_rounds = 0;
+                            let lookup_rule =
+                                Self::targeted_lookup_budget_rule(action_checkpoint_lookup_count);
                             let recovery = format!(
-                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe patch from the evidence already gathered. Prefer file_edit/file_write; bash is allowed only for a mutating patch command here. If file_read or grep is still exposed, you may use exactly one targeted lookup before patching; otherwise patch from the evidence already gathered. Do not call tools that are not exposed.",
-                                exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", ")
+                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe patch from the evidence already gathered. Prefer file_edit/file_write; bash is allowed only for a mutating patch command here. If file_read or grep is still exposed, use the remaining focused lookup budget before patching; otherwise patch from the evidence already gathered. {} Do not call tools that are not exposed.",
+                                exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", "),
+                                lookup_rule
                             );
                             messages.push(Message::system(recovery.clone()));
                             tool_results_text.push('\n');
@@ -2199,6 +2211,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                     // be rejected without giving the model a way
                                     // to inspect and repair the arguments.
                                     false,
+                                    0,
                                     false,
                                     &destructive_scope,
                                 )
@@ -2273,9 +2286,12 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 action_checkpoint_lookup_count = 0;
                                 action_checkpoint_no_change_rounds = 0;
                                 no_code_progress_rounds = 1;
+                                file_edit_failure_retry_used = false;
+                                let lookup_rule = Self::targeted_lookup_budget_rule(0);
                                 let recovery = format!(
-                                    "Patch synthesis declined because evidence was insufficient: {}. Perform exactly one targeted read/search for the missing symbol, call site, or test, then make the smallest safe edit. Do not repeat broad inspection.",
-                                    safe_prefix_by_bytes(&err_text, 500)
+                                    "Patch synthesis declined because evidence was insufficient: {}. Use a targeted read/search for the missing symbol, call site, or test, then make the smallest safe edit. {}",
+                                    safe_prefix_by_bytes(&err_text, 500),
+                                    lookup_rule
                                 );
                                 messages.push(Message::system(recovery.clone()));
                                 tool_results_text.push('\n');
@@ -2746,6 +2762,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         action_checkpoint_no_change_rounds: &mut action_checkpoint_no_change_rounds,
                         action_checkpoint_active: &mut action_checkpoint_active,
                         action_checkpoint_lookup_count: &mut action_checkpoint_lookup_count,
+                        file_edit_failure_retry_used: &mut file_edit_failure_retry_used,
                         action_checkpoint_requires_patch_before_validation:
                             &mut action_checkpoint_requires_patch_before_validation,
                         should_closeout_after_verified_change,
@@ -3455,6 +3472,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         resource_policy: &crate::engine::resource_policy::ResourcePolicy,
         exposed_tool_names: &HashSet<String>,
         action_checkpoint_active: bool,
+        action_checkpoint_lookup_count: usize,
         has_changes_before_tools: bool,
         destructive_scope: &crate::engine::destructive_scope::DestructiveScopeContract,
     ) -> Vec<(ToolCall, ToolResult)> {
@@ -3473,7 +3491,11 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
             if !exposed_tool_names.contains(&tc.name) {
                 let error = if action_checkpoint_active {
-                    Self::action_checkpoint_unexposed_tool_message(&tc.name, exposed_tool_names)
+                    Self::action_checkpoint_unexposed_tool_message(
+                        &tc.name,
+                        exposed_tool_names,
+                        action_checkpoint_lookup_count,
+                    )
                 } else {
                     format!(
                         "Tool '{}' was not exposed in the current request and cannot be executed.",
@@ -4990,7 +5012,7 @@ mod tests {
 
         let prompt = ConversationLoop::focused_repair_mode_prompt(&exposed, 0);
 
-        assert!(prompt.contains("up to two targeted lookups"));
+        assert!(prompt.contains("Up to 2 targeted file_read/grep lookups remain"));
         assert!(prompt.contains("Do not call glob/project_list"));
         assert!(prompt.contains("bash only for a mutating patch command"));
         assert!(!prompt.contains("Do not call grep/glob/file_read/project_list"));
@@ -5051,12 +5073,17 @@ Expected 1 occurrence(s) of old_string, but found 1487.
         ]);
 
         let message =
-            ConversationLoop::action_checkpoint_unexposed_tool_message("project_list", &exposed);
+            ConversationLoop::action_checkpoint_unexposed_tool_message("project_list", &exposed, 0);
 
         assert!(message.contains("project_list"));
         assert!(message.contains("Exposed tools: file_edit, file_read, grep"));
         assert!(message.contains("Use file_edit/file_write or a mutating bash command"));
-        assert!(message.contains("one targeted lookup"));
+        assert!(message.contains("lookup budget still has room"));
+        assert!(message.contains("Up to 2 targeted file_read/grep lookups remain"));
+
+        let exhausted =
+            ConversationLoop::action_checkpoint_unexposed_tool_message("file_read", &exposed, 2);
+        assert!(exhausted.contains("targeted lookup budget has already been used"));
     }
 
     #[test]
@@ -6468,6 +6495,7 @@ mod tests {
                 &policy,
                 &exposed_tool_names,
                 false,
+                0,
                 false,
                 &destructive_scope,
             )
@@ -6519,6 +6547,7 @@ mod tests {
                 &policy,
                 &exposed_tool_names,
                 false,
+                0,
                 false,
                 &destructive_scope,
             )
@@ -6570,6 +6599,7 @@ mod tests {
                 &policy,
                 &exposed_tool_names,
                 false,
+                0,
                 false,
                 &destructive_scope,
             )

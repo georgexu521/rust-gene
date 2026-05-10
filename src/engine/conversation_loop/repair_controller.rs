@@ -38,6 +38,7 @@ pub(super) struct AcceptanceRepairContext<'a> {
     pub(super) action_checkpoint_no_change_rounds: &'a mut usize,
     pub(super) action_checkpoint_active: &'a mut bool,
     pub(super) action_checkpoint_lookup_count: &'a mut usize,
+    pub(super) file_edit_failure_retry_used: &'a mut bool,
     pub(super) action_checkpoint_requires_patch_before_validation: &'a mut bool,
     pub(super) should_closeout_after_verified_change: bool,
     pub(super) tool_results_text: &'a mut String,
@@ -404,6 +405,7 @@ impl ConversationLoop {
                         if needs_acceptance_investigation {
                             *context.action_checkpoint_active = false;
                             *context.action_checkpoint_lookup_count = 0;
+                            *context.file_edit_failure_retry_used = false;
                             context.messages.push(Message::system(
                                 "Acceptance review gaps remain after compile/code review checks. Restore investigation mode: inspect the unresolved acceptance items against the implementation, identify every acceptance-critical bypass or missing call site, then make the smallest targeted fix. If multiple independent acceptance-critical bypasses are visible, fix them together."
                                     .to_string(),
@@ -417,6 +419,7 @@ impl ConversationLoop {
                             *context.action_checkpoint_active = true;
                             *context.action_checkpoint_lookup_count =
                                 ConversationLoop::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET;
+                            *context.file_edit_failure_retry_used = false;
                             *context.action_checkpoint_requires_patch_before_validation = true;
                             context.messages.push(Message::system(
                                 "Repair must patch before validation: the latest verification/acceptance evidence already shows the current diff is invalid. Use file_edit/file_write first; run bash validation only after that new patch succeeds."
