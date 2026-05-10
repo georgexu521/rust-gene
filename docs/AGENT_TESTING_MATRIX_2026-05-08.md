@@ -63,7 +63,7 @@ evidence run:
 | Latest recovered dashboard run | `checkpoint-function-anchor-20260509-120047`: required commands ok, real diff, closeout passed, `failure_owner=none` |
 | Latest Batch 3 runs | Five current suite cases now have passing evidence; `live-eval-dashboard-summary` first failed as `agent_flow` in `capability-now-20260509-143251`, then passed in `capability-now-20260509-144729` after `3344363` removed Markdown highlighting from grep evidence. |
 | Latest six-case capability run | `capability-evidence-20260509-173239`: `6/6` passed, all with real diffs; memory active tasks `6`, memory changed-plan tasks `5`, skill active tasks `1`, skill promotion-evidence tasks `1`. |
-| Latest Batch 6 smoke | `batch6-smoke-20260510-133309` and `batch6-smoke-20260510-133944`: first two recommended cases passed after the ConversationLoop split, both with real diffs, required commands ok, full `1174 passed; 0 failed`, and `failure_owner=none`. |
+| Latest Batch 6 smoke | `batch6-smoke-20260510-133309` and `batch6-parsefix-20260510-141148`: first two recommended cases passed after the ConversationLoop split and parse-noise/provider fallback fix, both with real diffs, required commands ok, full test suites passing, and `failure_owner=none`. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 
@@ -206,14 +206,14 @@ The first six cases have current passing evidence. The expanded 12-case suite is
 the next productization baseline and should be run after runtime-loop or CLI
 behavior changes. The previous dashboard recovered warning and the residual
 workflow-judgment JSON parse stderr warning both have focused clean reruns. The
-latest dashboard rerun also proves the model-led repair path can write and
-repair the case without deterministic patch synthesis, though it still records
-repair warnings from an initially failing shell patch.
+latest dashboard rerun also proves the provider fallback path can recover a
+MiniMax 200 OK success body when the async client rejects it, then continue into
+model-led edit and validation without deterministic patch synthesis.
 
 | Case | Current evidence | Next action |
 | --- | --- | --- |
 | `code-change-verification-repair-loop` | `batch6-smoke-20260510-133309` passed after the 2026-05-10 loop split with real diff, required commands ok, full `1174 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. | Keep as a regression guard for verification-repair closeout. |
-| `live-eval-dashboard-summary` | `batch6-smoke-20260510-133944` passed after the 2026-05-10 loop split with real diff, required commands ok, full `1174 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. It still records a non-fatal workflow-judgment JSON parse warning before fallback and recovery. | Keep as the main guard for evidence-display contamination, no-diff agent-flow failures, workflow contract JSON tolerance, and model-led focused repair without deterministic patch takeover. Next improvement is reducing low-quality first patches and workflow-judgment parse noise. |
+| `live-eval-dashboard-summary` | `batch6-parsefix-20260510-141148` passed after the parse-noise/provider fallback fix with real diff, required commands ok, full `1178 passed; 0 failed`, `closeout_status=passed`, `failure_owner=none`, and no workflow-judgment parse warning in stderr. | Keep as the main guard for evidence-display contamination, no-diff agent-flow failures, workflow contract JSON tolerance, provider fallback, and model-led focused repair without deterministic patch takeover. Next improvement is reducing low-quality first patches. |
 | `backend-todo-api-crud` | `capability-evidence-20260509-173239` passed with real diff, required commands ok, and `failure_owner=none`. | Keep as a backend implementation guard. |
 | `frontend-book-notes-localstorage` | `capability-evidence-20260509-173239` passed with real diff, required Node test ok, and `failure_owner=none`. | Keep as a frontend persistence guard. |
 | `memory-save-quality-gate` | `capability-evidence-20260509-173239` passed with real diff, memory tests and full test suite ok, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
