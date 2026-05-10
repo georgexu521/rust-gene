@@ -1690,23 +1690,23 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     } else {
                         no_code_progress_rounds += 1;
                     }
-                    if no_diff_audit_closeout_allowed
-                        && !has_worktree_changes
-                        && no_code_progress_rounds >= 2
-                        && !action_checkpoint_active
-                        && !no_diff_audit_validation_checkpoint_sent
-                    {
-                        let checkpoint = "Audit/regression checkpoint: this task allows a no-diff closeout when the requested behavior is already present. Do not force an arbitrary edit. Run the required validation commands now; if they pass, provide a Closeout with direct evidence and changed files as none. If a concrete missing behavior is proven, then make the smallest focused edit."
-                            .to_string();
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "audit/regression task should validate before forcing edits"
-                                .to_string(),
-                        });
-                        messages.push(Message::system(checkpoint.clone()));
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&checkpoint);
-                        no_diff_audit_validation_checkpoint_sent = true;
-                        no_code_progress_rounds = 0;
+                    if no_diff_audit_closeout_allowed && !has_worktree_changes {
+                        if no_code_progress_rounds >= 2
+                            && !action_checkpoint_active
+                            && !no_diff_audit_validation_checkpoint_sent
+                        {
+                            let checkpoint = "Audit/regression checkpoint: this task allows a no-diff closeout when the requested behavior is already present. Do not force an arbitrary edit. Run the required validation commands now; if they pass, provide a Closeout with direct evidence and changed files as none. If a concrete missing behavior is proven, then make the smallest focused edit."
+                                .to_string();
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error: "audit/regression task should validate before forcing edits"
+                                    .to_string(),
+                            });
+                            messages.push(Message::system(checkpoint.clone()));
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&checkpoint);
+                            no_diff_audit_validation_checkpoint_sent = true;
+                            no_code_progress_rounds = 0;
+                        }
                     } else if has_worktree_changes
                         && successful_validation_commands.is_empty()
                         && no_code_progress_rounds >= 2
