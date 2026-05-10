@@ -70,6 +70,33 @@ fn effective_timeout_secs(requested: Option<u64>) -> u64 {
     requested.max(floor).min(3600)
 }
 
+fn sanitize_agent_runtime_env(cmd: &mut Command) {
+    for key in [
+        "PRIORITY_AGENT_A2A_TRANSCRIPT_PATH",
+        "PRIORITY_AGENT_AUTO_REVIEW",
+        "PRIORITY_AGENT_AUTO_TEST",
+        "PRIORITY_AGENT_BASH_BACKEND",
+        "PRIORITY_AGENT_BASH_EXTERNAL_ALLOWLIST",
+        "PRIORITY_AGENT_BASH_EXTERNAL_CMD",
+        "PRIORITY_AGENT_BASH_EXTERNAL_FALLBACK",
+        "PRIORITY_AGENT_BASH_EXTERNAL_WRAPPER_ALLOWLIST",
+        "PRIORITY_AGENT_BASH_SANDBOX_CMD",
+        "PRIORITY_AGENT_BASH_SANDBOX_FALLBACK",
+        "PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS",
+        "PRIORITY_AGENT_CLOSEOUT_VISIBILITY",
+        "PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE",
+        "PRIORITY_AGENT_EVAL_EVENTS",
+        "PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED",
+        "PRIORITY_AGENT_LLM_MEMORY_EXTRACTION",
+        "PRIORITY_AGENT_ROUTE_SCOPED_TOOLS",
+        "PRIORITY_AGENT_TOOL_PROFILE",
+        "PRIORITY_AGENT_WORKFLOW_CONTRACT",
+        "PRIORITY_AGENT_WORKFLOW_ENABLED",
+    ] {
+        cmd.env_remove(key);
+    }
+}
+
 fn restricted_command(command: &str) -> String {
     // 受限后端说明：
     // - 仅应用软资源限制和最小化环境变量
@@ -427,6 +454,7 @@ impl Tool for BashTool {
             .current_dir(&working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        sanitize_agent_runtime_env(&mut cmd);
 
         #[cfg(unix)]
         unsafe {
@@ -595,6 +623,7 @@ pub use crate::security::is_dangerous_command;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     #[test]
     fn bash_tool_contract_keeps_output_non_user_facing() {
@@ -802,6 +831,30 @@ mod tests {
         assert_eq!(classification["command_kind"], "unknown");
         assert_eq!(classification["env_prefixed"], true);
         assert_eq!(classification["safe_for_closeout"], false);
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_strips_agent_runtime_env_from_child_process() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_AUTO_TEST", "check_then_test");
+        env.set(
+            "PRIORITY_AGENT_EVAL_EVENTS",
+            "/tmp/priority-agent-events.jsonl",
+        );
+        env.set("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", "600");
+
+        let tool = BashTool;
+        let params = json!({
+            "command": "printf '%s:%s:%s' \"${PRIORITY_AGENT_AUTO_TEST:-unset}\" \"${PRIORITY_AGENT_EVAL_EVENTS:-unset}\" \"${PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS:-unset}\"",
+            "description": "Check agent runtime env isolation",
+            "backend": "local"
+        });
+        let context = ToolContext::new(".", "test-session-env-sanitize");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(result.success, "bash failed: {:?}", result.error);
+        assert!(result.content.contains("unset:unset:unset"));
     }
 
     #[tokio::test]
