@@ -306,8 +306,16 @@ impl Tool for BashTool {
             }
             // 如果是绝对路径，必须位于项目目录或临时目录下
             if wd.is_absolute() {
-                let project_root = &context.working_dir;
-                let in_project = wd.starts_with(project_root);
+                let project_root = if context.working_dir.is_absolute() {
+                    context.working_dir.clone()
+                } else {
+                    std::env::current_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                        .join(&context.working_dir)
+                };
+                let project_root = project_root.canonicalize().unwrap_or(project_root);
+                let checked_wd = wd.canonicalize().unwrap_or_else(|_| wd.clone());
+                let in_project = checked_wd.starts_with(&project_root);
                 let in_tmp = wd.starts_with("/tmp") || wd.starts_with("/var/tmp");
                 if !in_project && !in_tmp {
                     return ToolResult::error(
@@ -794,6 +802,23 @@ mod tests {
         assert_eq!(classification["command_kind"], "unknown");
         assert_eq!(classification["env_prefixed"], true);
         assert_eq!(classification["safe_for_closeout"], false);
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_accepts_absolute_working_dir_inside_relative_context() {
+        let tool = BashTool;
+        let cwd = std::env::current_dir().expect("current dir");
+        let params = json!({
+            "command": "pwd",
+            "description": "Absolute cwd under project",
+            "working_dir": cwd,
+            "backend": "restricted"
+        });
+        let context = ToolContext::new(".", "test-session-absolute-working-dir");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(result.success, "bash failed: {:?}", result.error);
     }
 
     #[tokio::test]
