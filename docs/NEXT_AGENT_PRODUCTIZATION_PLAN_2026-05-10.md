@@ -901,7 +901,7 @@ cargo test -q auto_verify
 
 ### Batch 5：ConversationLoop 第一轮拆分
 
-Status: started on 2026-05-10.
+Status: completed on 2026-05-10.
 
 目标：行为保持不变，先拆出最稳定职责。
 
