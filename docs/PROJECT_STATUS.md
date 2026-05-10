@@ -445,3 +445,10 @@ Latest maintenance note:
 - Adaptive workflow triggers are first-class trace events and live-eval
   summaries now expose a `triggers` column plus aggregate trigger distribution,
   so strict-mode activation can be measured without parsing fallback prose.
+- Audit/regression live evals now route through the code workflow without
+  requiring arbitrary diffs, bash child processes strip agent runtime env vars
+  before running validation commands, and workflow judgment factor parsing
+  tolerates missing optional fields. The latest Batch 6 reruns
+  `batch6-rerun-20260510-230329` and `batch6-rerun-20260510-232124` both have
+  clean harness-required commands but remain provider-blocked by MiniMax
+  request-send failures before closeout.

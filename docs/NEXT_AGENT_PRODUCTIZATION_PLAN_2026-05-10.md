@@ -1085,7 +1085,7 @@ Ninth completed slice:
   planning, `closeout_status=passed`, and `failure_owner=none`. The first seven
   recommended live-eval cases now have current post-split passing evidence.
 
-Tenth slice, blocked on provider:
+Tenth slice, still blocked on provider after runtime reroute/env fixes:
 
 - Reran `memory-recall-conflict-precision` and found an over-control issue in
   audit/no-diff tasks: the runtime and generated live-eval prompt still pushed
@@ -1093,14 +1093,21 @@ Tenth slice, blocked on provider:
   allowing audit/regression evaluations to validate and close out with no diff,
   keeping them out of forced edit checkpoints, and making the generated audit
   prompt say to run required validation after the small inspection budget.
-- The latest rerun, `batch6-smoke-20260510-175656`, is not a pass. It no longer
-  forced a patch or entered patch synthesis, and the harness required commands
-  passed with full `1180 passed; 0 failed`, but MiniMax failed before closeout
-  with `error sending request for url`; the refreshed report now attributes
-  this as `failure_owner=environment`. Rerun this case before claiming an eighth
+- A later rerun exposed two runtime issues before the provider failure: audit
+  live evals with `audit_or_regression_check` could still route through
+  non-code paths, and agent bash children inherited `PRIORITY_AGENT_AUTO_TEST`
+  / live-eval runtime variables, causing recursive `cargo test --no-fail-fast`
+  process growth during agent-run validation. Fixed both by routing audit live
+  evals through the code workflow with diff optional and stripping agent runtime
+  env vars from bash child processes.
+- The latest clean rerun, `batch6-rerun-20260510-230329`, is not a pass. The
+  recursive validation-process issue did not recur, harness required commands
+  passed with full `1183 passed; 0 failed`, and the run remained no-diff, but
+  MiniMax failed before closeout with `error sending request for url`; report
+  owner is `environment`. Rerun this case before claiming an eighth
   recommended-case pass.
 
-Eleventh slice, blocked on provider:
+Eleventh slice, still blocked on provider after runtime/schema fixes:
 
 - Reran `memory-save-sensitive-hard-block` and found two harness/runtime issues
   before the provider failure: live evals were defaulting
@@ -1109,10 +1116,15 @@ Eleventh slice, blocked on provider:
   `ToolContext` used relative `"."`. Fixed both so live evals use the normal
   tool loop by default and bash accepts absolute paths inside the project
   context.
-- The latest rerun, `batch6-smoke-20260510-182657`, is not a pass. The legacy
-  workflow no longer hijacks the run and harness required commands passed with
-  full `1181 passed; 0 failed`, but MiniMax failed before closeout with
-  `error sending request for url`; report owner is `environment`.
+- Later reruns found two additional runtime/schema issues: the audit task first
+  routed as `Configuration/Direct`, then workflow judgment parsing failed when
+  MiniMax omitted the optional `uncertainty_reduction` factor. Fixed routing as
+  above and made workflow factor fields default safely before normalization.
+- The latest clean rerun, `batch6-rerun-20260510-232124`, is not a pass.
+  Workflow judgment and weighted planning now complete, harness required
+  commands passed with full `1184 passed; 0 failed`, but MiniMax failed before
+  tool execution/closeout with `error sending request for url`; report owner is
+  `environment`.
 
 验证：
 
@@ -1145,6 +1157,8 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-154614
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-163831
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-175656
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-182657
+scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-230329
+scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-232124
 ```
 
 ## 验收指标
