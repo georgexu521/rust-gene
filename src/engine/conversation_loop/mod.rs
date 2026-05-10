@@ -1782,6 +1782,14 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         trace.record(TraceEvent::WorkflowFallback {
                             error: lookup_notice.to_string(),
                         });
+                        if action_checkpoint_lookup_count
+                            >= Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET
+                        {
+                            action_checkpoint_no_change_rounds = 1;
+                            force_patch_synthesis_after_no_change = true;
+                            force_patch_synthesis_reason =
+                                Some("focused repair lookup budget exhausted");
+                        }
                     }
                     if action_checkpoint_active && !activated_checkpoint_this_round {
                         action_checkpoint_no_change_rounds += 1;

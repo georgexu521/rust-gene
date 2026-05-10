@@ -15,13 +15,10 @@ repo:
 
       path = Path("src/engine/conversation_loop/mod.rs")
       text = path.read_text()
-      prefetch = ".prefetch_retrieval_context_with_llm_rerank(\n                    &last_user_preview,"
-      prefetch_at = text.index(prefetch)
-      start = text.rfind("        if let Some(ref mem_mutex) = self.memory_manager {", 0, prefetch_at)
-      if start < 0:
-          raise SystemExit("could not find memory prefetch block start")
+      start_marker = "        if route.retrieval.allows_memory_context() {\n            if let Some(ref mem_mutex) = self.memory_manager {"
+      start = text.index(start_marker)
       end_marker = "        if let Some(ref ctx) = turn_retrieval_context {\n            trace.record(TraceEvent::RetrievalContextBuilt {"
-      end = text.index(end_marker, prefetch_at)
+      end = text.index(end_marker, start)
       replacement = (
           "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n"
       )
