@@ -106,7 +106,17 @@ pub fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
             content,
             tool_calls,
         } => {
-            let content = Some(ChatCompletionRequestAssistantMessageContent::Text(content));
+            let has_tool_calls = tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
+            let content = if has_tool_calls && content.trim().is_empty() {
+                // Strict OpenAI-compatible providers can reject a tool-result
+                // turn if the preceding assistant tool-call message carries
+                // an empty text content field. When the assistant is only
+                // issuing tool calls, omit content and let `tool_calls` be the
+                // sole assistant payload.
+                None
+            } else {
+                Some(ChatCompletionRequestAssistantMessageContent::Text(content))
+            };
             let tool_calls = tool_calls.map(|calls| {
                 calls
                     .into_iter()
@@ -136,5 +146,43 @@ pub fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
             tool_call_id,
         }
         .into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_call() -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "Cargo.toml"}),
+        }
+    }
+
+    #[test]
+    fn assistant_tool_call_omits_empty_content_for_strict_providers() {
+        let message = convert_message(Message::assistant_with_tools("", vec![tool_call()]));
+        let ChatCompletionRequestMessage::Assistant(assistant) = message else {
+            panic!("expected assistant message");
+        };
+
+        assert!(assistant.content.is_none());
+        assert_eq!(assistant.tool_calls.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn assistant_tool_call_keeps_non_empty_content() {
+        let message = convert_message(Message::assistant_with_tools(
+            "I will inspect the file.",
+            vec![tool_call()],
+        ));
+        let ChatCompletionRequestMessage::Assistant(assistant) = message else {
+            panic!("expected assistant message");
+        };
+
+        assert!(assistant.content.is_some());
+        assert_eq!(assistant.tool_calls.unwrap().len(), 1);
     }
 }

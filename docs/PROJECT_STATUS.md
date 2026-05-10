@@ -1,12 +1,30 @@
 # Project Status
 
-Last updated: 2026-05-09
+Last updated: 2026-05-10
 
 ## Summary
 
 Priority Agent is now an interactive coding CLI with a stateful runtime spine:
 intent routing, turn traces, session goals, memory, permissions, recovery plans,
 MCP health, CLI observability panels, and required validation closeout.
+
+Active next-stage direction:
+
+- `docs/NEXT_AGENT_PRODUCTIZATION_PLAN_2026-05-10.md` defines the next phase as
+  reference-first productization: learn from local Claude Code and opencode,
+  then implement the Rust runtime equivalents without adding another heavy
+  workflow framework.
+- `docs/AGENT_PRODUCTIZATION_REFERENCE_AUDIT_2026-05-10.md` is the Batch 1
+  artifact. It records the Claude/opencode reference map, current
+  `ConversationLoop` architecture map, current product capability table, and
+  the recommended Batch 2-5 order.
+- Next implementation focus is provider-safe tool result normalization,
+  terminal/bash productization, an evidence ledger, then behavior-preserving
+  `ConversationLoop` extraction.
+- The first Batch 2 provider-safe serialization slice is complete: strict
+  OpenAI-compatible providers now receive pure assistant `tool_calls` messages
+  without an empty `content` field in OpenAI-compatible and Kimi request
+  conversion.
 
 The recent closure plan is complete:
 
@@ -49,6 +67,9 @@ Latest recovery commits and planning artifacts:
 | Extract tool orchestrator helpers | this change |
 | Surface companion helper context | `f33174a` |
 | Give focused repair two targeted lookups | this change |
+| Add next-stage productization plan | this change |
+| Add reference audit and architecture map | this change |
+| Normalize pure tool-call assistant messages for strict providers | this change |
 
 The all-features clippy and experimental API checks are clean as of this
 focused lookup-budget change.

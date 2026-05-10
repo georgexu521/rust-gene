@@ -370,7 +370,12 @@ fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
             content,
             tool_calls,
         } => {
-            let content = Some(ChatCompletionRequestAssistantMessageContent::Text(content));
+            let has_tool_calls = tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
+            let content = if has_tool_calls && content.trim().is_empty() {
+                None
+            } else {
+                Some(ChatCompletionRequestAssistantMessageContent::Text(content))
+            };
             let tool_calls = tool_calls.map(|calls| {
                 calls
                     .into_iter()
@@ -421,5 +426,23 @@ mod tests {
         assert_eq!(config.default_model, "kimi-k2.5");
         assert!(config.thinking_enabled); // 默认启用
         assert!(config.thinking_budget.is_none()); // 默认 adaptive
+    }
+
+    #[test]
+    fn assistant_tool_call_omits_empty_content_for_strict_providers() {
+        let message = convert_message(Message::assistant_with_tools(
+            "",
+            vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "file_read".to_string(),
+                arguments: serde_json::json!({"path": "Cargo.toml"}),
+            }],
+        ));
+        let ChatCompletionRequestMessage::Assistant(assistant) = message else {
+            panic!("expected assistant message");
+        };
+
+        assert!(assistant.content.is_none());
+        assert_eq!(assistant.tool_calls.unwrap().len(), 1);
     }
 }
