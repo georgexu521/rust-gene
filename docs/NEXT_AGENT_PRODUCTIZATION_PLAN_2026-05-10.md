@@ -1025,6 +1025,16 @@ Third completed slice:
   with real diff, required commands ok, full `1178 passed; 0 failed`,
   `failure_owner=none`, and no workflow-judgment parse warning in stderr.
 
+Fourth completed slice:
+
+- Ran `backend-todo-api-crud` as the next recommended live eval:
+  `batch6-smoke-20260510-142800` passed with a real backend diff, required
+  unittest and no-TODO checks ok, `closeout_status=passed`, and
+  `failure_owner=none`. The report recorded earlier verification and
+  stage-validation failures before repair, then final required commands passed;
+  this makes the case useful as both a backend implementation guard and a
+  repair-after-failed-validation guard.
+
 验证：
 
 ```bash
@@ -1038,9 +1048,11 @@ cargo check -q
 scripts/run_live_eval.sh --case code-change-verification-repair-loop --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-parsefix
+scripts/run_live_eval.sh --case backend-todo-api-crud --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-142800
 ```
 
 ## 验收指标
