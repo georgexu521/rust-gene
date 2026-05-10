@@ -1229,6 +1229,15 @@ status = "failed" if failures else "ok"
 def infer_failure_owner():
     if not failures:
         return "none"
+    provider_text = "\n".join([stderr_text, output]).lower()
+    if (
+        "error sending request for url" in provider_text
+        or "connection refused" in provider_text
+        or "connection reset" in provider_text
+        or "operation timed out" in provider_text
+        or "provider unavailable" in provider_text
+    ):
+        return "environment"
     lower_cmd = cmd_log_text.lower()
     if "502" in lower_cmd or "proxy" in lower_cmd or "connection refused" in lower_cmd:
         return "environment"

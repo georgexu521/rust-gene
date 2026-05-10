@@ -1085,6 +1085,21 @@ Ninth completed slice:
   planning, `closeout_status=passed`, and `failure_owner=none`. The first seven
   recommended live-eval cases now have current post-split passing evidence.
 
+Tenth slice, blocked on provider:
+
+- Reran `memory-recall-conflict-precision` and found an over-control issue in
+  audit/no-diff tasks: the runtime and generated live-eval prompt still pushed
+  the model toward arbitrary edits after read-only inspection. Fixed this by
+  allowing audit/regression evaluations to validate and close out with no diff,
+  keeping them out of forced edit checkpoints, and making the generated audit
+  prompt say to run required validation after the small inspection budget.
+- The latest rerun, `batch6-smoke-20260510-175656`, is not a pass. It no longer
+  forced a patch or entered patch synthesis, and the harness required commands
+  passed with full `1180 passed; 0 failed`, but MiniMax failed before closeout
+  with `error sending request for url`; the refreshed report now attributes
+  this as `failure_owner=environment`. Rerun this case before claiming an eighth
+  recommended-case pass.
+
 验证：
 
 ```bash
@@ -1103,6 +1118,7 @@ scripts/run_live_eval.sh --case frontend-book-notes-localstorage --mode agent-ru
 scripts/run_live_eval.sh --case memory-save-quality-gate --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case skill-promotion-gate --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case persistent-memory-planning-context --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
+scripts/run_live_eval.sh --case memory-recall-conflict-precision --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-smoke
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1112,6 +1128,7 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-144053
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-152513
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-154614
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-163831
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-175656
 ```
 
 ## 验收指标
