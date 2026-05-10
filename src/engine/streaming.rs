@@ -1264,12 +1264,22 @@ mod tests {
                     tool_calls: None,
                     usage: None,
                 },
+                crate::services::api::ChatResponse {
+                    content: "Done.".to_string(),
+                    tool_calls: None,
+                    usage: None,
+                },
+                crate::services::api::ChatResponse {
+                    content: "Done.".to_string(),
+                    tool_calls: None,
+                    usage: None,
+                },
             ])),
         });
         let mut registry = ToolRegistry::new();
         registry.register(crate::tools::file_tool::FileWriteTool);
         let engine = StreamingQueryEngine::new(provider, Arc::new(registry), "MiniMax-M2.7")
-            .with_max_iterations(3);
+            .with_max_iterations(5);
 
         let mut stream = engine
             .query_stream("请写一个 python 文件，内容打印 ok")
