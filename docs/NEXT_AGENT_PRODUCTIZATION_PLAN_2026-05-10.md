@@ -777,7 +777,7 @@ git diff --check
 
 ### Batch 2：Tool result schema 和 provider-safe serialization
 
-Status: started on 2026-05-10.
+Status: completed on 2026-05-10.
 
 目标：优先解决 MiniMax 400 这类基础稳定性问题。
 
@@ -819,7 +819,7 @@ cargo check -q
 
 ### Batch 3：Terminal availability 和 bash route exposure
 
-Status: started on 2026-05-10.
+Status: completed on 2026-05-10.
 
 目标：让编码任务稳定看到并使用 bash。
 
@@ -858,7 +858,7 @@ cargo check -q
 
 ### Batch 4：EvidenceLedger 第一版
 
-Status: started on 2026-05-10.
+Status: completed on 2026-05-10.
 
 目标：把文件事实、命令事实、验证事实和 closeout 分开。
 
