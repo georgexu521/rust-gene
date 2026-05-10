@@ -63,7 +63,7 @@ evidence run:
 | Latest recovered dashboard run | `checkpoint-function-anchor-20260509-120047`: required commands ok, real diff, closeout passed, `failure_owner=none` |
 | Latest Batch 3 runs | Five current suite cases now have passing evidence; `live-eval-dashboard-summary` first failed as `agent_flow` in `capability-now-20260509-143251`, then passed in `capability-now-20260509-144729` after `3344363` removed Markdown highlighting from grep evidence. |
 | Latest six-case capability run | `capability-evidence-20260509-173239`: `6/6` passed, all with real diffs; memory active tasks `6`, memory changed-plan tasks `5`, skill active tasks `1`, skill promotion-evidence tasks `1`. |
-| Latest Batch 6 smoke | `batch6-smoke-20260510-133309`, `batch6-parsefix-20260510-141148`, `batch6-smoke-20260510-142800`, and `batch6-smoke-20260510-143451`: first four recommended cases passed after the ConversationLoop split and parse-noise/provider fallback fix, all with real diffs, required commands ok, and `failure_owner=none`. |
+| Latest Batch 6 smoke | `batch6-smoke-20260510-133309`, `batch6-parsefix-20260510-141148`, `batch6-smoke-20260510-142800`, `batch6-smoke-20260510-143451`, and `batch6-smoke-20260510-144053`: first five recommended cases passed after the ConversationLoop split and parse-noise/provider fallback fix, all with real diffs, required commands ok, and `failure_owner=none`. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 
@@ -202,7 +202,7 @@ default loop.
 | 11 | `resume-session-picker` | Tests Claude-style resume as a daily CLI workflow. |
 | 12 | `cli-scrollback-polish` | Tests interactive CLI readability and long-output ergonomics. |
 
-The first four cases have current post-split passing evidence, and the first six
+The first five cases have current post-split passing evidence, and the first six
 cases have current passing evidence overall. The expanded 12-case suite is the
 next productization baseline and should be run after runtime-loop or CLI behavior
 changes. The previous dashboard recovered warning and the residual
@@ -217,7 +217,7 @@ model-led edit and validation without deterministic patch synthesis.
 | `live-eval-dashboard-summary` | `batch6-parsefix-20260510-141148` passed after the parse-noise/provider fallback fix with real diff, required commands ok, full `1178 passed; 0 failed`, `closeout_status=passed`, `failure_owner=none`, and no workflow-judgment parse warning in stderr. | Keep as the main guard for evidence-display contamination, no-diff agent-flow failures, workflow contract JSON tolerance, provider fallback, and model-led focused repair without deterministic patch takeover. Next improvement is reducing low-quality first patches. |
 | `backend-todo-api-crud` | `batch6-smoke-20260510-142800` passed after the 2026-05-10 loop split with real diff, required commands ok, `closeout_status=passed`, and `failure_owner=none`. It also recorded earlier verification/stage-validation failures before repair, which is useful evidence that the repair loop recovered instead of closing out early. | Keep as a backend implementation and repair-after-failed-validation guard. |
 | `frontend-book-notes-localstorage` | `batch6-smoke-20260510-143451` passed after the 2026-05-10 loop split with real diff, required Node test ok, no TODOs, `closeout_status=passed`, and `failure_owner=none`. | Keep as a frontend persistence and product-completeness guard. |
-| `memory-save-quality-gate` | `capability-evidence-20260509-173239` passed with real diff, memory tests and full test suite ok, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
+| `memory-save-quality-gate` | `batch6-smoke-20260510-144053` passed after the 2026-05-10 loop split with real diff, memory tests and full `1178 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
 | `skill-promotion-gate` | `capability-evidence-20260509-173239` passed on rerun after refreshing the fixture path from `config.rs` to `learning.rs`; summary now records `skill_active=true` and `promotion=true`. | Keep as a skill promotion and report-evidence guard. |
 | `persistent-memory-planning-context` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Run with the recommended suite before claiming current memory-planning strength. |
 | `memory-recall-conflict-precision` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the guard against over-broad memory conflict demotion. |

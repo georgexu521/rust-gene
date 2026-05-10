@@ -1043,6 +1043,14 @@ Fifth completed slice:
   `closeout_status=passed`, and `failure_owner=none`. This keeps the frontend
   persistence/product-completeness guard current after the loop split.
 
+Sixth completed slice:
+
+- Ran `memory-save-quality-gate` as the next recommended live eval:
+  `batch6-smoke-20260510-144053` passed with real memory quality-gate changes,
+  required memory tests ok, full `1178 passed; 0 failed`, `acceptance_accepted=True`,
+  `closeout_status=passed`, and `failure_owner=none`. This keeps the memory
+  quality gate and truthful `/save` outcome guard current after the loop split.
+
 验证：
 
 ```bash
@@ -1058,11 +1066,13 @@ scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --r
 scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-parsefix
 scripts/run_live_eval.sh --case backend-todo-api-crud --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case frontend-book-notes-localstorage --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
+scripts/run_live_eval.sh --case memory-save-quality-gate --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-142800
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-143451
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-144053
 ```
 
 ## 验收指标
