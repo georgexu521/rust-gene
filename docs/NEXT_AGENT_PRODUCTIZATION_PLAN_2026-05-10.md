@@ -957,9 +957,19 @@ Sixth completed slice:
   pre-executed read-only results, trace events, and provider-safe tool-result
   completion are preserved in the extracted controller.
 
+Seventh completed slice:
+
+- Added `conversation_loop/session_processor.rs` and moved the non-streaming
+  and streaming LLM request lifecycle out of the main loop. API timeout
+  handling, streaming text sanitization, usage events, read-only pre-execution,
+  fallback to non-streaming, cost tracking, recovery-plan tracing, and trace
+  finish persistence are preserved behind the same `ConversationLoop` methods.
+
 验证：
 
 ```bash
+cargo test -q runtime_diet_report_is_recorded_for_real_loop_turn
+cargo test -q test_coding_quality_tracks_fail_then_repair_cycle
 cargo test -q test_tool_specific_confirmation_blocks_git_push_without_approval
 cargo test -q test_unexposed_tool_call_is_denied_before_execution
 cargo test -q destructive_scope_blocks_parent_delete_before_bash_execution
