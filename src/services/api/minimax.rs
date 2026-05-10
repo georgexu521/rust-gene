@@ -2,12 +2,14 @@
 //!
 //! 参考官方文档：Token Plan 支持 OpenAI 兼容调用。
 
-use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
+use crate::services::api::{
+    sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, ToolCall, Usage,
+};
 use anyhow::{Context, Result};
 use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
 use async_trait::async_trait;
 use reqwest::StatusCode;
-use tracing::info;
+use tracing::{debug, info};
 
 /// MiniMax 客户端
 pub struct MiniMaxClient {
@@ -103,6 +105,98 @@ impl MiniMaxClient {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct MiniMaxChatResponseBody {
+    choices: Vec<MiniMaxChoice>,
+    usage: Option<MiniMaxUsage>,
+}
+
+#[derive(serde::Deserialize)]
+struct MiniMaxChoice {
+    message: MiniMaxMessage,
+}
+
+#[derive(serde::Deserialize)]
+struct MiniMaxMessage {
+    content: Option<String>,
+    tool_calls: Option<Vec<MiniMaxToolCall>>,
+}
+
+#[derive(serde::Deserialize)]
+struct MiniMaxToolCall {
+    id: String,
+    function: MiniMaxFunctionCall,
+}
+
+#[derive(serde::Deserialize)]
+struct MiniMaxFunctionCall {
+    name: String,
+    #[serde(default)]
+    arguments: String,
+}
+
+#[derive(serde::Deserialize)]
+struct MiniMaxUsage {
+    #[serde(default)]
+    prompt_tokens: u32,
+    #[serde(default)]
+    completion_tokens: u32,
+    #[serde(default)]
+    total_tokens: u32,
+    prompt_tokens_details: Option<MiniMaxPromptTokenDetails>,
+    completion_tokens_details: Option<MiniMaxCompletionTokenDetails>,
+}
+
+#[derive(serde::Deserialize)]
+struct MiniMaxPromptTokenDetails {
+    cached_tokens: Option<u32>,
+}
+
+#[derive(serde::Deserialize)]
+struct MiniMaxCompletionTokenDetails {
+    reasoning_tokens: Option<u32>,
+}
+
+fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
+    let body: MiniMaxChatResponseBody = serde_json::from_str(body)?;
+    let choice = body
+        .choices
+        .into_iter()
+        .next()
+        .context("No choices in response")?;
+    let message = choice.message;
+    let tool_calls = message.tool_calls.map(|calls| {
+        calls
+            .into_iter()
+            .map(|call| ToolCall {
+                id: call.id,
+                name: call.function.name,
+                arguments: serde_json::from_str(&call.function.arguments).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to parse MiniMax tool arguments: {}", e);
+                    serde_json::Value::Null
+                }),
+            })
+            .collect()
+    });
+    let usage = body.usage.map(|usage| Usage {
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        reasoning_tokens: usage
+            .completion_tokens_details
+            .and_then(|details| details.reasoning_tokens),
+        cached_tokens: usage
+            .prompt_tokens_details
+            .and_then(|details| details.cached_tokens),
+    });
+
+    Ok(ChatResponse {
+        content: sanitize_assistant_content(message.content.unwrap_or_default()),
+        tool_calls,
+        usage,
+    })
+}
+
 #[async_trait]
 impl LlmProvider for MiniMaxClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
@@ -114,6 +208,15 @@ impl LlmProvider for MiniMaxClient {
             Ok(resp) => resp,
             Err(e) => {
                 if let Some((status, body)) = self.fetch_error_body(&req).await {
+                    if status.is_success() {
+                        if let Ok(response) = parse_minimax_chat_response_body(&body) {
+                            debug!(
+                                "Recovered MiniMax chat response with manual parser after client error: {}",
+                                e
+                            );
+                            return Ok(response);
+                        }
+                    }
                     anyhow::bail!(
                         "Failed to get response from MiniMax API: {} (status {}) body: {}",
                         e,
@@ -174,5 +277,78 @@ mod tests {
         let client = MiniMaxClient::new("test-key", None, None);
         assert_eq!(client.default_model(), "MiniMax-M2.7");
         assert_eq!(client.base_url(), "https://api.minimaxi.com/v1");
+    }
+
+    #[test]
+    fn parses_success_body_after_client_content_error() {
+        let body = r#"{
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "message": {
+                "content": "<think>hidden</think>\n\n{\"task_type\":\"feature\"}",
+                "role": "assistant"
+              }
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": {"cached_tokens": 4}
+          },
+          "base_resp": {"status_code": 0, "status_msg": "success"}
+        }"#;
+
+        let response = parse_minimax_chat_response_body(body).unwrap();
+
+        assert_eq!(response.content, "{\"task_type\":\"feature\"}");
+        assert!(response.tool_calls.is_none());
+        assert_eq!(response.usage.unwrap().cached_tokens, Some(4));
+    }
+
+    #[test]
+    fn parses_success_body_with_tool_calls_after_client_error() {
+        let body = r#"{
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "<think>hidden</think>\n\n",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                      "name": "file_read",
+                      "arguments": "{\"path\":\"scripts/run_live_eval.sh\"}"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 20,
+            "completion_tokens": 6,
+            "total_tokens": 26,
+            "completion_tokens_details": {"reasoning_tokens": 2}
+          }
+        }"#;
+
+        let response = parse_minimax_chat_response_body(body).unwrap();
+        let calls = response.tool_calls.unwrap();
+
+        assert!(response.content.trim().is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_read");
+        assert_eq!(
+            calls[0].arguments,
+            serde_json::json!({"path": "scripts/run_live_eval.sh"})
+        );
+        assert_eq!(response.usage.unwrap().reasoning_tokens, Some(2));
     }
 }
