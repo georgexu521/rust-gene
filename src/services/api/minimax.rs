@@ -224,7 +224,10 @@ impl LlmProvider for MiniMaxClient {
                         body
                     );
                 }
-                return Err(e).context("Failed to get response from MiniMax API");
+                anyhow::bail!(
+                    "Failed to get response from MiniMax API: {} (error body unavailable)",
+                    e
+                );
             }
         };
         convert_response(response)
@@ -254,7 +257,10 @@ impl LlmProvider for MiniMaxClient {
                         body
                     );
                 }
-                Err(e).context("Failed to create streaming response from MiniMax API")
+                anyhow::bail!(
+                    "Failed to create streaming response from MiniMax API: {} (error body unavailable)",
+                    e
+                );
             }
         }
     }

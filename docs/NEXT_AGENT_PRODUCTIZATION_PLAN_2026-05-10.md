@@ -1051,6 +1051,19 @@ Sixth completed slice:
   `closeout_status=passed`, and `failure_owner=none`. This keeps the memory
   quality gate and truthful `/save` outcome guard current after the loop split.
 
+Seventh attempted slice:
+
+- Reran `skill-promotion-gate` after fixing an unrelated dirty-worktree
+  streaming test fragility. The current run `batch6-smoke-20260510-152513`
+  failed before any tool call because the first MiniMax API turn failed; the
+  harness recorded no diff, `closeout_status=missing`, and
+  `failure_owner=agent_flow`. Required commands then ran against the seeded
+  unmodified worktree, so the two Python assertions failed as expected. This is
+  not a clean verdict on skill repair quality; rerun after provider stability.
+- Small follow-up fixes from this slice: the streaming history unit test now
+  tolerates extra runtime turns in dirty worktrees, and MiniMax errors preserve
+  the original provider error text when fallback body fetching is unavailable.
+
 验证：
 
 ```bash
@@ -1067,12 +1080,14 @@ scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --r
 scripts/run_live_eval.sh --case backend-todo-api-crud --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case frontend-book-notes-localstorage --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case memory-save-quality-gate --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
+scripts/run_live_eval.sh --case skill-promotion-gate --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-142800
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-143451
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-144053
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-152513
 ```
 
 ## 验收指标
