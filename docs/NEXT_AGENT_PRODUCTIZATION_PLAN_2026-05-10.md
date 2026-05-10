@@ -949,9 +949,20 @@ Fifth completed slice:
   timeout configuration. The main loop now consumes timeout policy instead of
   owning environment parsing details.
 
+Sixth completed slice:
+
+- Added `conversation_loop/tool_execution_controller.rs` and moved
+  `execute_tools_parallel` out of the main loop. Tool exposure checks, resource
+  policy limits, destructive-scope blocking, approval prompts, hooks,
+  pre-executed read-only results, trace events, and provider-safe tool-result
+  completion are preserved in the extracted controller.
+
 验证：
 
 ```bash
+cargo test -q test_tool_specific_confirmation_blocks_git_push_without_approval
+cargo test -q test_unexposed_tool_call_is_denied_before_execution
+cargo test -q destructive_scope_blocks_parent_delete_before_bash_execution
 cargo test -q focused_repair_prompt
 cargo test -q closeout
 cargo test -q route_scoped_tools
