@@ -1005,6 +1005,16 @@ First completed slice:
   validation/repair, eval reporting, memory, permissions, skill promotion,
   resume, and CLI scrollback behavior.
 
+Second completed slice:
+
+- Ran the first two recommended live evals after the ConversationLoop split:
+  `code-change-verification-repair-loop` and `live-eval-dashboard-summary`.
+  Both produced real code diffs, passed required commands including full
+  `cargo test -q -- --test-threads=1` with `1174 passed; 0 failed`, generated
+  summary reports, and recorded `failure_owner=none`. The dashboard case still
+  shows a non-fatal workflow-judgment JSON parse warning before runtime
+  fallback and recovery, so parse-noise reduction remains a follow-up.
+
 验证：
 
 ```bash
@@ -1012,6 +1022,10 @@ bash -n scripts/run_live_eval.sh
 scripts/run_live_eval.sh --case recommended --list
 python3 -m py_compile scripts/live_eval_report_parser.py
 cargo test -q eval
+scripts/run_live_eval.sh --case code-change-verification-repair-loop --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
+scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 ```
 
 ## 验收指标

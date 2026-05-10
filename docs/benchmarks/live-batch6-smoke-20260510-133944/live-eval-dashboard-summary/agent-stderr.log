@@ -1,0 +1,9 @@
+2026-05-10T05:39:56.082242Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: workflow judgment response was not parseable as JSON: strict JSON error: key must be a string at line 1 column 2; JSON5 fallback error:  --> 1:1
+  |
+1 | {tool => "file_read", args => {
+  | ^---
+  |
+  = expected array, boolean, null, number, object, or string
+[required validation still running after 30s] cargo test -q -- --test-threads=1
+[required validation still running after 60s] cargo test -q -- --test-threads=1
+[required validation still running after 90s] cargo test -q -- --test-threads=1
