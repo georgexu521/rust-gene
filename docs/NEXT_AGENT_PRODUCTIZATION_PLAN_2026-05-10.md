@@ -1100,6 +1100,20 @@ Tenth slice, blocked on provider:
   this as `failure_owner=environment`. Rerun this case before claiming an eighth
   recommended-case pass.
 
+Eleventh slice, blocked on provider:
+
+- Reran `memory-save-sensitive-hard-block` and found two harness/runtime issues
+  before the provider failure: live evals were defaulting
+  `PRIORITY_AGENT_WORKFLOW_ENABLED=1`, which let the legacy workflow executor
+  hijack audit cases, and bash rejected absolute `working_dir` values when
+  `ToolContext` used relative `"."`. Fixed both so live evals use the normal
+  tool loop by default and bash accepts absolute paths inside the project
+  context.
+- The latest rerun, `batch6-smoke-20260510-182657`, is not a pass. The legacy
+  workflow no longer hijacks the run and harness required commands passed with
+  full `1181 passed; 0 failed`, but MiniMax failed before closeout with
+  `error sending request for url`; report owner is `environment`.
+
 验证：
 
 ```bash
@@ -1119,6 +1133,7 @@ scripts/run_live_eval.sh --case memory-save-quality-gate --mode agent-run --run-
 scripts/run_live_eval.sh --case skill-promotion-gate --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case persistent-memory-planning-context --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case memory-recall-conflict-precision --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-smoke
+scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-smoke
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1129,6 +1144,7 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-152513
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-154614
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-163831
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-175656
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-182657
 ```
 
 ## 验收指标

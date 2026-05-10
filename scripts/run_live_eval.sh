@@ -1214,7 +1214,6 @@ if harness_acceptance_passed:
     downgraded = []
     for item in (
         "action_checkpoint_invalid_tools",
-        "closeout_not_successful",
         "acceptance_review_rejected",
         "stage_validation_failed",
         "verification_failed",
