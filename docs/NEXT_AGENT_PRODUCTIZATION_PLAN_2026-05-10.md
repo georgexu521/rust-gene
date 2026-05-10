@@ -937,6 +937,12 @@ Third completed slice:
   This keeps trace serialization near workflow telemetry instead of embedding it
   in turn execution control flow.
 
+Fourth completed slice:
+
+- Moved changed-file diff evidence generation into `evidence_ledger`, so the
+  main loop no longer builds git diff evidence directly. This keeps file-change
+  evidence collection with the runtime-owned evidence layer.
+
 验证：
 
 ```bash

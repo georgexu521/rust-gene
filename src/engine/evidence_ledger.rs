@@ -8,7 +8,8 @@ use crate::services::api::ToolCall;
 use crate::tools::ToolResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 const PREVIEW_CHARS: usize = 240;
 
@@ -54,6 +55,62 @@ pub struct EvidenceSnapshot {
     pub validation_facts: usize,
     pub passed_validation_facts: usize,
     pub failed_validation_facts: usize,
+}
+
+pub async fn changed_files_diff_evidence(
+    working_dir: &Path,
+    changed_files: &[PathBuf],
+) -> Option<String> {
+    let mut args = vec![
+        "diff".to_string(),
+        "--no-color".to_string(),
+        "--".to_string(),
+    ];
+    let mut seen = HashSet::new();
+    for path in changed_files {
+        let display_path = path
+            .strip_prefix(working_dir)
+            .ok()
+            .unwrap_or(path.as_path())
+            .display()
+            .to_string();
+        if display_path.trim().is_empty() || !seen.insert(display_path.clone()) {
+            continue;
+        }
+        args.push(display_path);
+    }
+
+    if args.len() <= 3 {
+        return None;
+    }
+
+    let output = tokio::process::Command::new("git")
+        .args(&args)
+        .current_dir(working_dir)
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() && output.stdout.is_empty() {
+        return None;
+    }
+
+    let diff = String::from_utf8_lossy(&output.stdout);
+    let trimmed = diff.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let max_chars = 12_000usize;
+    let mut excerpt = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars {
+        excerpt.push_str("\n[diff excerpt truncated]");
+    }
+
+    Some(format!(
+        "[Changed-file diff evidence]\n{}\nUse this diff as direct acceptance evidence for the modified files.",
+        excerpt
+    ))
 }
 
 impl EvidenceLedger {
@@ -329,6 +386,13 @@ mod tests {
             Some("failed:1/1")
         );
         assert_eq!(ledger.validation_facts()[0].summary, "compile error");
+    }
+
+    #[tokio::test]
+    async fn changed_files_diff_evidence_skips_empty_input() {
+        let evidence = changed_files_diff_evidence(Path::new("."), &[]).await;
+
+        assert!(evidence.is_none());
     }
 
     #[test]

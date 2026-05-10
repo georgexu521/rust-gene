@@ -55,7 +55,7 @@ use workflow_trace::{
     apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger, trace_stage_validation,
 };
 
-use crate::engine::evidence_ledger::EvidenceLedger;
+use crate::engine::evidence_ledger::{changed_files_diff_evidence, EvidenceLedger};
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
@@ -98,62 +98,6 @@ fn stream_chunk_idle_timeout() -> std::time::Duration {
         .unwrap_or(120)
         .clamp(30, 600);
     std::time::Duration::from_secs(secs)
-}
-
-async fn changed_files_diff_evidence(
-    working_dir: &std::path::Path,
-    changed_files: &[std::path::PathBuf],
-) -> Option<String> {
-    let mut args = vec![
-        "diff".to_string(),
-        "--no-color".to_string(),
-        "--".to_string(),
-    ];
-    let mut seen = HashSet::new();
-    for path in changed_files {
-        let display_path = path
-            .strip_prefix(working_dir)
-            .ok()
-            .unwrap_or(path.as_path())
-            .display()
-            .to_string();
-        if display_path.trim().is_empty() || !seen.insert(display_path.clone()) {
-            continue;
-        }
-        args.push(display_path);
-    }
-
-    if args.len() <= 3 {
-        return None;
-    }
-
-    let output = tokio::process::Command::new("git")
-        .args(&args)
-        .current_dir(working_dir)
-        .output()
-        .await
-        .ok()?;
-
-    if !output.status.success() && output.stdout.is_empty() {
-        return None;
-    }
-
-    let diff = String::from_utf8_lossy(&output.stdout);
-    let trimmed = diff.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let max_chars = 12_000usize;
-    let mut excerpt = trimmed.chars().take(max_chars).collect::<String>();
-    if trimmed.chars().count() > max_chars {
-        excerpt.push_str("\n[diff excerpt truncated]");
-    }
-
-    Some(format!(
-        "[Changed-file diff evidence]\n{}\nUse this diff as direct acceptance evidence for the modified files.",
-        excerpt
-    ))
 }
 
 async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent>) {
