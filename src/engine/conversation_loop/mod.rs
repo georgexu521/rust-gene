@@ -16,6 +16,7 @@ mod patch_repair_rules;
 mod pseudo_tool_text;
 mod repair_controller;
 mod runtime_diet;
+mod runtime_timeouts;
 mod step_executor;
 mod text_sanitizer;
 mod tool_execution;
@@ -33,6 +34,7 @@ use repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
 };
 use runtime_diet::{trace_runtime_diet_report, RuntimeDietSnapshot};
+use runtime_timeouts::{llm_request_timeout, stream_chunk_idle_timeout};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use text_sanitizer::{strip_think_blocks, VisibleTextSanitizer};
 pub(crate) use tool_execution::{
@@ -80,24 +82,6 @@ fn tool_result_dialog_content(result: &ToolResult) -> String {
     } else {
         result.error.clone().unwrap_or_default()
     }
-}
-
-fn llm_request_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(180)
-        .clamp(30, 600);
-    std::time::Duration::from_secs(secs)
-}
-
-fn stream_chunk_idle_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(120)
-        .clamp(30, 600);
-    std::time::Duration::from_secs(secs)
 }
 
 async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent>) {

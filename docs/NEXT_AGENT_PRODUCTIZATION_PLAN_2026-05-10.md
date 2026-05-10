@@ -943,6 +943,12 @@ Fourth completed slice:
   main loop no longer builds git diff evidence directly. This keeps file-change
   evidence collection with the runtime-owned evidence layer.
 
+Fifth completed slice:
+
+- Added `conversation_loop/runtime_timeouts.rs` for LLM request and stream idle
+  timeout configuration. The main loop now consumes timeout policy instead of
+  owning environment parsing details.
+
 验证：
 
 ```bash
