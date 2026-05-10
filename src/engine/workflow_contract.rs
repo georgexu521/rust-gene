@@ -1195,6 +1195,12 @@ pub fn parse_workflow_judgment(content: &str) -> anyhow::Result<ProgrammingWorkf
     Ok(judgment)
 }
 
+pub fn is_recoverable_workflow_judgment_parse_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("workflow judgment response did not contain JSON")
+        || message.contains("workflow judgment response was not parseable as JSON")
+}
+
 pub fn parse_acceptance_review(content: &str) -> anyhow::Result<AcceptanceReview> {
     let mut value = parse_json_object_value(content, "acceptance review")?;
     sanitize_acceptance_review_value(&mut value);
@@ -1691,6 +1697,22 @@ mod tests {
         assert_eq!(judgment.task_type, "feature");
         assert_eq!(judgment.plan[0].id.as_deref(), Some("summary"));
         assert_eq!(judgment.acceptance.criteria.len(), 1);
+    }
+
+    #[test]
+    fn workflow_judgment_tool_like_parse_noise_is_recoverable() {
+        let err = parse_workflow_judgment(r#"{tool => "file_read", args => {"path": "x"}}"#)
+            .expect_err("tool-like model leakage is not valid judgment JSON");
+
+        assert!(is_recoverable_workflow_judgment_parse_error(&err));
+    }
+
+    #[test]
+    fn workflow_judgment_schema_errors_still_surface() {
+        let err = parse_workflow_judgment(r#"{"task_type":"feature"}"#)
+            .expect_err("incomplete JSON should fail schema validation");
+
+        assert!(!is_recoverable_workflow_judgment_parse_error(&err));
     }
 
     #[test]

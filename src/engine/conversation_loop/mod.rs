@@ -791,10 +791,21 @@ impl ConversationLoop {
                     messages.insert(insert_at, Message::system(context_note));
                 }
                 Err(err) => {
-                    warn!("Workflow judgment analysis failed: {}", err);
-                    trace.record(TraceEvent::WorkflowFallback {
-                        error: format!("workflow judgment analysis failed: {}", err),
-                    });
+                    if crate::engine::workflow_contract::is_recoverable_workflow_judgment_parse_error(&err) {
+                        debug!(
+                            "Workflow judgment skipped after non-JSON model response: {}",
+                            err
+                        );
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error: "workflow judgment skipped after non-JSON model response"
+                                .to_string(),
+                        });
+                    } else {
+                        warn!("Workflow judgment analysis failed: {}", err);
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error: format!("workflow judgment analysis failed: {}", err),
+                        });
+                    }
                 }
             }
         }
