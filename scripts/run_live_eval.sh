@@ -779,8 +779,8 @@ env.update({
     "CARGO_TARGET_DIR": cargo_target_dir,
     "PRIORITY_AGENT_A2A_TRANSCRIPT_PATH": os.path.join(env_base, "a2a-transcript.jsonl"),
     "PRIORITY_AGENT_EVAL_EVENTS": events_file,
-    "PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED": os.environ.get("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED", os.environ.get("PRIORITY_AGENT_WORKFLOW_ENABLED", "1")),
-    "PRIORITY_AGENT_WORKFLOW_ENABLED": os.environ.get("PRIORITY_AGENT_WORKFLOW_ENABLED", "1"),
+    "PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED": os.environ.get("PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED", os.environ.get("PRIORITY_AGENT_WORKFLOW_ENABLED", "0")),
+    "PRIORITY_AGENT_WORKFLOW_ENABLED": os.environ.get("PRIORITY_AGENT_WORKFLOW_ENABLED", "0"),
     "PRIORITY_AGENT_WORKFLOW_CONTRACT": os.environ.get("PRIORITY_AGENT_WORKFLOW_CONTRACT", "1"),
     "PRIORITY_AGENT_CLOSEOUT_VISIBILITY": os.environ.get("PRIORITY_AGENT_CLOSEOUT_VISIBILITY", "full"),
     "PRIORITY_AGENT_AUTO_TEST": os.environ.get("PRIORITY_AGENT_AUTO_TEST", "check_then_test"),
@@ -1121,6 +1121,7 @@ print(f"stale_edit_warnings: {stale_edit_warnings}")
 action_checkpoint_no_patch = "Stopped action checkpoint without patch synthesis" in output
 action_checkpoint_invalid_tools = "Stopped action checkpoint after repeated invalid tool requests" in output
 patch_synthesis_no_change = "Patch synthesis did not produce a file change" in output
+legacy_workflow_hijack = "# Workflow 执行报告" in output
 print(f"action_checkpoint_no_patch: {str(action_checkpoint_no_patch).lower()}")
 print(f"action_checkpoint_invalid_tools: {str(action_checkpoint_invalid_tools).lower()}")
 print(f"patch_synthesis_no_change: {str(patch_synthesis_no_change).lower()}")
@@ -1176,6 +1177,9 @@ if action_checkpoint_invalid_tools:
 if patch_synthesis_no_change:
     print("warning: patch_synthesis_no_change")
     failures.append("patch_synthesis_no_change")
+if legacy_workflow_hijack:
+    print("warning: legacy_workflow_hijack")
+    failures.append("legacy_workflow_hijack")
 if verification_events and any(event.get("passed") is not True for event in verification_events[:-1]):
     print("warning: earlier_verification_failed_before_repair")
     warnings.append("earlier_verification_failed_before_repair")
@@ -1251,6 +1255,7 @@ def infer_failure_owner():
         "action_checkpoint_no_patch" in failures
         or "action_checkpoint_invalid_tools" in failures
         or "patch_synthesis_no_change" in failures
+        or "legacy_workflow_hijack" in failures
     ):
         return "agent_flow"
     if (
