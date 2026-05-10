@@ -145,6 +145,64 @@ pub(super) fn build_tool_execution_summary(
     summary
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub(super) struct ToolExecutionRecord {
+    pub(super) call_id: String,
+    pub(super) tool_name: String,
+    pub(super) status: ToolExecutionStatus,
+    pub(super) user_output: String,
+    pub(super) machine_metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ToolExecutionStatus {
+    Completed,
+    Failed,
+}
+
+impl ToolExecutionRecord {
+    pub(super) fn from_result(tool_call: &ToolCall, result: &ToolResult) -> Self {
+        Self {
+            call_id: tool_call.id.clone(),
+            tool_name: tool_call.name.clone(),
+            status: if result.success {
+                ToolExecutionStatus::Completed
+            } else {
+                ToolExecutionStatus::Failed
+            },
+            user_output: tool_result_user_output(result),
+            machine_metadata: build_tool_execution_summary(tool_call, result),
+        }
+    }
+
+    pub(super) fn provider_content(&self) -> String {
+        let label = match self.status {
+            ToolExecutionStatus::Completed => "OK",
+            ToolExecutionStatus::Failed => "ERROR",
+        };
+        format!("Result: {}\n{}", label, self.user_output)
+    }
+}
+
+pub(super) fn provider_tool_result_content(tool_call: &ToolCall, result: &ToolResult) -> String {
+    ToolExecutionRecord::from_result(tool_call, result).provider_content()
+}
+
+fn tool_result_user_output(result: &ToolResult) -> String {
+    if !result.content.trim().is_empty() {
+        result.content.clone()
+    } else if let Some(error) = result
+        .error
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        error.to_string()
+    } else {
+        "tool returned no output".to_string()
+    }
+}
+
 pub(super) fn tool_execution_start_progress(
     tool_name: &str,
     arguments: &serde_json::Value,
@@ -301,5 +359,44 @@ pub(super) fn persist_tool_outcome_learning_event(
         &payload,
     ) {
         warn!("Failed to persist tool outcome learning event: {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_call(name: &str) -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: name.to_string(),
+            arguments: serde_json::json!({"command": "cargo test -q"}),
+        }
+    }
+
+    #[test]
+    fn provider_tool_result_content_keeps_success_output() {
+        let content =
+            provider_tool_result_content(&tool_call("bash"), &ToolResult::success("all good"));
+
+        assert_eq!(content, "Result: OK\nall good");
+    }
+
+    #[test]
+    fn provider_tool_result_content_uses_error_when_output_empty() {
+        let content = provider_tool_result_content(&tool_call("bash"), &ToolResult::error("boom"));
+
+        assert_eq!(content, "Result: ERROR\nboom");
+    }
+
+    #[test]
+    fn tool_execution_record_separates_machine_metadata_from_provider_text() {
+        let record =
+            ToolExecutionRecord::from_result(&tool_call("bash"), &ToolResult::success("compiled"));
+
+        assert_eq!(record.status, ToolExecutionStatus::Completed);
+        assert_eq!(record.provider_content(), "Result: OK\ncompiled");
+        assert_eq!(record.machine_metadata["tool"], "bash");
+        assert_eq!(record.machine_metadata["command_kind"], "validation");
     }
 }

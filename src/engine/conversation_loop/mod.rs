@@ -37,7 +37,7 @@ pub(crate) use tool_execution::{
 };
 use tool_metadata::{
     attach_tool_execution_metadata, persist_tool_outcome_learning_event,
-    tool_execution_start_progress,
+    provider_tool_result_content, tool_execution_start_progress,
 };
 use turn_recording::{
     persist_turn_learning_event, record_goal_drift_if_needed, record_hook_traces,
@@ -1756,11 +1756,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
             for (tc, result) in results.iter_mut() {
                 truncate_tool_result(result, &tc.name, &tc.id).await;
-                let result_content = format!(
-                    "Result: {}\n{}",
-                    if result.success { "OK" } else { "ERROR" },
-                    tool_result_dialog_content(result)
-                );
+                let result_content = provider_tool_result_content(tc, result);
                 tool_results_text.push_str(&result_content);
                 tool_results_text.push('\n');
                 messages.push(Message::tool(tc.id.clone(), result_content));
@@ -2093,11 +2089,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
-                                let result_content = format!(
-                                    "Result: {}\n{}",
-                                    if result.success { "OK" } else { "ERROR" },
-                                    tool_result_dialog_content(result)
-                                );
+                                let result_content = provider_tool_result_content(tc, result);
                                 tool_results_text.push_str(&result_content);
                                 tool_results_text.push('\n');
                                 messages.push(Message::tool(tc.id.clone(), result_content));
@@ -2218,11 +2210,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
-                                let result_content = format!(
-                                    "Result: {}\n{}",
-                                    if result.success { "OK" } else { "ERROR" },
-                                    tool_result_dialog_content(result)
-                                );
+                                let result_content = provider_tool_result_content(tc, result);
                                 tool_results_text.push_str(&result_content);
                                 tool_results_text.push('\n');
                                 messages.push(Message::tool(tc.id.clone(), result_content));
@@ -3720,11 +3708,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 );
                 results.push((tc.clone(), pre_result.clone()));
                 if let Some(tx) = tx {
-                    let result_content = format!(
-                        "Result: {}\n{}",
-                        if pre_result.success { "OK" } else { "ERROR" },
-                        tool_result_dialog_content(&pre_result)
-                    );
+                    let result_content = provider_tool_result_content(tc, &pre_result);
                     let _ = tx
                         .send(StreamEvent::ToolExecutionComplete {
                             id: tc.id.clone(),
@@ -3840,11 +3824,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 &result,
             );
             if let Some(tx) = tx {
-                let result_content = format!(
-                    "Result: {}\n{}",
-                    if result.success { "OK" } else { "ERROR" },
-                    tool_result_dialog_content(&result)
-                );
+                let result_content = provider_tool_result_content(&tc, &result);
                 let _ = tx
                     .send(StreamEvent::ToolExecutionComplete {
                         id: tc.id.clone(),
@@ -4109,11 +4089,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
 
             if let Some(tx) = tx {
-                let result_content = format!(
-                    "Result: {}\n{}",
-                    if result.success { "OK" } else { "ERROR" },
-                    tool_result_dialog_content(&result)
-                );
+                let result_content = provider_tool_result_content(&tc, &result);
                 let _ = tx
                     .send(StreamEvent::ToolExecutionComplete {
                         id: tool_id.clone(),

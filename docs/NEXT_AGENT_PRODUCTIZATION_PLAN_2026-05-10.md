@@ -801,6 +801,14 @@ First completed slice:
   tool/function call is present, and avoids strict compatible providers
   misreading a tool-call turn.
 
+Second completed slice:
+
+- Tool execution now has an internal `ToolExecutionRecord` that separates
+  provider-facing text from machine metadata. Provider-visible tool messages
+  are generated through one shared function, while command classification,
+  duration, path, and error previews stay available as structured runtime
+  metadata instead of being mixed into the text sent back to the model.
+
 验证：
 
 ```bash
