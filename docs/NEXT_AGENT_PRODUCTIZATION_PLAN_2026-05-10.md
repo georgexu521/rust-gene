@@ -923,6 +923,13 @@ First completed slice:
   behavior-preserving extraction and keeps prompt/tool/memory/retrieval
   accounting separate from the turn execution loop.
 
+Second completed slice:
+
+- Added `conversation_loop/tool_result_controller.rs` for the shared path that
+  records tool-result evidence, appends provider-safe tool result text, and
+  writes the matching `Message::Tool`. This keeps repeated tool-result plumbing
+  out of the main loop while leaving streaming UI completion events unchanged.
+
 验证：
 
 ```bash

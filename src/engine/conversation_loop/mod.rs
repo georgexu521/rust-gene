@@ -21,6 +21,7 @@ mod text_sanitizer;
 mod tool_execution;
 mod tool_metadata;
 mod tool_orchestrator;
+mod tool_result_controller;
 mod turn_recording;
 mod validation_runner;
 
@@ -41,6 +42,7 @@ use tool_metadata::{
     attach_tool_execution_metadata, persist_tool_outcome_learning_event,
     provider_tool_result_content, tool_execution_start_progress,
 };
+use tool_result_controller::append_provider_tool_result;
 use turn_recording::{
     persist_turn_learning_event, record_goal_drift_if_needed, record_hook_traces,
     record_mcp_resource_trace, record_recovery_plan, record_web_retrieval_trace,
@@ -1683,11 +1685,13 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
             for (tc, result) in results.iter_mut() {
                 truncate_tool_result(result, &tc.name, &tc.id).await;
-                evidence_ledger.record_tool_result(tc, result);
-                let result_content = provider_tool_result_content(tc, result);
-                tool_results_text.push_str(&result_content);
-                tool_results_text.push('\n');
-                messages.push(Message::tool(tc.id.clone(), result_content));
+                append_provider_tool_result(
+                    tc,
+                    result,
+                    &mut evidence_ledger,
+                    &mut tool_results_text,
+                    &mut messages,
+                );
 
                 if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                     if let Some(note) = companion_context::companion_context_note(
@@ -2017,11 +2021,13 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
-                                evidence_ledger.record_tool_result(tc, result);
-                                let result_content = provider_tool_result_content(tc, result);
-                                tool_results_text.push_str(&result_content);
-                                tool_results_text.push('\n');
-                                messages.push(Message::tool(tc.id.clone(), result_content));
+                                append_provider_tool_result(
+                                    tc,
+                                    result,
+                                    &mut evidence_ledger,
+                                    &mut tool_results_text,
+                                    &mut messages,
+                                );
                                 if result.success && Self::is_code_write_tool_name(&tc.name) {
                                     action_checkpoint_requires_patch_before_validation = false;
                                     if let Some(path) = tc.arguments["path"].as_str() {
@@ -2139,11 +2145,13 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
-                                evidence_ledger.record_tool_result(tc, result);
-                                let result_content = provider_tool_result_content(tc, result);
-                                tool_results_text.push_str(&result_content);
-                                tool_results_text.push('\n');
-                                messages.push(Message::tool(tc.id.clone(), result_content));
+                                append_provider_tool_result(
+                                    tc,
+                                    result,
+                                    &mut evidence_ledger,
+                                    &mut tool_results_text,
+                                    &mut messages,
+                                );
                                 if result.success {
                                     any_tool_success = true;
                                 }
