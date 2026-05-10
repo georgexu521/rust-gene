@@ -441,18 +441,11 @@ impl LearningFeedback {
             }
         }
         if !self.discouraged_tools.is_empty() {
-            let before = route.recommended_tools.len();
-            route
-                .recommended_tools
-                .retain(|tool| !self.discouraged_tools.contains(tool));
-            let removed = before.saturating_sub(route.recommended_tools.len());
-            if removed > 0 {
-                route.confidence = (route.confidence - 0.05).max(0.1);
-                route.reason.push_str(&format!(
-                    "; learning feedback: avoided recently failing tool(s): {}",
-                    self.discouraged_tools.join(", ")
-                ));
-            }
+            route.confidence = (route.confidence - 0.05).max(0.1);
+            route.reason.push_str(&format!(
+                "; learning feedback: recent failure(s) for tool(s): {}",
+                self.discouraged_tools.join(", ")
+            ));
         }
     }
 }
@@ -1024,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn learning_feedback_discourages_repeated_tool_failures() {
+    fn learning_feedback_notes_repeated_tool_failures_without_hiding_tools() {
         let events = vec![
             crate::session_store::LearningEventRecord {
                 id: 1,
@@ -1048,7 +1041,41 @@ mod tests {
             },
         ];
         let route = IntentRouter::new().route_with_learning("帮我修复 cargo test 报错", &events);
-        assert!(!route.recommended_tools.contains(&"grep".to_string()));
-        assert!(route.reason.contains("avoided recently failing"));
+        assert!(route.recommended_tools.contains(&"grep".to_string()));
+        assert!(route.reason.contains("recent failure"));
+    }
+
+    #[test]
+    fn learning_feedback_keeps_bash_for_terminal_operation_after_failures() {
+        let events = vec![
+            crate::session_store::LearningEventRecord {
+                id: 1,
+                session_id: "s1".to_string(),
+                kind: "tool_outcome".to_string(),
+                source: "test".to_string(),
+                summary: "bash failed".to_string(),
+                confidence: 1.0,
+                payload: serde_json::json!({"tool": "bash", "success": false}),
+                created_at: "now".to_string(),
+            },
+            crate::session_store::LearningEventRecord {
+                id: 2,
+                session_id: "s1".to_string(),
+                kind: "tool_outcome".to_string(),
+                source: "test".to_string(),
+                summary: "bash failed".to_string(),
+                confidence: 1.0,
+                payload: serde_json::json!({"tool": "bash", "success": false}),
+                created_at: "now".to_string(),
+            },
+        ];
+
+        let route = IntentRouter::new().route_with_learning(
+            "帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧",
+            &events,
+        );
+
+        assert!(route.recommended_tools.contains(&"bash".to_string()));
+        assert!(route.reason.contains("recent failure"));
     }
 }

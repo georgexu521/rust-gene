@@ -819,6 +819,8 @@ cargo check -q
 
 ### Batch 3：Terminal availability 和 bash route exposure
 
+Status: started on 2026-05-10.
+
 目标：让编码任务稳定看到并使用 bash。
 
 参考：
@@ -831,6 +833,13 @@ cargo check -q
 - route-scoped tools。
 - bash diagnostics。
 - `/status` 或 `/doctor`。
+
+First completed slice:
+
+- Learning feedback no longer removes recently failing tools from the route
+  recommendation list. It still records the failure signal in the route reason,
+  but terminal/runtime requests keep `bash` exposed when bash is the tool needed
+  to inspect, install, run, or validate local state.
 
 验证：
 
