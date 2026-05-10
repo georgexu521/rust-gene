@@ -47,6 +47,7 @@ use turn_recording::{
 use validation_runner::shell_output_with_timeout;
 use validation_runner::{should_run_default_auto_tests, verification_source_context};
 
+use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
@@ -923,6 +924,7 @@ impl ConversationLoop {
         }
         let mut code_workflow =
             crate::engine::code_change_workflow::CodeChangeWorkflowRunner::new(&task_bundle);
+        let mut evidence_ledger = EvidenceLedger::new();
         if !required_validation_commands.is_empty()
             && code_workflow.activate_trigger(
                 crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RequiredValidation,
@@ -1756,6 +1758,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
             for (tc, result) in results.iter_mut() {
                 truncate_tool_result(result, &tc.name, &tc.id).await;
+                evidence_ledger.record_tool_result(tc, result);
                 let result_content = provider_tool_result_content(tc, result);
                 tool_results_text.push_str(&result_content);
                 tool_results_text.push('\n');
@@ -2089,6 +2092,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
+                                evidence_ledger.record_tool_result(tc, result);
                                 let result_content = provider_tool_result_content(tc, result);
                                 tool_results_text.push_str(&result_content);
                                 tool_results_text.push('\n');
@@ -2210,6 +2214,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
+                                evidence_ledger.record_tool_result(tc, result);
                                 let result_content = provider_tool_result_content(tc, result);
                                 tool_results_text.push_str(&result_content);
                                 tool_results_text.push('\n');
@@ -2460,6 +2465,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 
             // ── 自动验证闭环 ──────────────────────────────
             if !changed_files.is_empty() {
+                evidence_ledger.record_changed_files(&changed_files);
                 if code_workflow.activate_trigger(
                     crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::FirstCodeChange,
                 ) {
@@ -2496,6 +2502,12 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 for result in verify_results {
                     let verify_text = result.to_dialog_text();
                     acceptance_evidence.push(verify_text.clone());
+                    evidence_ledger.record_validation_result(
+                        "auto_verify",
+                        Some(&result.command),
+                        result.success,
+                        &verify_text,
+                    );
                     if !result.success {
                         failed_commands.push(result.command.clone());
                         post_edit_evidence.push(verify_text.clone());
@@ -2578,6 +2590,12 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         for result in required_results {
                             let text = result.to_dialog_text();
                             acceptance_evidence.push(text.clone());
+                            evidence_ledger.record_validation_result(
+                                "required_validation",
+                                Some(&result.command),
+                                result.success,
+                                &text,
+                            );
                             if result.success {
                                 successful_required_validation_commands
                                     .insert(result.command.trim().to_string());
@@ -2619,6 +2637,12 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 for result in test_results {
                     let test_text = result.to_dialog_text();
                     acceptance_evidence.push(test_text.clone());
+                    evidence_ledger.record_validation_result(
+                        "auto_test",
+                        Some(&result.command),
+                        result.success,
+                        &test_text,
+                    );
                     if !result.success {
                         if manual_validation_after_changes || required_validation_covers_tests {
                             debug!(
@@ -2647,6 +2671,14 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     );
                     acceptance_evidence.push(manual_text.clone());
                     post_edit_evidence.push(manual_text.clone());
+                    for command in &successful_validation_commands {
+                        evidence_ledger.record_validation_result(
+                            "manual_validation",
+                            Some(command),
+                            true,
+                            &manual_text,
+                        );
+                    }
                     debug!("{}", manual_text);
                 }
 
@@ -2655,13 +2687,21 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 {
                     acceptance_evidence.push(diff_text.clone());
                     post_edit_evidence.push(diff_text.clone());
+                    evidence_ledger.record_validation_result("diff", None, true, &diff_text);
                     debug!("{}", diff_text);
                 }
 
                 // ── 代码自审查 ────────────────────────────────
                 let review_result =
                     super::code_review::review_changed_files(&working_dir, &changed_files);
-                acceptance_evidence.push(review_result.to_dialog_text());
+                let review_dialog = review_result.to_dialog_text();
+                evidence_ledger.record_validation_result(
+                    "code_review",
+                    None,
+                    review_result.success,
+                    &review_dialog,
+                );
+                acceptance_evidence.push(review_dialog);
                 if !review_result.success {
                     let review_text = review_result.to_dialog_text();
                     post_edit_evidence.push(review_text.clone());
@@ -2846,6 +2886,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             final_tool_calls: &final_tool_calls,
             iterations_used,
             max_iterations: self.max_iterations,
+            evidence_ledger: &evidence_ledger,
             tx,
         })
         .await;

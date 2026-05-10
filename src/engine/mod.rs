@@ -22,6 +22,7 @@ pub use diagnostic_tracker::{
 pub mod diff;
 pub mod error_classifier;
 pub mod evalset;
+pub mod evidence_ledger;
 pub mod evolution_controller;
 pub mod experience_ledger;
 pub mod goal_drift;

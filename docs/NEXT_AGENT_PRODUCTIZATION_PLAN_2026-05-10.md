@@ -858,6 +858,8 @@ cargo check -q
 
 ### Batch 4：EvidenceLedger 第一版
 
+Status: started on 2026-05-10.
+
 目标：把文件事实、命令事实、验证事实和 closeout 分开。
 
 参考：
@@ -870,6 +872,16 @@ cargo check -q
 - 新模块 `evidence_ledger.rs`。
 - closeout controller 接入。
 - filesystem grounding tests。
+
+First completed slice:
+
+- Added `src/engine/evidence_ledger.rs` as the first runtime-owned evidence
+  ledger. It records file facts, changed files, shell command facts, and
+  validation facts separately from model-visible tool result text.
+- `ConversationLoop` now writes tool, file-change, validation, diff, and code
+  review facts into the ledger. `FinalCloseoutContext` reads the ledger for the
+  runtime validation evidence label while keeping the user-facing closeout
+  compact.
 
 验证：
 

@@ -1,5 +1,6 @@
 use super::{ConversationLoop, RuntimeDietSnapshot};
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
@@ -14,11 +15,13 @@ pub(super) struct FinalCloseoutContext<'a> {
     pub(super) final_tool_calls: &'a [ToolCall],
     pub(super) iterations_used: usize,
     pub(super) max_iterations: usize,
+    pub(super) evidence_ledger: &'a EvidenceLedger,
     pub(super) tx: Option<&'a mpsc::Sender<super::super::streaming::StreamEvent>>,
 }
 
 impl ConversationLoop {
     pub(super) async fn apply_final_closeout(context: FinalCloseoutContext<'_>) {
+        let ledger_validation_label = context.evidence_ledger.runtime_validation_label();
         if let Some(closeout) = context.code_workflow.build_closeout(context.task_bundle) {
             context.trace.record(TraceEvent::FinalCloseoutPrepared {
                 status: closeout.status.label().to_string(),
@@ -29,7 +32,9 @@ impl ConversationLoop {
             });
             context.runtime_diet.closeout_visibility =
                 format!("{:?}", closeout.visibility_from_env()).to_ascii_lowercase();
-            context.runtime_diet.validation_evidence = closeout.status.label().to_string();
+            context.runtime_diet.validation_evidence = ledger_validation_label
+                .clone()
+                .unwrap_or_else(|| closeout.status.label().to_string());
             let closeout_text = closeout.format_for_user_response();
             if !closeout_text.is_empty() && !context.final_content.contains("Closeout:") {
                 context.final_content.push_str(&closeout_text);
@@ -40,6 +45,12 @@ impl ConversationLoop {
                         ))
                         .await;
                 }
+            }
+        }
+
+        if context.runtime_diet.validation_evidence == "none" {
+            if let Some(label) = ledger_validation_label {
+                context.runtime_diet.validation_evidence = label;
             }
         }
 
