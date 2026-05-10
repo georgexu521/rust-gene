@@ -901,6 +901,8 @@ cargo test -q auto_verify
 
 ### Batch 5：ConversationLoop 第一轮拆分
 
+Status: started on 2026-05-10.
+
 目标：行为保持不变，先拆出最稳定职责。
 
 参考：
@@ -913,6 +915,13 @@ cargo test -q auto_verify
 - `session_processor.rs`
 - `tool_execution_controller.rs`
 - `repair_controller.rs`
+
+First completed slice:
+
+- Moved runtime diet accounting and `RuntimeDietReport` emission out of
+  `conversation_loop/mod.rs` into `conversation_loop/runtime_diet.rs`. This is a
+  behavior-preserving extraction and keeps prompt/tool/memory/retrieval
+  accounting separate from the turn execution loop.
 
 验证：
 

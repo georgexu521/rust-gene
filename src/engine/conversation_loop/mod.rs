@@ -15,6 +15,7 @@ mod patch_recovery;
 mod patch_repair_rules;
 mod pseudo_tool_text;
 mod repair_controller;
+mod runtime_diet;
 mod step_executor;
 mod text_sanitizer;
 mod tool_execution;
@@ -29,6 +30,7 @@ use patch_recovery::PatchSynthesisAction;
 use repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
 };
+use runtime_diet::{trace_runtime_diet_report, RuntimeDietSnapshot};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use text_sanitizer::{strip_think_blocks, VisibleTextSanitizer};
 pub(crate) use tool_execution::{
@@ -61,7 +63,7 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, warn};
 
 use super::context_compressor::{
-    estimate_messages_tokens, estimate_tokens, estimate_tool_schemas_tokens, ContextCompressor,
+    estimate_messages_tokens, estimate_tool_schemas_tokens, ContextCompressor,
 };
 use super::hooks::{HookDecision, ToolHookManager};
 use super::streaming::StreamEvent;
@@ -392,107 +394,6 @@ fn trace_adaptive_workflow_trigger(
         max_repair_attempts: runner.policy.max_repair_attempts,
         reason: runner.policy.reason.clone(),
     });
-}
-
-#[derive(Debug, Clone)]
-struct RuntimeDietSnapshot {
-    prompt_tokens: u64,
-    tool_schema_tokens: u64,
-    exposed_tools: usize,
-    memory_snapshot_chars: usize,
-    memory_snapshot_tokens: u64,
-    retrieval_items: usize,
-    retrieval_tokens: u64,
-    skill_list_chars: usize,
-    skill_list_tokens: u64,
-    route_scoped_tools: bool,
-    closeout_visibility: String,
-    validation_evidence: String,
-}
-
-impl RuntimeDietSnapshot {
-    fn new(route_scoped_tools: bool) -> Self {
-        Self {
-            prompt_tokens: 0,
-            tool_schema_tokens: 0,
-            exposed_tools: 0,
-            memory_snapshot_chars: 0,
-            memory_snapshot_tokens: 0,
-            retrieval_items: 0,
-            retrieval_tokens: 0,
-            skill_list_chars: 0,
-            skill_list_tokens: 0,
-            route_scoped_tools,
-            closeout_visibility: "none".to_string(),
-            validation_evidence: "none".to_string(),
-        }
-    }
-
-    fn observe_memory_snapshot(&mut self, snapshot: &str) {
-        self.memory_snapshot_chars = self.memory_snapshot_chars.max(snapshot.chars().count());
-        self.memory_snapshot_tokens = self.memory_snapshot_tokens.max(estimate_tokens(snapshot));
-    }
-
-    fn observe_retrieval_context(
-        &mut self,
-        ctx: &crate::engine::retrieval_context::RetrievalContext,
-    ) {
-        self.retrieval_items = self.retrieval_items.max(ctx.items.len());
-        self.retrieval_tokens = self.retrieval_tokens.max(ctx.token_estimate as u64);
-    }
-
-    fn observe_skill_list_summary(&mut self, summary: &str) {
-        self.skill_list_chars = self.skill_list_chars.max(summary.chars().count());
-        self.skill_list_tokens = self.skill_list_tokens.max(estimate_tokens(summary));
-    }
-}
-
-fn trace_runtime_diet_report(
-    trace: &TraceCollector,
-    route: &IntentRoute,
-    runner: &crate::engine::code_change_workflow::CodeChangeWorkflowRunner,
-    snapshot: &RuntimeDietSnapshot,
-) {
-    trace.record(TraceEvent::RuntimeDietReport {
-        prompt_tokens: snapshot.prompt_tokens,
-        tool_schema_tokens: snapshot.tool_schema_tokens,
-        exposed_tools: snapshot.exposed_tools,
-        memory_snapshot_chars: snapshot.memory_snapshot_chars,
-        memory_snapshot_tokens: snapshot.memory_snapshot_tokens,
-        retrieval_items: snapshot.retrieval_items,
-        retrieval_tokens: snapshot.retrieval_tokens,
-        skill_list_chars: snapshot.skill_list_chars,
-        skill_list_tokens: snapshot.skill_list_tokens,
-        route_scoped_tools: snapshot.route_scoped_tools,
-        workflow_context: runtime_workflow_context_label(route, runner).to_string(),
-        closeout_visibility: snapshot.closeout_visibility.clone(),
-        validation_evidence: snapshot.validation_evidence.clone(),
-    });
-}
-
-fn runtime_workflow_context_label(
-    route: &IntentRoute,
-    runner: &crate::engine::code_change_workflow::CodeChangeWorkflowRunner,
-) -> &'static str {
-    if !crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-        return "none";
-    }
-    if matches!(
-        runner.policy.depth,
-        crate::engine::code_change_workflow::WorkflowDepth::Strict
-    ) {
-        return "strict";
-    }
-    if runner.policy.require_workflow_judgment
-        || runner.policy.require_stage_validation
-        || runner.policy.reflection_blocks
-    {
-        return "guarded";
-    }
-    if !runner.adaptive_trigger_labels().is_empty() {
-        return "adaptive";
-    }
-    "minimal"
 }
 
 /// 统一对话循环

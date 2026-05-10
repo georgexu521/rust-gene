@@ -1,4 +1,4 @@
-use super::{ConversationLoop, RuntimeDietSnapshot};
+use super::{runtime_diet::RuntimeDietSnapshot, ConversationLoop};
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::task_context::TaskContextBundle;
