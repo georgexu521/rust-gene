@@ -1035,6 +1035,14 @@ Fourth completed slice:
   this makes the case useful as both a backend implementation guard and a
   repair-after-failed-validation guard.
 
+Fifth completed slice:
+
+- Ran `frontend-book-notes-localstorage` as the next recommended live eval:
+  `batch6-smoke-20260510-143451` passed with a real frontend diff, required
+  Node behavior test ok, no-TODO check ok, `acceptance_accepted=True`,
+  `closeout_status=passed`, and `failure_owner=none`. This keeps the frontend
+  persistence/product-completeness guard current after the loop split.
+
 验证：
 
 ```bash
@@ -1049,10 +1057,12 @@ scripts/run_live_eval.sh --case code-change-verification-repair-loop --mode agen
 scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-parsefix
 scripts/run_live_eval.sh --case backend-todo-api-crud --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
+scripts/run_live_eval.sh --case frontend-book-notes-localstorage --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-142800
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-143451
 ```
 
 ## 验收指标
