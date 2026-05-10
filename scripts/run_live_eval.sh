@@ -18,11 +18,26 @@ AGENT_TIMEOUT_SECS="${PRIORITY_AGENT_LIVE_EVAL_TIMEOUT_SECS:-1800}"
 AGENT_IDLE_SECS="${PRIORITY_AGENT_LIVE_EVAL_IDLE_SECS:-300}"
 OVERLAY_WORKTREE="${PRIORITY_AGENT_LIVE_EVAL_OVERLAY_WORKTREE:-0}"
 
+RECOMMENDED_CASES=(
+  code-change-verification-repair-loop
+  live-eval-dashboard-summary
+  backend-todo-api-crud
+  frontend-book-notes-localstorage
+  memory-save-quality-gate
+  skill-promotion-gate
+  persistent-memory-planning-context
+  memory-recall-conflict-precision
+  memory-save-sensitive-hard-block
+  permission-default-open-dangerous-guard
+  resume-session-picker
+  cli-scrollback-polish
+)
+
 usage() {
   cat <<'EOF'
 Usage:
   scripts/run_live_eval.sh --list
-  scripts/run_live_eval.sh --case <id|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
+  scripts/run_live_eval.sh --case <id|recommended|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
   scripts/run_live_eval.sh --mode summary --run-id <id>
 
 Modes:
@@ -35,7 +50,8 @@ Modes:
   summary   Generate docs/benchmarks/live-<run-id>/summary.md.
 
 Options:
-  --case ID          Live task id, or "all".
+  --case ID          Live task id, "recommended", or "all".
+                     With --list, "recommended" lists only the recommended suite.
   --mode MODE        list, prepare, api-plan, agent-run, collect, or full.
   --workdir DIR      Existing task worktree for collect mode.
   --label LABEL      Report/run label (default: live-eval).
@@ -305,6 +321,47 @@ find_task_file() {
     fi
   done
   return 1
+}
+
+recommended_task_files() {
+  local id file missing=0
+  for id in "${RECOMMENDED_CASES[@]}"; do
+    if file="$(find_task_file "$id")"; then
+      echo "$file"
+    else
+      echo "Recommended live task missing: $id" >&2
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
+print_task_table_header() {
+  printf '%-36s %-12s %-26s %-10s %s\n' \
+    id type eval_intent risk title
+  printf '%-36s %-12s %-26s %-10s %s\n' \
+    -- ---- ----------- ---- -----
+}
+
+print_task_table_row() {
+  local file="$1"
+  printf '%-36s %-12s %-26s %-10s %s\n' \
+    "$(yaml_get "$file" id)" \
+    "$(yaml_get "$file" type unknown)" \
+    "$(yaml_get "$file" eval_intent seeded_code_change)" \
+    "$(yaml_get "$file" risk unknown)" \
+    "$(yaml_get "$file" title "$(yaml_get "$file" id)")"
+}
+
+list_recommended_tasks() {
+  local files file
+  if ! files="$(recommended_task_files)"; then
+    return 1
+  fi
+  print_task_table_header
+  for file in $files; do
+    print_task_table_row "$file"
+  done
 }
 
 list_tasks() {
@@ -1603,7 +1660,12 @@ run_one() {
 
 main() {
   if [[ "$MODE" == "list" ]]; then
-    list_tasks
+    if [[ "$CASE_ID" == "recommended" ]]; then
+      need_yaml
+      list_recommended_tasks
+    else
+      list_tasks
+    fi
     exit 0
   fi
   if [[ "$MODE" == "summary" ]]; then
@@ -1623,9 +1685,16 @@ main() {
 
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
 
-  if [[ "$CASE_ID" == "all" ]]; then
-    local file failures=0
-    for file in $(task_files); do
+  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" ]]; then
+    local file files failures=0
+    if [[ "$CASE_ID" == "recommended" ]]; then
+      if ! files="$(recommended_task_files)"; then
+        exit 1
+      fi
+    else
+      files="$(task_files)"
+    fi
+    for file in $files; do
       if ! run_one "$file"; then
         echo "Live eval task failed: $(yaml_get "$file" id)" >&2
         failures=$((failures + 1))

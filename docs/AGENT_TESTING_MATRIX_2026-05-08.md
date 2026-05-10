@@ -1,6 +1,6 @@
 # Agent Testing Matrix
 
-Last updated: 2026-05-09
+Last updated: 2026-05-10
 
 This is the current entry point for testing Priority Agent as a coding agent.
 It organizes the existing local tests, workflow gates, evalsets, live evals, and
@@ -180,8 +180,11 @@ Current live task groups:
 
 ## Recommended Live Suite
 
-For current product work, do not start with a toy game and do not run every live
-case by default. Start with this five-case suite:
+For current product work, do not start with a toy game. Use the recommended
+suite as the normal product signal: broad enough to cover real coding,
+validation, memory, permissions, skills, and CLI behavior, but still distinct
+from `--case all` so experimental or duplicate tasks can stay outside the
+default loop.
 
 | Priority | Case | Reason |
 | --- | --- | --- |
@@ -191,12 +194,20 @@ case by default. Start with this five-case suite:
 | 4 | `frontend-book-notes-localstorage` | Tests frontend/product completeness and persistence. |
 | 5 | `memory-save-quality-gate` | Tests the project's memory/quality-gate differentiator. |
 | 6 | `skill-promotion-gate` | Tests skill promotion gate repair and skill evidence reporting. |
+| 7 | `persistent-memory-planning-context` | Tests whether persistent memory changes planning without prompt bloat. |
+| 8 | `memory-recall-conflict-precision` | Tests whether memory conflict handling is precise rather than over-broad. |
+| 9 | `memory-save-sensitive-hard-block` | Tests that explicit saves still respect hard safety boundaries. |
+| 10 | `permission-default-open-dangerous-guard` | Tests default-open convenience without unsafe destructive behavior. |
+| 11 | `resume-session-picker` | Tests Claude-style resume as a daily CLI workflow. |
+| 12 | `cli-scrollback-polish` | Tests interactive CLI readability and long-output ergonomics. |
 
-Current evidence for this suite is passing. The previous dashboard recovered
-warning and the residual workflow-judgment JSON parse stderr warning both have
-focused clean reruns. The latest dashboard rerun also proves the model-led
-repair path can write and repair the case without deterministic patch synthesis,
-though it still records repair warnings from an initially failing shell patch.
+The first six cases have current passing evidence. The expanded 12-case suite is
+the next productization baseline and should be run after runtime-loop or CLI
+behavior changes. The previous dashboard recovered warning and the residual
+workflow-judgment JSON parse stderr warning both have focused clean reruns. The
+latest dashboard rerun also proves the model-led repair path can write and
+repair the case without deterministic patch synthesis, though it still records
+repair warnings from an initially failing shell patch.
 
 | Case | Current evidence | Next action |
 | --- | --- | --- |
@@ -206,6 +217,12 @@ though it still records repair warnings from an initially failing shell patch.
 | `frontend-book-notes-localstorage` | `capability-evidence-20260509-173239` passed with real diff, required Node test ok, and `failure_owner=none`. | Keep as a frontend persistence guard. |
 | `memory-save-quality-gate` | `capability-evidence-20260509-173239` passed with real diff, memory tests and full test suite ok, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
 | `skill-promotion-gate` | `capability-evidence-20260509-173239` passed on rerun after refreshing the fixture path from `config.rs` to `learning.rs`; summary now records `skill_active=true` and `promotion=true`. | Keep as a skill promotion and report-evidence guard. |
+| `persistent-memory-planning-context` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Run with the recommended suite before claiming current memory-planning strength. |
+| `memory-recall-conflict-precision` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the guard against over-broad memory conflict demotion. |
+| `memory-save-sensitive-hard-block` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the hard-block safety guard for explicit memory saves. |
+| `permission-default-open-dangerous-guard` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the destructive-action safety guard. |
+| `resume-session-picker` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the resume-session product guard. |
+| `cli-scrollback-polish` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the CLI readability guard. |
 
 Run one case:
 
@@ -222,22 +239,19 @@ scripts/run_live_eval.sh \
 Run the recommended suite:
 
 ```bash
-for case in \
-  code-change-verification-repair-loop \
-  live-eval-dashboard-summary \
-  backend-todo-api-crud \
-  frontend-book-notes-localstorage \
-  memory-save-quality-gate \
-  skill-promotion-gate
-do
-  scripts/run_live_eval.sh \
-    --case "$case" \
-    --mode agent-run \
-    --run-tests \
-    --timeout 1800 \
-    --idle-timeout 300 \
-    --label capability-now
-done
+scripts/run_live_eval.sh \
+  --case recommended \
+  --mode agent-run \
+  --run-tests \
+  --timeout 1800 \
+  --idle-timeout 300 \
+  --label capability-now
+```
+
+List only the recommended suite:
+
+```bash
+scripts/run_live_eval.sh --case recommended --list
 ```
 
 After runs complete, refresh summaries:

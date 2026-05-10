@@ -981,6 +981,8 @@ cargo check -q
 
 ### Batch 6：真实任务评测套件
 
+Status: started on 2026-05-10.
+
 目标：用真实任务证明产品变好，而不是只证明某个 case 过了。
 
 参考：
@@ -994,10 +996,20 @@ cargo check -q
 - eval case definitions。
 - report parser / aggregate summary。
 
+First completed slice:
+
+- Added `scripts/run_live_eval.sh --case recommended` as a first-class entry
+  for the recommended live suite, with `--case recommended --list` for a
+  deterministic view of the suite. Expanded the testing matrix from the old
+  six-case product signal to a 12-case suite covering real implementation,
+  validation/repair, eval reporting, memory, permissions, skill promotion,
+  resume, and CLI scrollback behavior.
+
 验证：
 
 ```bash
 bash -n scripts/run_live_eval.sh
+scripts/run_live_eval.sh --case recommended --list
 python3 -m py_compile scripts/live_eval_report_parser.py
 cargo test -q eval
 ```
