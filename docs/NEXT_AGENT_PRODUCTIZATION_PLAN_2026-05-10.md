@@ -1059,10 +1059,20 @@ Seventh attempted slice:
   harness recorded no diff, `closeout_status=missing`, and
   `failure_owner=agent_flow`. Required commands then ran against the seeded
   unmodified worktree, so the two Python assertions failed as expected. This is
-  not a clean verdict on skill repair quality; rerun after provider stability.
+  retained as provider-failure evidence, not as a verdict on skill repair
+  quality.
 - Small follow-up fixes from this slice: the streaming history unit test now
   tolerates extra runtime turns in dirty worktrees, and MiniMax errors preserve
   the original provider error text when fallback body fetching is unavailable.
+
+Eighth completed slice:
+
+- Reran `skill-promotion-gate` after the provider-blocked attempt:
+  `batch6-smoke-20260510-154614` passed with a real skill promotion-gate diff,
+  required skill/slash/Python/full-suite commands ok, full
+  `1178 passed; 0 failed`, `skill_active=true`, `promotion=true`,
+  `closeout_status=passed`, and `failure_owner=none`. The first six
+  recommended live-eval cases now have current post-split passing evidence.
 
 验证：
 
@@ -1088,6 +1098,7 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-142800
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-143451
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-144053
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-152513
+scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-154614
 ```
 
 ## 验收指标

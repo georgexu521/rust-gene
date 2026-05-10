@@ -63,10 +63,10 @@ evidence run:
 | Latest recovered dashboard run | `checkpoint-function-anchor-20260509-120047`: required commands ok, real diff, closeout passed, `failure_owner=none` |
 | Latest Batch 3 runs | Five current suite cases now have passing evidence; `live-eval-dashboard-summary` first failed as `agent_flow` in `capability-now-20260509-143251`, then passed in `capability-now-20260509-144729` after `3344363` removed Markdown highlighting from grep evidence. |
 | Latest six-case capability run | `capability-evidence-20260509-173239`: `6/6` passed, all with real diffs; memory active tasks `6`, memory changed-plan tasks `5`, skill active tasks `1`, skill promotion-evidence tasks `1`. |
-| Latest Batch 6 smoke | `batch6-smoke-20260510-133309`, `batch6-parsefix-20260510-141148`, `batch6-smoke-20260510-142800`, `batch6-smoke-20260510-143451`, and `batch6-smoke-20260510-144053`: first five recommended cases passed after the ConversationLoop split and parse-noise/provider fallback fix, all with real diffs, required commands ok, and `failure_owner=none`. |
+| Latest Batch 6 smoke | `batch6-smoke-20260510-133309`, `batch6-parsefix-20260510-141148`, `batch6-smoke-20260510-142800`, `batch6-smoke-20260510-143451`, `batch6-smoke-20260510-144053`, and `batch6-smoke-20260510-154614`: first six recommended cases passed after the ConversationLoop split and parse-noise/provider fallback fix, all with real diffs, required commands ok, and `failure_owner=none`. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
-| Latest skill-promotion rerun | `batch6-smoke-20260510-152513` failed before any tool call because the MiniMax request failed at the first API turn; this is an `agent_flow`/provider failure, not a passing or failing verdict on the skill repair path. |
+| Latest skill-promotion rerun | `batch6-smoke-20260510-154614` passed after the earlier provider-blocked rerun, with real diff, `skill_active=true`, `promotion=true`, required commands ok, full `1178 passed; 0 failed`, and `failure_owner=none`. |
 
 The aggregate intentionally includes older runs that predate structured
 `failure_owner`, `eval_intent`, and adaptive-trigger metadata. Use it for
@@ -203,8 +203,7 @@ default loop.
 | 11 | `resume-session-picker` | Tests Claude-style resume as a daily CLI workflow. |
 | 12 | `cli-scrollback-polish` | Tests interactive CLI readability and long-output ergonomics. |
 
-The first five cases have current post-split passing evidence, and the first six
-cases have current passing evidence overall. The expanded 12-case suite is the
+The first six cases have current post-split passing evidence. The expanded 12-case suite is the
 next productization baseline and should be run after runtime-loop or CLI behavior
 changes. The previous dashboard recovered warning and the residual
 workflow-judgment JSON parse stderr warning both have focused clean reruns. The
@@ -219,7 +218,7 @@ model-led edit and validation without deterministic patch synthesis.
 | `backend-todo-api-crud` | `batch6-smoke-20260510-142800` passed after the 2026-05-10 loop split with real diff, required commands ok, `closeout_status=passed`, and `failure_owner=none`. It also recorded earlier verification/stage-validation failures before repair, which is useful evidence that the repair loop recovered instead of closing out early. | Keep as a backend implementation and repair-after-failed-validation guard. |
 | `frontend-book-notes-localstorage` | `batch6-smoke-20260510-143451` passed after the 2026-05-10 loop split with real diff, required Node test ok, no TODOs, `closeout_status=passed`, and `failure_owner=none`. | Keep as a frontend persistence and product-completeness guard. |
 | `memory-save-quality-gate` | `batch6-smoke-20260510-144053` passed after the 2026-05-10 loop split with real diff, memory tests and full `1178 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
-| `skill-promotion-gate` | `capability-evidence-20260509-173239` passed on rerun after refreshing the fixture path from `config.rs` to `learning.rs`; summary records `skill_active=true` and `promotion=true`. The post-split rerun `batch6-smoke-20260510-152513` failed before tools due a MiniMax API error, with no diff and `failure_owner=agent_flow`, so it is not a clean product verdict. | Rerun after provider stability; if it reaches tools and still fails, prioritize repair guidance for restoring both `validate_skill_promotion_for_apply` and `record_evolution_update`. |
+| `skill-promotion-gate` | `batch6-smoke-20260510-154614` passed after the 2026-05-10 loop split with real diff, required commands ok, full `1178 passed; 0 failed`, `skill_active=true`, `promotion=true`, `closeout_status=passed`, and `failure_owner=none`. | Keep as the skill promotion and report-evidence guard. |
 | `persistent-memory-planning-context` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Run with the recommended suite before claiming current memory-planning strength. |
 | `memory-recall-conflict-precision` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the guard against over-broad memory conflict demotion. |
 | `memory-save-sensitive-hard-block` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the hard-block safety guard for explicit memory saves. |
