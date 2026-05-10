@@ -205,8 +205,13 @@ write_agent_prompt() {
     else
       lines << "- This is a real code-change evaluation in an isolated worktree. Do not stop at investigation."
     end
+    case sample.fetch("eval_intent", "seeded_code_change").to_s.strip
+    when "audit_or_regression_check", "stale_or_already_satisfied"
+      lines << "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, run the required validation commands and close out with no changes if the requested behavior is already present. Make a focused edit only when a concrete missing behavior is proven."
+    else
+      lines << "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, either make a focused edit or clearly state the concrete blocker."
+    end
     lines.concat([
-      "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, either make a focused edit or clearly state the concrete blocker.",
       "- If the code is already fixed, prove it with the required commands and still provide a Closeout.",
       "- Summarize files changed and why.",
       "- List validation commands you ran and their pass/fail status.",
