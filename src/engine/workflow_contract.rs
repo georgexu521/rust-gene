@@ -47,13 +47,19 @@ pub enum WeightOverrideStatus {
     Rejected,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct WeightFactors {
+    #[serde(default)]
     pub dependency: f32,
+    #[serde(default)]
     pub user_value: f32,
+    #[serde(default)]
     pub risk_reduction: f32,
+    #[serde(default)]
     pub uncertainty_reduction: f32,
+    #[serde(default)]
     pub blocking: f32,
+    #[serde(default)]
     pub cost: f32,
 }
 
@@ -1781,6 +1787,51 @@ mod tests {
             .map(WorkflowPlanStep::computed_weight_share)
             .sum::<f32>();
         assert!((total_share - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn workflow_judgment_defaults_missing_factor_fields() {
+        let content = r#"{
+  "task_type": "bug_fix",
+  "complexity": "medium",
+  "risk": "high",
+  "requirement_complete_enough": true,
+  "needs_user_questions": false,
+  "question_reason": null,
+  "questions": [],
+  "assumptions": [],
+  "guided_reasoning_required": true,
+  "guided_reasoning_triggers": ["high_risk_area"],
+  "plan": [
+    {
+      "id": "validate",
+      "description": "Run required validation",
+      "priority": "p1",
+      "factors": {
+        "dependency": 0.7,
+        "user_value": 0.8,
+        "risk_reduction": 0.9,
+        "blocking": 0.8,
+        "cost": 0.2
+      },
+      "reason": "Validation proves whether the current behavior is already satisfied",
+      "acceptance_criteria": ["Required commands pass"]
+    }
+  ],
+  "acceptance": {
+    "original_user_goal": "Audit memory behavior",
+    "assumptions": [],
+    "criteria": [],
+    "unresolved_items": [],
+    "residual_risks": []
+  }
+}"#;
+
+        let judgment = parse_workflow_judgment(content).unwrap();
+
+        let factors = judgment.plan[0].factors.expect("factors should parse");
+        assert_eq!(factors.uncertainty_reduction, 0.0);
+        assert!(judgment.plan[0].normalized_weight() > 0.0);
     }
 
     #[test]
