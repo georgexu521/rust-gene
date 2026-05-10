@@ -101,17 +101,38 @@ async fn terminal_bash_exposure_report(
     let mut registry = crate::tools::ToolRegistry::default_registry();
     let _ = crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
     let context = app.build_tool_context().await;
-    let route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, app.agent_mode);
+    let learning_events = recent_route_learning_events(app);
+    let route = route_for_agent_mode_with_learning(
+        TERMINAL_EXPOSURE_PROMPT,
+        app.agent_mode,
+        &learning_events,
+    );
     crate::engine::tool_exposure::diagnose_tool_exposure(&registry, &context, &route, "bash")
 }
 
+#[cfg(test)]
 fn route_for_agent_mode(
     prompt: &str,
     mode: AgentMode,
 ) -> crate::engine::intent_router::IntentRoute {
-    let mut route = crate::engine::intent_router::IntentRouter::new().route(prompt);
+    route_for_agent_mode_with_learning(prompt, mode, &[])
+}
+
+fn route_for_agent_mode_with_learning(
+    prompt: &str,
+    mode: AgentMode,
+    learning_events: &[crate::session_store::LearningEventRecord],
+) -> crate::engine::intent_router::IntentRoute {
+    let mut route = crate::engine::intent_router::IntentRouter::new()
+        .route_with_learning(prompt, learning_events);
     mode.apply_to_route(&mut route);
     route
+}
+
+fn recent_route_learning_events(app: &TuiApp) -> Vec<crate::session_store::LearningEventRecord> {
+    app.session_manager
+        .recent_learning_events(20)
+        .unwrap_or_default()
 }
 
 fn format_current_mode_route_exposure(
@@ -119,7 +140,12 @@ fn format_current_mode_route_exposure(
     registry: &crate::tools::ToolRegistry,
     context: &crate::tools::ToolContext,
 ) -> String {
-    let route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, app.agent_mode);
+    let learning_events = recent_route_learning_events(app);
+    let route = route_for_agent_mode_with_learning(
+        TERMINAL_EXPOSURE_PROMPT,
+        app.agent_mode,
+        &learning_events,
+    );
     let bash =
         crate::engine::tool_exposure::diagnose_tool_exposure(registry, context, &route, "bash");
     let file_edit = crate::engine::tool_exposure::diagnose_tool_exposure(
@@ -148,6 +174,7 @@ fn format_current_mode_route_exposure(
 fn format_agent_mode_exposure_matrix(
     registry: &crate::tools::ToolRegistry,
     context: &crate::tools::ToolContext,
+    learning_events: &[crate::session_store::LearningEventRecord],
 ) -> String {
     [
         AgentMode::Auto,
@@ -158,7 +185,8 @@ fn format_agent_mode_exposure_matrix(
     ]
     .into_iter()
     .map(|mode| {
-        let route = route_for_agent_mode(TERMINAL_EXPOSURE_PROMPT, mode);
+        let route =
+            route_for_agent_mode_with_learning(TERMINAL_EXPOSURE_PROMPT, mode, learning_events);
         let bash =
             crate::engine::tool_exposure::diagnose_tool_exposure(registry, context, &route, "bash");
         let file_edit = crate::engine::tool_exposure::diagnose_tool_exposure(
@@ -386,13 +414,14 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
         ));
     }
     let context = app.build_tool_context().await;
+    let learning_events = recent_route_learning_events(app);
     report.checks.push(crate::diagnostics::CheckResult::info(
         "agent_mode_route",
         format_current_mode_route_exposure(app, &registry, &context),
     ));
     report.checks.push(crate::diagnostics::CheckResult::info(
         "agent_mode_matrix",
-        format_agent_mode_exposure_matrix(&registry, &context),
+        format_agent_mode_exposure_matrix(&registry, &context, &learning_events),
     ));
 
     if let Some(ref engine) = app.streaming_engine {
@@ -2031,5 +2060,39 @@ mod tests {
         assert!(!plan_allowlist.contains("file_edit"));
         assert!(build_allowlist.contains("bash"));
         assert!(build_allowlist.contains("file_edit"));
+    }
+
+    #[test]
+    fn doctor_route_summary_keeps_bash_with_learning_feedback() {
+        let events = vec![
+            crate::session_store::LearningEventRecord {
+                id: 1,
+                session_id: "s1".to_string(),
+                kind: "tool_outcome".to_string(),
+                source: "test".to_string(),
+                summary: "bash failed".to_string(),
+                confidence: 1.0,
+                payload: serde_json::json!({"tool": "bash", "success": false}),
+                created_at: "now".to_string(),
+            },
+            crate::session_store::LearningEventRecord {
+                id: 2,
+                session_id: "s1".to_string(),
+                kind: "tool_outcome".to_string(),
+                source: "test".to_string(),
+                summary: "bash failed".to_string(),
+                confidence: 1.0,
+                payload: serde_json::json!({"tool": "bash", "success": false}),
+                created_at: "now".to_string(),
+            },
+        ];
+
+        let route =
+            route_for_agent_mode_with_learning(TERMINAL_EXPOSURE_PROMPT, AgentMode::Auto, &events);
+        let allowlist =
+            crate::engine::conversation_loop::ConversationLoop::route_tool_allowlist(&route);
+
+        assert!(route.reason.contains("recent failure"));
+        assert!(allowlist.contains("bash"));
     }
 }

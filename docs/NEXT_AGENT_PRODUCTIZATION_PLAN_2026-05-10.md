@@ -841,6 +841,13 @@ First completed slice:
   but terminal/runtime requests keep `bash` exposed when bash is the tool needed
   to inspect, install, run, or validate local state.
 
+Second completed slice:
+
+- `/doctor` route exposure diagnostics now use the current session's learning
+  events, matching the real turn routing path more closely. The diagnostic tests
+  cover the prior failure mode where repeated bash failures could otherwise make
+  terminal tasks look as if bash were unavailable.
+
 验证：
 
 ```bash
