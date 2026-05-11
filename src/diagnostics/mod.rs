@@ -2,6 +2,8 @@
 //!
 //! 检测环境健康状态，提供可执行的修复建议，并支持导出 JSON 诊断报告。
 
+pub mod provider_health;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;

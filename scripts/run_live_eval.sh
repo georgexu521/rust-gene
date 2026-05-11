@@ -17,6 +17,7 @@ RUN_TESTS=0
 AGENT_TIMEOUT_SECS="${PRIORITY_AGENT_LIVE_EVAL_TIMEOUT_SECS:-1800}"
 AGENT_IDLE_SECS="${PRIORITY_AGENT_LIVE_EVAL_IDLE_SECS:-300}"
 OVERLAY_WORKTREE="${PRIORITY_AGENT_LIVE_EVAL_OVERLAY_WORKTREE:-0}"
+SKIP_PROVIDER_HEALTH="${PRIORITY_AGENT_LIVE_EVAL_SKIP_PROVIDER_HEALTH:-0}"
 
 RECOMMENDED_CASES=(
   code-change-verification-repair-loop
@@ -58,6 +59,8 @@ Options:
   --run-id ID        Stable run id (default: timestamp).
   --run-tests        Run acceptance.required_commands during collect/agent-run/full.
   --skip-build       Reuse target/release/priority-agent for api-plan.
+  --skip-provider-health
+                     Skip provider health preflight before agent-run.
   --overlay-working-tree
                      Apply tracked local working-tree changes to the isolated
                      worktree and commit them as the task baseline.
@@ -83,6 +86,7 @@ while [[ $# -gt 0 ]]; do
     --run-id) RUN_ID="${2:-}"; shift 2 ;;
     --run-tests) RUN_TESTS=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
+    --skip-provider-health) SKIP_PROVIDER_HEALTH=1; shift ;;
     --overlay-working-tree) OVERLAY_WORKTREE=1; shift ;;
     --timeout) AGENT_TIMEOUT_SECS="${2:-}"; shift 2 ;;
     --idle-timeout) AGENT_IDLE_SECS="${2:-}"; shift 2 ;;
@@ -715,6 +719,114 @@ PY
   echo "$plan_file"
 }
 
+provider_health_enabled() {
+  [[ "$SKIP_PROVIDER_HEALTH" != "1" && "${PRIORITY_AGENT_LIVE_EVAL_PROVIDER_HEALTH:-1}" != "0" ]]
+}
+
+provider_health_preflight() {
+  local env_base="$1"
+  if ! provider_health_enabled; then
+    return 0
+  fi
+
+  local run_report_dir status_file health_json health_stdout health_stderr status
+  run_report_dir="$REPORT_DIR/live-$RUN_ID"
+  status_file="$run_report_dir/provider-health-status.txt"
+  health_json="$run_report_dir/provider-health.json"
+  health_stdout="$run_report_dir/provider-health-stdout.log"
+  health_stderr="$run_report_dir/provider-health-stderr.log"
+  mkdir -p "$run_report_dir" "$env_base/home" "$env_base/xdg-config" "$env_base/xdg-data" "$env_base/xdg-state"
+
+  if [[ -f "$status_file" ]]; then
+    [[ "$(cat "$status_file")" == "ok" ]]
+    return $?
+  fi
+
+  (
+    set +e
+    HOME="$env_base/home" \
+      XDG_CONFIG_HOME="$env_base/xdg-config" \
+      XDG_DATA_HOME="$env_base/xdg-data" \
+      XDG_STATE_HOME="$env_base/xdg-state" \
+      MINIMAX_API_KEY="${MINIMAX_API_KEY:-}" \
+      MINIMAX_BASE_URL="${MINIMAX_BASE_URL:-}" \
+      MINIMAX_MODEL="${MINIMAX_MODEL:-MiniMax-M2.7}" \
+      OPENAI_API_KEY="" \
+      MOONSHOT_API_KEY="" \
+      "$ROOT_DIR/target/release/priority-agent" \
+        --provider-health \
+        --output "$ROOT_DIR/$health_json" \
+        --timeout "${PRIORITY_AGENT_PROVIDER_HEALTH_TIMEOUT_SECS:-45}" \
+        >"$health_stdout" 2>"$health_stderr"
+    status=$?
+    if [[ "$status" -eq 0 ]]; then
+      echo ok >"$status_file"
+    else
+      echo failed >"$status_file"
+    fi
+    exit "$status"
+  )
+}
+
+write_provider_health_agent_failure() {
+  local id="$1" task_workdir="$2" report_dir="$3" agent_stdout="$4" agent_stderr="$5" agent_output="$6" agent_events="$7" exit_file="$8" prompt_file="$9"
+  local run_report_dir health_json health_stderr
+  run_report_dir="$REPORT_DIR/live-$RUN_ID"
+  health_json="$run_report_dir/provider-health.json"
+  health_stderr="$run_report_dir/provider-health-stderr.log"
+
+  : >"$agent_stdout"
+  : >"$agent_output"
+  {
+    echo "provider unavailable: provider health preflight failed before agent-run"
+    echo "Health status: $run_report_dir/provider-health-status.txt"
+    echo "Health report: $health_json"
+    if [[ -s "$health_stderr" ]]; then
+      echo
+      cat "$health_stderr"
+    fi
+  } >"$agent_stderr"
+  echo 126 >"$exit_file"
+  touch "$report_dir/provider-health-preflight-failed"
+  if [[ -f "$health_json" ]]; then
+    cp "$health_json" "$report_dir/provider-health.json"
+  fi
+
+  python3 - "$agent_events" "$prompt_file" "$task_workdir" "$health_json" "$id" <<'PY'
+import json
+import pathlib
+import sys
+
+events_path = pathlib.Path(sys.argv[1])
+prompt_file = sys.argv[2]
+cwd = sys.argv[3]
+health_json = sys.argv[4]
+task_id = sys.argv[5]
+events_path.parent.mkdir(parents=True, exist_ok=True)
+events = [
+    {
+        "event": "eval_started",
+        "prompt_file": prompt_file,
+        "cwd": cwd,
+        "model": "provider-health-preflight",
+    },
+    {
+        "event": "provider_health_preflight",
+        "status": "failed",
+        "task_id": task_id,
+        "report": health_json,
+    },
+    {
+        "event": "error",
+        "message": "provider unavailable: provider health preflight failed before agent-run",
+    },
+]
+with events_path.open("w", encoding="utf-8") as fh:
+    for event in events:
+        fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+PY
+}
+
 agent_run_task() {
   local file="$1" task_workdir="$2"
   local id report_dir agent_stdout agent_stderr agent_output agent_events exit_file prompt_file env_base cargo_target_dir
@@ -737,6 +849,19 @@ agent_run_task() {
 
   build_binary
   ensure_task_env "$id"
+  if ! provider_health_preflight "$env_base"; then
+    write_provider_health_agent_failure \
+      "$id" \
+      "$task_workdir" \
+      "$report_dir" \
+      "$agent_stdout" \
+      "$agent_stderr" \
+      "$agent_output" \
+      "$agent_events" \
+      "$exit_file" \
+      "$prompt_file"
+    return 126
+  fi
 
   python3 - \
     "$AGENT_TIMEOUT_SECS" \
@@ -921,6 +1046,9 @@ collect_task() {
   if [[ "$required_cmd_count" -gt 0 && ( "$MODE" == "agent-run" || "$MODE" == "full" ) ]]; then
     effective_run_tests=1
   fi
+  if [[ -f "$report_dir/provider-health-preflight-failed" ]]; then
+    effective_run_tests=0
+  fi
 
   git -C "$task_workdir" status --short >"$report_dir/git-status.txt" || true
   git -C "$task_workdir" diff --stat >"$diff_stat" || true
@@ -967,6 +1095,22 @@ File.write(json_path, JSON.generate(YAML.load_file(sample_path) || {}) + "\n")
     echo "- Test status: \`$test_status\`"
     echo "- Generated: \`$(date '+%Y-%m-%d %H:%M:%S %z')\`"
     echo
+    if [[ -f "$report_dir/provider-health-preflight-failed" ]]; then
+      echo "## Provider Health Preflight"
+      echo
+      echo "Provider health failed before the agent run, so required commands were not run for this task."
+      echo
+      if [[ -f "$report_dir/provider-health.json" ]]; then
+        echo '```json'
+        cat "$report_dir/provider-health.json"
+        echo '```'
+      else
+        echo '```text'
+        cat "$REPORT_DIR/live-$RUN_ID/provider-health-stderr.log" 2>/dev/null || true
+        echo '```'
+      fi
+      echo
+    fi
     echo "## Git Status"
     echo
     echo '```text'

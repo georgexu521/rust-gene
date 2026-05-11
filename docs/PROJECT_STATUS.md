@@ -452,3 +452,11 @@ Latest maintenance note:
   `batch6-rerun-20260510-230329` and `batch6-rerun-20260510-232124` both have
   clean harness-required commands but remain provider-blocked by MiniMax
   request-send failures before closeout.
+- Provider health preflight is now available as
+  `priority-agent --provider-health` and is enabled by default for
+  `scripts/run_live_eval.sh --mode agent-run`. It probes plain chat, tool-call,
+  and tool-result continuation before spending a live-eval run; failures are
+  written as provider-health artifacts and task reports classify the stop as an
+  environment/provider issue. Use `--skip-provider-health` or
+  `PRIORITY_AGENT_LIVE_EVAL_PROVIDER_HEALTH=0` only for debugging the gate
+  itself.

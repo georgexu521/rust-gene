@@ -62,6 +62,7 @@ enum StartupMode {
     Cli,
     Tui,
     EvalRun,
+    ProviderHealth,
 }
 
 fn detect_startup_mode(args: &[String]) -> StartupMode {
@@ -72,6 +73,7 @@ fn detect_startup_mode(args: &[String]) -> StartupMode {
         Some("--cli") => StartupMode::Cli,
         Some("--tui") => StartupMode::Tui,
         Some("--eval-run") => StartupMode::EvalRun,
+        Some("--provider-health") => StartupMode::ProviderHealth,
         _ => StartupMode::Cli,
     }
 }
@@ -94,6 +96,8 @@ fn print_help() {
     println!("  --tui    Start the full-screen terminal interface");
     println!("  --eval-run --prompt-file <PATH> [--output <PATH>] [--events <PATH>]");
     println!("           Run one non-interactive evaluation task");
+    println!("  --provider-health [--output <PATH>] [--timeout <SECS>]");
+    println!("           Probe provider chat, tool-call, and tool-result continuation");
     println!("  (none)   Default: start Priority Agent");
     println!();
     println!("Examples:");
@@ -347,6 +351,37 @@ async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn run_provider_health_command(args: &[String]) -> anyhow::Result<()> {
+    let timeout_secs = arg_value(args, "--timeout")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(45)
+        .clamp(5, 300);
+    let output_file = arg_value(args, "--output");
+    let (provider, model) = bootstrap::init_provider()?;
+    let report = diagnostics::provider_health::run_provider_health(
+        provider,
+        model,
+        std::time::Duration::from_secs(timeout_secs),
+    )
+    .await;
+    let json = serde_json::to_string_pretty(&report)?;
+
+    if let Some(path) = output_file {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, json)?;
+    } else {
+        println!("{json}");
+    }
+
+    if !report.is_ok() {
+        anyhow::bail!("provider health failed: {}", report.failure_summary());
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     // 解析命令行参数
@@ -356,7 +391,11 @@ async fn main() {
     // 初始化日志（交互模式默认降噪，仍可通过 RUST_LOG 覆盖）
     let default_level = match startup_mode {
         StartupMode::Api => "info",
-        StartupMode::Help | StartupMode::Cli | StartupMode::Tui | StartupMode::EvalRun => "warn",
+        StartupMode::Help
+        | StartupMode::Cli
+        | StartupMode::Tui
+        | StartupMode::EvalRun
+        | StartupMode::ProviderHealth => "warn",
     };
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -510,6 +549,13 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        StartupMode::ProviderHealth => {
+            if let Err(e) = run_provider_health_command(&args).await {
+                error!("Provider health failed: {}", e);
+                eprintln!("Provider health failed: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     info!("Priority Agent exiting.");
@@ -552,6 +598,10 @@ mod tests {
         assert_eq!(
             detect_startup_mode(&["priority-agent".into(), "--eval-run".into()]),
             StartupMode::EvalRun
+        );
+        assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "--provider-health".into()]),
+            StartupMode::ProviderHealth
         );
         assert_eq!(
             detect_startup_mode(&["priority-agent".into()]),

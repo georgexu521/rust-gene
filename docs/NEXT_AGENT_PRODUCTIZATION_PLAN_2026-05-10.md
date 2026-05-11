@@ -1025,6 +1025,19 @@ Third completed slice:
   with real diff, required commands ok, full `1178 passed; 0 failed`,
   `failure_owner=none`, and no workflow-judgment parse warning in stderr.
 
+Provider health gate slice:
+
+- Added `priority-agent --provider-health` as a direct provider smoke probe for
+  plain chat, tool-call generation, and tool-result continuation with a
+  Closeout marker. The command writes structured JSON and exits non-zero on
+  auth, rate-limit, schema, timeout, transport, or provider-semantic failures.
+- `scripts/run_live_eval.sh --mode agent-run` now runs this preflight before
+  launching the agent. If the provider is unhealthy, the task report records a
+  provider-health section, skips expensive required commands, writes an
+  environment-owned agent failure, and stops before spending a long eval turn.
+  The gate can be bypassed for debugging with `--skip-provider-health` or
+  `PRIORITY_AGENT_LIVE_EVAL_PROVIDER_HEALTH=0`.
+
 Fourth completed slice:
 
 - Ran `backend-todo-api-crud` as the next recommended live eval:

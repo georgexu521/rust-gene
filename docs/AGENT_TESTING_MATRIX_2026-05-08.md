@@ -213,6 +213,11 @@ workflow-judgment JSON parse stderr warning both have focused clean reruns. The
 latest dashboard rerun also proves the provider fallback path can recover a
 MiniMax 200 OK success body when the async client rejects it, then continue into
 model-led edit and validation without deterministic patch synthesis.
+New live-eval agent runs now have a provider health preflight before the agent
+turn. The preflight checks plain chat, tool calls, and tool-result continuation;
+if it fails, the run is recorded as an environment/provider stop instead of
+spending the full eval timeout. Use `--skip-provider-health` only when testing
+the gate itself.
 
 | Case | Current evidence | Next action |
 | --- | --- | --- |
