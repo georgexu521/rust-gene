@@ -55,6 +55,17 @@
   the long anonymous argument list with a named execution boundary for tool
   calls, streaming, pre-executed results, route policy, exposed tools,
   checkpoint facts, destructive scope, and lifecycle state.
+- 2026-05-11: Phase 1 Batch 1.3 continued. Introduced
+  `ToolExecutionController` as the owner of `execute_tools_parallel`; the main
+  loop now constructs the controller and passes a `ToolExecutionRequest`,
+  keeping execution behavior unchanged while moving tool orchestration out of
+  `impl ConversationLoop`.
+- Validation after the `ToolExecutionController` ownership split:
+  `cargo fmt --check`, `git diff --check`, targeted `tool_call_lifecycle`,
+  `batch_summarizes_results_and_lifecycle_statuses`, `route_scoped_tools`,
+  `tool_result`, `runtime_diet`, and `patch_synthesis` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1208 passed; 0 failed`).
 - Validation after the `ToolExecutionRequest` slice: `cargo fmt --check`,
   `git diff --check`, targeted `tool_call_lifecycle`,
   `batch_summarizes_results_and_lifecycle_statuses`, `tool_result`,

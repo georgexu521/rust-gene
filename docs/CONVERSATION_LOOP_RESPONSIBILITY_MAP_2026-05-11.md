@@ -73,6 +73,11 @@ anonymous argument list and makes route policy, exposed tools, checkpoint facts,
 destructive scope, pre-executed results, streaming, and lifecycle ownership
 explicit at the controller boundary.
 
+`ToolExecutionController` now owns the `execute_tools_parallel` implementation.
+It still borrows `ConversationLoop` for existing dependencies, so this is a
+behavior-preserving ownership split rather than a dependency rewrite. The next
+safe step is to replace that broad borrow with an explicit execution context.
+
 ## Extraction Rule
 
 Future loop-split commits should follow this rule:

@@ -97,8 +97,15 @@ pub(super) struct ToolExecutionRequest<'a> {
     pub(super) lifecycle: &'a mut ToolCallLifecycle,
 }
 
-impl ConversationLoop {
-    /// 并行执行工具调用
+pub(super) struct ToolExecutionController<'a> {
+    conversation: &'a ConversationLoop,
+}
+
+impl<'a> ToolExecutionController<'a> {
+    pub(super) fn new(conversation: &'a ConversationLoop) -> Self {
+        Self { conversation }
+    }
+
     pub(super) async fn execute_tools_parallel(
         &self,
         request: ToolExecutionRequest<'_>,
@@ -116,11 +123,12 @@ impl ConversationLoop {
             destructive_scope,
             lifecycle,
         } = request;
+        let conversation = self.conversation;
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
         let mut denied_results = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
-        let active_goal = self
+        let active_goal = conversation
             .goal_manager
             .as_ref()
             .and_then(|manager| manager.current());
@@ -132,7 +140,7 @@ impl ConversationLoop {
             }
             if !exposed_tool_names.contains(&tc.name) {
                 let error = if action_checkpoint_active {
-                    Self::action_checkpoint_unexposed_tool_message(
+                    ConversationLoop::action_checkpoint_unexposed_tool_message(
                         &tc.name,
                         exposed_tool_names,
                         action_checkpoint_lookup_count,
@@ -161,8 +169,8 @@ impl ConversationLoop {
                     });
                 }
                 persist_tool_outcome_learning_event(
-                    self.session_store.as_ref(),
-                    &self.session_id,
+                    conversation.session_store.as_ref(),
+                    &conversation.session_id,
                     tc,
                     &result,
                 );
@@ -194,8 +202,8 @@ impl ConversationLoop {
                     });
                 }
                 persist_tool_outcome_learning_event(
-                    self.session_store.as_ref(),
-                    &self.session_id,
+                    conversation.session_store.as_ref(),
+                    &conversation.session_id,
                     tc,
                     &result,
                 );
@@ -204,11 +212,11 @@ impl ConversationLoop {
                 continue;
             }
             record_goal_drift_if_needed(&trace, active_goal.as_ref(), tc);
-            if !tool_allowed_by_context(&self.allowed_tools, &tc.name) {
+            if !tool_allowed_by_context(&conversation.allowed_tools, &tc.name) {
                 let result = tool_not_allowed_result(tc);
                 persist_tool_outcome_learning_event(
-                    self.session_store.as_ref(),
-                    &self.session_id,
+                    conversation.session_store.as_ref(),
+                    &conversation.session_id,
                     tc,
                     &result,
                 );
@@ -253,8 +261,8 @@ impl ConversationLoop {
                         });
                     }
                     persist_tool_outcome_learning_event(
-                        self.session_store.as_ref(),
-                        &self.session_id,
+                        conversation.session_store.as_ref(),
+                        &conversation.session_id,
                         tc,
                         &result,
                     );
@@ -266,7 +274,10 @@ impl ConversationLoop {
 
             if action_checkpoint_active
                 && tc.name == "bash"
-                && !Self::bash_allowed_at_action_checkpoint(&tc.arguments, has_changes_before_tools)
+                && !ConversationLoop::bash_allowed_at_action_checkpoint(
+                    &tc.arguments,
+                    has_changes_before_tools,
+                )
             {
                 let mut result = ToolResult::error(
                     "Bash is restricted during the action checkpoint: use it only to apply a patch (for example python/perl/sed -i/apply_patch/redirect/tee) or, after files have changed, to run validation. Do not use bash for read-only inspection at this checkpoint."
@@ -289,8 +300,8 @@ impl ConversationLoop {
                     });
                 }
                 persist_tool_outcome_learning_event(
-                    self.session_store.as_ref(),
-                    &self.session_id,
+                    conversation.session_store.as_ref(),
+                    &conversation.session_id,
                     tc,
                     &result,
                 );
@@ -299,7 +310,7 @@ impl ConversationLoop {
                 continue;
             }
             if action_checkpoint_active && tc.name == "file_edit" {
-                if let Some(reason) = Self::action_checkpoint_file_edit_rejection(
+                if let Some(reason) = ConversationLoop::action_checkpoint_file_edit_rejection(
                     &tc.arguments,
                     &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
                 ) {
@@ -323,8 +334,8 @@ impl ConversationLoop {
                         });
                     }
                     persist_tool_outcome_learning_event(
-                        self.session_store.as_ref(),
-                        &self.session_id,
+                        conversation.session_store.as_ref(),
+                        &conversation.session_id,
                         tc,
                         &result,
                     );
@@ -338,8 +349,8 @@ impl ConversationLoop {
                 let mut pre_result = pre_result.clone();
                 attach_tool_execution_metadata(tc, &mut pre_result);
                 persist_tool_outcome_learning_event(
-                    self.session_store.as_ref(),
-                    &self.session_id,
+                    conversation.session_store.as_ref(),
+                    &conversation.session_id,
                     tc,
                     &pre_result,
                 );
@@ -389,12 +400,12 @@ impl ConversationLoop {
                         })
                         .await;
                 }
-                let registry = self.tool_registry.clone();
-                let context = self.create_tool_context_with_optional_trace(&trace);
+                let registry = conversation.tool_registry.clone();
+                let context = conversation.create_tool_context_with_optional_trace(&trace);
                 let tc_clone = tc.clone();
                 let tool_name = tc.name.clone();
-                let cost_tracker = self.cost_tracker.clone();
-                let hook_manager = self.hook_manager.clone();
+                let cost_tracker = conversation.cost_tracker.clone();
+                let hook_manager = conversation.hook_manager.clone();
                 let trace = trace.clone();
                 read_only_jobs.push(async move {
                     let started_at = std::time::Instant::now();
@@ -480,8 +491,8 @@ impl ConversationLoop {
         while let Some((tc, result)) = readonly_stream.next().await {
             lifecycle.completed(&tc, &result);
             persist_tool_outcome_learning_event(
-                self.session_store.as_ref(),
-                &self.session_id,
+                conversation.session_store.as_ref(),
+                &conversation.session_id,
                 &tc,
                 &result,
             );
@@ -500,11 +511,11 @@ impl ConversationLoop {
         for tc in read_write_calls {
             let tool_id = tc.id.clone();
             let tool_name = tc.name.clone();
-            if !tool_allowed_by_context(&self.allowed_tools, &tool_name) {
+            if !tool_allowed_by_context(&conversation.allowed_tools, &tool_name) {
                 let result = tool_not_allowed_result(&tc);
                 persist_tool_outcome_learning_event(
-                    self.session_store.as_ref(),
-                    &self.session_id,
+                    conversation.session_store.as_ref(),
+                    &conversation.session_id,
                     &tc,
                     &result,
                 );
@@ -531,8 +542,10 @@ impl ConversationLoop {
                 });
             }
 
-            let (result, hook_context) = if let Some(tool) = self.tool_registry.get(&tool_name) {
-                let mut context = self.create_tool_context_with_optional_trace(&trace);
+            let (result, hook_context) = if let Some(tool) =
+                conversation.tool_registry.get(&tool_name)
+            {
+                let mut context = conversation.create_tool_context_with_optional_trace(&trace);
                 let drift_check = active_goal
                     .as_ref()
                     .map(|goal| {
@@ -540,7 +553,7 @@ impl ConversationLoop {
                     })
                     .unwrap_or_else(crate::engine::goal_drift::DriftCheck::ok);
                 let drift_requires_approval = drift_check.requires_approval();
-                let pre_decision = if let Some(ref hooks) = self.hook_manager {
+                let pre_decision = if let Some(ref hooks) = conversation.hook_manager {
                     let hook_start = hooks.current_record_sequence();
                     let decision = hooks.run_pre_tool(&tc, &context).await;
                     let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
@@ -572,7 +585,7 @@ impl ConversationLoop {
                     )
                 } else if requires_approval {
                     let mut approved = false;
-                    if let (Some(ref channel), Some(tx)) = (&self.approval_channel, tx) {
+                    if let (Some(ref channel), Some(tx)) = (&conversation.approval_channel, tx) {
                         let base_prompt = if drift_requires_approval {
                             format!(
                                 "Tool '{}' may drift from the current goal. Reason: {} Suggested action: {} Allow?",
@@ -680,13 +693,14 @@ impl ConversationLoop {
                 attach_tool_execution_metadata(&tc, &mut result);
 
                 // ── Security Audit & Denial Tracking ──────────────────────
-                let params_summary = if let Some(tool) = self.tool_registry.get(&tool_name) {
+                let params_summary = if let Some(tool) = conversation.tool_registry.get(&tool_name)
+                {
                     tool.to_classifier_input(&tc.arguments)
                 } else {
                     tool_name.clone()
                 };
 
-                if let Some(ref log) = self.audit_log {
+                if let Some(ref log) = conversation.audit_log {
                     let decision = if result.success {
                         "EXECUTED"
                     } else if result
@@ -703,7 +717,7 @@ impl ConversationLoop {
                         .await;
                 }
 
-                if let Some(ref tracker) = self.denial_tracker {
+                if let Some(ref tracker) = conversation.denial_tracker {
                     if result.success {
                         tracker.record_success().await;
                     } else if result
@@ -729,7 +743,7 @@ impl ConversationLoop {
                 // ─────────────────────────────────────────────────────────
 
                 {
-                    let mut tracker = self.cost_tracker.lock().await;
+                    let mut tracker = conversation.cost_tracker.lock().await;
                     tracker.record_tool_execution(
                         &tool_name,
                         result.success,
@@ -745,7 +759,7 @@ impl ConversationLoop {
                 (result, None)
             };
 
-            if let (Some(hooks), Some(context)) = (&self.hook_manager, &hook_context) {
+            if let (Some(hooks), Some(context)) = (&conversation.hook_manager, &hook_context) {
                 let hook_start = hooks.current_record_sequence();
                 hooks.run_post_tool(&tc, &result, context).await;
                 let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
@@ -784,8 +798,8 @@ impl ConversationLoop {
                 lifecycle.completed(&tc, &result);
             }
             persist_tool_outcome_learning_event(
-                self.session_store.as_ref(),
-                &self.session_id,
+                conversation.session_store.as_ref(),
+                &conversation.session_id,
                 &tc,
                 &result,
             );

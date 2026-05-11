@@ -45,7 +45,7 @@ use text_sanitizer::VisibleTextSanitizer;
 pub(crate) use tool_execution::{
     safe_prefix_by_bytes, safe_suffix_by_bytes, truncate_tool_result, READ_ONLY_TOOLS,
 };
-use tool_execution_controller::ToolExecutionRequest;
+use tool_execution_controller::{ToolExecutionController, ToolExecutionRequest};
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
@@ -1512,7 +1512,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             let has_changes_before_tools =
                 crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
                     && !Self::git_status_files_since(&baseline_git_status_files).is_empty();
-            let mut tool_batch = self
+            let mut tool_batch = ToolExecutionController::new(self)
                 .execute_tools_parallel(ToolExecutionRequest {
                     tool_calls: &tool_calls,
                     tx,
@@ -1909,7 +1909,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             ));
                             let exposed_synth_tools =
                                 HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
-                            let mut synthesized_batch = self
+                            let mut synthesized_batch = ToolExecutionController::new(self)
                                 .execute_tools_parallel(ToolExecutionRequest {
                                     tool_calls: &deterministic_calls,
                                     tx,
@@ -2028,7 +2028,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             ));
                             let exposed_synth_tools =
                                 HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
-                            let mut synthesized_batch = self
+                            let mut synthesized_batch = ToolExecutionController::new(self)
                                 .execute_tools_parallel(ToolExecutionRequest {
                                     tool_calls: &synthesized_calls,
                                     tx,
@@ -5229,7 +5229,7 @@ mod tests {
         let exposed_tool_names = HashSet::from(["git".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let batch = loop_instance
+        let batch = ToolExecutionController::new(&loop_instance)
             .execute_tools_parallel(ToolExecutionRequest {
                 tool_calls: &tool_calls,
                 tx: None,
@@ -5284,7 +5284,7 @@ mod tests {
         let exposed_tool_names = HashSet::from(["file_edit".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let batch = loop_instance
+        let batch = ToolExecutionController::new(&loop_instance)
             .execute_tools_parallel(ToolExecutionRequest {
                 tool_calls: &tool_calls,
                 tx: None,
@@ -5339,7 +5339,7 @@ mod tests {
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let batch = loop_instance
+        let batch = ToolExecutionController::new(&loop_instance)
             .execute_tools_parallel(ToolExecutionRequest {
                 tool_calls: &tool_calls,
                 tx: None,
