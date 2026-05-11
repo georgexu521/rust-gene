@@ -173,8 +173,9 @@ fn memory_quality_gate_rule(
     lower_evidence: &str,
     cwd: &std::path::Path,
 ) -> Vec<PatchSynthesisAction> {
-    if !(lower_evidence.contains("memorywrite")
-        || lower_evidence.contains("memory_save")
+    if !(lower_evidence.contains("memory-save-quality-gate")
+        || lower_evidence.contains("memory quality gate")
+        || lower_evidence.contains("memory save quality")
         || lower_evidence.contains("quality gate")
         || lower_evidence.contains("quality gates"))
     {

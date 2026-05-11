@@ -4508,6 +4508,75 @@ fn handle_apply() {
     }
 
     #[test]
+    fn test_deterministic_patch_synthesis_ignores_unrelated_memory_tool_mentions() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/tools/memory_tool"))
+            .expect("create memory tool dir");
+        std::fs::write(
+            tmp.path().join("src/tools/memory_tool/mod.rs"),
+            "let assessment = assess_memory_candidate(content, category, &existing, true);\n",
+        )
+        .expect("write fixture file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "resume-session-picker inspected /resume and saw memory_save while checking whether \
+             restore_session flushes current memory before switching sessions",
+            tmp.path(),
+        );
+
+        assert!(
+            calls.is_empty(),
+            "memory quality repair must not fire for unrelated resume tasks"
+        );
+    }
+
+    #[test]
+    fn test_deterministic_patch_synthesis_repairs_memory_quality_gate() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/tools/memory_tool"))
+            .expect("create memory tool dir");
+        std::fs::write(
+            tmp.path().join("src/tools/memory_tool/mod.rs"),
+            "let assessment = assess_memory_candidate(content, category, &existing, true);\n",
+        )
+        .expect("write fixture file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "memory-save-quality-gate found that explicit memory_save bypasses the quality gate",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "src/tools/memory_tool/mod.rs");
+        assert_eq!(
+            calls[0].arguments["new_string"],
+            "assess_memory_candidate(content, category, &existing, false)"
+        );
+    }
+
+    #[test]
     fn test_deterministic_patch_synthesis_repairs_memory_recall_conflict_precision() {
         let provider = Arc::new(MockLlmProvider {
             responses: StdMutex::new(VecDeque::new()),
