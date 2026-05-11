@@ -42,6 +42,9 @@ test baseline.
 - assistant-visible text
 - collected tool calls
 - pre-executed read-only tool results
+- usage
+- finish reason
+- step source
 
 This replaces the old anonymous tuple and gives the future `SessionProcessor`
 state machine an explicit return boundary.

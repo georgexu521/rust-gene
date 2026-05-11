@@ -31,6 +31,16 @@
   `(content, tool_calls, pre_executed_results)` session processor tuple with
   `SessionStepResult`, giving the model request / streaming step an explicit
   output boundary before deeper lifecycle migration.
+- 2026-05-11: Phase 1 Batch 1.3 continued. Extended `SessionStepResult` with
+  `usage`, `finish_reason`, and `source` so the future `SessionProcessor`
+  state machine can distinguish normal non-streaming, successful streaming,
+  and streaming fallback paths without depending on tuple position or ad hoc
+  log text.
+- Validation after the Batch 1.3 continuation: `cargo fmt --check`,
+  `git diff --check`, targeted `runtime_diet`, `route_scoped_tools`,
+  `prompt_context`, `tool_result`, and `patch_synthesis` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1205 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.4 started. Added the first
   `ToolResultNormalizer` boundary and routed provider-facing tool result
   content through it. The first slice preserves the exact existing model

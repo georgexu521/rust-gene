@@ -8,7 +8,7 @@ use super::ConversationLoop;
 use crate::engine::hooks::HookDecision;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TurnStatus};
-use crate::services::api::{ChatRequest, ChatResponse, ToolCall};
+use crate::services::api::{ChatRequest, ChatResponse, ToolCall, Usage};
 use crate::tools::ToolResult;
 use anyhow::Result;
 use futures::StreamExt;
@@ -20,6 +20,16 @@ pub(super) struct SessionStepResult {
     pub(super) assistant_text: String,
     pub(super) tool_calls: Vec<ToolCall>,
     pub(super) pre_executed_results: std::collections::HashMap<usize, ToolResult>,
+    pub(super) usage: Option<Usage>,
+    pub(super) finish_reason: Option<String>,
+    pub(super) source: SessionStepSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SessionStepSource {
+    NonStreaming,
+    Streaming,
+    StreamingFallback { reason: String },
 }
 
 impl SessionStepResult {
@@ -27,11 +37,17 @@ impl SessionStepResult {
         assistant_text: String,
         tool_calls: Vec<ToolCall>,
         pre_executed_results: std::collections::HashMap<usize, ToolResult>,
+        usage: Option<Usage>,
+        finish_reason: Option<String>,
+        source: SessionStepSource,
     ) -> Self {
         Self {
             assistant_text,
             tool_calls,
             pre_executed_results,
+            usage,
+            finish_reason,
+            source,
         }
     }
 }
@@ -58,11 +74,15 @@ impl ConversationLoop {
 
         let content = strip_think_blocks(&response.content);
         let tool_calls = response.tool_calls.unwrap_or_default();
+        let usage = response.usage.clone();
 
         Ok(SessionStepResult::new(
             content,
             tool_calls,
             std::collections::HashMap::new(),
+            usage,
+            None,
+            SessionStepSource::NonStreaming,
         ))
     }
 
@@ -102,6 +122,8 @@ impl ConversationLoop {
                 let mut collected_tool_calls: Vec<ToolCall> = Vec::new();
                 let mut raw_args_accum: Vec<String> = Vec::new();
                 let mut stream_failed: Option<String> = None;
+                let mut stream_usage: Option<Usage> = None;
+                let mut finish_reason: Option<String> = None;
                 let mut visible_sanitizer = VisibleTextSanitizer::default();
 
                 let _ = tx.send(StreamEvent::ThinkingStart).await;
@@ -135,6 +157,19 @@ impl ConversationLoop {
                     match result {
                         Ok(chunk) => {
                             if let Some(usage) = &chunk.usage {
+                                stream_usage = Some(Usage {
+                                    prompt_tokens: usage.prompt_tokens,
+                                    completion_tokens: usage.completion_tokens,
+                                    total_tokens: usage.total_tokens,
+                                    reasoning_tokens: usage
+                                        .completion_tokens_details
+                                        .as_ref()
+                                        .and_then(|d| d.reasoning_tokens),
+                                    cached_tokens: usage
+                                        .prompt_tokens_details
+                                        .as_ref()
+                                        .and_then(|d| d.cached_tokens),
+                                });
                                 let _ = tx
                                     .send(StreamEvent::Usage {
                                         prompt_tokens: usage.prompt_tokens,
@@ -357,6 +392,16 @@ impl ConversationLoop {
                                 let _ = tx.send(StreamEvent::OutputTruncated).await;
                             }
                             if chunk.choices.iter().any(|c| c.finish_reason.is_some()) {
+                                finish_reason = chunk
+                                    .choices
+                                    .iter()
+                                    .find_map(|choice| {
+                                        choice
+                                            .finish_reason
+                                            .as_ref()
+                                            .map(|reason| format!("{:?}", reason))
+                                    })
+                                    .or(finish_reason);
                                 break;
                             }
                         }
@@ -458,6 +503,11 @@ impl ConversationLoop {
                         content,
                         tool_calls,
                         std::collections::HashMap::new(),
+                        response.usage.clone(),
+                        None,
+                        SessionStepSource::StreamingFallback {
+                            reason: "stream_interrupted".to_string(),
+                        },
                     ));
                 }
 
@@ -465,6 +515,9 @@ impl ConversationLoop {
                     full_content,
                     collected_tool_calls,
                     pre_executed,
+                    stream_usage,
+                    finish_reason,
+                    SessionStepSource::Streaming,
                 ))
             }
             Ok(Err(e)) => {
@@ -515,6 +568,11 @@ impl ConversationLoop {
                     content,
                     tool_calls,
                     std::collections::HashMap::new(),
+                    response.usage.clone(),
+                    None,
+                    SessionStepSource::StreamingFallback {
+                        reason: "stream_open".to_string(),
+                    },
                 ))
             }
             Err(_) => {
@@ -569,6 +627,11 @@ impl ConversationLoop {
                     content,
                     tool_calls,
                     std::collections::HashMap::new(),
+                    response.usage.clone(),
+                    None,
+                    SessionStepSource::StreamingFallback {
+                        reason: "stream_open_timeout".to_string(),
+                    },
                 ))
             }
         }

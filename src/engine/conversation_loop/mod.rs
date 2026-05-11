@@ -1398,6 +1398,18 @@ impl ConversationLoop {
                     return Err(e);
                 }
             };
+            debug!(
+                "Session step completed: source={:?}, finish_reason={:?}, usage={:?}",
+                session_step.source,
+                session_step.finish_reason,
+                session_step.usage.as_ref().map(|usage| {
+                    (
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        usage.total_tokens,
+                    )
+                })
+            );
             let content = session_step.assistant_text;
             let tool_calls = session_step.tool_calls;
             let pre_executed = session_step.pre_executed_results;
