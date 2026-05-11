@@ -609,11 +609,21 @@ impl CodeChangeWorkflowRunner {
     }
 
     pub fn build_closeout(&self, bundle: &TaskContextBundle) -> Option<WorkflowCloseout> {
+        self.build_closeout_with_runtime_validation(bundle, None)
+    }
+
+    pub fn build_closeout_with_runtime_validation(
+        &self,
+        bundle: &TaskContextBundle,
+        runtime_validation_label: Option<&str>,
+    ) -> Option<WorkflowCloseout> {
         if !self.policy.require_final_closeout {
             return None;
         }
 
-        let status = self.closeout_status(bundle);
+        let no_diff_runtime_verified =
+            self.no_diff_runtime_verified(bundle, runtime_validation_label);
+        let status = self.closeout_status(bundle, runtime_validation_label);
         let mut validation = self
             .step_states
             .iter()
@@ -628,7 +638,12 @@ impl CodeChangeWorkflowRunner {
             })
             .collect::<Vec<_>>();
         if validation.is_empty() {
-            if self.policy.require_stage_validation {
+            if no_diff_runtime_verified {
+                validation.push(format!(
+                    "required validation: passed ({})",
+                    runtime_validation_label.unwrap_or("passed")
+                ));
+            } else if self.policy.require_stage_validation {
                 validation.push(
                     "No required file-change validation was recorded for this workflow".to_string(),
                 );
@@ -652,6 +667,13 @@ impl CodeChangeWorkflowRunner {
                 review.unresolved_count()
             ));
         }
+        if acceptance.is_empty() && no_diff_runtime_verified && !bundle.acceptance_checks.is_empty()
+        {
+            acceptance.push(
+                "accepted=true confidence=High unresolved=0 (required validation passed; code diff optional for audit/regression task)"
+                    .to_string(),
+            );
+        }
         if acceptance.is_empty() {
             for check in &bundle.acceptance_checks {
                 acceptance.push(format!("pending: {}", check));
@@ -668,19 +690,28 @@ impl CodeChangeWorkflowRunner {
         } else {
             self.residual_risks.clone()
         };
-        if is_programming_workflow(bundle.route.workflow) && self.changed_files.is_empty() {
+        if is_programming_workflow(bundle.route.workflow)
+            && self.changed_files.is_empty()
+            && !no_diff_runtime_verified
+        {
             push_unique(
                 &mut residual,
                 "No changed files were recorded for this code-change workflow".to_string(),
             );
         }
-        if self.policy.require_stage_validation && self.validations.is_empty() {
+        if self.policy.require_stage_validation
+            && self.validations.is_empty()
+            && !no_diff_runtime_verified
+        {
             push_unique(
                 &mut residual,
                 "Required validation was not run or not recorded".to_string(),
             );
         }
-        if !bundle.acceptance_checks.is_empty() && self.acceptance_reviews.is_empty() {
+        if !bundle.acceptance_checks.is_empty()
+            && self.acceptance_reviews.is_empty()
+            && !no_diff_runtime_verified
+        {
             push_unique(
                 &mut residual,
                 "Acceptance criteria were generated but not reviewed".to_string(),
@@ -711,7 +742,11 @@ impl CodeChangeWorkflowRunner {
         })
     }
 
-    fn closeout_status(&self, bundle: &TaskContextBundle) -> StageValidationStatus {
+    fn closeout_status(
+        &self,
+        bundle: &TaskContextBundle,
+        runtime_validation_label: Option<&str>,
+    ) -> StageValidationStatus {
         let latest_validation_status = self.validations.last().map(|record| record.status);
         let has_failed_validation = matches!(
             latest_validation_status,
@@ -741,17 +776,26 @@ impl CodeChangeWorkflowRunner {
             return StageValidationStatus::NotVerified;
         }
 
-        if self.policy.require_stage_validation && self.validations.is_empty() {
+        let no_diff_runtime_verified =
+            self.no_diff_runtime_verified(bundle, runtime_validation_label);
+        if self.policy.require_stage_validation
+            && self.validations.is_empty()
+            && !no_diff_runtime_verified
+        {
             return StageValidationStatus::NotVerified;
         }
 
-        if !bundle.acceptance_checks.is_empty() && self.acceptance_reviews.is_empty() {
+        if !bundle.acceptance_checks.is_empty()
+            && self.acceptance_reviews.is_empty()
+            && !no_diff_runtime_verified
+        {
             return StageValidationStatus::NotVerified;
         }
 
         if is_programming_workflow(bundle.route.workflow)
             && self.changed_files.is_empty()
             && !self.has_clean_accepted_review()
+            && !no_diff_runtime_verified
         {
             return StageValidationStatus::NotVerified;
         }
@@ -768,6 +812,10 @@ impl CodeChangeWorkflowRunner {
             return StageValidationStatus::Passed;
         }
 
+        if no_diff_runtime_verified && !has_partial_validation && !has_unresolved_acceptance {
+            return StageValidationStatus::Passed;
+        }
+
         if has_partial_validation
             || has_unresolved_acceptance
             || self.step_states.iter().any(|step| {
@@ -781,6 +829,17 @@ impl CodeChangeWorkflowRunner {
         } else {
             StageValidationStatus::Passed
         }
+    }
+
+    fn no_diff_runtime_verified(
+        &self,
+        bundle: &TaskContextBundle,
+        runtime_validation_label: Option<&str>,
+    ) -> bool {
+        self.changed_files.is_empty()
+            && is_programming_workflow(bundle.route.workflow)
+            && route_allows_no_diff_closeout(&bundle.route.reason)
+            && runtime_validation_label_passed(runtime_validation_label)
     }
 
     fn has_clean_accepted_review(&self) -> bool {
@@ -850,6 +909,21 @@ impl CodeChangeWorkflowRunner {
 
 pub fn is_programming_workflow(workflow: WorkflowKind) -> bool {
     matches!(workflow, WorkflowKind::CodeChange | WorkflowKind::BugFix)
+}
+
+fn route_allows_no_diff_closeout(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("code diff is optional")
+        || lower.contains("audit/regression")
+        || lower.contains("already satisfied")
+}
+
+fn runtime_validation_label_passed(label: Option<&str>) -> bool {
+    let Some(label) = label else {
+        return false;
+    };
+    let lower = label.trim().to_ascii_lowercase();
+    lower.starts_with("passed:") && !lower.starts_with("passed:0/")
 }
 
 fn append_bullets(out: &mut String, items: &[String]) {
@@ -999,6 +1073,14 @@ mod tests {
         }
     }
 
+    fn audit_route(risk: RiskLevel) -> IntentRoute {
+        IntentRoute {
+            reason: "live coding audit/regression eval requires project verification; code diff is optional"
+                .into(),
+            ..code_change_route(risk)
+        }
+    }
+
     #[test]
     fn policy_is_strict_for_high_risk_code() {
         let route = IntentRoute {
@@ -1122,6 +1204,56 @@ mod tests {
             .acceptance
             .iter()
             .any(|item| item.contains("pending: memory_save respects quality gates")));
+        assert!(closeout
+            .residual_risks
+            .iter()
+            .any(|item| item.contains("No changed files")));
+        assert!(closeout
+            .format_for_final_response()
+            .contains("acceptance_pending=1"));
+    }
+
+    #[test]
+    fn audit_no_diff_closeout_can_pass_with_runtime_validation() {
+        let route = audit_route(RiskLevel::High);
+        let mut bundle = TaskContextBundle::new("审查 memory conflict precision", ".", route, None);
+        bundle.add_acceptance_check("generic conflict words do not cause false matches");
+        bundle.add_acceptance_check("required regression tests pass");
+        let runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        let closeout = runner
+            .build_closeout_with_runtime_validation(&bundle, Some("passed:3/3"))
+            .unwrap();
+
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert!(closeout.changed_files.is_empty());
+        assert!(closeout
+            .validation
+            .iter()
+            .any(|item| item == "required validation: passed (passed:3/3)"));
+        assert!(closeout
+            .acceptance
+            .iter()
+            .any(|item| item.contains("accepted=true")));
+        assert_eq!(closeout.residual_risks, vec!["none recorded".to_string()]);
+        let summary = closeout.evidence_summary();
+        assert!(summary.contains("validation_passed=1"));
+        assert!(summary.contains("acceptance_passed=1"));
+        assert!(summary.contains("acceptance_pending=0"));
+    }
+
+    #[test]
+    fn runtime_validation_does_not_pass_seeded_code_change_without_diff() {
+        let route = code_change_route(RiskLevel::High);
+        let mut bundle = TaskContextBundle::new("实现缺失功能", ".", route, None);
+        bundle.add_acceptance_check("feature is implemented");
+        let runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        let closeout = runner
+            .build_closeout_with_runtime_validation(&bundle, Some("passed:3/3"))
+            .unwrap();
+
+        assert_eq!(closeout.status, StageValidationStatus::NotVerified);
         assert!(closeout
             .residual_risks
             .iter()

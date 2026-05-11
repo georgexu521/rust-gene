@@ -22,7 +22,13 @@ pub(super) struct FinalCloseoutContext<'a> {
 impl ConversationLoop {
     pub(super) async fn apply_final_closeout(context: FinalCloseoutContext<'_>) {
         let ledger_validation_label = context.evidence_ledger.runtime_validation_label();
-        if let Some(closeout) = context.code_workflow.build_closeout(context.task_bundle) {
+        if let Some(closeout) = context
+            .code_workflow
+            .build_closeout_with_runtime_validation(
+                context.task_bundle,
+                ledger_validation_label.as_deref(),
+            )
+        {
             context.trace.record(TraceEvent::FinalCloseoutPrepared {
                 status: closeout.status.label().to_string(),
                 changed_files: closeout.changed_files.len(),
