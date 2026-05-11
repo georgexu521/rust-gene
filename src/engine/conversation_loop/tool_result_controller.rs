@@ -3,6 +3,23 @@ use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::services::api::{Message, ToolCall};
 use crate::tools::ToolResult;
 
+pub(super) struct NormalizedToolResult {
+    pub(super) model_content: String,
+}
+
+pub(super) struct ToolResultNormalizer;
+
+impl ToolResultNormalizer {
+    pub(super) fn normalize_for_provider(
+        tool_call: &ToolCall,
+        result: &ToolResult,
+    ) -> NormalizedToolResult {
+        NormalizedToolResult {
+            model_content: provider_tool_result_content(tool_call, result),
+        }
+    }
+}
+
 pub(super) fn append_provider_tool_result(
     tool_call: &ToolCall,
     result: &ToolResult,
@@ -11,10 +28,13 @@ pub(super) fn append_provider_tool_result(
     messages: &mut Vec<Message>,
 ) {
     evidence_ledger.record_tool_result(tool_call, result);
-    let result_content = provider_tool_result_content(tool_call, result);
-    tool_results_text.push_str(&result_content);
+    let normalized = ToolResultNormalizer::normalize_for_provider(tool_call, result);
+    tool_results_text.push_str(&normalized.model_content);
     tool_results_text.push('\n');
-    messages.push(Message::tool(tool_call.id.clone(), result_content));
+    messages.push(Message::tool(
+        tool_call.id.clone(),
+        normalized.model_content,
+    ));
 }
 
 #[cfg(test)]
@@ -54,5 +74,15 @@ mod tests {
                 content
             } if tool_call_id == "call_1" && content == "Result: OK\nok"
         ));
+    }
+
+    #[test]
+    fn normalizes_provider_tool_result_content() {
+        let normalized = ToolResultNormalizer::normalize_for_provider(
+            &tool_call("bash"),
+            &ToolResult::success("ok"),
+        );
+
+        assert_eq!(normalized.model_content, "Result: OK\nok");
     }
 }

@@ -112,7 +112,8 @@ Rules:
             let request = ChatRequest::new(&self.model)
                 .with_messages(synthesis_messages.clone())
                 .with_temperature(0.0);
-            let (content, _, _) = self.call_api(request).await?;
+            let session_step = self.call_api(request).await?;
+            let content = session_step.assistant_text;
             last_content = content.clone();
 
             if let Some(plan) = Self::parse_patch_synthesis_plan(&content) {
@@ -201,7 +202,9 @@ Do not answer in prose unless no safe patch exists."#;
             ])
             .with_tools(vec![file_edit_schema])
             .with_temperature(0.0);
-        let (fallback_content, fallback_tool_calls, _) = self.call_api(tool_request).await?;
+        let fallback_step = self.call_api(tool_request).await?;
+        let fallback_content = fallback_step.assistant_text;
+        let fallback_tool_calls = fallback_step.tool_calls;
         let mut calls = Vec::new();
         let mut validation_errors = Vec::new();
         for tool_call in fallback_tool_calls.into_iter().take(6) {

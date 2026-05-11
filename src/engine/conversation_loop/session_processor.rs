@@ -16,6 +16,26 @@ use std::collections::HashSet;
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 
+pub(super) struct SessionStepResult {
+    pub(super) assistant_text: String,
+    pub(super) tool_calls: Vec<ToolCall>,
+    pub(super) pre_executed_results: std::collections::HashMap<usize, ToolResult>,
+}
+
+impl SessionStepResult {
+    fn new(
+        assistant_text: String,
+        tool_calls: Vec<ToolCall>,
+        pre_executed_results: std::collections::HashMap<usize, ToolResult>,
+    ) -> Self {
+        Self {
+            assistant_text,
+            tool_calls,
+            pre_executed_results,
+        }
+    }
+}
+
 async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent>) {
     if let Some(usage) = &response.usage {
         let _ = tx
@@ -30,14 +50,7 @@ async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent
 }
 
 impl ConversationLoop {
-    pub(super) async fn call_api(
-        &self,
-        request: ChatRequest,
-    ) -> Result<(
-        String,
-        Vec<ToolCall>,
-        std::collections::HashMap<usize, ToolResult>,
-    )> {
+    pub(super) async fn call_api(&self, request: ChatRequest) -> Result<SessionStepResult> {
         let response = self
             .provider_chat_with_timeout(request, "non-streaming chat")
             .await?;
@@ -46,7 +59,11 @@ impl ConversationLoop {
         let content = strip_think_blocks(&response.content);
         let tool_calls = response.tool_calls.unwrap_or_default();
 
-        Ok((content, tool_calls, std::collections::HashMap::new()))
+        Ok(SessionStepResult::new(
+            content,
+            tool_calls,
+            std::collections::HashMap::new(),
+        ))
     }
 
     async fn provider_chat_with_timeout(
@@ -72,11 +89,7 @@ impl ConversationLoop {
         tx: &mpsc::Sender<StreamEvent>,
         trace: &TraceCollector,
         exposed_tool_names: &HashSet<String>,
-    ) -> Result<(
-        String,
-        Vec<ToolCall>,
-        std::collections::HashMap<usize, ToolResult>,
-    )> {
+    ) -> Result<SessionStepResult> {
         let fallback_messages = request.messages.clone();
         let fallback_tools = request.tools.clone();
 
@@ -441,10 +454,18 @@ impl ConversationLoop {
                         let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
                     }
                     let tool_calls = response.tool_calls.unwrap_or_default();
-                    return Ok((content, tool_calls, std::collections::HashMap::new()));
+                    return Ok(SessionStepResult::new(
+                        content,
+                        tool_calls,
+                        std::collections::HashMap::new(),
+                    ));
                 }
 
-                Ok((full_content, collected_tool_calls, pre_executed))
+                Ok(SessionStepResult::new(
+                    full_content,
+                    collected_tool_calls,
+                    pre_executed,
+                ))
             }
             Ok(Err(e)) => {
                 let plan = crate::engine::recovery_plan::RecoveryPlan::streaming_fallback(
@@ -490,7 +511,11 @@ impl ConversationLoop {
                     let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
                 }
                 let tool_calls = response.tool_calls.unwrap_or_default();
-                Ok((content, tool_calls, std::collections::HashMap::new()))
+                Ok(SessionStepResult::new(
+                    content,
+                    tool_calls,
+                    std::collections::HashMap::new(),
+                ))
             }
             Err(_) => {
                 let timeout_msg = format!(
@@ -540,7 +565,11 @@ impl ConversationLoop {
                     let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
                 }
                 let tool_calls = response.tool_calls.unwrap_or_default();
-                Ok((content, tool_calls, std::collections::HashMap::new()))
+                Ok(SessionStepResult::new(
+                    content,
+                    tool_calls,
+                    std::collections::HashMap::new(),
+                ))
             }
         }
     }

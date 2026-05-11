@@ -16,13 +16,39 @@
 2. 再把 shell / terminal 做成一等编码能力。
 3. 最后补齐文件编辑质量，尤其是 stale read、编码、换行、锁、diff、LSP 和回滚。
 
+## Implementation Progress
+
+- 2026-05-11: Phase 1 Batch 1.1 started. Added
+  `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
+  `ConversationLoop::run_inner` responsibility map and extraction boundary.
+- 2026-05-11: Phase 1 Batch 1.2 started. Added
+  `src/engine/conversation_loop/turn_runtime_state.rs` and moved the first
+  turn-owned mutable state into it: `EvidenceLedger`, `RuntimeDietSnapshot`,
+  iteration counters, and repair counters. This is a behavior-preserving first
+  slice; checkpoint state and tool-call lifecycle state remain in `run_inner`
+  until the next split.
+- 2026-05-11: Phase 1 Batch 1.3 started. Replaced the anonymous
+  `(content, tool_calls, pre_executed_results)` session processor tuple with
+  `SessionStepResult`, giving the model request / streaming step an explicit
+  output boundary before deeper lifecycle migration.
+- 2026-05-11: Phase 1 Batch 1.4 started. Added the first
+  `ToolResultNormalizer` boundary and routed provider-facing tool result
+  content through it. The first slice preserves the exact existing model
+  content while creating the owner for later UI content / metadata / evidence
+  separation.
+- Validation after this slice: `cargo fmt --check`, `git diff --check`,
+  targeted `runtime_diet`, `route_scoped_tools`, `prompt_context`,
+  `evidence_ledger`, `closeout`, `tool_result`, and `patch_synthesis` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1205 passed; 0 failed`).
+
 ## 当前判断
 
 Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1204 passed; 0 failed`。
+- 最近全量本地测试基线是 `1205 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 
@@ -70,6 +96,58 @@ Priority Agent 的基础编码能力已经不再是空白：
 - shell 会扫描命令、路径和权限，输出过长时落盘并给模型可继续读取的路径。
 - edit tool 有 per-file lock、BOM、换行、format、LSP diagnostics 和 snapshot diff。
 - permission 是 ruleset 和 runtime ask，不是提示词里的提醒。
+
+## 二次对照后的补充结论
+
+重新看 Claude Code 和 opencode 源码后，这份计划需要补四个横切主题。它们不改变“三条主线”的顺序，但必须明确写进计划，否则后面容易继续靠 prompt 或局部补丁解决系统问题。
+
+### 1. Context / Tool Output Budget 是主循环拆分的一部分
+
+Claude Code 在 query loop 里把 tool result budget、snip、microcompact、autocompact、context collapse、memory prefetch、skill prefetch 放在模型请求前后的固定位置。opencode 也有 session compaction、overflow、summary 和 truncation service。
+
+这说明上下文控制不是“优化项”，而是编码 agent 的主循环职责。Priority Agent 后续拆主循环时，必须把下面能力归到明确模块：
+
+- tool result 过长时替换为 artifact 引用。
+- 历史工具结果能被压缩，但最近关键证据不能丢。
+- memory/skill/retrieval 是后台上下文，不应该阻塞简单任务。
+- context overflow 是可恢复状态，不是普通 API 失败。
+
+### 2. Permission / Ask / Reply 要成为产品路径
+
+opencode 的 permission service 有 pending requests、approved ruleset、reject/corrected error、session permission persistence。Claude Code 的 `ToolPermissionContext` 也区分 allow/deny/ask、mode、additional working dirs、avoid prompts、automated checks。
+
+这说明权限不是“是否展示工具”的布尔值。Priority Agent 需要把权限拆成：
+
+- model-visible tool exposure。
+- runtime permission evaluation。
+- user approval / rejection / correction。
+- session-scoped allow rules。
+- permission denial 的可恢复提示。
+
+### 3. Provider Protocol Transform 要有矩阵
+
+opencode 的 provider transform 会按 Anthropic、Bedrock、Claude、DeepSeek、OpenAI-compatible 等模型处理空内容、tool id、tool result、reasoning、interleaved fields。我们最近遇到的 MiniMax 400 本质上就是 provider protocol transform 不够系统。
+
+后续不能只在某个 provider 出错时修一次。需要建立 provider/tool-call roundtrip 矩阵，覆盖：
+
+- assistant pure tool-call message。
+- tool result follows tool call。
+- empty assistant content。
+- reasoning content 保留、隐藏或转换。
+- streaming delta 合并。
+- aborted / missing tool result 的 synthetic result。
+- provider-specific bad request 的归因。
+
+### 4. Todo / Task / Subagent 不是第一主线，但边界要固定
+
+opencode 的 build、plan、general、explore agent 都是 permission ruleset 驱动；task tool 可以恢复 subagent session，truncate service 甚至会建议让 explore agent 处理长输出。Claude Code 也有 todo/task/agent 相关工具。
+
+但对 Priority Agent 下一阶段来说，多 agent 不能抢主线。正确边界是：
+
+- 单 agent coding loop 先稳定。
+- todo 是用户可见任务状态，不是强制 planning 框架。
+- subagent 只在长输出、宽代码搜索、独立审查时作为辅助。
+- route/permission 决定 subagent 能做什么，不靠 prompt 约束。
 
 ## 第一性原则
 
@@ -248,7 +326,122 @@ cargo check -q
 - provider-safe serialization 是 normalizer 的职责。
 - closeout 不再从原始 stdout/stderr 里临时猜事实。
 
-### Batch 1.5：拆 `RepairController` 和 deterministic repair 边界
+### Batch 1.5：建立 `ContextBudgetController`
+
+参考：
+
+- Claude `query.ts` 的 `applyToolResultBudget`、snip、microcompact、autocompact、context collapse。
+- Claude memory / skill prefetch。
+- opencode `tool/truncate.ts`、`session/compaction`、`session/overflow`、`session/summary`。
+
+任务：
+
+- 把上下文预算从主循环散点逻辑收敛为一个控制器：
+  - model context used / remaining。
+  - tool result aggregate size。
+  - large output replacement records。
+  - compaction boundary。
+  - retained evidence window。
+- 工具长输出不直接进入 messages；先进入 artifact，再给模型 preview + path。
+- memory/skill/retrieval 改成可跳过、可延迟、可追踪的背景上下文。
+- context overflow 触发可恢复路径，而不是普通 provider error。
+
+验收：
+
+```bash
+cargo test -q runtime_diet -- --test-threads=1
+cargo test -q prompt_context -- --test-threads=1
+cargo test -q evidence_ledger -- --test-threads=1
+cargo check -q
+```
+
+完成标准：
+
+- 长工具输出不会挤掉最近代码和验证证据。
+- compaction 后仍能解释关键事实来自哪里。
+- 简单任务不会因为 memory/skill 检索而变慢或变复杂。
+
+### Batch 1.6：建立 `PermissionController` 边界
+
+参考：
+
+- Claude `ToolPermissionContext`。
+- opencode `permission/index.ts`、`permission/evaluate.ts`、`agent/agent.ts`。
+
+任务：
+
+- 把权限拆成四层：
+  - registry availability。
+  - route/role tool exposure。
+  - runtime permission evaluation。
+  - user ask/reply/persisted session rules。
+- 建立 permission request 数据结构：
+  - id
+  - session id
+  - permission kind
+  - patterns
+  - metadata
+  - allowed always rules
+  - rejection/correction feedback
+- permission denied / rejected / corrected 都进入 ToolResultNormalizer 和 EvidenceLedger。
+- 对 shell、file edit、external directory、task/subagent 使用同一套 permission path。
+
+验收：
+
+```bash
+cargo test -q permissions -- --test-threads=1
+cargo test -q tool_exposure -- --test-threads=1
+cargo test -q bash_tool -- --test-threads=1
+cargo check -q
+```
+
+完成标准：
+
+- “工具不可用”能区分 registry、route、permission、platform、provider。
+- 用户拒绝或修正权限后，模型得到可恢复信息，而不是泛化失败。
+- 权限规则是 runtime contract，不靠长 prompt 约束。
+
+### Batch 1.7：建立 provider protocol regression matrix
+
+参考：
+
+- opencode `provider/transform.ts`。
+- opencode `session/llm.ts`。
+- Claude query loop 的 missing tool result / abort synthetic result 处理。
+
+任务：
+
+- 为每个 provider family 建立消息转换用例：
+  - OpenAI-compatible。
+  - MiniMax。
+  - Kimi。
+  - Anthropic-like。
+  - reasoning / thinking capable。
+- 固定 tool-call roundtrip 场景：
+  - assistant pure tool call。
+  - assistant text + tool call。
+  - empty content。
+  - multiple tool calls。
+  - tool result after abort。
+  - tool result error。
+  - reasoning content with tool calls。
+- provider bad request 必须被归因为 schema/protocol/provider，而不是泛化成 LLM 失败。
+
+验收：
+
+```bash
+cargo test -q provider -- --test-threads=1
+cargo test -q openai_compat -- --test-threads=1
+cargo test -q minimax -- --test-threads=1
+cargo test -q kimi -- --test-threads=1
+```
+
+完成标准：
+
+- MiniMax/Kimi/OpenAI-compatible 的 tool result 形状有固定回归测试。
+- provider 400 不再通过人工看截图判断。
+
+### Batch 1.8：拆 `RepairController` 和 deterministic repair 边界
 
 任务：
 
@@ -277,6 +470,7 @@ bash scripts/workflow-production-gates.sh
 - `conversation_loop/mod.rs` 从 5600+ 行降到 3500 行以内。
 - 后续目标是 2500 行以内，但第一阶段不为行数破坏清晰度。
 - 主循环只负责高层顺序：route、prompt、session processor、tool lifecycle、closeout。
+- context budget、permission、provider protocol 都有独立边界，不再和主循环互相穿插。
 - 每个核心行为都有独立测试入口。
 
 ## Phase 2：shell / terminal 一等化
@@ -288,6 +482,7 @@ bash scripts/workflow-production-gates.sh
 - `bash` 已可执行命令，但仍像普通工具。
 - 长命令、后台任务、输出继续读取、交互式 PTY、取消、输出落盘还不完整。
 - route/permission 隐藏 bash 时，模型有时只能给命令文本，用户体验会倒退。
+- shell 权限、命令语义、输出 artifact、EvidenceLedger 还没有形成完整闭环。
 
 ### Batch 2.1：终端可见性和诊断
 
@@ -301,6 +496,7 @@ bash scripts/workflow-production-gates.sh
   - provider/tool schema 是否兼容
 - 在 `/status` 或 `/doctor` 暴露当前 bash 状态。
 - 对用户问题“检查/安装/运行/测试/启动/默认 python/package”强制走 terminal-capable route。
+- 把 terminal route 的诊断输出接入 PermissionController，而不是单独写一套判断。
 
 验收：
 
@@ -343,6 +539,7 @@ cargo test -q intent_router -- --test-threads=1
   - EvidenceLedger
   - closeout
   - UI summary
+- 分类器要输出 path patterns，供 permission ask/reply 使用。
 
 验收：
 
@@ -460,6 +657,7 @@ cargo check -q
 - 长输出可落盘并继续读取。
 - 长命令可后台运行、取消、读取输出。
 - bash 结果进入 EvidenceLedger，最终回答不和命令事实矛盾。
+- shell command permission、output artifact、task state 和 closeout 使用同一份结构化事实。
 
 ## Phase 3：文件编辑质量追上成熟编码 agent
 
@@ -483,6 +681,43 @@ cargo check -q
 - read-before-edit 默认策略还不够清晰。
 - LSP/format feedback 和 edit result 没有深度集成。
 - file history / rollback 和用户可见 diff 还没有达到 Claude/opencode 级别。
+- read/search 工具输出和 file edit 输入之间仍需更强的 display/content 边界，避免把行号、截断提示、highlight 当成文件内容。
+
+### Batch 3.0：读文件 / 搜索输出保真
+
+参考：
+
+- Claude Read/Grep/Glob 的 bounded output 和 file read state。
+- opencode read/grep/glob 的 truncation metadata。
+
+任务：
+
+- 明确区分：
+  - raw file content。
+  - displayed content with line numbers。
+  - search output with match context。
+  - truncated output hint。
+- `file_edit` 不能接受 display prefixes、grep decoration、truncation hints 当作真实内容。
+- `file_read` 和 `grep` 输出进入 EvidenceLedger 时保留 raw fact metadata：
+  - path
+  - line range
+  - total lines
+  - displayed lines
+  - truncated
+  - content hash when available
+
+验收：
+
+```bash
+cargo test -q file_tool -- --test-threads=1
+cargo test -q grep -- --test-threads=1
+cargo test -q evidence_ledger -- --test-threads=1
+```
+
+完成标准：
+
+- 模型可以看到行号，但工具层不会把行号当成文件内容。
+- search evidence 可以驱动 line-range edit，而不污染 patch anchor。
 
 ### Batch 3.1：文件身份和 read state 整理
 
@@ -623,28 +858,103 @@ cargo check -q
 
 - 用户可以信任 agent 写代码，因为每次修改都有可解释、可恢复路径。
 
+### Batch 3.6：多文件 patch / apply-patch 边界
+
+参考：
+
+- opencode `tool/apply_patch.ts`。
+- Claude FileEditTool 的 per-file diff 和 permission path。
+
+任务：
+
+- 明确 `file_edit`、`file_write`、patch/apply-patch 的边界：
+  - 单点替换：`file_edit`。
+  - 新文件或完整替换：`file_write`。
+  - 多文件原子 patch：专门 patch path。
+- 多文件 patch 必须：
+  - 逐文件 permission check。
+  - 逐文件 stale-read check。
+  - 生成统一 diff summary。
+  - 失败时不产生半应用状态，或明确记录 partial failure。
+- patch fallback 不能绕过文件编辑质量约束。
+
+验收：
+
+```bash
+cargo test -q file_tool -- --test-threads=1
+cargo test -q patch_recovery -- --test-threads=1
+cargo test -q permissions -- --test-threads=1
+cargo check -q
+```
+
+完成标准：
+
+- 多文件修改有明确工具路径，不靠 bash heredoc 或 deterministic patch synthesis 偷偷绕过权限和 stale-read。
+
 ### Phase 3 完成标准
 
 - file edit 对编码、换行、并发和外部修改安全。
 - 文件修改结果有 diff、diagnostics 和 evidence。
 - rollback 是正常产品路径，不是 debug fallback。
+- 多文件 patch 和单文件 edit 共享 permission、state、diff、rollback 语义。
+
+## Phase 4：基本编码质量回归集
+
+目标：用少量稳定场景证明“基本编程质量”是否真的接近 Claude Code / opencode，而不是只看单次 live eval。
+
+任务：
+
+- 建立 `core-coding-quality` eval group，至少包含：
+  - inspection-only：查看目录/文件，不编造大小、时间、数量。
+  - simple edit：读文件后单点编辑，验证 stale-read。
+  - multi-file edit：修改两个相关文件，验证 diff 和 tests。
+  - terminal install/run：检查包、安装或解释不能安装的具体原因、运行脚本。
+  - long output：命令输出过长，落盘后继续读取关键段。
+  - provider roundtrip：pure tool call + tool result 在 MiniMax/Kimi/OpenAI-compatible 下不 400。
+  - permission rejection：用户拒绝/修正后，模型按反馈恢复。
+  - rollback：编辑后回滚并验证文件恢复。
+- 每个 case 标注 failure_owner：
+  - model_reasoning
+  - tool_contract
+  - permission
+  - provider_protocol
+  - terminal_runtime
+  - file_state
+  - harness
+- 每个 case 都要有“Claude/opencode 借鉴点”和“Priority Agent 验收事实”。
+
+验收：
+
+```bash
+bash -n scripts/run_live_eval.sh
+python3 -m py_compile scripts/live_eval_report_parser.py
+cargo test -q evidence_ledger -- --test-threads=1
+```
+
+完成标准：
+
+- 每个阶段改动后都能跑同一组核心场景。
+- 失败能定位到产品层，不再靠截图猜原因。
 
 ## 推荐执行顺序
 
 严格按下面顺序推进：
 
-1. Phase 1 Batch 1.1 到 1.3：先把主循环边界稳住。
-2. Phase 1 Batch 1.4 到 1.5：让工具结果和 repair 有清晰归属。
-3. Phase 2 Batch 2.1 到 2.3：先让 bash 可见、可诊断、结果可靠。
-4. Phase 2 Batch 2.4 到 2.5：再做后台任务和 PTY。
-5. Phase 3 Batch 3.1 到 3.3：先做文件身份、编码、锁。
-6. Phase 3 Batch 3.4 到 3.5：再做 diagnostics、history、rollback。
+1. Phase 1 Batch 1.1 到 1.4：先把主循环和工具生命周期边界稳住。
+2. Phase 1 Batch 1.5 到 1.7：补 context budget、permission、provider protocol 这三个横切层。
+3. Phase 1 Batch 1.8：最后再收 repair，避免 repair 继续绕过工具契约。
+4. Phase 2 Batch 2.1 到 2.3：先让 bash 可见、可诊断、结果可靠。
+5. Phase 2 Batch 2.4 到 2.5：再做后台任务和 PTY。
+6. Phase 3 Batch 3.0 到 3.3：先做 read/search 保真、文件身份、编码、锁。
+7. Phase 3 Batch 3.4 到 3.6：再做 diagnostics、history、rollback、多文件 patch。
+8. Phase 4：用核心编码质量回归集验证每个阶段是否真的改善体验。
 
 原因：
 
 - 不先拆主循环，后面 terminal 和 file edit 会继续往上叠补丁。
 - 不先让 terminal 可靠，基本编程任务还是会退化成“给用户命令”。
 - 文件编辑质量很重要，但它依赖更清晰的 tool result、evidence、rollback 路径。
+- context budget、permission 和 provider protocol 是三条主线的共同底座，缺它们会导致同类问题反复以不同形式出现。
 
 ## 每批通用验收
 
@@ -672,6 +982,13 @@ bash -n scripts/run_live_eval.sh
 bash scripts/workflow-production-gates.sh
 ```
 
+涉及 provider/tool-call 协议时补充：
+
+```bash
+cargo test -q provider -- --test-threads=1
+cargo test -q openai_compat -- --test-threads=1
+```
+
 大批次完成后跑：
 
 ```bash
@@ -694,6 +1011,7 @@ cargo test -q
 - 主循环足够薄，新增工具或修复 closeout 不会误伤 streaming/provider/repair。
 - shell 是可靠的一等能力，能运行、后台、取消、读输出、解释失败。
 - file edit 具备成熟编码 agent 的基本安全性：read state、stale check、encoding、line ending、lock、diff、diagnostics、rollback。
+- provider/tool-call 协议有矩阵测试，不再靠线上 400 才发现。
+- context budget 和 tool output artifact 能保护长任务上下文。
 - EvidenceLedger 从“评测辅助”变成日常回答和 closeout 的事实来源。
 - 用户看到的是自然的编码 agent，而不是被规则和框架牵着走的模型。
-

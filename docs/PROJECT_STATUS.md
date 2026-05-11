@@ -16,7 +16,12 @@ Active next-stage direction:
   workflow framework.
 - `docs/NEXT_AGENT_CORE_CODING_QUALITY_PLAN_2026-05-11.md` narrows the next
   execution order to core coding quality: split the main loop first, productize
-  shell/terminal next, then finish file-edit quality.
+  shell/terminal next, then finish file-edit quality. It also records the
+  second-pass Claude/opencode gaps for context budget, permission ask/reply,
+  provider protocol transforms, and a core coding quality regression set.
+- `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` is the first
+  Batch 1.1 artifact for the current main-loop split. It records current
+  responsibility ownership and the initial `TurnRuntimeState` boundary.
 - `docs/AGENT_PRODUCTIZATION_REFERENCE_AUDIT_2026-05-10.md` is the Batch 1
   artifact. It records the Claude/opencode reference map, current
   `ConversationLoop` architecture map, current product capability table, and
@@ -44,7 +49,7 @@ provider reconnect, harness-split, evidence-label/env-alignment, and review
 hardening work:
 
 ```text
-1204 passed; 0 failed
+1205 passed; 0 failed
 ```
 
 Validated locally with:
@@ -355,7 +360,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-11 with `1195 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-11 with `1205 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry

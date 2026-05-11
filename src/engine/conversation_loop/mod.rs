@@ -26,6 +26,7 @@ mod tool_metadata;
 mod tool_orchestrator;
 mod tool_result_controller;
 mod turn_recording;
+mod turn_runtime_state;
 mod validation_runner;
 mod workflow_trace;
 
@@ -35,7 +36,7 @@ use patch_recovery::PatchSynthesisAction;
 use repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
 };
-use runtime_diet::{trace_runtime_diet_report, RuntimeDietSnapshot};
+use runtime_diet::trace_runtime_diet_report;
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use text_sanitizer::strip_think_blocks;
 #[cfg(test)]
@@ -48,6 +49,7 @@ use tool_metadata::attach_tool_execution_metadata;
 use tool_metadata::tool_execution_start_progress;
 use tool_result_controller::append_provider_tool_result;
 use turn_recording::record_recovery_plan;
+use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
 use validation_runner::{should_run_default_auto_tests, verification_source_context};
@@ -55,7 +57,7 @@ use workflow_trace::{
     apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger, trace_stage_validation,
 };
 
-use crate::engine::evidence_ledger::{changed_files_diff_evidence, EvidenceLedger};
+use crate::engine::evidence_ledger::changed_files_diff_evidence;
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
@@ -668,7 +670,7 @@ impl ConversationLoop {
         }
         let mut code_workflow =
             crate::engine::code_change_workflow::CodeChangeWorkflowRunner::new(&task_bundle);
-        let mut evidence_ledger = EvidenceLedger::new();
+        let mut turn_state = TurnRuntimeState::new(Self::route_scoped_tools_enabled());
         if !required_validation_commands.is_empty()
             && code_workflow.activate_trigger(
                 crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RequiredValidation,
@@ -1054,7 +1056,6 @@ impl ConversationLoop {
         let mut final_content = String::new();
         let mut final_tool_calls = Vec::new();
         let mut tool_calls_made = false;
-        let mut iterations_used = 0;
         let mut no_code_progress_rounds = 0usize;
         let mut action_checkpoint_active = false;
         let mut action_checkpoint_lookup_count = 0usize;
@@ -1068,14 +1069,15 @@ impl ConversationLoop {
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
         let mut successful_required_validation_commands: HashSet<String> = HashSet::new();
-        let mut runtime_diet = RuntimeDietSnapshot::new(Self::route_scoped_tools_enabled());
         if let Some(ref ctx) = turn_retrieval_context {
-            runtime_diet.observe_retrieval_context(ctx);
+            turn_state.runtime_diet.observe_retrieval_context(ctx);
         }
         if base_tools.iter().any(|tool| tool.name == "skills_list") {
             let skill_summary =
                 crate::skills::SkillRuntime::load(&working_dir).discovery_summary("", 30);
-            runtime_diet.observe_skill_list_summary(&skill_summary);
+            turn_state
+                .runtime_diet
+                .observe_skill_list_summary(&skill_summary);
         }
 
         // ── 记忆围栏注入：先注入，再让 preflight 统计真实请求大小 ──
@@ -1088,7 +1090,7 @@ impl ConversationLoop {
                         matches!(m, Message::System { content } if content.contains("<memory-context>"))
                     })
                 {
-                    runtime_diet.observe_memory_snapshot(&snapshot);
+                    turn_state.runtime_diet.observe_memory_snapshot(&snapshot);
                     trace.record(TraceEvent::MemorySnapshotInjected {
                         chars: snapshot.chars().count(),
                     });
@@ -1164,9 +1166,6 @@ impl ConversationLoop {
         }
 
         // ── 迭代预算 ─────────────────────────────────────
-        let mut effective_iterations: usize = 0;
-        let mut acceptance_repair_attempts: usize = 0;
-        let mut reserved_repair_rounds: usize = 0;
         let max_loop_iterations = self.max_iterations + code_workflow.max_repair_attempts().max(3);
         let baseline_git_status_files = Self::git_status_files();
         let mut action_checkpoint_no_change_rounds = 0usize;
@@ -1175,28 +1174,28 @@ impl ConversationLoop {
         for iteration in 0..max_loop_iterations {
             debug!(
                 "Conversation loop iteration {} (effective: {}/{})",
-                iteration, effective_iterations, self.max_iterations
+                iteration, turn_state.effective_iterations, self.max_iterations
             );
-            iterations_used = iteration + 1;
+            turn_state.iterations_used = iteration + 1;
 
             if let Some(ref mem_mutex) = self.memory_manager {
                 let mut mem = mem_mutex.lock().await;
                 mem.reset_turn();
             }
 
-            if effective_iterations >= self.max_iterations {
-                if reserved_repair_rounds > 0 {
-                    reserved_repair_rounds -= 1;
+            if turn_state.effective_iterations >= self.max_iterations {
+                if turn_state.reserved_repair_rounds > 0 {
+                    turn_state.reserved_repair_rounds -= 1;
                     trace.record(TraceEvent::WorkflowFallback {
                         error: format!(
                             "using reserved repair round after validation failure (remaining={})",
-                            reserved_repair_rounds
+                            turn_state.reserved_repair_rounds
                         ),
                     });
                 } else {
                     warn!(
                         "Effective iteration budget exhausted ({}/{})",
-                        effective_iterations, self.max_iterations
+                        turn_state.effective_iterations, self.max_iterations
                     );
                     break;
                 }
@@ -1260,7 +1259,7 @@ impl ConversationLoop {
                                 )
                                 .await;
                             if let Some(ref ctx) = retrieval_context {
-                                runtime_diet.observe_retrieval_context(ctx);
+                                turn_state.runtime_diet.observe_retrieval_context(ctx);
                                 trace.record(TraceEvent::MemoryPrefetch {
                                     chars: ctx
                                         .items
@@ -1290,13 +1289,16 @@ impl ConversationLoop {
                 }
             }
 
-            runtime_diet.prompt_tokens = runtime_diet
+            turn_state.runtime_diet.prompt_tokens = turn_state
+                .runtime_diet
                 .prompt_tokens
                 .max(estimate_messages_tokens(&request_messages));
-            runtime_diet.tool_schema_tokens = runtime_diet
+            turn_state.runtime_diet.tool_schema_tokens = turn_state
+                .runtime_diet
                 .tool_schema_tokens
                 .max(estimate_tool_schemas_tokens(&tools));
-            runtime_diet.exposed_tools = runtime_diet.exposed_tools.max(tools.len());
+            turn_state.runtime_diet.exposed_tools =
+                turn_state.runtime_diet.exposed_tools.max(tools.len());
 
             let mut request = ChatRequest::new(&self.model)
                 .with_messages(request_messages)
@@ -1305,11 +1307,7 @@ impl ConversationLoop {
 
             // ── 响应式压缩循环 ─────────────────────────────
             let mut compressed_this_turn = false;
-            let mut api_result: Result<(
-                String,
-                Vec<ToolCall>,
-                std::collections::HashMap<usize, ToolResult>,
-            )> = Err(anyhow::anyhow!("initial"));
+            let mut api_result = Err(anyhow::anyhow!("initial"));
             for compress_retry in 0..3 {
                 trace.record(TraceEvent::ApiRequestStarted {
                     iteration: iteration + 1,
@@ -1383,18 +1381,26 @@ impl ConversationLoop {
                 }
             }
 
-            let (content, tool_calls, pre_executed) = match api_result {
+            let session_step = match api_result {
                 Ok(value) => value,
                 Err(e) => {
                     trace.record(TraceEvent::Error {
                         message: e.to_string(),
                     });
-                    runtime_diet.validation_evidence = "api_error".to_string();
-                    trace_runtime_diet_report(&trace, &route, &code_workflow, &runtime_diet);
+                    turn_state.runtime_diet.validation_evidence = "api_error".to_string();
+                    trace_runtime_diet_report(
+                        &trace,
+                        &route,
+                        &code_workflow,
+                        &turn_state.runtime_diet,
+                    );
                     self.finish_trace(trace.clone(), TurnStatus::Failed);
                     return Err(e);
                 }
             };
+            let content = session_step.assistant_text;
+            let tool_calls = session_step.tool_calls;
+            let pre_executed = session_step.pre_executed_results;
             trace.record(TraceEvent::ApiRequestCompleted {
                 iteration: iteration + 1,
                 tool_calls: tool_calls.len(),
@@ -1427,7 +1433,9 @@ impl ConversationLoop {
                         &exposed_tool_names,
                     );
                 let filesystem_grounding_gaps = if is_local_filesystem_inspection_route(&route) {
-                    evidence_ledger.unsupported_filesystem_claims(&content)
+                    turn_state
+                        .evidence_ledger
+                        .unsupported_filesystem_claims(&content)
                 } else {
                     Vec::new()
                 };
@@ -1513,7 +1521,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             if all_read_only {
                 debug!("All tools read-only, refunding iteration budget");
             } else {
-                effective_iterations += 1;
+                turn_state.effective_iterations += 1;
             }
 
             let mut tool_results_text = String::new();
@@ -1541,7 +1549,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 append_provider_tool_result(
                     tc,
                     result,
-                    &mut evidence_ledger,
+                    &mut turn_state.evidence_ledger,
                     &mut tool_results_text,
                     &mut messages,
                 );
@@ -1904,7 +1912,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 append_provider_tool_result(
                                     tc,
                                     result,
-                                    &mut evidence_ledger,
+                                    &mut turn_state.evidence_ledger,
                                     &mut tool_results_text,
                                     &mut messages,
                                 );
@@ -2028,7 +2036,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 append_provider_tool_result(
                                     tc,
                                     result,
-                                    &mut evidence_ledger,
+                                    &mut turn_state.evidence_ledger,
                                     &mut tool_results_text,
                                     &mut messages,
                                 );
@@ -2278,7 +2286,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 
             // ── 自动验证闭环 ──────────────────────────────
             if !changed_files.is_empty() {
-                evidence_ledger.record_changed_files(&changed_files);
+                turn_state
+                    .evidence_ledger
+                    .record_changed_files(&changed_files);
                 if code_workflow.activate_trigger(
                     crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::FirstCodeChange,
                 ) {
@@ -2315,7 +2325,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 for result in verify_results {
                     let verify_text = result.to_dialog_text();
                     acceptance_evidence.push(verify_text.clone());
-                    evidence_ledger.record_validation_result(
+                    turn_state.evidence_ledger.record_validation_result(
                         "auto_verify",
                         Some(&result.command),
                         result.success,
@@ -2403,7 +2413,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         for result in required_results {
                             let text = result.to_dialog_text();
                             acceptance_evidence.push(text.clone());
-                            evidence_ledger.record_validation_result(
+                            turn_state.evidence_ledger.record_validation_result(
                                 "required_validation",
                                 Some(&result.command),
                                 result.success,
@@ -2450,7 +2460,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 for result in test_results {
                     let test_text = result.to_dialog_text();
                     acceptance_evidence.push(test_text.clone());
-                    evidence_ledger.record_validation_result(
+                    turn_state.evidence_ledger.record_validation_result(
                         "auto_test",
                         Some(&result.command),
                         result.success,
@@ -2485,7 +2495,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     acceptance_evidence.push(manual_text.clone());
                     post_edit_evidence.push(manual_text.clone());
                     for command in &successful_validation_commands {
-                        evidence_ledger.record_validation_result(
+                        turn_state.evidence_ledger.record_validation_result(
                             "manual_validation",
                             Some(command),
                             true,
@@ -2500,7 +2510,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 {
                     acceptance_evidence.push(diff_text.clone());
                     post_edit_evidence.push(diff_text.clone());
-                    evidence_ledger.record_validation_result("diff", None, true, &diff_text);
+                    turn_state
+                        .evidence_ledger
+                        .record_validation_result("diff", None, true, &diff_text);
                     debug!("{}", diff_text);
                 }
 
@@ -2508,7 +2520,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 let review_result =
                     super::code_review::review_changed_files(&working_dir, &changed_files);
                 let review_dialog = review_result.to_dialog_text();
-                evidence_ledger.record_validation_result(
+                turn_state.evidence_ledger.record_validation_result(
                     "code_review",
                     None,
                     review_result.success,
@@ -2551,7 +2563,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         verify_passed,
                         post_edit_evidence: &post_edit_evidence,
                         failed_commands: &failed_commands,
-                        acceptance_repair_attempts,
+                        acceptance_repair_attempts: turn_state.acceptance_repair_attempts,
                         tool_results_text: &mut tool_results_text,
                         messages: &mut messages,
                     });
@@ -2598,8 +2610,8 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         acceptance_evidence: &acceptance_evidence,
                         required_validation_passed,
                         check_passed,
-                        acceptance_repair_attempts: &mut acceptance_repair_attempts,
-                        reserved_repair_rounds: &mut reserved_repair_rounds,
+                        acceptance_repair_attempts: &mut turn_state.acceptance_repair_attempts,
+                        reserved_repair_rounds: &mut turn_state.reserved_repair_rounds,
                         action_checkpoint_no_change_rounds: &mut action_checkpoint_no_change_rounds,
                         action_checkpoint_active: &mut action_checkpoint_active,
                         action_checkpoint_lookup_count: &mut action_checkpoint_lookup_count,
@@ -2635,8 +2647,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     tool_results_text.push('\n');
                     tool_results_text.push_str(&repair_instruction);
                     messages.push(Message::system(repair_instruction));
-                    if effective_iterations >= self.max_iterations {
-                        reserved_repair_rounds = reserved_repair_rounds.max(1);
+                    if turn_state.effective_iterations >= self.max_iterations {
+                        turn_state.reserved_repair_rounds =
+                            turn_state.reserved_repair_rounds.max(1);
                         trace.record(TraceEvent::WorkflowFallback {
                             error:
                                 "reserved repair round granted after post-edit reflection failure"
@@ -2694,17 +2707,17 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             trace: &trace,
             code_workflow: &code_workflow,
             task_bundle: &task_bundle,
-            runtime_diet: &mut runtime_diet,
+            runtime_diet: &mut turn_state.runtime_diet,
             final_content: &mut final_content,
             final_tool_calls: &final_tool_calls,
-            iterations_used,
+            iterations_used: turn_state.iterations_used,
             max_iterations: self.max_iterations,
-            evidence_ledger: &evidence_ledger,
+            evidence_ledger: &turn_state.evidence_ledger,
             tx,
         })
         .await;
 
-        trace_runtime_diet_report(&trace, &route, &code_workflow, &runtime_diet);
+        trace_runtime_diet_report(&trace, &route, &code_workflow, &turn_state.runtime_diet);
 
         if let Some(tx) = tx {
             let _ = tx.send(StreamEvent::Complete).await;
@@ -2712,7 +2725,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 
         trace.record(TraceEvent::AssistantResponded {
             chars: final_content.chars().count(),
-            iterations: iterations_used,
+            iterations: turn_state.iterations_used,
         });
         self.finish_trace(trace, TurnStatus::Completed);
 
@@ -2720,7 +2733,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             content: final_content,
             tool_calls: Vec::new(),
             tool_calls_made,
-            iterations: iterations_used,
+            iterations: turn_state.iterations_used,
             pre_executed_results: std::collections::HashMap::new(),
         })
     }
