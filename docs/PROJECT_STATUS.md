@@ -36,17 +36,17 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic test baseline observed during the 2026-05-11 provider
-reconnect and harness-split live-eval work:
+Latest deterministic local test baseline observed during the 2026-05-11
+provider reconnect, harness-split, and evidence-label/env-alignment work:
 
 ```text
-1197 passed; 0 failed
+1200 passed; 0 failed
 ```
 
-Validated inside live-eval required commands with:
+Validated locally with:
 
 ```bash
-cargo test -q
+OPENAI_API_KEY="" MOONSHOT_API_KEY="" MINIMAX_API_KEY="dummy" MINIMAX_MODEL="MiniMax-M2.7" cargo test -q -- --test-threads=1
 ```
 
 Latest expanded live-eval checkpoint:
@@ -476,13 +476,13 @@ Latest maintenance note:
   `batch6-reconnect-20260511-135823` passed as audit/no-diff checks with
   required commands ok, full `1195 passed; 0 failed`,
   `closeout_status=passed`, and `failure_owner=none`.
-- The expanded recommended suite is current through case 11. Cases 8-10 passed
-  in the reconnect batch. `resume-session-picker` is still failing as
-  `agent_flow`: `batch6-reconnect-20260511-150921` produced a relevant diff and
-  harness required commands passed, but runtime verification/acceptance stayed
-  failed and closeout remained failed. The preceding rerun
-  `batch6-reconnect-20260511-142835` exposed an over-broad deterministic
-  memory-quality patch rule, fixed by `f43e43e`.
+- The expanded 12-case recommended suite now has current passing evidence.
+  Cases 8-10 passed as audit/no-diff checks in the reconnect batch.
+  `resume-session-picker` passed in `batch6-harnesssplit-20260511-155208`
+  after focused agent-visible validation was split from harness-only full-suite
+  validation. `cli-scrollback-polish` passed in
+  `batch6-evidencefix2-20260511-173535` after runtime validation labels and
+  live-eval provider environments were aligned.
 - Provider health preflight is now available as
   `priority-agent --provider-health` and is enabled by default for
   `scripts/run_live_eval.sh --mode agent-run`. It probes plain chat, tool-call,
