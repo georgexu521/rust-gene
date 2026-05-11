@@ -66,6 +66,7 @@ evidence run, and 2026-05-11 provider-reconnect reruns:
 | Latest Batch 6 smoke | `batch6-smoke-20260510-133309`, `batch6-parsefix-20260510-141148`, `batch6-smoke-20260510-142800`, `batch6-smoke-20260510-143451`, `batch6-smoke-20260510-144053`, `batch6-smoke-20260510-154614`, and `batch6-smoke-20260510-163831`: first seven recommended code-change cases passed after the ConversationLoop split and parse-noise/provider fallback fix, all with real diffs, required commands ok, and `failure_owner=none`. |
 | Latest Batch 6 reconnect reruns | `batch6-reconnect-20260511-132912`, `batch6-reconnect-20260511-133851`, and `batch6-reconnect-20260511-135823`: recommended cases 8, 9, and 10 passed as audit/no-diff checks with required commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. All three runs exercised MiniMax reconnect retry logs. |
 | Latest resume-session rerun | `batch6-harnesssplit-20260511-155208` passed after splitting agent-visible focused commands from harness-only full-suite validation: real `/resume` diff, agent required commands ok, harness full `911 passed; 0 failed`, `acceptance_accepted=True`, `closeout_status=passed`, and `failure_owner=none`. |
+| Latest CLI scrollback rerun | `batch6-auditfix-20260511-163148` passed after reclassifying the stale seeded task as an audit/regression check: default scrollback CLI evidence was verified, the agent fixed the fixture's pre-existing lowercase Kimi header test blocker, focused required commands and harness full suite passed, `closeout_status=passed`, and `failure_owner=none`. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 | Latest skill-promotion rerun | `batch6-smoke-20260510-154614` passed after the earlier provider-blocked rerun, with real diff, `skill_active=true`, `promotion=true`, required commands ok, full `1178 passed; 0 failed`, and `failure_owner=none`. |
@@ -208,12 +209,12 @@ default loop.
 | 11 | `resume-session-picker` | Tests Claude-style resume as a daily CLI workflow. |
 | 12 | `cli-scrollback-polish` | Tests interactive CLI readability and long-output ergonomics. |
 
-The first eleven cases have current post-split passing evidence. Cases 1-7 and
-case 11 are real code-change passes; cases 8-10 are audit/no-diff passes where
-the agent proved the current code already satisfied the acceptance criteria and
-then ran required validation. Case 12 is the next productization target. The
-expanded 12-case suite remains the next productization baseline and should be
-run after runtime-loop or CLI behavior changes. The
+All twelve recommended cases now have current post-split passing evidence.
+Cases 1-7 and case 11 are real code-change passes; cases 8-10 are audit/no-diff
+passes; case 12 is now an audit/regression check because the chosen base ref
+already contained the default scrollback CLI behavior. The expanded 12-case
+suite is the current productization baseline and should be rerun after
+runtime-loop or CLI behavior changes. The
 previous dashboard recovered warning and the residual workflow-judgment JSON
 parse stderr warning both have focused clean reruns. The latest dashboard rerun
 also proves the provider fallback path can recover a MiniMax 200 OK success body
@@ -239,7 +240,7 @@ environment/provider stop instead of spending the full eval timeout. Use
 | `memory-save-sensitive-hard-block` | `batch6-reconnect-20260511-133851` passed after the provider reconnect and protocol-only health check updates. It was a correct audit/no-diff closeout with required memory/TUI/full-suite commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`; stderr records MiniMax transient reconnects recovered by retry. | Keep as the hard-block safety guard for explicit memory saves. |
 | `permission-default-open-dangerous-guard` | `batch6-reconnect-20260511-135823` passed after the provider reconnect and protocol-only health check updates. It was a correct audit/no-diff closeout with required permissions/bash/full-suite commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`; stderr records MiniMax transient reconnects recovered by retry. | Keep as the destructive-action safety guard. |
 | `resume-session-picker` | `batch6-harnesssplit-20260511-155208` passed after moving the broad full-suite command to `acceptance.harness_commands`: the agent saw and passed the two focused `/resume`/session commands, the harness still ran full `cargo test`, runtime verification passed, acceptance accepted, closeout passed, and `failure_owner=none`. Earlier same-day evidence `batch6-reconnect-20260511-150921` proved the old combined command list over-controlled the agent loop; `batch6-reconnect-20260511-142835` also exposed the deterministic memory-quality patch misfire fixed by `f43e43e`. | Keep as the guard that CLI feature tasks use focused agent validation while the harness still enforces release-level full-suite checks. |
-| `cli-scrollback-polish` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the CLI readability guard. |
+| `cli-scrollback-polish` | `batch6-auditfix-20260511-163148` passed after correcting the case intent from stale seeded-code-change to audit/regression. The failed precursor `batch6-harnesssplit-20260511-160935` showed why: the base already had scrollback-first `src/shell.rs`, so seeded mode pushed the model into unrelated `--tui` edits. The passing rerun verified default CLI evidence, repaired a pre-existing Kimi `HeaderName::from_static` lowercase issue in the fixture, passed focused shell/tui commands plus harness full suite, and closed out cleanly with `failure_owner=none`. | Keep as the CLI readability guard and as a stale-fixture/intent-classification guard. |
 
 Run one case:
 

@@ -1223,6 +1223,23 @@ Fourteenth slice:
   `closeout_status=passed`, and `failure_owner=none`.
   This makes `cli-scrollback-polish` the next recommended productization target.
 
+Fifteenth slice:
+
+- Reran `cli-scrollback-polish` and found a stale eval-intent problem. The base
+  ref `55ad3e8` already contains the default scrollback-first `src/shell.rs`
+  path, welcome block, context/status labels, and concise tool rendering. As a
+  seeded code-change task, `batch6-harnesssplit-20260511-160935` pushed the
+  agent into unrelated `--tui` alternate-screen edits and failed acceptance.
+- Reclassified `cli-scrollback-polish` as `audit_or_regression_check`, made the
+  prompt explicit that the target is default `priority-agent` / `pa --cli` and
+  not compatibility `--tui`, and moved the broad full-suite command to
+  `acceptance.harness_commands`.
+- The rerun `batch6-auditfix-20260511-163148` passed. It verified the default
+  CLI evidence, found and fixed the fixture's pre-existing Kimi lowercase header
+  test blocker, passed focused shell/TUI commands plus harness full suite
+  (`901 passed; 0 failed`), and closed out with `failure_owner=none`.
+  The expanded 12-case suite now has current passing evidence.
+
 验证：
 
 ```bash
@@ -1250,6 +1267,8 @@ scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-ru
 scripts/run_live_eval.sh --case permission-default-open-dangerous-guard --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --case resume-session-picker --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --case resume-session-picker --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-harnesssplit
+scripts/run_live_eval.sh --case cli-scrollback-polish --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-harnesssplit
+scripts/run_live_eval.sh --case cli-scrollback-polish --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-auditfix
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1269,6 +1288,8 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-13385
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-135823
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-142835
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-150921
+scripts/run_live_eval.sh --mode summary --run-id batch6-harnesssplit-20260511-160935
+scripts/run_live_eval.sh --mode summary --run-id batch6-auditfix-20260511-163148
 ```
 
 ## 验收指标
