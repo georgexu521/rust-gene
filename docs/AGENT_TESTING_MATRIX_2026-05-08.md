@@ -1,6 +1,6 @@
 # Agent Testing Matrix
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 This is the current entry point for testing Priority Agent as a coding agent.
 It organizes the existing local tests, workflow gates, evalsets, live evals, and
@@ -50,12 +50,12 @@ code is broken. Separate product validation from agent closeout.
 ## Current Baseline Snapshot
 
 This is the current evidence baseline after the 2026-05-09 recovery,
-baseline reset, terminal/filesystem grounding pass, and six-case capability
-evidence run:
+baseline reset, terminal/filesystem grounding pass, six-case capability
+evidence run, and 2026-05-11 provider-reconnect reruns:
 
 | Signal | Current evidence |
 | --- | --- |
-| Deterministic tests | `cargo test -q` -> `1151 passed; 0 failed` |
+| Deterministic tests | `cargo test -q` -> `1195 passed; 0 failed` |
 | Live aggregate | `40/142` task reports passed; `102/142` failed |
 | Instrumented slice | `18/50` passed; `32/50` failed |
 | Real code-change passes | `13` reports with non-empty diffs |
@@ -63,13 +63,14 @@ evidence run:
 | Latest recovered dashboard run | `checkpoint-function-anchor-20260509-120047`: required commands ok, real diff, closeout passed, `failure_owner=none` |
 | Latest Batch 3 runs | Five current suite cases now have passing evidence; `live-eval-dashboard-summary` first failed as `agent_flow` in `capability-now-20260509-143251`, then passed in `capability-now-20260509-144729` after `3344363` removed Markdown highlighting from grep evidence. |
 | Latest six-case capability run | `capability-evidence-20260509-173239`: `6/6` passed, all with real diffs; memory active tasks `6`, memory changed-plan tasks `5`, skill active tasks `1`, skill promotion-evidence tasks `1`. |
-| Latest Batch 6 smoke | `batch6-smoke-20260510-133309`, `batch6-parsefix-20260510-141148`, `batch6-smoke-20260510-142800`, `batch6-smoke-20260510-143451`, `batch6-smoke-20260510-144053`, `batch6-smoke-20260510-154614`, and `batch6-smoke-20260510-163831`: first seven recommended cases passed after the ConversationLoop split and parse-noise/provider fallback fix, all with real diffs, required commands ok, and `failure_owner=none`. |
+| Latest Batch 6 smoke | `batch6-smoke-20260510-133309`, `batch6-parsefix-20260510-141148`, `batch6-smoke-20260510-142800`, `batch6-smoke-20260510-143451`, `batch6-smoke-20260510-144053`, `batch6-smoke-20260510-154614`, and `batch6-smoke-20260510-163831`: first seven recommended code-change cases passed after the ConversationLoop split and parse-noise/provider fallback fix, all with real diffs, required commands ok, and `failure_owner=none`. |
+| Latest Batch 6 reconnect reruns | `batch6-reconnect-20260511-132912` and `batch6-reconnect-20260511-133851`: recommended cases 8 and 9 both passed as audit/no-diff checks with required commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. Both runs exercised MiniMax reconnect retry logs. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 | Latest skill-promotion rerun | `batch6-smoke-20260510-154614` passed after the earlier provider-blocked rerun, with real diff, `skill_active=true`, `promotion=true`, required commands ok, full `1178 passed; 0 failed`, and `failure_owner=none`. |
 | Latest persistent-memory planning rerun | `batch6-smoke-20260510-163831` passed after fixture anchoring and focused-repair synthesis tuning, with real diff, memory active, memory changed planning, required commands ok, full `1178 passed; 0 failed`, and `failure_owner=none`. |
-| Latest memory-recall conflict rerun | `batch6-provider-gated-fix-20260511-103341` is not a pass: provider health preflight passed, but MiniMax failed in the agent loop before closeout; `failure_owner=environment`, `runtime_diet.validation=api_error`. The prior `batch6-provider-gated-20260511-101147` reached the audit/no-diff path with required commands passing, exposing the now-fixed no-diff closeout classification bug. |
-| Latest sensitive-memory hard-block rerun | `batch6-provider-gated-fix-20260511-104114` is not a pass: provider health preflight blocked before agent-run because MiniMax returned no tool call for the tool-call probe; `failure_owner=environment`, required commands skipped. |
+| Latest memory-recall conflict rerun | `batch6-reconnect-20260511-132912` passed as an audit/no-diff check: required retrieval/memory/full-suite commands passed, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. |
+| Latest sensitive-memory hard-block rerun | `batch6-reconnect-20260511-133851` passed as an audit/no-diff check: required memory/TUI/full-suite commands passed, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. |
 
 The aggregate intentionally includes older runs that predate structured
 `failure_owner`, `eval_intent`, and adaptive-trigger metadata. Use it for
@@ -206,18 +207,22 @@ default loop.
 | 11 | `resume-session-picker` | Tests Claude-style resume as a daily CLI workflow. |
 | 12 | `cli-scrollback-polish` | Tests interactive CLI readability and long-output ergonomics. |
 
-The first six cases have current post-split passing evidence. The expanded 12-case suite is the
-next productization baseline and should be run after runtime-loop or CLI behavior
-changes. The previous dashboard recovered warning and the residual
-workflow-judgment JSON parse stderr warning both have focused clean reruns. The
-latest dashboard rerun also proves the provider fallback path can recover a
-MiniMax 200 OK success body when the async client rejects it, then continue into
-model-led edit and validation without deterministic patch synthesis.
+The first nine cases have current post-split passing evidence. Cases 1-7 are
+real code-change passes; cases 8-9 are audit/no-diff passes where the agent
+proved the current code already satisfied the acceptance criteria and then ran
+required validation. The expanded 12-case suite remains the next productization
+baseline and should be run after runtime-loop or CLI behavior changes. The
+previous dashboard recovered warning and the residual workflow-judgment JSON
+parse stderr warning both have focused clean reruns. The latest dashboard rerun
+also proves the provider fallback path can recover a MiniMax 200 OK success body
+when the async client rejects it, then continue into model-led edit and
+validation without deterministic patch synthesis.
 New live-eval agent runs now have a provider health preflight before the agent
 turn. The preflight checks plain chat, tool calls, and tool-result continuation;
-if it fails, the run is recorded as an environment/provider stop instead of
-spending the full eval timeout. Use `--skip-provider-health` only when testing
-the gate itself.
+the continuation step is a protocol check and does not require the model to
+repeat an exact Closeout phrase. If it fails, the run is recorded as an
+environment/provider stop instead of spending the full eval timeout. Use
+`--skip-provider-health` only when testing the gate itself.
 
 | Case | Current evidence | Next action |
 | --- | --- | --- |
@@ -228,8 +233,8 @@ the gate itself.
 | `memory-save-quality-gate` | `batch6-smoke-20260510-144053` passed after the 2026-05-10 loop split with real diff, memory tests and full `1178 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. | Keep as a regression guard for quality-gate bypass and truthful `/save` outcomes. |
 | `skill-promotion-gate` | `batch6-smoke-20260510-154614` passed after the 2026-05-10 loop split with real diff, required commands ok, full `1178 passed; 0 failed`, `skill_active=true`, `promotion=true`, `closeout_status=passed`, and `failure_owner=none`. | Keep as the skill promotion and report-evidence guard. |
 | `persistent-memory-planning-context` | `batch6-smoke-20260510-163831` passed after fixture anchoring and focused-repair synthesis tuning with real diff, required commands ok, full `1178 passed; 0 failed`, memory active, memory changed planning, `closeout_status=passed`, and `failure_owner=none`. | Keep as the regression guard for persistent memory prefetch before workflow judgment without prompt bloat. |
-| `memory-recall-conflict-precision` | `batch6-provider-gated-fix-20260511-103341` remains provider-blocked, not passed: provider health preflight passed, required harness commands passed, but the agent loop hit `error sending request for url`; `failure_owner=environment`, `closeout_status=missing`. The earlier same-day run `batch6-provider-gated-20260511-101147` confirmed the model can inspect and run the required checks, but it exposed a no-diff audit closeout bug fixed by `fed2f27`. | Rerun when provider is stable; keep as the guard against over-broad memory conflict demotion and audit/no-diff over-control. |
-| `memory-save-sensitive-hard-block` | `batch6-provider-gated-fix-20260511-104114` remains provider-blocked, not passed: the new provider health preflight failed before agent-run because MiniMax returned no tool call for the tool-call probe; `failure_owner=environment`, `closeout_status=missing`, required commands skipped. | Rerun when provider health is stable; keep as the hard-block safety guard for explicit memory saves. |
+| `memory-recall-conflict-precision` | `batch6-reconnect-20260511-132912` passed after the provider reconnect and protocol-only health check updates. It was a correct audit/no-diff closeout with required retrieval/memory/full-suite commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`; stderr records MiniMax transient reconnects recovered by retry. | Keep as the guard against over-broad memory conflict demotion and audit/no-diff over-control. |
+| `memory-save-sensitive-hard-block` | `batch6-reconnect-20260511-133851` passed after the provider reconnect and protocol-only health check updates. It was a correct audit/no-diff closeout with required memory/TUI/full-suite commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`; stderr records MiniMax transient reconnects recovered by retry. | Keep as the hard-block safety guard for explicit memory saves. |
 | `permission-default-open-dangerous-guard` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the destructive-action safety guard. |
 | `resume-session-picker` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the resume-session product guard. |
 | `cli-scrollback-polish` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the CLI readability guard. |

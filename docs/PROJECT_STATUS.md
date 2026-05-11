@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 ## Summary
 
@@ -36,11 +36,11 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic test baseline observed during the 2026-05-09 focused
-lookup-budget live-eval run:
+Latest deterministic test baseline observed during the 2026-05-11 provider
+reconnect live-eval reruns:
 
 ```text
-1155 passed; 0 failed
+1195 passed; 0 failed
 ```
 
 Validated inside live-eval required commands with:
@@ -335,11 +335,15 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-09 with `1155 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-11 with `1195 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry
   auth/schema/400-class request-contract failures.
+- Provider health preflight is now protocol-focused: plain chat, tool-call, and
+  tool-result continuation must work, but the continuation probe no longer
+  requires the model to repeat an exact Closeout phrase before live evals can
+  start.
 - Latest validation for the companion-context slice: `cargo fmt --check`,
   `cargo test -q companion_context`, `cargo test -q shell_compatibility_hint`,
   `cargo test -q agent_mode`, `cargo check -q`, `cargo test -q`,
@@ -452,10 +456,11 @@ Latest maintenance note:
 - Audit/regression live evals now route through the code workflow without
   requiring arbitrary diffs, bash child processes strip agent runtime env vars
   before running validation commands, and workflow judgment factor parsing
-  tolerates missing optional fields. The latest Batch 6 reruns
-  `batch6-rerun-20260510-230329` and `batch6-rerun-20260510-232124` both have
-  clean harness-required commands but remain provider-blocked by MiniMax
-  request-send failures before closeout.
+  tolerates missing optional fields. After the reconnect policy and
+  protocol-only provider health update, `batch6-reconnect-20260511-132912`
+  and `batch6-reconnect-20260511-133851` both passed as audit/no-diff checks
+  with required commands ok, full `1195 passed; 0 failed`,
+  `closeout_status=passed`, and `failure_owner=none`.
 - Provider health preflight is now available as
   `priority-agent --provider-health` and is enabled by default for
   `scripts/run_live_eval.sh --mode agent-run`. It probes plain chat, tool-call,

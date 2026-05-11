@@ -1028,9 +1028,11 @@ Third completed slice:
 Provider health gate slice:
 
 - Added `priority-agent --provider-health` as a direct provider smoke probe for
-  plain chat, tool-call generation, and tool-result continuation with a
-  Closeout marker. The command writes structured JSON and exits non-zero on
-  auth, rate-limit, schema, timeout, transport, or provider-semantic failures.
+  plain chat, tool-call generation, and tool-result continuation. The command
+  writes structured JSON and exits non-zero on auth, rate-limit, schema,
+  timeout, transport, or provider-semantic failures. The continuation step is
+  intentionally a protocol check: a non-empty continuation is enough, and the
+  probe does not require the model to repeat an exact Closeout phrase.
 - `scripts/run_live_eval.sh --mode agent-run` now runs this preflight before
   launching the agent. If the provider is unhealthy, the task report records a
   provider-health section, skips expensive required commands, writes an
@@ -1105,7 +1107,7 @@ Ninth completed slice:
   planning, `closeout_status=passed`, and `failure_owner=none`. The first seven
   recommended live-eval cases now have current post-split passing evidence.
 
-Tenth slice, still blocked on provider after runtime reroute/env fixes:
+Tenth completed slice:
 
 - Reran `memory-recall-conflict-precision` and found an over-control issue in
   audit/no-diff tasks: the runtime and generated live-eval prompt still pushed
@@ -1137,8 +1139,16 @@ Tenth slice, still blocked on provider after runtime reroute/env fixes:
   `batch6-provider-gated-fix-20260511-103341`, was blocked by a MiniMax request
   failure during the agent loop and is correctly classified as
   `failure_owner=environment`.
+- Added the shared reconnect retry policy and relaxed the provider health
+  continuation probe from exact Closeout text to a protocol-level non-empty
+  continuation check. The current rerun, `batch6-reconnect-20260511-132912`,
+  passed as a correct audit/no-diff closeout: retrieval/memory/full-suite
+  required commands all passed, full `1195 passed; 0 failed`,
+  `closeout_status=passed`, and `failure_owner=none`. The run recorded MiniMax
+  transient `error sending request for url` reconnects that recovered under the
+  five-attempt retry policy.
 
-Eleventh slice, still blocked on provider after runtime/schema fixes:
+Eleventh completed slice:
 
 - Reran `memory-save-sensitive-hard-block` and found two harness/runtime issues
   before the provider failure: live evals were defaulting
@@ -1162,6 +1172,12 @@ Eleventh slice, still blocked on provider after runtime/schema fixes:
   return the required tool call. The report is correctly classified as
   `failure_owner=environment`; required commands were skipped because the agent
   never started.
+- After the reconnect policy and protocol-only provider health update, the
+  current rerun, `batch6-reconnect-20260511-133851`, passed as a correct
+  audit/no-diff closeout: memory/TUI/full-suite required commands all passed,
+  full `1195 passed; 0 failed`, `closeout_status=passed`, and
+  `failure_owner=none`. The run also recorded MiniMax transient reconnects that
+  recovered instead of aborting the agent loop.
 
 验证：
 
@@ -1172,7 +1188,9 @@ python3 -m py_compile scripts/live_eval_report_parser.py
 cargo test -q eval
 cargo test -q minimax
 cargo test -q workflow_contract
+cargo test -q provider_health -- --test-threads=1
 cargo check -q
+cargo run -q -- --provider-health --output /tmp/priority-agent-provider-health-protocol.json --timeout 60
 scripts/run_live_eval.sh --case code-change-verification-repair-loop --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case live-eval-dashboard-summary --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-parsefix
@@ -1183,6 +1201,8 @@ scripts/run_live_eval.sh --case skill-promotion-gate --mode agent-run --run-test
 scripts/run_live_eval.sh --case persistent-memory-planning-context --mode agent-run --run-tests --timeout 1800 --idle-timeout 300 --label batch6-smoke
 scripts/run_live_eval.sh --case memory-recall-conflict-precision --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-smoke
 scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-smoke
+scripts/run_live_eval.sh --case memory-recall-conflict-precision --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
+scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1196,6 +1216,8 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-175656
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-182657
 scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-230329
 scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-232124
+scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-132912
+scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-133851
 ```
 
 ## 验收指标
