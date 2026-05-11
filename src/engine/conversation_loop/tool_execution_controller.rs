@@ -9,7 +9,9 @@ use super::turn_recording::{
     record_web_retrieval_trace,
 };
 use super::{tool_allowed_by_context, tool_not_allowed_result, ConversationLoop};
+use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::hooks::HookDecision;
+use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
@@ -81,23 +83,39 @@ impl ToolExecutionBatch {
     }
 }
 
+pub(super) struct ToolExecutionRequest<'a> {
+    pub(super) tool_calls: &'a [ToolCall],
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) pre_executed: HashMap<usize, ToolResult>,
+    pub(super) trace: Option<TraceCollector>,
+    pub(super) resource_policy: &'a ResourcePolicy,
+    pub(super) exposed_tool_names: &'a HashSet<String>,
+    pub(super) action_checkpoint_active: bool,
+    pub(super) action_checkpoint_lookup_count: usize,
+    pub(super) has_changes_before_tools: bool,
+    pub(super) destructive_scope: &'a DestructiveScopeContract,
+    pub(super) lifecycle: &'a mut ToolCallLifecycle,
+}
+
 impl ConversationLoop {
     /// 并行执行工具调用
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn execute_tools_parallel(
         &self,
-        tool_calls: &[ToolCall],
-        tx: Option<&mpsc::Sender<StreamEvent>>,
-        pre_executed: HashMap<usize, ToolResult>,
-        trace: Option<TraceCollector>,
-        resource_policy: &crate::engine::resource_policy::ResourcePolicy,
-        exposed_tool_names: &HashSet<String>,
-        action_checkpoint_active: bool,
-        action_checkpoint_lookup_count: usize,
-        has_changes_before_tools: bool,
-        destructive_scope: &crate::engine::destructive_scope::DestructiveScopeContract,
-        lifecycle: &mut ToolCallLifecycle,
+        request: ToolExecutionRequest<'_>,
     ) -> ToolExecutionBatch {
+        let ToolExecutionRequest {
+            tool_calls,
+            tx,
+            pre_executed,
+            trace,
+            resource_policy,
+            exposed_tool_names,
+            action_checkpoint_active,
+            action_checkpoint_lookup_count,
+            has_changes_before_tools,
+            destructive_scope,
+            lifecycle,
+        } = request;
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
         let mut denied_results = Vec::new();

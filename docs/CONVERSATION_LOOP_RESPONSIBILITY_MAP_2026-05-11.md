@@ -67,6 +67,12 @@ route on structured facts instead of rescanning raw tuples. The main loop now
 uses batch-level success and unsuccessful-result summaries for low-risk guard
 and retry decisions while leaving detailed evidence collection unchanged.
 
+`ToolExecutionRequest` now names the input context for one tool execution
+batch. It keeps the existing execution semantics, but removes the long
+anonymous argument list and makes route policy, exposed tools, checkpoint facts,
+destructive scope, pre-executed results, streaming, and lifecycle ownership
+explicit at the controller boundary.
+
 ## Extraction Rule
 
 Future loop-split commits should follow this rule:
