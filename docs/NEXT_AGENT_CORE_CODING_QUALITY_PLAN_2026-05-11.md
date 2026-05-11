@@ -72,6 +72,18 @@
   checkpoint bash/file_edit guards. The gate only decides allow/deny and
   prepares denial results; `ToolExecutionController` still owns persistence,
   lifecycle updates, scheduling, and execution order.
+- 2026-05-11: Phase 1 Batch 1.3 continued. Split
+  `ToolExecutionController::execute_tools_parallel` internally: read-only tool
+  job creation now lives in `read_only_job`, read-only result collection in
+  `collect_read_only_results`, and sequential read-write execution in
+  `execute_read_write_calls`. This keeps the batch/gate/context contract stable
+  while reducing the main execution method to orchestration.
+- Validation after the read-only/read-write execution split:
+  `cargo fmt --check`, `git diff --check`, targeted `tool_call_lifecycle`,
+  `batch_summarizes_results_and_lifecycle_statuses`, `route_scoped_tools`,
+  `tool_result`, `runtime_diet`, and `patch_synthesis` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1208 passed; 0 failed`).
 - Validation after the `ToolExecutionGate` split: `cargo fmt --check`,
   `git diff --check`, targeted `tool_call_lifecycle`,
   `batch_summarizes_results_and_lifecycle_statuses`, `route_scoped_tools`,

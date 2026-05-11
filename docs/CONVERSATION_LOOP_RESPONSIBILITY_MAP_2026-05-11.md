@@ -90,6 +90,12 @@ isolation, destructive scope, and action checkpoint bash/file_edit guards. The
 controller remains responsible for persistence, lifecycle updates, scheduling,
 and result ordering.
 
+`ToolExecutionController` now separates the two execution lanes internally:
+read-only job creation, read-only result collection, and sequential read-write
+execution are individual methods. `execute_tools_parallel` remains the batch
+orchestrator and preserves existing ordering: denied/pre-executed results,
+then completed read-only results, then read-write results.
+
 ## Extraction Rule
 
 Future loop-split commits should follow this rule:

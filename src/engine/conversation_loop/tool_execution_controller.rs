@@ -18,6 +18,7 @@ use crate::services::api::ToolCall;
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -279,201 +280,103 @@ impl ToolExecutionController {
         Self { context }
     }
 
-    pub(super) async fn execute_tools_parallel(
+    fn read_only_job(
         &self,
-        request: ToolExecutionRequest<'_>,
-    ) -> ToolExecutionBatch {
-        let ToolExecutionRequest {
-            tool_calls,
-            tx,
-            pre_executed,
-            trace,
-            resource_policy,
-            exposed_tool_names,
-            action_checkpoint_active,
-            action_checkpoint_lookup_count,
-            has_changes_before_tools,
-            destructive_scope,
-            lifecycle,
-        } = request;
+        trace: &Option<TraceCollector>,
+        tool_call: &ToolCall,
+    ) -> impl Future<Output = (ToolCall, ToolResult)> + 'static {
         let execution = &self.context;
-        let mut read_only_jobs = Vec::new();
-        let mut read_write_calls = Vec::new();
-        let mut denied_results = Vec::new();
-        let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
-        lifecycle.pending_batch(tool_calls);
-        let gate = ToolExecutionGate {
-            active_goal: execution.active_goal.as_ref(),
-            allowed_tools: &execution.allowed_tools,
-            resource_policy,
-            exposed_tool_names,
-            action_checkpoint_active,
-            action_checkpoint_lookup_count,
-            has_changes_before_tools,
-            destructive_scope,
-            trace: &trace,
-        };
-
-        for (i, tc) in tool_calls.iter().enumerate() {
-            if tc.name.is_empty() {
-                continue;
-            }
-            let scheduled_count = results.len()
-                + denied_results.len()
-                + read_only_jobs.len()
-                + read_write_calls.len();
-            if let ToolExecutionGateOutcome::Deny(result) = gate.evaluate(tc, scheduled_count) {
-                persist_tool_outcome_learning_event(
-                    execution.session_store.as_ref(),
-                    &execution.session_id,
-                    tc,
-                    &result,
-                );
-                lifecycle.denied(tc);
-                denied_results.push((tc.clone(), result));
-                continue;
-            }
-
-            if let Some(pre_result) = pre_executed.get(&i) {
-                let mut pre_result = pre_result.clone();
-                attach_tool_execution_metadata(tc, &mut pre_result);
-                persist_tool_outcome_learning_event(
-                    execution.session_store.as_ref(),
-                    &execution.session_id,
-                    tc,
-                    &pre_result,
-                );
-                if let Some(ref trace) = trace {
-                    trace.record(TraceEvent::ToolStarted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        parallel: true,
-                        pre_executed: true,
-                    });
-                    trace.record(TraceEvent::ToolCompleted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        success: pre_result.success,
-                        duration_ms: pre_result.duration_ms,
-                        output_chars: pre_result.content.chars().count(),
-                    });
-                    let trace_ref = Some(trace.clone());
-                    record_mcp_resource_trace(&trace_ref, tc, &pre_result);
-                    record_web_retrieval_trace(&trace_ref, tc, &pre_result);
-                }
-                lifecycle.provider_executed(tc, &pre_result);
-                debug!(
-                    "Skipping pre-executed read-only tool at index {}: {}",
-                    i, tc.name
-                );
-                results.push((tc.clone(), pre_result.clone()));
-                if let Some(tx) = tx {
-                    let result_content = provider_tool_result_content(tc, &pre_result);
-                    let _ = tx
-                        .send(StreamEvent::ToolExecutionComplete {
-                            id: tc.id.clone(),
-                            result: result_content,
-                        })
-                        .await;
-                }
-                continue;
-            }
-
-            if is_read_only(&tc.name) {
-                lifecycle.running(tc, true, false);
-                if let Some(tx) = tx {
-                    let _ = tx
-                        .send(StreamEvent::ToolExecutionStart {
-                            id: tc.id.clone(),
-                            name: tc.name.clone(),
-                        })
-                        .await;
-                }
-                let registry = execution.tool_registry.clone();
-                let context = execution.tool_context(&trace);
-                let tc_clone = tc.clone();
-                let tool_name = tc.name.clone();
-                let cost_tracker = execution.cost_tracker.clone();
-                let hook_manager = execution.hook_manager.clone();
-                let trace = trace.clone();
-                read_only_jobs.push(async move {
-                    let started_at = std::time::Instant::now();
-                    if let Some(ref trace) = trace {
-                        trace.record(TraceEvent::ToolStarted {
-                            tool: tool_name.clone(),
-                            call_id: tc_clone.id.clone(),
-                            parallel: true,
-                            pre_executed: false,
-                        });
-                    }
-                    let pre_decision = if let Some(ref hooks) = hook_manager {
-                        let hook_start = hooks.current_record_sequence();
-                        let decision = hooks.run_pre_tool(&tc_clone, &context).await;
-                        let hook_records = hooks.recent_records_after_for(hook_start, &tc_clone.id);
-                        record_hook_traces(&trace, &hook_records);
-                        decision
-                    } else {
-                        HookDecision {
-                            allow: true,
-                            reason: None,
-                        }
-                    };
-
-                    let mut result =
-                        if !pre_decision.allow {
-                            ToolResult::error(pre_decision.reason.unwrap_or_else(|| {
-                                format!("blocked by pre-tool hook: {}", tool_name)
-                            }))
-                        } else if let Some(tool) = registry.get(&tool_name) {
-                            tool.execute(tc_clone.arguments.clone(), context.clone())
-                                .await
-                        } else {
-                            ToolResult::error(format!("Tool '{}' not found", tool_name))
-                        };
-                    let duration_ms = started_at.elapsed().as_millis() as u64;
-                    if result.duration_ms.is_none() {
-                        result.duration_ms = Some(duration_ms);
-                    }
-
-                    if let Some(ref hooks) = hook_manager {
-                        let hook_start = hooks.current_record_sequence();
-                        hooks.run_post_tool(&tc_clone, &result, &context).await;
-                        let hook_records = hooks.recent_records_after_for(hook_start, &tc_clone.id);
-                        record_hook_traces(&trace, &hook_records);
-                    };
-                    attach_tool_execution_metadata(&tc_clone, &mut result);
-                    {
-                        let mut tracker = cost_tracker.lock().await;
-                        tracker.record_tool_execution(
-                            &tool_name,
-                            result.success,
-                            duration_ms,
-                            result.error.as_deref(),
-                        );
-                    }
-                    if let Some(ref trace) = trace {
-                        trace.record(TraceEvent::ToolCompleted {
-                            tool: tool_name,
-                            call_id: tc_clone.id.clone(),
-                            success: result.success,
-                            duration_ms: result.duration_ms,
-                            output_chars: result.content.chars().count(),
-                        });
-                        let trace_ref = Some(trace.clone());
-                        record_mcp_resource_trace(&trace_ref, &tc_clone, &result);
-                        record_web_retrieval_trace(&trace_ref, &tc_clone, &result);
-                    }
-                    (tc_clone, result)
+        let registry = execution.tool_registry.clone();
+        let context = execution.tool_context(trace);
+        let tc_clone = tool_call.clone();
+        let tool_name = tool_call.name.clone();
+        let cost_tracker = execution.cost_tracker.clone();
+        let hook_manager = execution.hook_manager.clone();
+        let trace = trace.clone();
+        async move {
+            let started_at = std::time::Instant::now();
+            if let Some(ref trace) = trace {
+                trace.record(TraceEvent::ToolStarted {
+                    tool: tool_name.clone(),
+                    call_id: tc_clone.id.clone(),
+                    parallel: true,
+                    pre_executed: false,
                 });
-            } else {
-                read_write_calls.push(tc.clone());
             }
+            let pre_decision = if let Some(ref hooks) = hook_manager {
+                let hook_start = hooks.current_record_sequence();
+                let decision = hooks.run_pre_tool(&tc_clone, &context).await;
+                let hook_records = hooks.recent_records_after_for(hook_start, &tc_clone.id);
+                record_hook_traces(&trace, &hook_records);
+                decision
+            } else {
+                HookDecision {
+                    allow: true,
+                    reason: None,
+                }
+            };
+
+            let mut result = if !pre_decision.allow {
+                ToolResult::error(
+                    pre_decision
+                        .reason
+                        .unwrap_or_else(|| format!("blocked by pre-tool hook: {}", tool_name)),
+                )
+            } else if let Some(tool) = registry.get(&tool_name) {
+                tool.execute(tc_clone.arguments.clone(), context.clone())
+                    .await
+            } else {
+                ToolResult::error(format!("Tool '{}' not found", tool_name))
+            };
+            let duration_ms = started_at.elapsed().as_millis() as u64;
+            if result.duration_ms.is_none() {
+                result.duration_ms = Some(duration_ms);
+            }
+
+            if let Some(ref hooks) = hook_manager {
+                let hook_start = hooks.current_record_sequence();
+                hooks.run_post_tool(&tc_clone, &result, &context).await;
+                let hook_records = hooks.recent_records_after_for(hook_start, &tc_clone.id);
+                record_hook_traces(&trace, &hook_records);
+            };
+            attach_tool_execution_metadata(&tc_clone, &mut result);
+            {
+                let mut tracker = cost_tracker.lock().await;
+                tracker.record_tool_execution(
+                    &tool_name,
+                    result.success,
+                    duration_ms,
+                    result.error.as_deref(),
+                );
+            }
+            if let Some(ref trace) = trace {
+                trace.record(TraceEvent::ToolCompleted {
+                    tool: tool_name,
+                    call_id: tc_clone.id.clone(),
+                    success: result.success,
+                    duration_ms: result.duration_ms,
+                    output_chars: result.content.chars().count(),
+                });
+                let trace_ref = Some(trace.clone());
+                record_mcp_resource_trace(&trace_ref, &tc_clone, &result);
+                record_web_retrieval_trace(&trace_ref, &tc_clone, &result);
+            }
+            (tc_clone, result)
         }
+    }
 
-        results.append(&mut denied_results);
-
-        let concurrency =
-            read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
+    async fn collect_read_only_results<F>(
+        &self,
+        read_only_jobs: Vec<F>,
+        concurrency: usize,
+        tx: Option<&mpsc::Sender<StreamEvent>>,
+        lifecycle: &mut ToolCallLifecycle,
+    ) -> Vec<(ToolCall, ToolResult)>
+    where
+        F: Future<Output = (ToolCall, ToolResult)>,
+    {
+        let execution = &self.context;
+        let mut results = Vec::new();
         let mut readonly_stream =
             futures::stream::iter(read_only_jobs).buffer_unordered(concurrency);
 
@@ -496,6 +399,19 @@ impl ToolExecutionController {
             }
             results.push((tc, result));
         }
+
+        results
+    }
+
+    async fn execute_read_write_calls(
+        &self,
+        read_write_calls: Vec<ToolCall>,
+        tx: Option<&mpsc::Sender<StreamEvent>>,
+        trace: &Option<TraceCollector>,
+        lifecycle: &mut ToolCallLifecycle,
+    ) -> Vec<(ToolCall, ToolResult)> {
+        let execution = &self.context;
+        let mut results = Vec::new();
 
         for tc in read_write_calls {
             let tool_id = tc.id.clone();
@@ -533,7 +449,7 @@ impl ToolExecutionController {
 
             let (result, hook_context) = if let Some(tool) = execution.tool_registry.get(&tool_name)
             {
-                let mut context = execution.tool_context(&trace);
+                let mut context = execution.tool_context(trace);
                 let drift_check = execution
                     .active_goal
                     .as_ref()
@@ -546,7 +462,7 @@ impl ToolExecutionController {
                     let hook_start = hooks.current_record_sequence();
                     let decision = hooks.run_pre_tool(&tc, &context).await;
                     let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
-                    record_hook_traces(&trace, &hook_records);
+                    record_hook_traces(trace, &hook_records);
                     decision
                 } else {
                     HookDecision {
@@ -751,7 +667,7 @@ impl ToolExecutionController {
                 let hook_start = hooks.current_record_sequence();
                 hooks.run_post_tool(&tc, &result, context).await;
                 let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
-                record_hook_traces(&trace, &hook_records);
+                record_hook_traces(trace, &hook_records);
             }
 
             if let Some(tx) = tx {
@@ -793,6 +709,139 @@ impl ToolExecutionController {
             );
             results.push((tc, result));
         }
+
+        results
+    }
+
+    pub(super) async fn execute_tools_parallel(
+        &self,
+        request: ToolExecutionRequest<'_>,
+    ) -> ToolExecutionBatch {
+        let ToolExecutionRequest {
+            tool_calls,
+            tx,
+            pre_executed,
+            trace,
+            resource_policy,
+            exposed_tool_names,
+            action_checkpoint_active,
+            action_checkpoint_lookup_count,
+            has_changes_before_tools,
+            destructive_scope,
+            lifecycle,
+        } = request;
+        let execution = &self.context;
+        let mut read_only_jobs = Vec::new();
+        let mut read_write_calls = Vec::new();
+        let mut denied_results = Vec::new();
+        let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
+        lifecycle.pending_batch(tool_calls);
+        let gate = ToolExecutionGate {
+            active_goal: execution.active_goal.as_ref(),
+            allowed_tools: &execution.allowed_tools,
+            resource_policy,
+            exposed_tool_names,
+            action_checkpoint_active,
+            action_checkpoint_lookup_count,
+            has_changes_before_tools,
+            destructive_scope,
+            trace: &trace,
+        };
+
+        for (i, tc) in tool_calls.iter().enumerate() {
+            if tc.name.is_empty() {
+                continue;
+            }
+            let scheduled_count = results.len()
+                + denied_results.len()
+                + read_only_jobs.len()
+                + read_write_calls.len();
+            if let ToolExecutionGateOutcome::Deny(result) = gate.evaluate(tc, scheduled_count) {
+                persist_tool_outcome_learning_event(
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
+                    tc,
+                    &result,
+                );
+                lifecycle.denied(tc);
+                denied_results.push((tc.clone(), result));
+                continue;
+            }
+
+            if let Some(pre_result) = pre_executed.get(&i) {
+                let mut pre_result = pre_result.clone();
+                attach_tool_execution_metadata(tc, &mut pre_result);
+                persist_tool_outcome_learning_event(
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
+                    tc,
+                    &pre_result,
+                );
+                if let Some(ref trace) = trace {
+                    trace.record(TraceEvent::ToolStarted {
+                        tool: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                        parallel: true,
+                        pre_executed: true,
+                    });
+                    trace.record(TraceEvent::ToolCompleted {
+                        tool: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                        success: pre_result.success,
+                        duration_ms: pre_result.duration_ms,
+                        output_chars: pre_result.content.chars().count(),
+                    });
+                    let trace_ref = Some(trace.clone());
+                    record_mcp_resource_trace(&trace_ref, tc, &pre_result);
+                    record_web_retrieval_trace(&trace_ref, tc, &pre_result);
+                }
+                lifecycle.provider_executed(tc, &pre_result);
+                debug!(
+                    "Skipping pre-executed read-only tool at index {}: {}",
+                    i, tc.name
+                );
+                results.push((tc.clone(), pre_result.clone()));
+                if let Some(tx) = tx {
+                    let result_content = provider_tool_result_content(tc, &pre_result);
+                    let _ = tx
+                        .send(StreamEvent::ToolExecutionComplete {
+                            id: tc.id.clone(),
+                            result: result_content,
+                        })
+                        .await;
+                }
+                continue;
+            }
+
+            if is_read_only(&tc.name) {
+                lifecycle.running(tc, true, false);
+                if let Some(tx) = tx {
+                    let _ = tx
+                        .send(StreamEvent::ToolExecutionStart {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                        })
+                        .await;
+                }
+                read_only_jobs.push(self.read_only_job(&trace, tc));
+            } else {
+                read_write_calls.push(tc.clone());
+            }
+        }
+
+        results.append(&mut denied_results);
+
+        let concurrency =
+            read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
+        let read_only_results = self
+            .collect_read_only_results(read_only_jobs, concurrency, tx, lifecycle)
+            .await;
+        results.extend(read_only_results);
+
+        let read_write_results = self
+            .execute_read_write_calls(read_write_calls, tx, &trace, lifecycle)
+            .await;
+        results.extend(read_write_results);
 
         let lifecycle_snapshot = lifecycle.snapshot();
         let lifecycle_summary = lifecycle_snapshot
