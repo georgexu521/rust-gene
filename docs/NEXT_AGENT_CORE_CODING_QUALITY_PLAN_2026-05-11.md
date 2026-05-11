@@ -46,6 +46,10 @@
   object instead of a naked `Vec<(ToolCall, ToolResult)>`. The first slice keeps
   existing result ordering and exposes lifecycle-derived denied / failed /
   pre-executed counts for future state-machine routing.
+- 2026-05-11: Phase 1 Batch 1.3 continued. Added result-derived
+  `ToolExecutionBatch` accessors (`any_success`, `unsuccessful_count`,
+  `result_successes`) and wired the main loop's low-risk retry/guard checks to
+  those structured facts instead of rescanning raw tuples.
 - Validation after the Batch 1.3 continuation: `cargo fmt --check`,
   `git diff --check`, targeted `runtime_diet`, `route_scoped_tools`,
   `prompt_context`, `tool_result`, and `patch_synthesis` tests,
@@ -62,6 +66,12 @@
   `runtime_diet`, and `patch_synthesis` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1208 passed; 0 failed`).
+- Validation after wiring batch summaries into low-risk main-loop checks:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `batch_summarizes_results_and_lifecycle_statuses`, `tool_call_lifecycle`,
+  `tool_result`, `route_scoped_tools`, `runtime_diet`, and `patch_synthesis`
+  tests, `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and
+  full `cargo test -q` all passed (`1208 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.4 started. Added the first
   `ToolResultNormalizer` boundary and routed provider-facing tool result
   content through it. The first slice preserves the exact existing model

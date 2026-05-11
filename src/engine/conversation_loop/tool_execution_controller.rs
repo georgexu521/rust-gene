@@ -42,6 +42,23 @@ impl ToolExecutionBatch {
         &mut self.results
     }
 
+    pub(super) fn any_success(&self) -> bool {
+        self.results.iter().any(|(_, result)| result.success)
+    }
+
+    pub(super) fn unsuccessful_count(&self) -> usize {
+        self.results
+            .iter()
+            .filter(|(_, result)| !result.success)
+            .count()
+    }
+
+    pub(super) fn result_successes(&self) -> impl Iterator<Item = (&ToolCall, bool)> {
+        self.results
+            .iter()
+            .map(|(tool_call, result)| (tool_call, result.success))
+    }
+
     pub(super) fn denied_count(&self) -> usize {
         self.lifecycle
             .iter()
@@ -795,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_counts_lifecycle_statuses() {
+    fn batch_summarizes_results_and_lifecycle_statuses() {
         let mut lifecycle = ToolCallLifecycle::default();
         let denied = tool_call("call_1", "file_write");
         let failed = tool_call("call_2", "bash");
@@ -805,8 +822,25 @@ mod tests {
         lifecycle.completed(&failed, &ToolResult::error("nope"));
         lifecycle.provider_executed(&pre_executed, &ToolResult::success("ok"));
 
-        let batch = ToolExecutionBatch::new(Vec::new(), lifecycle.snapshot());
+        let batch = ToolExecutionBatch::new(
+            vec![
+                (denied.clone(), ToolResult::error("denied")),
+                (failed.clone(), ToolResult::error("nope")),
+                (pre_executed.clone(), ToolResult::success("ok")),
+            ],
+            lifecycle.snapshot(),
+        );
 
+        assert!(batch.any_success());
+        assert_eq!(batch.unsuccessful_count(), 2);
+        let result_successes = batch
+            .result_successes()
+            .map(|(tool_call, success)| (tool_call.id.as_str(), success))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            result_successes,
+            vec![("call_1", false), ("call_2", false), ("call_3", true)]
+        );
         assert_eq!(batch.denied_count(), 1);
         assert_eq!(batch.failed_count(), 1);
         assert_eq!(batch.pre_executed_count(), 1);

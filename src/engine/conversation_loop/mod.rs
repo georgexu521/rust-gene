@@ -1526,7 +1526,6 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     &mut turn_state.tool_lifecycle,
                 )
                 .await;
-            let results = tool_batch.results_mut();
 
             // ── 迭代预算退还 ──────────────────────────────
             let all_read_only = tool_calls
@@ -1541,6 +1540,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 
             let mut tool_results_text = String::new();
             let mut changed_files = Vec::new();
+            let batch_has_unsuccessful_tools = tool_batch.unsuccessful_count() > 0;
             let used_write_tool = tool_calls
                 .iter()
                 .any(|tc| Self::is_code_write_tool_name(&tc.name));
@@ -1549,7 +1549,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 && tool_calls
                     .iter()
                     .any(|tc| matches!(tc.name.as_str(), "file_read" | "grep"));
-            let mut any_tool_success = false;
+            let mut any_tool_success = tool_batch.any_success();
             let mut repeated_failed_tools = Vec::new();
             let mut failed_tool_names_this_round = Vec::new();
             let mut failed_tool_evidence = Vec::new();
@@ -1559,7 +1559,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             if used_write_tool && !required_validation_commands.is_empty() {
                 successful_required_validation_commands.clear();
             }
-            for (tc, result) in results.iter_mut() {
+            for (tc, result) in tool_batch.results_mut().iter_mut() {
                 truncate_tool_result(result, &tc.name, &tc.id).await;
                 append_provider_tool_result(
                     tc,
@@ -1587,7 +1587,6 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 
                 let fp = tool_call_fingerprint(tc);
                 if result.success {
-                    any_tool_success = true;
                     failed_tool_fingerprints.remove(&fp);
                     failed_tool_names.remove(&tc.name);
                 } else {
@@ -1629,10 +1628,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     }
                 }
             }
-            if let Some(guard) = destructive_scope.completion_guard_for_results(
-                results.iter().map(|(tc, result)| (tc, result.success)),
-                &working_dir,
-            ) {
+            if let Some(guard) = destructive_scope
+                .completion_guard_for_results(tool_batch.result_successes(), &working_dir)
+            {
                 trace.record(TraceEvent::DestructiveScopeChecked {
                     tool: "assistant_response".to_string(),
                     call_id: "post_action_guard".to_string(),
@@ -1852,7 +1850,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
 
             if action_checkpoint_active
-                && ((!any_tool_success && !failed_tool_evidence.is_empty())
+                && ((!any_tool_success
+                    && batch_has_unsuccessful_tools
+                    && !failed_tool_evidence.is_empty())
                     || force_patch_synthesis_after_no_change)
             {
                 action_checkpoint_no_change_rounds += 1;

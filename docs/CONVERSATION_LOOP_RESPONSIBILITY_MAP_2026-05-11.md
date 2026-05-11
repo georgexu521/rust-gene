@@ -63,7 +63,9 @@ events.
 `ToolExecutionBatch` now names the result of one tool execution batch. It still
 preserves the old ordered tool result list, but also carries lifecycle-derived
 denied, failed, and pre-executed counts so the future session state machine can
-route on structured facts instead of rescanning raw tuples.
+route on structured facts instead of rescanning raw tuples. The main loop now
+uses batch-level success and unsuccessful-result summaries for low-risk guard
+and retry decisions while leaving detailed evidence collection unchanged.
 
 ## Extraction Rule
 
