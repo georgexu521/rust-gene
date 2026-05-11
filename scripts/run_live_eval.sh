@@ -1376,7 +1376,10 @@ status = "failed" if failures else "ok"
 def infer_failure_owner():
     if not failures:
         return "none"
-    provider_text = "\n".join([stderr_text, output]).lower()
+    stderr_without_recovered_retries = "\n".join(
+        line for line in stderr_text.splitlines() if "reconnecting" not in line.lower()
+    )
+    provider_text = "\n".join([stderr_without_recovered_retries, output]).lower()
     if (
         "error sending request for url" in provider_text
         or "connection refused" in provider_text
