@@ -36,11 +36,19 @@ impl OpenAiClient {
 
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY must be set")?;
-        if api_key.trim().is_empty() {
+        let api_key = api_key.trim().to_string();
+        if api_key.is_empty() {
             bail!("OPENAI_API_KEY must be set");
         }
-        let base_url = std::env::var("OPENAI_BASE_URL").ok();
-        let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+        let base_url = std::env::var("OPENAI_BASE_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let model = std::env::var("OPENAI_MODEL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "gpt-4o".to_string());
         Ok(Self::new(&api_key, base_url.as_deref(), Some(&model)))
     }
 

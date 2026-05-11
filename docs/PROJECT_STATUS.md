@@ -37,16 +37,19 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-11
-provider reconnect, harness-split, and evidence-label/env-alignment work:
+provider reconnect, harness-split, evidence-label/env-alignment, and review
+hardening work:
 
 ```text
-1200 passed; 0 failed
+1204 passed; 0 failed
 ```
 
 Validated locally with:
 
 ```bash
-OPENAI_API_KEY="" MOONSHOT_API_KEY="" MINIMAX_API_KEY="dummy" MINIMAX_MODEL="MiniMax-M2.7" cargo test -q -- --test-threads=1
+cargo fmt --check
+cargo test -q
+cargo clippy --all-features -- -D warnings
 ```
 
 Latest expanded live-eval checkpoint:

@@ -48,15 +48,22 @@ impl KimiConfig {
     /// 从环境变量加载配置
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("MOONSHOT_API_KEY").context("MOONSHOT_API_KEY must be set")?;
-        if api_key.trim().is_empty() {
+        let api_key = api_key.trim().to_string();
+        if api_key.is_empty() {
             bail!("MOONSHOT_API_KEY must be set");
         }
 
         let base_url = std::env::var("MOONSHOT_BASE_URL")
-            .unwrap_or_else(|_| "https://api.moonshot.ai/v1".to_string());
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "https://api.moonshot.ai/v1".to_string());
 
-        let default_model =
-            std::env::var("MOONSHOT_MODEL").unwrap_or_else(|_| "kimi-k2.5".to_string());
+        let default_model = std::env::var("MOONSHOT_MODEL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "kimi-k2.5".to_string());
 
         // PRIORITY_AGENT_THINKING=0 禁用，默认启用
         let thinking_enabled = std::env::var("PRIORITY_AGENT_THINKING")

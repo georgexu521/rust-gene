@@ -334,15 +334,22 @@ fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
     // {"type":"openai","api_key":"...","base_url":"https://...","model":"gpt-4o"}
     if value.trim_start().starts_with('{') {
         let json = serde_json::from_str::<serde_json::Value>(value).ok()?;
-        let provider_type = ProviderType::parse_lossy(json.get("type")?.as_str()?);
-        let api_key = json.get("api_key")?.as_str()?.to_string();
+        let provider_type = ProviderType::parse_lossy(json.get("type")?.as_str()?.trim());
+        let api_key = json.get("api_key")?.as_str()?.trim().to_string();
+        if api_key.is_empty() {
+            return None;
+        }
         let base_url = json
             .get("base_url")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string);
         let default_model = json
             .get("model")
             .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .unwrap_or("gpt-4o")
             .to_string();
         return Some(ProviderConfig {
@@ -360,9 +367,9 @@ fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
     // - 可用 "|" 显式分隔 model: TYPE:KEY:https://...|gpt-4o
     // - 不带 "|" 时视为仅提供 BASE_URL
     let mut parts = value.splitn(3, ':');
-    let p_type = parts.next()?;
-    let p_key = parts.next()?;
-    let rest = parts.next();
+    let p_type = parts.next()?.trim();
+    let p_key = parts.next()?.trim();
+    let rest = parts.next().map(str::trim).filter(|s| !s.is_empty());
     if p_type.is_empty() || p_key.is_empty() {
         return None;
     }
@@ -373,14 +380,22 @@ fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
         None => (None, "gpt-4o".to_string()),
         Some(rem) if rem.starts_with("http://") || rem.starts_with("https://") => {
             if let Some((url, model)) = rem.rsplit_once('|') {
-                (Some(url.to_string()), model.to_string())
+                let model = model.trim();
+                (
+                    Some(url.trim().to_string()),
+                    if model.is_empty() { "gpt-4o" } else { model }.to_string(),
+                )
             } else {
                 (Some(rem.to_string()), "gpt-4o".to_string())
             }
         }
         Some(rem) => {
             if let Some((url, model)) = rem.split_once(':') {
-                (Some(url.to_string()), model.to_string())
+                let model = model.trim();
+                (
+                    Some(url.trim().to_string()),
+                    if model.is_empty() { "gpt-4o" } else { model }.to_string(),
+                )
             } else {
                 (Some(rem.to_string()), "gpt-4o".to_string())
             }
@@ -472,6 +487,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_extra_provider_env_json_rejects_blank_api_key() {
+        assert!(parse_extra_provider_env(
+            "demo",
+            r#"{"type":"openai","api_key":"   ","base_url":"https://api.example.com/v1"}"#,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn test_parse_extra_provider_env_json_trims_optional_values() {
+        let cfg = parse_extra_provider_env(
+            "demo",
+            r#"{"type":" openai ","api_key":" k1 ","base_url":" https://api.example.com/v1 ","model":"  "}"#,
+        )
+        .expect("should parse json");
+        assert_eq!(cfg.provider_type, ProviderType::OpenAI);
+        assert_eq!(cfg.api_key, "k1");
+        assert_eq!(cfg.base_url.as_deref(), Some("https://api.example.com/v1"));
+        assert_eq!(cfg.default_model, "gpt-4o");
+    }
+
+    #[test]
     fn test_parse_extra_provider_env_legacy_url_with_model_separator() {
         let cfg =
             parse_extra_provider_env("demo", "openai:k1:https://api.example.com/v1|gpt-4o-mini")
@@ -480,6 +517,13 @@ mod tests {
         assert_eq!(cfg.api_key, "k1");
         assert_eq!(cfg.base_url.as_deref(), Some("https://api.example.com/v1"));
         assert_eq!(cfg.default_model, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_parse_extra_provider_env_legacy_rejects_blank_api_key() {
+        assert!(
+            parse_extra_provider_env("demo", "openai:   :https://api.example.com/v1").is_none()
+        );
     }
 
     #[test]

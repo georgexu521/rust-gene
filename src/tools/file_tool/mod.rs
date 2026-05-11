@@ -263,6 +263,12 @@ fn compute_content_hash(content: &str) -> u64 {
     hasher.finish()
 }
 
+fn file_state_key(path: &Path) -> String {
+    canonicalize_or_normalize(path)
+        .to_string_lossy()
+        .to_string()
+}
+
 /// 标记文件已被读取并记录状态（用于变更检测）
 pub fn mark_file_read_with_state(
     session_id: &str,
@@ -423,7 +429,8 @@ impl Tool for FileReadTool {
         let mtime = std::fs::metadata(&path)
             .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        mark_file_read_with_state(&context.session_id, path_str, &content, mtime);
+        let state_key = file_state_key(&path);
+        mark_file_read_with_state(&context.session_id, &state_key, &content, mtime);
 
         // 应用 limit 和 offset
         let lines: Vec<&str> = content.lines().collect();
@@ -997,6 +1004,7 @@ impl Tool for FileEditTool {
             Err(msg) => return ToolResult::error(msg),
         };
         info!("Editing file: {:?}", path);
+        let state_key = file_state_key(&path);
 
         // 读取文件内容
         if let Err(msg) = check_file_size_limit(&path, "edit") {
@@ -1016,7 +1024,7 @@ impl Tool for FileEditTool {
             .as_ref()
             .map(|v| v.as_str())
             == Ok("1")
-            && !is_file_read(&context.session_id, path_str)
+            && !is_file_read(&context.session_id, &state_key)
         {
             return ToolResult::error(
                 format!(
@@ -1030,7 +1038,7 @@ impl Tool for FileEditTool {
         let current_mtime = std::fs::metadata(&path)
             .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        if is_file_modified_since_read(&context.session_id, path_str, &content, current_mtime) {
+        if is_file_modified_since_read(&context.session_id, &state_key, &content, current_mtime) {
             if !allow_stale_read {
                 return ToolResult::error(format!(
                     "Refusing file_edit for '{}': file changed since this session last read it. Re-read the file and retry, or set allow_stale_read=true if this overwrite is intentional.",
@@ -1120,7 +1128,7 @@ impl Tool for FileEditTool {
                             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
                         mark_file_read_with_state(
                             &context.session_id,
-                            path_str,
+                            &state_key,
                             &new_content,
                             new_mtime,
                         );
@@ -1875,6 +1883,51 @@ mod tests {
         assert_eq!(content, "hello changed\n");
 
         let _ = tokio::fs::remove_file(path).await;
+        clear_read_files(session_id);
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_stale_read_uses_resolved_path_key() {
+        let read_tool = FileReadTool;
+        let edit_tool = FileEditTool;
+        let session_id = "test-session-edit-stale-resolved-path";
+        let root = std::env::temp_dir().join(format!(
+            "test_priority_agent_edit_stale_resolved_path_{}",
+            std::process::id()
+        ));
+        let nested = root.join("nested");
+        let path = nested.join("target.txt");
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        tokio::fs::create_dir_all(&nested).await.unwrap();
+        tokio::fs::write(&path, "hello world\n").await.unwrap();
+
+        let read_result = read_tool
+            .execute(
+                json!({ "path": "nested/target.txt" }),
+                ToolContext::new(&root, session_id),
+            )
+            .await;
+        assert!(read_result.success, "read failed: {:?}", read_result.error);
+
+        tokio::fs::write(&path, "hello changed\n").await.unwrap();
+        let edit_result = edit_tool
+            .execute(
+                json!({
+                    "path": path.to_string_lossy().to_string(),
+                    "old_string": "hello changed",
+                    "new_string": "hello edited"
+                }),
+                ToolContext::new(&root, session_id),
+            )
+            .await;
+
+        assert!(!edit_result.success);
+        let err = edit_result.error.unwrap_or_default();
+        assert!(err.contains("file changed since this session last read it"));
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(content, "hello changed\n");
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
         clear_read_files(session_id);
     }
 

@@ -47,11 +47,19 @@ impl MiniMaxClient {
 
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("MINIMAX_API_KEY").context("MINIMAX_API_KEY must be set")?;
-        if api_key.trim().is_empty() {
+        let api_key = api_key.trim().to_string();
+        if api_key.is_empty() {
             bail!("MINIMAX_API_KEY must be set");
         }
-        let base_url = std::env::var("MINIMAX_BASE_URL").ok();
-        let model = std::env::var("MINIMAX_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".to_string());
+        let base_url = std::env::var("MINIMAX_BASE_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let model = std::env::var("MINIMAX_MODEL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "MiniMax-M2.7".to_string());
         Ok(Self::new(&api_key, base_url.as_deref(), Some(&model)))
     }
 
