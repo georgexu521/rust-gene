@@ -462,6 +462,13 @@ Latest maintenance note:
   `batch6-reconnect-20260511-135823` passed as audit/no-diff checks with
   required commands ok, full `1195 passed; 0 failed`,
   `closeout_status=passed`, and `failure_owner=none`.
+- The expanded recommended suite is current through case 11. Cases 8-10 passed
+  in the reconnect batch. `resume-session-picker` is still failing as
+  `agent_flow`: `batch6-reconnect-20260511-150921` produced a relevant diff and
+  harness required commands passed, but runtime verification/acceptance stayed
+  failed and closeout remained failed. The preceding rerun
+  `batch6-reconnect-20260511-142835` exposed an over-broad deterministic
+  memory-quality patch rule, fixed by `f43e43e`.
 - Provider health preflight is now available as
   `priority-agent --provider-health` and is enabled by default for
   `scripts/run_live_eval.sh --mode agent-run`. It probes plain chat, tool-call,

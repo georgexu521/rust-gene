@@ -1188,6 +1188,25 @@ Twelfth completed slice:
   `failure_owner=none`. The run recorded MiniMax transient reconnects that
   recovered under the shared retry policy.
 
+Thirteenth attempted slice:
+
+- Reran `resume-session-picker` and found two productization issues. First,
+  recovered MiniMax retry warnings were polluting `failure_owner`, so a run that
+  failed later in the agent loop was incorrectly classified as `environment`.
+  Fixed this by filtering recovered `reconnecting x/5` warnings before provider
+  owner inference.
+- The next rerun, `batch6-reconnect-20260511-142835`, exposed an over-broad
+  deterministic patch rule: `memory-quality-gate` triggered from unrelated
+  `/resume` evidence merely because the inspected code mentioned `memory_save`.
+  Fixed this in `f43e43e` by requiring explicit memory quality-gate evidence
+  before applying that deterministic rule, with regression tests for both the
+  unrelated resume case and the intended memory quality case.
+- The current rerun, `batch6-reconnect-20260511-150921`, no longer mispatched
+  `memory_tool`; it changed the relevant `/resume` files and harness required
+  commands passed. It is still not a pass: runtime verification and acceptance
+  remained failed, closeout stayed failed, and `failure_owner=agent_flow`.
+  This makes `resume-session-picker` the next recommended productization target.
+
 验证：
 
 ```bash
@@ -1213,6 +1232,7 @@ scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-ru
 scripts/run_live_eval.sh --case memory-recall-conflict-precision --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --case permission-default-open-dangerous-guard --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
+scripts/run_live_eval.sh --case resume-session-picker --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1229,6 +1249,8 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-232124
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-132912
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-133851
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-135823
+scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-142835
+scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-150921
 ```
 
 ## 验收指标
