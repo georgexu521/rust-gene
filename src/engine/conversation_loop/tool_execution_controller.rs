@@ -2,8 +2,9 @@ use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, Too
 use super::tool_execution::{is_read_only, read_only_tool_concurrency};
 use super::tool_metadata::{
     attach_tool_execution_metadata, persist_tool_outcome_learning_event,
-    provider_tool_result_content, tool_execution_start_progress,
+    tool_execution_start_progress,
 };
+use super::tool_result_controller::ToolResultNormalizer;
 use super::turn_recording::{
     record_goal_drift_if_needed, record_hook_traces, record_mcp_resource_trace,
     record_web_retrieval_trace,
@@ -389,7 +390,7 @@ impl ToolExecutionController {
                 &result,
             );
             if let Some(tx) = tx {
-                let result_content = provider_tool_result_content(&tc, &result);
+                let result_content = ToolResultNormalizer::normalize(&tc, &result).ui_content;
                 let _ = tx
                     .send(StreamEvent::ToolExecutionComplete {
                         id: tc.id.clone(),
@@ -671,7 +672,7 @@ impl ToolExecutionController {
             }
 
             if let Some(tx) = tx {
-                let result_content = provider_tool_result_content(&tc, &result);
+                let result_content = ToolResultNormalizer::normalize(&tc, &result).ui_content;
                 let _ = tx
                     .send(StreamEvent::ToolExecutionComplete {
                         id: tool_id.clone(),
@@ -802,7 +803,8 @@ impl ToolExecutionController {
                 );
                 results.push((tc.clone(), pre_result.clone()));
                 if let Some(tx) = tx {
-                    let result_content = provider_tool_result_content(tc, &pre_result);
+                    let result_content =
+                        ToolResultNormalizer::normalize(tc, &pre_result).ui_content;
                     let _ = tx
                         .send(StreamEvent::ToolExecutionComplete {
                             id: tc.id.clone(),

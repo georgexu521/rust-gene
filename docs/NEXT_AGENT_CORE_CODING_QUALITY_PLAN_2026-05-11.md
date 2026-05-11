@@ -140,6 +140,17 @@
   `evidence_ledger`, `closeout`, `tool_result`, and `patch_synthesis` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1205 passed; 0 failed`).
+- 2026-05-11: Phase 1 Batch 1.4 continued. Expanded
+  `ToolResultNormalizer` from a provider-content wrapper into the explicit
+  tool-result boundary for `model_content`, `ui_content`,
+  `structured_metadata`, and `evidence_facts`. The append path now records
+  evidence through the normalized result, and streaming completion events use
+  the normalized UI content instead of calling provider formatting directly.
+- Validation after the normalized tool-result split: `cargo fmt --check`,
+  `git diff --check`, targeted `tool_result`, `evidence_ledger`, `closeout`,
+  `route_scoped_tools`, `runtime_diet`, and `patch_synthesis` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1209 passed; 0 failed`).
 
 ## 当前判断
 
@@ -147,7 +158,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1208 passed; 0 failed`。
+- 最近全量本地测试基线是 `1209 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 
