@@ -1037,6 +1037,13 @@ Provider health gate slice:
   environment-owned agent failure, and stops before spending a long eval turn.
   The gate can be bypassed for debugging with `--skip-provider-health` or
   `PRIORITY_AGENT_LIVE_EVAL_PROVIDER_HEALTH=0`.
+- Added a shared provider reconnect policy for OpenAI-compatible requests.
+  OpenAI, Kimi, and MiniMax non-streaming calls and stream creation now retry
+  transient transport/5xx failures with five reconnect opportunities by
+  default. The policy deliberately does not retry auth, schema, or bad-request
+  failures, and MiniMax health probes now use enough token budget for
+  thinking-heavy responses plus a forced named tool choice for the tool-call
+  probe.
 
 Fourth completed slice:
 

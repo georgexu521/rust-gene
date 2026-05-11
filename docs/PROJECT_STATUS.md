@@ -336,6 +336,10 @@ The remaining work is now product maturity, not missing foundations:
 Latest maintenance note:
 
 - `cargo test -q` is clean as of 2026-05-09 with `1155 passed; 0 failed`.
+- Provider API calls now use a bounded reconnect policy for transient transport
+  failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
+  reconnect opportunities, with exponential backoff, and does not retry
+  auth/schema/400-class request-contract failures.
 - Latest validation for the companion-context slice: `cargo fmt --check`,
   `cargo test -q companion_context`, `cargo test -q shell_compatibility_hint`,
   `cargo test -q agent_mode`, `cargo check -q`, `cargo test -q`,

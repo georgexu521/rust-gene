@@ -1674,13 +1674,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 } else if used_write_tool {
                     action_checkpoint_requires_patch_before_validation = true;
                 } else if any_tool_success && !used_write_tool {
-                    if has_worktree_changes && !successful_validation_commands.is_empty() {
-                        no_code_progress_rounds = 0;
-                        action_checkpoint_active = false;
-                        action_checkpoint_no_change_rounds = 0;
-                        action_checkpoint_lookup_count = 0;
-                    } else if no_diff_audit_closeout_allowed
-                        && !has_worktree_changes
+                    if (no_diff_audit_closeout_allowed || has_worktree_changes)
                         && !successful_validation_commands.is_empty()
                     {
                         no_code_progress_rounds = 0;

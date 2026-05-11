@@ -2,6 +2,7 @@
 //!
 //! 支持 OpenAI 兼容格式的 API 调用，支持 extended thinking
 
+use crate::services::api::retry::ProviderRetryPolicy;
 use crate::services::api::{
     normalize_tool_message_sequence, sanitize_assistant_content, ChatRequest, ChatResponse,
     LlmProvider, Message, ToolCall, Usage,
@@ -205,6 +206,9 @@ impl LlmProvider for KimiClient {
             temperature: request.temperature,
             max_completion_tokens: request.max_tokens,
             tools: None,
+            tool_choice: request
+                .tool_choice
+                .map(super::openai_compat::convert_tool_choice),
             ..Default::default()
         };
 
@@ -233,10 +237,11 @@ impl LlmProvider for KimiClient {
 
         debug!("Request: {:?}", req);
 
-        let response = self
-            .client
-            .chat()
-            .create(req)
+        let response = ProviderRetryPolicy::from_env()
+            .retry("Kimi", "chat.completions", || {
+                let req = req.clone();
+                async move { self.client.chat().create(req).await }
+            })
             .await
             .context("Failed to get response from Kimi API")?;
 
@@ -310,6 +315,9 @@ impl LlmProvider for KimiClient {
             temperature: request.temperature,
             max_completion_tokens: request.max_tokens,
             tools: None,
+            tool_choice: request
+                .tool_choice
+                .map(super::openai_compat::convert_tool_choice),
             ..Default::default()
         };
 
@@ -342,10 +350,11 @@ impl LlmProvider for KimiClient {
             include_usage: true,
         });
 
-        let stream = self
-            .client
-            .chat()
-            .create_stream(req)
+        let stream = ProviderRetryPolicy::from_env()
+            .retry("Kimi", "chat.completions.stream", || {
+                let req = req.clone();
+                async move { self.client.chat().create_stream(req).await }
+            })
             .await
             .context("Failed to create streaming response from Kimi API")?;
 

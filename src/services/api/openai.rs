@@ -1,5 +1,6 @@
 //! OpenAI API 客户端
 
+use crate::services::api::retry::ProviderRetryPolicy;
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
 use anyhow::{Context, Result};
 use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
@@ -54,10 +55,11 @@ impl LlmProvider for OpenAiClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         use super::openai_compat::{convert_request, convert_response};
         let req = convert_request(request, &self.model);
-        let response = self
-            .client
-            .chat()
-            .create(req)
+        let response = ProviderRetryPolicy::from_env()
+            .retry("OpenAI", "chat.completions", || {
+                let req = req.clone();
+                async move { self.client.chat().create(req).await }
+            })
             .await
             .context("Failed to get response from OpenAI API")?;
         convert_response(response)
@@ -71,9 +73,11 @@ impl LlmProvider for OpenAiClient {
         req.stream_options = Some(ChatCompletionStreamOptions {
             include_usage: true,
         });
-        self.client
-            .chat()
-            .create_stream(req)
+        ProviderRetryPolicy::from_env()
+            .retry("OpenAI", "chat.completions.stream", || {
+                let req = req.clone();
+                async move { self.client.chat().create_stream(req).await }
+            })
             .await
             .context("Failed to create streaming response from OpenAI API")
     }

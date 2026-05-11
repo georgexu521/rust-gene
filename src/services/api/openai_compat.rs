@@ -57,7 +57,7 @@ pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletio
     req
 }
 
-fn convert_tool_choice(choice: ToolChoice) -> ChatCompletionToolChoiceOption {
+pub(crate) fn convert_tool_choice(choice: ToolChoice) -> ChatCompletionToolChoiceOption {
     match choice {
         ToolChoice::None => ChatCompletionToolChoiceOption::None,
         ToolChoice::Auto => ChatCompletionToolChoiceOption::Auto,
