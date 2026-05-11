@@ -1511,7 +1511,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             let has_changes_before_tools =
                 crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
                     && !Self::git_status_files_since(&baseline_git_status_files).is_empty();
-            let mut results = self
+            let mut tool_batch = self
                 .execute_tools_parallel(
                     &tool_calls,
                     tx,
@@ -1526,6 +1526,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     &mut turn_state.tool_lifecycle,
                 )
                 .await;
+            let results = tool_batch.results_mut();
 
             // ── 迭代预算退还 ──────────────────────────────
             let all_read_only = tool_calls
@@ -1907,7 +1908,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             ));
                             let exposed_synth_tools =
                                 HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
-                            let mut synthesized_results = self
+                            let mut synthesized_batch = self
                                 .execute_tools_parallel(
                                     &deterministic_calls,
                                     tx,
@@ -1922,7 +1923,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                     &mut turn_state.tool_lifecycle,
                                 )
                                 .await;
-                            for (tc, result) in synthesized_results.iter_mut() {
+                            for (tc, result) in synthesized_batch.results_mut().iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
                                 append_provider_tool_result(
                                     tc,
@@ -2026,7 +2027,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             ));
                             let exposed_synth_tools =
                                 HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
-                            let mut synthesized_results = self
+                            let mut synthesized_batch = self
                                 .execute_tools_parallel(
                                     &synthesized_calls,
                                     tx,
@@ -2047,7 +2048,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                     &mut turn_state.tool_lifecycle,
                                 )
                                 .await;
-                            for (tc, result) in synthesized_results.iter_mut() {
+                            for (tc, result) in synthesized_batch.results_mut().iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
                                 append_provider_tool_result(
                                     tc,
@@ -5227,7 +5228,7 @@ mod tests {
         let exposed_tool_names = HashSet::from(["git".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let results = loop_instance
+        let batch = loop_instance
             .execute_tools_parallel(
                 &tool_calls,
                 None,
@@ -5242,6 +5243,7 @@ mod tests {
                 &mut lifecycle,
             )
             .await;
+        let results = batch.results();
 
         assert_eq!(results.len(), 1);
         assert!(!results[0].1.success);
@@ -5281,7 +5283,7 @@ mod tests {
         let exposed_tool_names = HashSet::from(["file_edit".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let results = loop_instance
+        let batch = loop_instance
             .execute_tools_parallel(
                 &tool_calls,
                 None,
@@ -5296,6 +5298,7 @@ mod tests {
                 &mut lifecycle,
             )
             .await;
+        let results = batch.results();
 
         assert_eq!(results.len(), 1);
         assert!(!results[0].1.success);
@@ -5335,7 +5338,7 @@ mod tests {
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let results = loop_instance
+        let batch = loop_instance
             .execute_tools_parallel(
                 &tool_calls,
                 None,
@@ -5350,6 +5353,7 @@ mod tests {
                 &mut lifecycle,
             )
             .await;
+        let results = batch.results();
 
         assert_eq!(results.len(), 1);
         assert!(!results[0].1.success);

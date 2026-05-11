@@ -1,4 +1,4 @@
-use super::tool_call_lifecycle::ToolCallLifecycle;
+use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, ToolCallStatus};
 use super::tool_execution::{is_read_only, read_only_tool_concurrency};
 use super::tool_metadata::{
     attach_tool_execution_metadata, persist_tool_outcome_learning_event,
@@ -19,6 +19,51 @@ use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+#[derive(Debug, Clone, Default)]
+pub(super) struct ToolExecutionBatch {
+    results: Vec<(ToolCall, ToolResult)>,
+    lifecycle: Vec<(String, ToolCallLifecycleRecord)>,
+}
+
+impl ToolExecutionBatch {
+    fn new(
+        results: Vec<(ToolCall, ToolResult)>,
+        lifecycle: Vec<(String, ToolCallLifecycleRecord)>,
+    ) -> Self {
+        Self { results, lifecycle }
+    }
+
+    #[cfg(test)]
+    pub(super) fn results(&self) -> &[(ToolCall, ToolResult)] {
+        &self.results
+    }
+
+    pub(super) fn results_mut(&mut self) -> &mut [(ToolCall, ToolResult)] {
+        &mut self.results
+    }
+
+    pub(super) fn denied_count(&self) -> usize {
+        self.lifecycle
+            .iter()
+            .filter(|(_, record)| record.status == ToolCallStatus::Denied)
+            .count()
+    }
+
+    pub(super) fn failed_count(&self) -> usize {
+        self.lifecycle
+            .iter()
+            .filter(|(_, record)| record.status == ToolCallStatus::Failed)
+            .count()
+    }
+
+    pub(super) fn pre_executed_count(&self) -> usize {
+        self.lifecycle
+            .iter()
+            .filter(|(_, record)| record.pre_executed)
+            .count()
+    }
+}
+
 impl ConversationLoop {
     /// 并行执行工具调用
     #[allow(clippy::too_many_arguments)]
@@ -35,7 +80,7 @@ impl ConversationLoop {
         has_changes_before_tools: bool,
         destructive_scope: &crate::engine::destructive_scope::DestructiveScopeContract,
         lifecycle: &mut ToolCallLifecycle,
-    ) -> Vec<(ToolCall, ToolResult)> {
+    ) -> ToolExecutionBatch {
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
         let mut denied_results = Vec::new();
@@ -712,9 +757,9 @@ impl ConversationLoop {
             results.push((tc, result));
         }
 
-        let lifecycle_summary = lifecycle
-            .snapshot()
-            .into_iter()
+        let lifecycle_snapshot = lifecycle.snapshot();
+        let lifecycle_summary = lifecycle_snapshot
+            .iter()
             .map(|(id, record)| {
                 format!(
                     "{}:{}:{:?}:parallel={}:pre_executed={}",
@@ -722,10 +767,48 @@ impl ConversationLoop {
                 )
             })
             .collect::<Vec<_>>();
+        let batch = ToolExecutionBatch::new(results, lifecycle_snapshot);
         if !lifecycle_summary.is_empty() {
-            debug!("Tool lifecycle batch: {}", lifecycle_summary.join(", "));
+            debug!(
+                "Tool lifecycle batch: {} (denied={}, failed={}, pre_executed={})",
+                lifecycle_summary.join(", "),
+                batch.denied_count(),
+                batch.failed_count(),
+                batch.pre_executed_count()
+            );
         }
 
-        results
+        batch
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_call(id: &str, name: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn batch_counts_lifecycle_statuses() {
+        let mut lifecycle = ToolCallLifecycle::default();
+        let denied = tool_call("call_1", "file_write");
+        let failed = tool_call("call_2", "bash");
+        let pre_executed = tool_call("call_3", "file_read");
+
+        lifecycle.denied(&denied);
+        lifecycle.completed(&failed, &ToolResult::error("nope"));
+        lifecycle.provider_executed(&pre_executed, &ToolResult::success("ok"));
+
+        let batch = ToolExecutionBatch::new(Vec::new(), lifecycle.snapshot());
+
+        assert_eq!(batch.denied_count(), 1);
+        assert_eq!(batch.failed_count(), 1);
+        assert_eq!(batch.pre_executed_count(), 1);
     }
 }

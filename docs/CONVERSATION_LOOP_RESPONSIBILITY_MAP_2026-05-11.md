@@ -60,6 +60,11 @@ implementation is attached to `TurnRuntimeState` and updates alongside the
 existing tool execution path without changing returned tool results or UI
 events.
 
+`ToolExecutionBatch` now names the result of one tool execution batch. It still
+preserves the old ordered tool result list, but also carries lifecycle-derived
+denied, failed, and pre-executed counts so the future session state machine can
+route on structured facts instead of rescanning raw tuples.
+
 ## Extraction Rule
 
 Future loop-split commits should follow this rule:
