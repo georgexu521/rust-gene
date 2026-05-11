@@ -49,7 +49,7 @@ provider reconnect, harness-split, evidence-label/env-alignment, and review
 hardening work:
 
 ```text
-1205 passed; 0 failed
+1207 passed; 0 failed
 ```
 
 Validated locally with:
@@ -360,7 +360,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-11 with `1205 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-11 with `1207 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry

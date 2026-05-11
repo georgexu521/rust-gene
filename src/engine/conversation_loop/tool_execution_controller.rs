@@ -1,3 +1,4 @@
+use super::tool_call_lifecycle::ToolCallLifecycle;
 use super::tool_execution::{is_read_only, read_only_tool_concurrency};
 use super::tool_metadata::{
     attach_tool_execution_metadata, persist_tool_outcome_learning_event,
@@ -33,6 +34,7 @@ impl ConversationLoop {
         action_checkpoint_lookup_count: usize,
         has_changes_before_tools: bool,
         destructive_scope: &crate::engine::destructive_scope::DestructiveScopeContract,
+        lifecycle: &mut ToolCallLifecycle,
     ) -> Vec<(ToolCall, ToolResult)> {
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
@@ -42,6 +44,7 @@ impl ConversationLoop {
             .goal_manager
             .as_ref()
             .and_then(|manager| manager.current());
+        lifecycle.pending_batch(tool_calls);
 
         for (i, tc) in tool_calls.iter().enumerate() {
             if tc.name.is_empty() {
@@ -83,6 +86,7 @@ impl ConversationLoop {
                     tc,
                     &result,
                 );
+                lifecycle.denied(tc);
                 denied_results.push((tc.clone(), result));
                 continue;
             }
@@ -115,6 +119,7 @@ impl ConversationLoop {
                     tc,
                     &result,
                 );
+                lifecycle.denied(tc);
                 denied_results.push((tc.clone(), result));
                 continue;
             }
@@ -127,6 +132,7 @@ impl ConversationLoop {
                     tc,
                     &result,
                 );
+                lifecycle.denied(tc);
                 denied_results.push((tc.clone(), result));
                 continue;
             }
@@ -172,6 +178,7 @@ impl ConversationLoop {
                         tc,
                         &result,
                     );
+                    lifecycle.denied(tc);
                     denied_results.push((tc.clone(), result));
                     continue;
                 }
@@ -207,6 +214,7 @@ impl ConversationLoop {
                     tc,
                     &result,
                 );
+                lifecycle.denied(tc);
                 denied_results.push((tc.clone(), result));
                 continue;
             }
@@ -240,6 +248,7 @@ impl ConversationLoop {
                         tc,
                         &result,
                     );
+                    lifecycle.denied(tc);
                     denied_results.push((tc.clone(), result));
                     continue;
                 }
@@ -272,6 +281,7 @@ impl ConversationLoop {
                     record_mcp_resource_trace(&trace_ref, tc, &pre_result);
                     record_web_retrieval_trace(&trace_ref, tc, &pre_result);
                 }
+                lifecycle.provider_executed(tc, &pre_result);
                 debug!(
                     "Skipping pre-executed read-only tool at index {}: {}",
                     i, tc.name
@@ -290,6 +300,7 @@ impl ConversationLoop {
             }
 
             if is_read_only(&tc.name) {
+                lifecycle.running(tc, true, false);
                 if let Some(tx) = tx {
                     let _ = tx
                         .send(StreamEvent::ToolExecutionStart {
@@ -387,6 +398,7 @@ impl ConversationLoop {
             futures::stream::iter(read_only_jobs).buffer_unordered(concurrency);
 
         while let Some((tc, result)) = readonly_stream.next().await {
+            lifecycle.completed(&tc, &result);
             persist_tool_outcome_learning_event(
                 self.session_store.as_ref(),
                 &self.session_id,
@@ -416,9 +428,11 @@ impl ConversationLoop {
                     &tc,
                     &result,
                 );
+                lifecycle.denied(&tc);
                 results.push((tc, result));
                 continue;
             }
+            lifecycle.running(&tc, false, false);
 
             if let Some(tx) = tx {
                 let _ = tx
@@ -679,6 +693,16 @@ impl ConversationLoop {
                 record_mcp_resource_trace(&trace_ref, &tc, &result);
                 record_web_retrieval_trace(&trace_ref, &tc, &result);
             }
+            if result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Permission denied")
+            {
+                lifecycle.denied(&tc);
+            } else {
+                lifecycle.completed(&tc, &result);
+            }
             persist_tool_outcome_learning_event(
                 self.session_store.as_ref(),
                 &self.session_id,
@@ -686,6 +710,20 @@ impl ConversationLoop {
                 &result,
             );
             results.push((tc, result));
+        }
+
+        let lifecycle_summary = lifecycle
+            .snapshot()
+            .into_iter()
+            .map(|(id, record)| {
+                format!(
+                    "{}:{}:{:?}:parallel={}:pre_executed={}",
+                    id, record.tool_name, record.status, record.parallel, record.pre_executed
+                )
+            })
+            .collect::<Vec<_>>();
+        if !lifecycle_summary.is_empty() {
+            debug!("Tool lifecycle batch: {}", lifecycle_summary.join(", "));
         }
 
         results

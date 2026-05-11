@@ -20,6 +20,7 @@ mod runtime_timeouts;
 mod session_processor;
 mod step_executor;
 mod text_sanitizer;
+mod tool_call_lifecycle;
 mod tool_execution;
 mod tool_execution_controller;
 mod tool_metadata;
@@ -1522,6 +1523,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     action_checkpoint_lookup_count,
                     has_changes_before_tools,
                     &destructive_scope,
+                    &mut turn_state.tool_lifecycle,
                 )
                 .await;
 
@@ -1917,6 +1919,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                     0,
                                     false,
                                     &destructive_scope,
+                                    &mut turn_state.tool_lifecycle,
                                 )
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
@@ -2041,6 +2044,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                     0,
                                     false,
                                     &destructive_scope,
+                                    &mut turn_state.tool_lifecycle,
                                 )
                                 .await;
                             for (tc, result) in synthesized_results.iter_mut() {
@@ -5221,6 +5225,7 @@ mod tests {
             arguments: serde_json::json!({"action": "push"}),
         }];
         let exposed_tool_names = HashSet::from(["git".to_string()]);
+        let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
         let results = loop_instance
             .execute_tools_parallel(
@@ -5234,6 +5239,7 @@ mod tests {
                 0,
                 false,
                 &destructive_scope,
+                &mut lifecycle,
             )
             .await;
 
@@ -5273,6 +5279,7 @@ mod tests {
             arguments: serde_json::json!({"action": "push"}),
         }];
         let exposed_tool_names = HashSet::from(["file_edit".to_string()]);
+        let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
         let results = loop_instance
             .execute_tools_parallel(
@@ -5286,6 +5293,7 @@ mod tests {
                 0,
                 false,
                 &destructive_scope,
+                &mut lifecycle,
             )
             .await;
 
@@ -5325,6 +5333,7 @@ mod tests {
             arguments: serde_json::json!({"command": "rm -rf /tmp/gex"}),
         }];
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
+        let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
         let results = loop_instance
             .execute_tools_parallel(
@@ -5338,6 +5347,7 @@ mod tests {
                 0,
                 false,
                 &destructive_scope,
+                &mut lifecycle,
             )
             .await;
 

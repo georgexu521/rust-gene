@@ -1,9 +1,11 @@
 use super::runtime_diet::RuntimeDietSnapshot;
+use super::tool_call_lifecycle::ToolCallLifecycle;
 use crate::engine::evidence_ledger::EvidenceLedger;
 
 pub(super) struct TurnRuntimeState {
     pub(super) evidence_ledger: EvidenceLedger,
     pub(super) runtime_diet: RuntimeDietSnapshot,
+    pub(super) tool_lifecycle: ToolCallLifecycle,
     pub(super) iterations_used: usize,
     pub(super) effective_iterations: usize,
     pub(super) acceptance_repair_attempts: usize,
@@ -15,6 +17,7 @@ impl TurnRuntimeState {
         Self {
             evidence_ledger: EvidenceLedger::new(),
             runtime_diet: RuntimeDietSnapshot::new(route_scoped_tools_enabled),
+            tool_lifecycle: ToolCallLifecycle::default(),
             iterations_used: 0,
             effective_iterations: 0,
             acceptance_repair_attempts: 0,

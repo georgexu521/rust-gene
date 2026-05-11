@@ -54,6 +54,12 @@ The initial implementation preserves the existing model content exactly, but
 future tool result changes should extend this boundary instead of adding raw
 stdout/stderr parsing or provider-specific formatting back into `run_inner`.
 
+`ToolCallLifecycle` now records the state of tool calls during execution:
+pending, running, completed, failed, denied, and provider-executed. The current
+implementation is attached to `TurnRuntimeState` and updates alongside the
+existing tool execution path without changing returned tool results or UI
+events.
+
 ## Extraction Rule
 
 Future loop-split commits should follow this rule:

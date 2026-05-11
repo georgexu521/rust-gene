@@ -36,11 +36,21 @@
   state machine can distinguish normal non-streaming, successful streaming,
   and streaming fallback paths without depending on tuple position or ad hoc
   log text.
+- 2026-05-11: Phase 1 Batch 1.3 continued. Added `ToolCallLifecycle` with
+  explicit pending/running/completed/failed/denied/provider-executed states and
+  connected it to the current tool execution path through `TurnRuntimeState`.
+  This keeps the existing `Vec<(ToolCall, ToolResult)>` return shape while
+  giving the future `SessionProcessor` state machine a real lifecycle boundary.
 - Validation after the Batch 1.3 continuation: `cargo fmt --check`,
   `git diff --check`, targeted `runtime_diet`, `route_scoped_tools`,
   `prompt_context`, `tool_result`, and `patch_synthesis` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1205 passed; 0 failed`).
+- Validation after the `ToolCallLifecycle` slice: `cargo fmt --check`,
+  `git diff --check`, targeted `tool_call_lifecycle`, `tool_result`,
+  `route_scoped_tools`, `runtime_diet`, and `patch_synthesis` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1207 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.4 started. Added the first
   `ToolResultNormalizer` boundary and routed provider-facing tool result
   content through it. The first slice preserves the exact existing model
@@ -58,7 +68,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1205 passed; 0 failed`。
+- 最近全量本地测试基线是 `1207 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 
