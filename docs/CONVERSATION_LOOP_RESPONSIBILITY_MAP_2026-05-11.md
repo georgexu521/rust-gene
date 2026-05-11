@@ -84,6 +84,12 @@ approval channel, allowed tools, audit/denial trackers, active goal, and base
 tool context. The controller no longer holds a broad `ConversationLoop` borrow
 while executing tools.
 
+`ToolExecutionGate` now owns pre-execution allow/deny decisions for a tool call:
+exposed-tool enforcement, resource budget, goal-drift trace, allowed-tools
+isolation, destructive scope, and action checkpoint bash/file_edit guards. The
+controller remains responsible for persistence, lifecycle updates, scheduling,
+and result ordering.
+
 ## Extraction Rule
 
 Future loop-split commits should follow this rule:

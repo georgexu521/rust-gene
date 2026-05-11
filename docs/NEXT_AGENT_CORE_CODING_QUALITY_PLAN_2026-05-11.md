@@ -66,6 +66,18 @@
   execution dependencies: tool registry, cost tracker, session persistence,
   hooks, approval channel, allowed tools, audit/denial trackers, active goal,
   and the base `ToolContext`.
+- 2026-05-11: Phase 1 Batch 1.3 continued. Added `ToolExecutionGate` for
+  pre-execution checks: exposed-tool enforcement, resource call budget,
+  goal-drift trace, allowed-tools isolation, destructive scope, and action
+  checkpoint bash/file_edit guards. The gate only decides allow/deny and
+  prepares denial results; `ToolExecutionController` still owns persistence,
+  lifecycle updates, scheduling, and execution order.
+- Validation after the `ToolExecutionGate` split: `cargo fmt --check`,
+  `git diff --check`, targeted `tool_call_lifecycle`,
+  `batch_summarizes_results_and_lifecycle_statuses`, `route_scoped_tools`,
+  `tool_result`, `runtime_diet`, and `patch_synthesis` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1208 passed; 0 failed`).
 - Validation after the `ToolExecutionContext` split: `cargo fmt --check`,
   `git diff --check`, targeted `tool_call_lifecycle`,
   `batch_summarizes_results_and_lifecycle_statuses`, `route_scoped_tools`,

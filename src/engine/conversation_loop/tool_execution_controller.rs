@@ -144,6 +144,132 @@ impl ToolExecutionContext {
     }
 }
 
+enum ToolExecutionGateOutcome {
+    Allow,
+    Deny(ToolResult),
+}
+
+struct ToolExecutionGate<'a> {
+    active_goal: Option<&'a crate::engine::session_goal::SessionGoal>,
+    allowed_tools: &'a Option<HashSet<String>>,
+    resource_policy: &'a ResourcePolicy,
+    exposed_tool_names: &'a HashSet<String>,
+    action_checkpoint_active: bool,
+    action_checkpoint_lookup_count: usize,
+    has_changes_before_tools: bool,
+    destructive_scope: &'a DestructiveScopeContract,
+    trace: &'a Option<TraceCollector>,
+}
+
+impl<'a> ToolExecutionGate<'a> {
+    fn evaluate(&self, tool_call: &ToolCall, scheduled_count: usize) -> ToolExecutionGateOutcome {
+        if !self.exposed_tool_names.contains(&tool_call.name) {
+            let error = if self.action_checkpoint_active {
+                ConversationLoop::action_checkpoint_unexposed_tool_message(
+                    &tool_call.name,
+                    self.exposed_tool_names,
+                    self.action_checkpoint_lookup_count,
+                )
+            } else {
+                format!(
+                    "Tool '{}' was not exposed in the current request and cannot be executed.",
+                    tool_call.name
+                )
+            };
+            return self.deny_with_trace(tool_call, ToolResult::error(error));
+        }
+
+        if scheduled_count >= self.resource_policy.max_tool_calls {
+            let result = ToolResult::error(format!(
+                "Resource policy blocked tool '{}': max tool calls ({}) reached.",
+                tool_call.name, self.resource_policy.max_tool_calls
+            ));
+            return self.deny_with_trace(tool_call, result);
+        }
+
+        record_goal_drift_if_needed(self.trace, self.active_goal, tool_call);
+
+        if !tool_allowed_by_context(self.allowed_tools, &tool_call.name) {
+            return ToolExecutionGateOutcome::Deny(tool_not_allowed_result(tool_call));
+        }
+
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let destructive_check = self
+            .destructive_scope
+            .check_tool_call(tool_call, &working_dir);
+        if destructive_check.applies {
+            if let Some(ref trace) = self.trace {
+                trace.record(TraceEvent::DestructiveScopeChecked {
+                    tool: tool_call.name.clone(),
+                    call_id: tool_call.id.clone(),
+                    operation: destructive_check.operation.clone(),
+                    target: destructive_check.target.clone(),
+                    allowed: destructive_check.allowed,
+                    reason: destructive_check.reason.clone(),
+                });
+            }
+            if !destructive_check.allowed {
+                let result = ToolResult::error(format!(
+                    "Destructive scope blocked: {}",
+                    destructive_check.reason
+                ));
+                return self.deny_with_trace(tool_call, result);
+            }
+        }
+
+        if self.action_checkpoint_active
+            && tool_call.name == "bash"
+            && !ConversationLoop::bash_allowed_at_action_checkpoint(
+                &tool_call.arguments,
+                self.has_changes_before_tools,
+            )
+        {
+            let result = ToolResult::error(
+                "Bash is restricted during the action checkpoint: use it only to apply a patch (for example python/perl/sed -i/apply_patch/redirect/tee) or, after files have changed, to run validation. Do not use bash for read-only inspection at this checkpoint."
+                    .to_string(),
+            );
+            return self.deny_with_trace(tool_call, result);
+        }
+
+        if self.action_checkpoint_active && tool_call.name == "file_edit" {
+            if let Some(reason) = ConversationLoop::action_checkpoint_file_edit_rejection(
+                &tool_call.arguments,
+                &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            ) {
+                let result =
+                    ToolResult::error(format!("Action checkpoint file_edit rejected: {reason}"));
+                return self.deny_with_trace(tool_call, result);
+            }
+        }
+
+        ToolExecutionGateOutcome::Allow
+    }
+
+    fn deny_with_trace(
+        &self,
+        tool_call: &ToolCall,
+        mut result: ToolResult,
+    ) -> ToolExecutionGateOutcome {
+        attach_tool_execution_metadata(tool_call, &mut result);
+        if let Some(ref trace) = self.trace {
+            trace.record(TraceEvent::ToolStarted {
+                tool: tool_call.name.clone(),
+                call_id: tool_call.id.clone(),
+                parallel: false,
+                pre_executed: false,
+            });
+            trace.record(TraceEvent::ToolCompleted {
+                tool: tool_call.name.clone(),
+                call_id: tool_call.id.clone(),
+                success: false,
+                duration_ms: Some(0),
+                output_chars: result.content.chars().count(),
+            });
+        }
+        ToolExecutionGateOutcome::Deny(result)
+    }
+}
+
 pub(super) struct ToolExecutionController {
     context: ToolExecutionContext,
 }
@@ -176,41 +302,27 @@ impl ToolExecutionController {
         let mut denied_results = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
         lifecycle.pending_batch(tool_calls);
+        let gate = ToolExecutionGate {
+            active_goal: execution.active_goal.as_ref(),
+            allowed_tools: &execution.allowed_tools,
+            resource_policy,
+            exposed_tool_names,
+            action_checkpoint_active,
+            action_checkpoint_lookup_count,
+            has_changes_before_tools,
+            destructive_scope,
+            trace: &trace,
+        };
 
         for (i, tc) in tool_calls.iter().enumerate() {
             if tc.name.is_empty() {
                 continue;
             }
-            if !exposed_tool_names.contains(&tc.name) {
-                let error = if action_checkpoint_active {
-                    ConversationLoop::action_checkpoint_unexposed_tool_message(
-                        &tc.name,
-                        exposed_tool_names,
-                        action_checkpoint_lookup_count,
-                    )
-                } else {
-                    format!(
-                        "Tool '{}' was not exposed in the current request and cannot be executed.",
-                        tc.name
-                    )
-                };
-                let mut result = ToolResult::error(error);
-                attach_tool_execution_metadata(tc, &mut result);
-                if let Some(ref trace) = trace {
-                    trace.record(TraceEvent::ToolStarted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        parallel: false,
-                        pre_executed: false,
-                    });
-                    trace.record(TraceEvent::ToolCompleted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        success: false,
-                        duration_ms: Some(0),
-                        output_chars: result.content.chars().count(),
-                    });
-                }
+            let scheduled_count = results.len()
+                + denied_results.len()
+                + read_only_jobs.len()
+                + read_write_calls.len();
+            if let ToolExecutionGateOutcome::Deny(result) = gate.evaluate(tc, scheduled_count) {
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -220,172 +332,6 @@ impl ToolExecutionController {
                 lifecycle.denied(tc);
                 denied_results.push((tc.clone(), result));
                 continue;
-            }
-            if results.len() + denied_results.len() + read_only_jobs.len() + read_write_calls.len()
-                >= resource_policy.max_tool_calls
-            {
-                let mut result = ToolResult::error(format!(
-                    "Resource policy blocked tool '{}': max tool calls ({}) reached.",
-                    tc.name, resource_policy.max_tool_calls
-                ));
-                attach_tool_execution_metadata(tc, &mut result);
-                if let Some(ref trace) = trace {
-                    trace.record(TraceEvent::ToolStarted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        parallel: false,
-                        pre_executed: false,
-                    });
-                    trace.record(TraceEvent::ToolCompleted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        success: false,
-                        duration_ms: Some(0),
-                        output_chars: result.content.chars().count(),
-                    });
-                }
-                persist_tool_outcome_learning_event(
-                    execution.session_store.as_ref(),
-                    &execution.session_id,
-                    tc,
-                    &result,
-                );
-                lifecycle.denied(tc);
-                denied_results.push((tc.clone(), result));
-                continue;
-            }
-            record_goal_drift_if_needed(&trace, execution.active_goal.as_ref(), tc);
-            if !tool_allowed_by_context(&execution.allowed_tools, &tc.name) {
-                let result = tool_not_allowed_result(tc);
-                persist_tool_outcome_learning_event(
-                    execution.session_store.as_ref(),
-                    &execution.session_id,
-                    tc,
-                    &result,
-                );
-                lifecycle.denied(tc);
-                denied_results.push((tc.clone(), result));
-                continue;
-            }
-
-            let working_dir =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let destructive_check = destructive_scope.check_tool_call(tc, &working_dir);
-            if destructive_check.applies {
-                if let Some(ref trace) = trace {
-                    trace.record(TraceEvent::DestructiveScopeChecked {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        operation: destructive_check.operation.clone(),
-                        target: destructive_check.target.clone(),
-                        allowed: destructive_check.allowed,
-                        reason: destructive_check.reason.clone(),
-                    });
-                }
-                if !destructive_check.allowed {
-                    let mut result = ToolResult::error(format!(
-                        "Destructive scope blocked: {}",
-                        destructive_check.reason
-                    ));
-                    attach_tool_execution_metadata(tc, &mut result);
-                    if let Some(ref trace) = trace {
-                        trace.record(TraceEvent::ToolStarted {
-                            tool: tc.name.clone(),
-                            call_id: tc.id.clone(),
-                            parallel: false,
-                            pre_executed: false,
-                        });
-                        trace.record(TraceEvent::ToolCompleted {
-                            tool: tc.name.clone(),
-                            call_id: tc.id.clone(),
-                            success: false,
-                            duration_ms: Some(0),
-                            output_chars: result.content.chars().count(),
-                        });
-                    }
-                    persist_tool_outcome_learning_event(
-                        execution.session_store.as_ref(),
-                        &execution.session_id,
-                        tc,
-                        &result,
-                    );
-                    lifecycle.denied(tc);
-                    denied_results.push((tc.clone(), result));
-                    continue;
-                }
-            }
-
-            if action_checkpoint_active
-                && tc.name == "bash"
-                && !ConversationLoop::bash_allowed_at_action_checkpoint(
-                    &tc.arguments,
-                    has_changes_before_tools,
-                )
-            {
-                let mut result = ToolResult::error(
-                    "Bash is restricted during the action checkpoint: use it only to apply a patch (for example python/perl/sed -i/apply_patch/redirect/tee) or, after files have changed, to run validation. Do not use bash for read-only inspection at this checkpoint."
-                        .to_string(),
-                );
-                attach_tool_execution_metadata(tc, &mut result);
-                if let Some(ref trace) = trace {
-                    trace.record(TraceEvent::ToolStarted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        parallel: false,
-                        pre_executed: false,
-                    });
-                    trace.record(TraceEvent::ToolCompleted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        success: false,
-                        duration_ms: Some(0),
-                        output_chars: result.content.chars().count(),
-                    });
-                }
-                persist_tool_outcome_learning_event(
-                    execution.session_store.as_ref(),
-                    &execution.session_id,
-                    tc,
-                    &result,
-                );
-                lifecycle.denied(tc);
-                denied_results.push((tc.clone(), result));
-                continue;
-            }
-            if action_checkpoint_active && tc.name == "file_edit" {
-                if let Some(reason) = ConversationLoop::action_checkpoint_file_edit_rejection(
-                    &tc.arguments,
-                    &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-                ) {
-                    let mut result = ToolResult::error(format!(
-                        "Action checkpoint file_edit rejected: {reason}"
-                    ));
-                    attach_tool_execution_metadata(tc, &mut result);
-                    if let Some(ref trace) = trace {
-                        trace.record(TraceEvent::ToolStarted {
-                            tool: tc.name.clone(),
-                            call_id: tc.id.clone(),
-                            parallel: false,
-                            pre_executed: false,
-                        });
-                        trace.record(TraceEvent::ToolCompleted {
-                            tool: tc.name.clone(),
-                            call_id: tc.id.clone(),
-                            success: false,
-                            duration_ms: Some(0),
-                            output_chars: result.content.chars().count(),
-                        });
-                    }
-                    persist_tool_outcome_learning_event(
-                        execution.session_store.as_ref(),
-                        &execution.session_id,
-                        tc,
-                        &result,
-                    );
-                    lifecycle.denied(tc);
-                    denied_results.push((tc.clone(), result));
-                    continue;
-                }
             }
 
             if let Some(pre_result) = pre_executed.get(&i) {
