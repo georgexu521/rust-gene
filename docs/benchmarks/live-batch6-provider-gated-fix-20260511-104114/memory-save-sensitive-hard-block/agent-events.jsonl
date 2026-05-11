@@ -1,0 +1,3 @@
+{"event": "eval_started", "prompt_file": "/Users/georgexu/Desktop/rust-agent/target/live-evals/batch6-provider-gated-fix-20260511-104114/memory-save-sensitive-hard-block/prompt.txt", "cwd": "target/live-evals/batch6-provider-gated-fix-20260511-104114/memory-save-sensitive-hard-block/worktree", "model": "provider-health-preflight"}
+{"event": "provider_health_preflight", "status": "failed", "task_id": "memory-save-sensitive-hard-block", "report": "docs/benchmarks/live-batch6-provider-gated-fix-20260511-104114/provider-health.json"}
+{"event": "error", "message": "provider unavailable: provider health preflight failed before agent-run"}

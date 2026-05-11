@@ -1,0 +1,7 @@
+status=failed
+failure_owner=environment
+failure=empty_agent_output
+failure=tool_run_without_closeout
+failure=closeout_not_successful
+warning=audit_no_code_diff
+warning=current_head_no_fixture_already_satisfied

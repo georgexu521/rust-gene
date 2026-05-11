@@ -1119,6 +1119,17 @@ Tenth slice, still blocked on provider after runtime reroute/env fixes:
   MiniMax failed before closeout with `error sending request for url`; report
   owner is `environment`. Rerun this case before claiming an eighth
   recommended-case pass.
+- The 2026-05-11 provider-gated rerun added a sharper split. Manual provider
+  health first showed MiniMax instability across plain chat/tool continuation.
+  `batch6-provider-gated-20260511-101147` then reached the audit/no-diff path
+  and ran all required commands, but the runtime closeout still appended
+  `not_verified` because it ignored runtime-owned validation evidence when no
+  diff was required. Fixed in `fed2f27` by allowing only audit/regression routes
+  with `code diff is optional` and `passed:n/n` validation evidence to close out
+  as passed without a file diff. The follow-up run,
+  `batch6-provider-gated-fix-20260511-103341`, was blocked by a MiniMax request
+  failure during the agent loop and is correctly classified as
+  `failure_owner=environment`.
 
 Eleventh slice, still blocked on provider after runtime/schema fixes:
 
@@ -1138,6 +1149,12 @@ Eleventh slice, still blocked on provider after runtime/schema fixes:
   commands passed with full `1184 passed; 0 failed`, but MiniMax failed before
   tool execution/closeout with `error sending request for url`; report owner is
   `environment`.
+- The 2026-05-11 provider-gated rerun,
+  `batch6-provider-gated-fix-20260511-104114`, was blocked before agent-run by
+  the new provider health preflight: plain chat returned, but MiniMax did not
+  return the required tool call. The report is correctly classified as
+  `failure_owner=environment`; required commands were skipped because the agent
+  never started.
 
 验证：
 

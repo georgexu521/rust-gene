@@ -1103,11 +1103,11 @@ File.write(json_path, JSON.generate(YAML.load_file(sample_path) || {}) + "\n")
       if [[ -f "$report_dir/provider-health.json" ]]; then
         echo '```json'
         cat "$report_dir/provider-health.json"
-        echo '```'
+        printf '\n```\n'
       else
         echo '```text'
         cat "$REPORT_DIR/live-$RUN_ID/provider-health-stderr.log" 2>/dev/null || true
-        echo '```'
+        printf '\n```\n'
       fi
       echo
     fi
