@@ -37,16 +37,26 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic test baseline observed during the 2026-05-11 provider
-reconnect live-eval reruns:
+reconnect and harness-split live-eval work:
 
 ```text
-1195 passed; 0 failed
+1197 passed; 0 failed
 ```
 
 Validated inside live-eval required commands with:
 
 ```bash
 cargo test -q
+```
+
+Latest expanded live-eval checkpoint:
+
+```text
+batch6-harnesssplit-20260511-155208 resume-session-picker: ok
+diff=yes agent_required_commands=2 harness_commands=1 required_command_status=ok
+verification_passed=true stage_validation_passed=true
+acceptance_accepted=true closeout_status=passed failure_owner=none
+note=full-suite cargo test is now harness-only for this case, keeping agent validation focused while preserving release-level evidence
 ```
 
 Latest recovery commits and planning artifacts:

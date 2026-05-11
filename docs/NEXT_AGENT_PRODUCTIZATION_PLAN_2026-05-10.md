@@ -1207,6 +1207,22 @@ Thirteenth attempted slice:
   remained failed, closeout stayed failed, and `failure_owner=agent_flow`.
   This makes `resume-session-picker` the next recommended productization target.
 
+Fourteenth slice:
+
+- Fixed the `resume-session-picker` over-control path by splitting validation
+  responsibility in live evals. `acceptance.required_commands` remains
+  agent-visible focused validation; the new `acceptance.harness_commands` runs
+  only in the external harness. This follows the Claude Code/opencode product
+  pattern more closely: the agent loop gets actionable local checks, while the
+  harness still owns release-level full-suite confidence.
+- Moved the broad `cargo test -q -- --test-threads=1` command for
+  `resume-session-picker` into `acceptance.harness_commands`. The rerun
+  `batch6-harnesssplit-20260511-155208` passed with a real `/resume` diff,
+  agent required commands ok, harness full suite ok (`911 passed; 0 failed`),
+  `verification_passed=true`, `acceptance_accepted=True`,
+  `closeout_status=passed`, and `failure_owner=none`.
+  This makes `cli-scrollback-polish` the next recommended productization target.
+
 验证：
 
 ```bash
@@ -1233,6 +1249,7 @@ scripts/run_live_eval.sh --case memory-recall-conflict-precision --mode agent-ru
 scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --case permission-default-open-dangerous-guard --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --case resume-session-picker --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
+scripts/run_live_eval.sh --case resume-session-picker --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-harnesssplit
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1243,6 +1260,7 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-152513
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-154614
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-163831
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-175656
+scripts/run_live_eval.sh --mode summary --run-id batch6-harnesssplit-20260511-155208
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-182657
 scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-230329
 scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-232124

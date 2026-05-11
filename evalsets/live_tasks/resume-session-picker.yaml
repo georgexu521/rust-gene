@@ -39,6 +39,7 @@ acceptance:
   required_commands:
     - cargo test -q resume -- --test-threads=1
     - cargo test -q session -- --test-threads=1
+  harness_commands:
     - cargo test -q -- --test-threads=1
   diff_constraints:
     max_files_changed: 10

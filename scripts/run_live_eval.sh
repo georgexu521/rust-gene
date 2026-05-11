@@ -57,7 +57,7 @@ Options:
   --workdir DIR      Existing task worktree for collect mode.
   --label LABEL      Report/run label (default: live-eval).
   --run-id ID        Stable run id (default: timestamp).
-  --run-tests        Run acceptance.required_commands during collect/agent-run/full.
+  --run-tests        Run acceptance.required_commands plus harness_commands during collect/agent-run/full.
   --skip-build       Reuse target/release/priority-agent for api-plan.
   --skip-provider-health
                      Skip provider health preflight before agent-run.
@@ -143,6 +143,12 @@ yaml_list() {
   ' "$file" "$path"
 }
 
+validation_commands() {
+  local file="$1"
+  yaml_list "$file" acceptance.required_commands
+  yaml_list "$file" acceptance.harness_commands
+}
+
 write_agent_prompt() {
   local file="$1" out="$2"
   ruby -ryaml -e '
@@ -190,6 +196,11 @@ write_agent_prompt() {
       lines << "- (none)"
     else
       required.each { |cmd| lines << "- `#{cmd}`" }
+    end
+    harness = acceptance["harness_commands"] || []
+    unless harness.empty?
+      lines << ""
+      lines << "Additional harness-only checks will run after your turn; do not spend the agent loop on those unless a focused failure points there."
     end
     lines.concat([
       "",
@@ -537,6 +548,15 @@ File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
       [[ -z "$cmd" ]] && continue
       echo "- \`$cmd\`"
     done < <(yaml_list "$file" acceptance.required_commands)
+    if [[ -n "$(yaml_list "$file" acceptance.harness_commands | sed '/^[[:space:]]*$/d')" ]]; then
+      echo
+      echo "## Harness-Only Commands"
+      echo
+      while IFS= read -r cmd; do
+        [[ -z "$cmd" ]] && continue
+        echo "- \`$cmd\`"
+      done < <(yaml_list "$file" acceptance.harness_commands)
+    fi
     echo
     echo "## Manual Agent Command"
     echo
@@ -1041,7 +1061,7 @@ collect_task() {
   test_status="skipped"
   env_base="$(task_env_base "$id")"
   cargo_target_dir="$(task_cargo_target_dir "$id")"
-  required_cmd_count="$(yaml_list "$file" acceptance.required_commands | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+  required_cmd_count="$(validation_commands "$file" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
   effective_run_tests="$RUN_TESTS"
   if [[ "$required_cmd_count" -gt 0 && ( "$MODE" == "agent-run" || "$MODE" == "full" ) ]]; then
     effective_run_tests=1
@@ -1077,7 +1097,7 @@ collect_task() {
         echo
         exit "$status"
       ) >>"$cmd_log" 2>&1 || test_status="failed"
-    done < <(yaml_list "$file" acceptance.required_commands)
+    done < <(validation_commands "$file")
   fi
   echo "$test_status" >"$status_file"
   ruby -ryaml -rjson -e '
@@ -1272,7 +1292,10 @@ print(f"patch_synthesis_no_change: {str(patch_synthesis_no_change).lower()}")
 
 failures = []
 warnings = []
-required_commands = ((sample.get("acceptance") or {}).get("required_commands") or [])
+acceptance_config = sample.get("acceptance") or {}
+required_commands = acceptance_config.get("required_commands") or []
+harness_commands = acceptance_config.get("harness_commands") or []
+validation_commands = list(required_commands) + list(harness_commands)
 repo = sample.get("repo") or {}
 base_ref = str(repo.get("base_ref", "HEAD")).strip()
 prepare_commands = repo.get("prepare_commands") or []
@@ -1333,7 +1356,7 @@ if stage_validation_events and any(str(event.get("status", "")).lower() not in {
 if not trace:
     print("warning: missing_trace_summary")
     failures.append("missing_trace_summary")
-if required_commands and test_status != "ok":
+if validation_commands and test_status != "ok":
     print("warning: required_commands_not_passing")
     failures.append("required_commands_not_passing")
 if closeout_status in {"failed", "not_verified", "blocked", "missing"}:
@@ -1474,7 +1497,10 @@ if events_path.exists():
 trace = next((event for event in reversed(events) if event.get("event") == "trace_summary"), {})
 trace_types = trace.get("event_types") or []
 trace_events = (trace.get("trace") or {}).get("events") or []
-required_commands = ((sample.get("acceptance") or {}).get("required_commands") or [])
+acceptance_config = sample.get("acceptance") or {}
+required_commands = acceptance_config.get("required_commands") or []
+harness_commands = acceptance_config.get("harness_commands") or []
+validation_commands = list(required_commands) + list(harness_commands)
 
 def trace_count(label):
     return sum(1 for item in trace_types if item == label)
@@ -1517,7 +1543,7 @@ reweighted_events = [event for event in workflow_plans if event.get("reweighted"
 guided_reasoning_events = [
     event for event in workflow_judgments if event.get("guided_reasoning") is True
 ]
-automation_active = bool(required_commands or verification_events or stage_validation_events or progress_events)
+automation_active = bool(validation_commands or verification_events or stage_validation_events or progress_events)
 memory_active = bool(trace_count("memory.sync") or memory_tools or any(source == "Memory" for source in memory_sources))
 guided_debugging_active = bool(guided_debugs)
 guided_reasoning_active = bool(guided_reasoning_events)
@@ -1547,7 +1573,9 @@ print(f"active_specialty_signals: {active_count}/{len(signals)}")
 print(f"memory_sync_events: {trace_count('memory.sync')}")
 print(f"memory_tool_calls: {len(memory_tools)}")
 print(f"retrieval_sources: {','.join(memory_sources) if memory_sources else 'none'}")
-print(f"required_commands: {len(required_commands)}")
+print(f"required_commands: {len(validation_commands)}")
+print(f"agent_required_commands: {len(required_commands)}")
+print(f"harness_commands: {len(harness_commands)}")
 print(f"required_command_status: {test_status}")
 print(f"validation_events: {len(verification_events)}")
 print(f"stage_validation_events: {len(stage_validation_events)}")
@@ -1574,7 +1602,7 @@ if latest_runtime_diet:
     )
 else:
     print("runtime_diet: missing")
-if required_commands and test_status != "ok":
+if validation_commands and test_status != "ok":
     print("attention: required commands did not pass in the harness")
 if "guided.debug" not in trace_types:
     print("note: guided debugging is expected only after a blocker or failed validation")
