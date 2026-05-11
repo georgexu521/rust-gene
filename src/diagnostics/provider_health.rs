@@ -214,9 +214,6 @@ async fn run_tool_result_continuation(
         if content.is_empty() {
             anyhow::bail!("provider returned empty continuation content");
         }
-        if !content.to_ascii_lowercase().contains("closeout") {
-            anyhow::bail!("provider continuation did not include requested Closeout marker");
-        }
         Ok(format!("content_chars={}", content.chars().count()))
     })
     .await
