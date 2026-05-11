@@ -6,7 +6,7 @@ use crate::services::api::retry::ProviderRetryPolicy;
 use crate::services::api::{
     sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, ToolCall, Usage,
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
 use async_trait::async_trait;
 use reqwest::StatusCode;
@@ -47,6 +47,9 @@ impl MiniMaxClient {
 
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("MINIMAX_API_KEY").context("MINIMAX_API_KEY must be set")?;
+        if api_key.trim().is_empty() {
+            bail!("MINIMAX_API_KEY must be set");
+        }
         let base_url = std::env::var("MINIMAX_BASE_URL").ok();
         let model = std::env::var("MINIMAX_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".to_string());
         Ok(Self::new(&api_key, base_url.as_deref(), Some(&model)))

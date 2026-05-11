@@ -934,9 +934,16 @@ env.update({
     "MINIMAX_API_KEY": os.environ.get("MINIMAX_API_KEY", ""),
     "MINIMAX_BASE_URL": os.environ.get("MINIMAX_BASE_URL", ""),
     "MINIMAX_MODEL": os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7"),
-    "OPENAI_API_KEY": "",
-    "MOONSHOT_API_KEY": "",
 })
+for key in (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "MOONSHOT_API_KEY",
+    "MOONSHOT_BASE_URL",
+    "MOONSHOT_MODEL",
+):
+    env.pop(key, None)
 
 localhost_no_proxy = "127.0.0.1,localhost,::1"
 for key in ("NO_PROXY", "no_proxy"):
@@ -1084,7 +1091,10 @@ collect_task() {
         set +e
         echo "\$ $cmd"
         (
-          cd "$task_workdir" && env \
+          cd "$task_workdir" && \
+            unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL \
+              MOONSHOT_API_KEY MOONSHOT_BASE_URL MOONSHOT_MODEL && \
+            env \
             CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" \
             RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
             CARGO_TARGET_DIR="$cargo_target_dir" \

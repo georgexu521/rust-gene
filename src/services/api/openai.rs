@@ -2,7 +2,7 @@
 
 use crate::services::api::retry::ProviderRetryPolicy;
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
 use async_trait::async_trait;
 use tracing::info;
@@ -36,6 +36,9 @@ impl OpenAiClient {
 
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY must be set")?;
+        if api_key.trim().is_empty() {
+            bail!("OPENAI_API_KEY must be set");
+        }
         let base_url = std::env::var("OPENAI_BASE_URL").ok();
         let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
         Ok(Self::new(&api_key, base_url.as_deref(), Some(&model)))

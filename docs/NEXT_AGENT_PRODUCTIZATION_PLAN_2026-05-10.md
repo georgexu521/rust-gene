@@ -1240,6 +1240,27 @@ Fifteenth slice:
   (`901 passed; 0 failed`), and closed out with `failure_owner=none`.
   The expanded 12-case suite now has current passing evidence.
 
+Sixteenth slice:
+
+- Fixed the runtime validation label so it reports the latest effective result
+  per validation identity instead of treating any historical failure as current.
+  A command/source that fails and later passes now contributes to
+  `recovered_failed`, while unrecovered failures still keep the label failed.
+  This addresses the misleading `runtime_diet.validation=failed:1/8` seen in
+  `batch6-auditfix-20260511-163148` after the final closeout had passed.
+- Rerunning `cli-scrollback-polish` first produced
+  `batch6-evidencefix-20260511-171653`, which failed as `agent_flow` even
+  though the external harness passed. The agent-run shell inherited empty
+  Moonshot/OpenAI provider variables, so `cargo test -q tui` saw a different
+  provider-discovery environment than the harness and failed on the old Kimi
+  header fixture path. Fixed this by treating empty provider keys as
+  unconfigured and by unsetting non-target provider variables in both live-eval
+  agent and harness validation environments.
+- The rerun `batch6-evidencefix2-20260511-173535` passed with no diff, focused
+  shell/TUI commands plus harness full suite (`901 passed; 0 failed`),
+  `tool_errors=0`, `runtime_diet.validation=passed:2/2`,
+  `closeout_status=passed`, and `failure_owner=none`.
+
 验证：
 
 ```bash
@@ -1269,6 +1290,8 @@ scripts/run_live_eval.sh --case resume-session-picker --mode agent-run --run-tes
 scripts/run_live_eval.sh --case resume-session-picker --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-harnesssplit
 scripts/run_live_eval.sh --case cli-scrollback-polish --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-harnesssplit
 scripts/run_live_eval.sh --case cli-scrollback-polish --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-auditfix
+scripts/run_live_eval.sh --case cli-scrollback-polish --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-evidencefix
+scripts/run_live_eval.sh --case cli-scrollback-polish --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-evidencefix2
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1290,6 +1313,8 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-14283
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-150921
 scripts/run_live_eval.sh --mode summary --run-id batch6-harnesssplit-20260511-160935
 scripts/run_live_eval.sh --mode summary --run-id batch6-auditfix-20260511-163148
+scripts/run_live_eval.sh --mode summary --run-id batch6-evidencefix-20260511-171653
+scripts/run_live_eval.sh --mode summary --run-id batch6-evidencefix2-20260511-173535
 ```
 
 ## 验收指标

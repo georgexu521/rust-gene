@@ -1,0 +1,27 @@
+{
+  "status": "ok",
+  "model": "MiniMax-M2.7",
+  "base_url": "https://api.minimaxi.com/v1",
+  "timeout_secs": 45,
+  "duration_ms": 20506,
+  "steps": [
+    {
+      "name": "plain_chat",
+      "status": "ok",
+      "duration_ms": 8834,
+      "detail": "content_chars=18"
+    },
+    {
+      "name": "tool_call",
+      "status": "ok",
+      "duration_ms": 8708,
+      "detail": "tool_call_id=call_function_go2jr1r24pw3_1"
+    },
+    {
+      "name": "tool_result_continuation",
+      "status": "ok",
+      "duration_ms": 2964,
+      "detail": "content_chars=42"
+    }
+  ]
+}

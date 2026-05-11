@@ -94,13 +94,11 @@ impl ProviderRegistry {
         let mut registry = Self::new();
 
         // 加载默认的 MiniMax Provider（如果配置了）
-        if let Ok(api_key) = std::env::var("MINIMAX_API_KEY") {
-            let base_url = std::env::var("MINIMAX_BASE_URL")
-                .ok()
+        if let Some(api_key) = env_non_empty("MINIMAX_API_KEY") {
+            let base_url = env_non_empty("MINIMAX_BASE_URL")
                 .unwrap_or_else(|| "https://api.minimaxi.com/v1".to_string());
-            let model = std::env::var("MINIMAX_MODEL")
-                .ok()
-                .unwrap_or_else(|| "MiniMax-M2.7".to_string());
+            let model =
+                env_non_empty("MINIMAX_MODEL").unwrap_or_else(|| "MiniMax-M2.7".to_string());
 
             let config = ProviderConfig {
                 name: "minimax".to_string(),
@@ -121,13 +119,10 @@ impl ProviderRegistry {
         }
 
         // 加载默认的 Kimi Provider（如果配置了）
-        if let Ok(api_key) = std::env::var("MOONSHOT_API_KEY") {
-            let base_url = std::env::var("MOONSHOT_BASE_URL")
-                .ok()
+        if let Some(api_key) = env_non_empty("MOONSHOT_API_KEY") {
+            let base_url = env_non_empty("MOONSHOT_BASE_URL")
                 .unwrap_or_else(|| "https://api.moonshot.cn/v1".to_string());
-            let model = std::env::var("MOONSHOT_MODEL")
-                .ok()
-                .unwrap_or_else(|| "kimi-k2.5".to_string());
+            let model = env_non_empty("MOONSHOT_MODEL").unwrap_or_else(|| "kimi-k2.5".to_string());
 
             let config = ProviderConfig {
                 name: "kimi".to_string(),
@@ -158,13 +153,10 @@ impl ProviderRegistry {
         }
 
         // 加载默认的 OpenAI Provider（如果配置了）
-        if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
-            let base_url = std::env::var("OPENAI_BASE_URL")
-                .ok()
+        if let Some(api_key) = env_non_empty("OPENAI_API_KEY") {
+            let base_url = env_non_empty("OPENAI_BASE_URL")
                 .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            let model = std::env::var("OPENAI_MODEL")
-                .ok()
-                .unwrap_or_else(|| "gpt-4o".to_string());
+            let model = env_non_empty("OPENAI_MODEL").unwrap_or_else(|| "gpt-4o".to_string());
 
             let config = ProviderConfig {
                 name: "openai".to_string(),
@@ -328,6 +320,13 @@ impl ProviderRegistry {
     pub fn len(&self) -> usize {
         self.providers.len()
     }
+}
+
+fn env_non_empty(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
@@ -500,5 +499,18 @@ mod tests {
         assert_eq!(cfg.base_url.as_deref(), Some("https://minimax.example/v1"));
         assert_eq!(cfg.default_model, "MiniMax-Test");
         assert!(registry.get("openai").is_some());
+    }
+
+    #[test]
+    fn test_from_env_ignores_empty_provider_keys() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("MINIMAX_API_KEY", "");
+        env.set("OPENAI_API_KEY", "   ");
+        env.set("MOONSHOT_API_KEY", "");
+
+        let registry = ProviderRegistry::from_env();
+
+        assert!(registry.is_empty());
+        assert_eq!(registry.selected(), None);
     }
 }

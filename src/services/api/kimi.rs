@@ -7,7 +7,7 @@ use crate::services::api::{
     normalize_tool_message_sequence, sanitize_assistant_content, ChatRequest, ChatResponse,
     LlmProvider, Message, ToolCall, Usage,
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_openai::{
     config::{Config, OpenAIConfig},
     types::{
@@ -48,6 +48,9 @@ impl KimiConfig {
     /// 从环境变量加载配置
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("MOONSHOT_API_KEY").context("MOONSHOT_API_KEY must be set")?;
+        if api_key.trim().is_empty() {
+            bail!("MOONSHOT_API_KEY must be set");
+        }
 
         let base_url = std::env::var("MOONSHOT_BASE_URL")
             .unwrap_or_else(|_| "https://api.moonshot.ai/v1".to_string());

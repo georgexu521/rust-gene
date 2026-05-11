@@ -57,6 +57,14 @@ pub struct EvidenceSnapshot {
     pub failed_validation_facts: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ValidationRollup {
+    current_total: usize,
+    current_passed: usize,
+    current_failed: usize,
+    recovered_failed: usize,
+}
+
 pub async fn changed_files_diff_evidence(
     working_dir: &Path,
     changed_files: &[PathBuf],
@@ -167,21 +175,64 @@ impl EvidenceLedger {
     }
 
     pub fn runtime_validation_label(&self) -> Option<String> {
-        let snapshot = self.snapshot();
-        if snapshot.validation_facts == 0 {
+        let rollup = self.current_validation_rollup()?;
+        if rollup.current_failed > 0 {
+            return Some(format!(
+                "failed:{}/{}",
+                rollup.current_failed, rollup.current_total
+            ));
+        }
+        let mut label = format!("passed:{}/{}", rollup.current_passed, rollup.current_total);
+        if rollup.recovered_failed > 0 {
+            label.push_str(&format!(" recovered_failed:{}", rollup.recovered_failed));
+        }
+        Some(label)
+    }
+
+    fn current_validation_rollup(&self) -> Option<ValidationRollup> {
+        if self.validation_facts.is_empty() {
             return None;
         }
-        if snapshot.failed_validation_facts > 0 {
-            Some(format!(
-                "failed:{}/{}",
-                snapshot.failed_validation_facts, snapshot.validation_facts
-            ))
-        } else {
-            Some(format!(
-                "passed:{}/{}",
-                snapshot.passed_validation_facts, snapshot.validation_facts
-            ))
+        let mut order = Vec::<String>::new();
+        let mut current = std::collections::BTreeMap::<String, ValidationEvidence>::new();
+        let mut failed_identities = BTreeSet::<String>::new();
+        for fact in &self.validation_facts {
+            let identity = validation_identity(fact);
+            if !current.contains_key(&identity) {
+                order.push(identity.clone());
+            }
+            if !fact.passed {
+                failed_identities.insert(identity.clone());
+            }
+            current.insert(identity, fact.clone());
         }
+        let current_total = order.len();
+        let current_passed = order
+            .iter()
+            .filter(|identity| {
+                current
+                    .get(*identity)
+                    .map(|fact| fact.passed)
+                    .unwrap_or(false)
+            })
+            .count();
+        let current_failed = current_total.saturating_sub(current_passed);
+        let recovered_failed = order
+            .iter()
+            .filter(|identity| {
+                failed_identities.contains(*identity)
+                    && current
+                        .get(*identity)
+                        .map(|fact| fact.passed)
+                        .unwrap_or(false)
+            })
+            .count();
+        Some(ValidationRollup {
+            current_total,
+            current_passed,
+            current_failed,
+            recovered_failed,
+        })
     }
 
     pub fn changed_files(&self) -> Vec<String> {
@@ -332,6 +383,16 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
+fn validation_identity(fact: &ValidationEvidence) -> String {
+    if let Some(command) = fact.command.as_deref() {
+        let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !normalized.is_empty() {
+            return format!("command:{normalized}");
+        }
+    }
+    format!("source:{}", fact.source.trim())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +447,54 @@ mod tests {
             Some("failed:1/1")
         );
         assert_eq!(ledger.validation_facts()[0].summary, "compile error");
+    }
+
+    #[test]
+    fn runtime_validation_label_uses_latest_result_per_command() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_validation_result(
+            "bash",
+            Some("cargo test -q tui -- --test-threads=1"),
+            false,
+            "provider header panic",
+        );
+        ledger.record_validation_result(
+            "required_validation",
+            Some("cargo    test -q tui -- --test-threads=1"),
+            true,
+            "test result: ok",
+        );
+        ledger.record_validation_result("code_review", None, true, "review passed");
+
+        assert_eq!(
+            ledger.runtime_validation_label().as_deref(),
+            Some("passed:2/2 recovered_failed:1")
+        );
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.validation_facts, 3);
+        assert_eq!(snapshot.failed_validation_facts, 1);
+    }
+
+    #[test]
+    fn runtime_validation_label_keeps_unrecovered_failures_current() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_validation_result(
+            "bash",
+            Some("cargo test -q tui -- --test-threads=1"),
+            false,
+            "test failed",
+        );
+        ledger.record_validation_result(
+            "required_validation",
+            Some("cargo test -q shell -- --test-threads=1"),
+            true,
+            "test result: ok",
+        );
+
+        assert_eq!(
+            ledger.runtime_validation_label().as_deref(),
+            Some("failed:1/2")
+        );
     }
 
     #[tokio::test]

@@ -57,10 +57,10 @@ diff=yes agent_required_commands=2 harness_commands=1 required_command_status=ok
 verification_passed=true stage_validation_passed=true
 acceptance_accepted=true closeout_status=passed failure_owner=none
 note=full-suite cargo test is now harness-only for this case, keeping agent validation focused while preserving release-level evidence
-batch6-auditfix-20260511-163148 cli-scrollback-polish: ok
-intent=audit_or_regression_check diff=yes required_command_status=ok
-agent_required_commands=2 harness_commands=1 closeout_status=passed failure_owner=none
-note=base already had default scrollback CLI; rerun fixed a stale fixture/test blocker and preserves full-suite harness evidence
+batch6-evidencefix2-20260511-173535 cli-scrollback-polish: ok
+intent=audit_or_regression_check diff=no required_command_status=ok
+agent_required_commands=2 harness_commands=1 tool_errors=0 closeout_status=passed failure_owner=none runtime_validation=passed:2/2
+note=agent and harness validation environments now agree; audit/no-diff closeout remains valid while runtime validation no longer reports stale recovered failures
 ```
 
 Latest recovery commits and planning artifacts:
