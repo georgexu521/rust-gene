@@ -14,6 +14,9 @@ Active next-stage direction:
   reference-first productization: learn from local Claude Code and opencode,
   then implement the Rust runtime equivalents without adding another heavy
   workflow framework.
+- `docs/NEXT_AGENT_CORE_CODING_QUALITY_PLAN_2026-05-11.md` narrows the next
+  execution order to core coding quality: split the main loop first, productize
+  shell/terminal next, then finish file-edit quality.
 - `docs/AGENT_PRODUCTIZATION_REFERENCE_AUDIT_2026-05-10.md` is the Batch 1
   artifact. It records the Claude/opencode reference map, current
   `ConversationLoop` architecture map, current product capability table, and
