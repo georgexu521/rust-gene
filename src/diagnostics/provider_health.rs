@@ -1,4 +1,4 @@
-use crate::services::api::{ChatRequest, LlmProvider, Message, Tool, ToolCall};
+use crate::services::api::{ChatRequest, LlmProvider, Message, Tool, ToolCall, ToolChoice};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -102,7 +102,7 @@ async fn run_plain_chat(
             Message::system("You are a provider health probe. Answer tersely."),
             Message::user("Reply with exactly: provider-health-ok"),
         ]);
-    request.max_tokens = Some(24);
+    request.max_tokens = Some(128);
 
     run_step("plain_chat", timeout, async move {
         let response = provider.chat(request).await?;
@@ -126,13 +126,14 @@ async fn run_tool_call(
     let mut request = ChatRequest::new(model)
         .with_temperature(0.0)
         .with_tools(vec![tool])
+        .with_tool_choice(ToolChoice::Function("provider_health_echo".to_string()))
         .with_messages(vec![
             Message::system("You are a provider health probe. Use the available tool when asked."),
             Message::user(
                 "Call provider_health_echo exactly once with value \"provider-health-ok\".",
             ),
         ]);
-    request.max_tokens = Some(64);
+    request.max_tokens = Some(256);
 
     let started = Instant::now();
     match tokio::time::timeout(timeout, provider.chat(request)).await {
@@ -205,7 +206,7 @@ async fn run_tool_result_continuation(
             Message::assistant_with_tools("", vec![tool_call.clone()]),
             Message::tool(tool_call.id, "Result: OK\nprovider-health-ok"),
         ]);
-    request.max_tokens = Some(48);
+    request.max_tokens = Some(128);
 
     run_step("tool_result_continuation", timeout, async move {
         let response = provider.chat(request).await?;

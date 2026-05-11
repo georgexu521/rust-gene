@@ -4,15 +4,16 @@
 
 use crate::services::api::{
     normalize_tool_message_sequence, sanitize_assistant_content, ChatRequest, ChatResponse,
-    Message, ToolCall, Usage,
+    Message, ToolCall, ToolChoice, Usage,
 };
 use anyhow::{Context, Result};
 use async_openai::types::{
-    ChatCompletionMessageToolCall, ChatCompletionRequestAssistantMessage,
-    ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage,
-    ChatCompletionRequestSystemMessage, ChatCompletionRequestToolMessage,
-    ChatCompletionRequestUserMessage, ChatCompletionTool, ChatCompletionToolType,
-    CreateChatCompletionRequest, CreateChatCompletionResponse, FunctionCall, FunctionObject,
+    ChatCompletionMessageToolCall, ChatCompletionNamedToolChoice,
+    ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
+    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
+    ChatCompletionRequestToolMessage, ChatCompletionRequestUserMessage, ChatCompletionTool,
+    ChatCompletionToolChoiceOption, ChatCompletionToolType, CreateChatCompletionRequest,
+    CreateChatCompletionResponse, FunctionCall, FunctionName, FunctionObject,
 };
 
 pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletionRequest {
@@ -32,6 +33,7 @@ pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletio
         temperature: request.temperature,
         max_completion_tokens: request.max_tokens,
         tools: None,
+        tool_choice: request.tool_choice.map(convert_tool_choice),
         ..Default::default()
     };
 
@@ -53,6 +55,20 @@ pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletio
     }
 
     req
+}
+
+fn convert_tool_choice(choice: ToolChoice) -> ChatCompletionToolChoiceOption {
+    match choice {
+        ToolChoice::None => ChatCompletionToolChoiceOption::None,
+        ToolChoice::Auto => ChatCompletionToolChoiceOption::Auto,
+        ToolChoice::Required => ChatCompletionToolChoiceOption::Required,
+        ToolChoice::Function(name) => {
+            ChatCompletionToolChoiceOption::Named(ChatCompletionNamedToolChoice {
+                r#type: ChatCompletionToolType::Function,
+                function: FunctionName { name },
+            })
+        }
+    }
 }
 
 pub fn convert_response(response: CreateChatCompletionResponse) -> Result<ChatResponse> {
@@ -184,5 +200,32 @@ mod tests {
 
         assert!(assistant.content.is_some());
         assert_eq!(assistant.tool_calls.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn request_can_force_named_tool_choice() {
+        let request = ChatRequest::new("test-model")
+            .with_messages(vec![Message::user("call the echo tool")])
+            .with_tools(vec![crate::services::api::Tool {
+                name: "provider_health_echo".to_string(),
+                description: "Echo health value".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string"}
+                    },
+                    "required": ["value"]
+                }),
+            }])
+            .with_tool_choice(ToolChoice::Function("provider_health_echo".to_string()));
+
+        let converted = convert_request(request, "fallback-model");
+
+        match converted.tool_choice {
+            Some(ChatCompletionToolChoiceOption::Named(choice)) => {
+                assert_eq!(choice.function.name, "provider_health_echo");
+            }
+            other => panic!("expected named tool choice, got {other:?}"),
+        }
     }
 }

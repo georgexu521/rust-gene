@@ -6,10 +6,20 @@ use crate::services::api::{
     sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, ToolCall, Usage,
 };
 use anyhow::{Context, Result};
-use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
+use async_openai::{
+    config::OpenAIConfig,
+    error::OpenAIError,
+    types::{
+        ChatCompletionResponseStream, CreateChatCompletionRequest, CreateChatCompletionResponse,
+    },
+    Client,
+};
 use async_trait::async_trait;
 use reqwest::StatusCode;
-use tracing::{debug, info};
+use std::time::Duration;
+use tracing::{debug, info, warn};
+
+const MINIMAX_TRANSPORT_RETRIES: usize = 2;
 
 /// MiniMax 客户端
 pub struct MiniMaxClient {
@@ -102,6 +112,30 @@ impl MiniMaxClient {
         normalized.push(merged_system);
         normalized.extend(others);
         normalized
+    }
+
+    async fn create_chat_with_transport_retries(
+        &self,
+        req: CreateChatCompletionRequest,
+    ) -> std::result::Result<CreateChatCompletionResponse, OpenAIError> {
+        for attempt in 0..=MINIMAX_TRANSPORT_RETRIES {
+            match self.client.chat().create(req.clone()).await {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    if attempt >= MINIMAX_TRANSPORT_RETRIES
+                        || !is_retryable_minimax_transport_error(&error.to_string())
+                    {
+                        return Err(error);
+                    }
+                    warn!(
+                        "Retrying MiniMax chat request after transient transport error: {}",
+                        error
+                    );
+                    tokio::time::sleep(Duration::from_millis(300 * (attempt as u64 + 1))).await;
+                }
+            }
+        }
+        unreachable!("MiniMax retry loop always returns before exhausting attempts")
     }
 }
 
@@ -197,6 +231,17 @@ fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
     })
 }
 
+fn is_retryable_minimax_transport_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("error sending request")
+        || lower.contains("operation timed out")
+        || lower.contains("connection reset")
+        || lower.contains("connection refused")
+        || lower.contains("unexpected eof")
+        || lower.contains("incomplete message")
+        || lower.contains("body write aborted")
+}
+
 #[async_trait]
 impl LlmProvider for MiniMaxClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
@@ -204,7 +249,7 @@ impl LlmProvider for MiniMaxClient {
         let mut request = request;
         request.messages = Self::normalize_messages_for_minimax(request.messages);
         let req = convert_request(request, &self.model);
-        let response = match self.client.chat().create(req.clone()).await {
+        let response = match self.create_chat_with_transport_retries(req.clone()).await {
             Ok(resp) => resp,
             Err(e) => {
                 if let Some((status, body)) = self.fetch_error_body(&req).await {
@@ -356,5 +401,20 @@ mod tests {
             serde_json::json!({"path": "scripts/run_live_eval.sh"})
         );
         assert_eq!(response.usage.unwrap().reasoning_tokens, Some(2));
+    }
+
+    #[test]
+    fn retries_only_transient_transport_errors() {
+        assert!(is_retryable_minimax_transport_error(
+            "error sending request for url"
+        ));
+        assert!(is_retryable_minimax_transport_error(
+            "OpenSSL SSL_read: unexpected eof while reading"
+        ));
+        assert!(is_retryable_minimax_transport_error("operation timed out"));
+        assert!(!is_retryable_minimax_transport_error(
+            "bad_request_error: invalid params"
+        ));
+        assert!(!is_retryable_minimax_transport_error("401 unauthorized"));
     }
 }

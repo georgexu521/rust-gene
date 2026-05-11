@@ -110,6 +110,7 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Option<Vec<Tool>>,
+    pub tool_choice: Option<ToolChoice>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     /// Thinking budget (token 数)，启用 extended thinking
@@ -123,6 +124,7 @@ impl ChatRequest {
             model: model.into(),
             messages: Vec::new(),
             tools: None,
+            tool_choice: None,
             temperature: Some(0.2),
             max_tokens: None,
             thinking_budget: None,
@@ -139,10 +141,23 @@ impl ChatRequest {
         self
     }
 
+    pub fn with_tool_choice(mut self, choice: ToolChoice) -> Self {
+        self.tool_choice = Some(choice);
+        self
+    }
+
     pub fn with_temperature(mut self, temp: f32) -> Self {
         self.temperature = Some(temp);
         self
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum ToolChoice {
+    None,
+    Auto,
+    Required,
+    Function(String),
 }
 
 /// 消息
