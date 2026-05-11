@@ -1179,6 +1179,15 @@ Eleventh completed slice:
   `failure_owner=none`. The run also recorded MiniMax transient reconnects that
   recovered instead of aborting the agent loop.
 
+Twelfth completed slice:
+
+- Ran `permission-default-open-dangerous-guard` as the next recommended live
+  eval. The current rerun, `batch6-reconnect-20260511-135823`, passed as a
+  correct audit/no-diff closeout: permissions/bash/full-suite required commands
+  all passed, full `1195 passed; 0 failed`, `closeout_status=passed`, and
+  `failure_owner=none`. The run recorded MiniMax transient reconnects that
+  recovered under the shared retry policy.
+
 验证：
 
 ```bash
@@ -1203,6 +1212,7 @@ scripts/run_live_eval.sh --case memory-recall-conflict-precision --mode agent-ru
 scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-smoke
 scripts/run_live_eval.sh --case memory-recall-conflict-precision --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --case memory-save-sensitive-hard-block --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
+scripts/run_live_eval.sh --case permission-default-open-dangerous-guard --mode agent-run --run-tests --timeout 1800 --idle-timeout 900 --label batch6-reconnect
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133309
 scripts/run_live_eval.sh --mode summary --run-id batch6-smoke-20260510-133944
 scripts/run_live_eval.sh --mode summary --run-id batch6-parsefix-20260510-141148
@@ -1218,6 +1228,7 @@ scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-230329
 scripts/run_live_eval.sh --mode summary --run-id batch6-rerun-20260510-232124
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-132912
 scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-133851
+scripts/run_live_eval.sh --mode summary --run-id batch6-reconnect-20260511-135823
 ```
 
 ## 验收指标

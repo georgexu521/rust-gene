@@ -64,7 +64,7 @@ evidence run, and 2026-05-11 provider-reconnect reruns:
 | Latest Batch 3 runs | Five current suite cases now have passing evidence; `live-eval-dashboard-summary` first failed as `agent_flow` in `capability-now-20260509-143251`, then passed in `capability-now-20260509-144729` after `3344363` removed Markdown highlighting from grep evidence. |
 | Latest six-case capability run | `capability-evidence-20260509-173239`: `6/6` passed, all with real diffs; memory active tasks `6`, memory changed-plan tasks `5`, skill active tasks `1`, skill promotion-evidence tasks `1`. |
 | Latest Batch 6 smoke | `batch6-smoke-20260510-133309`, `batch6-parsefix-20260510-141148`, `batch6-smoke-20260510-142800`, `batch6-smoke-20260510-143451`, `batch6-smoke-20260510-144053`, `batch6-smoke-20260510-154614`, and `batch6-smoke-20260510-163831`: first seven recommended code-change cases passed after the ConversationLoop split and parse-noise/provider fallback fix, all with real diffs, required commands ok, and `failure_owner=none`. |
-| Latest Batch 6 reconnect reruns | `batch6-reconnect-20260511-132912` and `batch6-reconnect-20260511-133851`: recommended cases 8 and 9 both passed as audit/no-diff checks with required commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. Both runs exercised MiniMax reconnect retry logs. |
+| Latest Batch 6 reconnect reruns | `batch6-reconnect-20260511-132912`, `batch6-reconnect-20260511-133851`, and `batch6-reconnect-20260511-135823`: recommended cases 8, 9, and 10 passed as audit/no-diff checks with required commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. All three runs exercised MiniMax reconnect retry logs. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 | Latest skill-promotion rerun | `batch6-smoke-20260510-154614` passed after the earlier provider-blocked rerun, with real diff, `skill_active=true`, `promotion=true`, required commands ok, full `1178 passed; 0 failed`, and `failure_owner=none`. |
@@ -207,8 +207,8 @@ default loop.
 | 11 | `resume-session-picker` | Tests Claude-style resume as a daily CLI workflow. |
 | 12 | `cli-scrollback-polish` | Tests interactive CLI readability and long-output ergonomics. |
 
-The first nine cases have current post-split passing evidence. Cases 1-7 are
-real code-change passes; cases 8-9 are audit/no-diff passes where the agent
+The first ten cases have current post-split passing evidence. Cases 1-7 are
+real code-change passes; cases 8-10 are audit/no-diff passes where the agent
 proved the current code already satisfied the acceptance criteria and then ran
 required validation. The expanded 12-case suite remains the next productization
 baseline and should be run after runtime-loop or CLI behavior changes. The
@@ -235,7 +235,7 @@ environment/provider stop instead of spending the full eval timeout. Use
 | `persistent-memory-planning-context` | `batch6-smoke-20260510-163831` passed after fixture anchoring and focused-repair synthesis tuning with real diff, required commands ok, full `1178 passed; 0 failed`, memory active, memory changed planning, `closeout_status=passed`, and `failure_owner=none`. | Keep as the regression guard for persistent memory prefetch before workflow judgment without prompt bloat. |
 | `memory-recall-conflict-precision` | `batch6-reconnect-20260511-132912` passed after the provider reconnect and protocol-only health check updates. It was a correct audit/no-diff closeout with required retrieval/memory/full-suite commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`; stderr records MiniMax transient reconnects recovered by retry. | Keep as the guard against over-broad memory conflict demotion and audit/no-diff over-control. |
 | `memory-save-sensitive-hard-block` | `batch6-reconnect-20260511-133851` passed after the provider reconnect and protocol-only health check updates. It was a correct audit/no-diff closeout with required memory/TUI/full-suite commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`; stderr records MiniMax transient reconnects recovered by retry. | Keep as the hard-block safety guard for explicit memory saves. |
-| `permission-default-open-dangerous-guard` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the destructive-action safety guard. |
+| `permission-default-open-dangerous-guard` | `batch6-reconnect-20260511-135823` passed after the provider reconnect and protocol-only health check updates. It was a correct audit/no-diff closeout with required permissions/bash/full-suite commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`; stderr records MiniMax transient reconnects recovered by retry. | Keep as the destructive-action safety guard. |
 | `resume-session-picker` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the resume-session product guard. |
 | `cli-scrollback-polish` | Not yet rerun in the expanded recommended suite after the 2026-05-10 loop split. | Keep as the CLI readability guard. |
 

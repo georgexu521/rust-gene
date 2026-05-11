@@ -457,9 +457,10 @@ Latest maintenance note:
   requiring arbitrary diffs, bash child processes strip agent runtime env vars
   before running validation commands, and workflow judgment factor parsing
   tolerates missing optional fields. After the reconnect policy and
-  protocol-only provider health update, `batch6-reconnect-20260511-132912`
-  and `batch6-reconnect-20260511-133851` both passed as audit/no-diff checks
-  with required commands ok, full `1195 passed; 0 failed`,
+  protocol-only provider health update, `batch6-reconnect-20260511-132912`,
+  `batch6-reconnect-20260511-133851`, and
+  `batch6-reconnect-20260511-135823` passed as audit/no-diff checks with
+  required commands ok, full `1195 passed; 0 failed`,
   `closeout_status=passed`, and `failure_owner=none`.
 - Provider health preflight is now available as
   `priority-agent --provider-health` and is enabled by default for
