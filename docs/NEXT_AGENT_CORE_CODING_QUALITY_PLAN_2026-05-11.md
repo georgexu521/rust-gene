@@ -60,6 +60,18 @@
   loop now constructs the controller and passes a `ToolExecutionRequest`,
   keeping execution behavior unchanged while moving tool orchestration out of
   `impl ConversationLoop`.
+- 2026-05-11: Phase 1 Batch 1.3 continued. Added explicit
+  `ToolExecutionContext`, so `ToolExecutionController` no longer borrows the
+  whole `ConversationLoop` during execution. The context snapshots the concrete
+  execution dependencies: tool registry, cost tracker, session persistence,
+  hooks, approval channel, allowed tools, audit/denial trackers, active goal,
+  and the base `ToolContext`.
+- Validation after the `ToolExecutionContext` split: `cargo fmt --check`,
+  `git diff --check`, targeted `tool_call_lifecycle`,
+  `batch_summarizes_results_and_lifecycle_statuses`, `route_scoped_tools`,
+  `tool_result`, `runtime_diet`, and `patch_synthesis` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1208 passed; 0 failed`).
 - Validation after the `ToolExecutionController` ownership split:
   `cargo fmt --check`, `git diff --check`, targeted `tool_call_lifecycle`,
   `batch_summarizes_results_and_lifecycle_statuses`, `route_scoped_tools`,

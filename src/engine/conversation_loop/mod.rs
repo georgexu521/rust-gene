@@ -45,7 +45,9 @@ use text_sanitizer::VisibleTextSanitizer;
 pub(crate) use tool_execution::{
     safe_prefix_by_bytes, safe_suffix_by_bytes, truncate_tool_result, READ_ONLY_TOOLS,
 };
-use tool_execution_controller::{ToolExecutionController, ToolExecutionRequest};
+use tool_execution_controller::{
+    ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
+};
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
@@ -496,16 +498,6 @@ impl ConversationLoop {
     fn create_tool_context_with_trace(&self, trace: &TraceCollector) -> ToolContext {
         self.create_tool_context()
             .with_trace_collector(trace.clone())
-    }
-
-    fn create_tool_context_with_optional_trace(
-        &self,
-        trace: &Option<TraceCollector>,
-    ) -> ToolContext {
-        match trace {
-            Some(trace) => self.create_tool_context_with_trace(trace),
-            None => self.create_tool_context(),
-        }
     }
 
     /// 运行对话循环（非流式）
@@ -1512,21 +1504,22 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             let has_changes_before_tools =
                 crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
                     && !Self::git_status_files_since(&baseline_git_status_files).is_empty();
-            let mut tool_batch = ToolExecutionController::new(self)
-                .execute_tools_parallel(ToolExecutionRequest {
-                    tool_calls: &tool_calls,
-                    tx,
-                    pre_executed,
-                    trace: Some(trace.clone()),
-                    resource_policy: &resource_policy,
-                    exposed_tool_names: &exposed_tool_names,
-                    action_checkpoint_active,
-                    action_checkpoint_lookup_count,
-                    has_changes_before_tools,
-                    destructive_scope: &destructive_scope,
-                    lifecycle: &mut turn_state.tool_lifecycle,
-                })
-                .await;
+            let mut tool_batch =
+                ToolExecutionController::new(ToolExecutionContext::from_conversation(self))
+                    .execute_tools_parallel(ToolExecutionRequest {
+                        tool_calls: &tool_calls,
+                        tx,
+                        pre_executed,
+                        trace: Some(trace.clone()),
+                        resource_policy: &resource_policy,
+                        exposed_tool_names: &exposed_tool_names,
+                        action_checkpoint_active,
+                        action_checkpoint_lookup_count,
+                        has_changes_before_tools,
+                        destructive_scope: &destructive_scope,
+                        lifecycle: &mut turn_state.tool_lifecycle,
+                    })
+                    .await;
 
             // ── 迭代预算退还 ──────────────────────────────
             let all_read_only = tool_calls
@@ -1909,21 +1902,23 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             ));
                             let exposed_synth_tools =
                                 HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
-                            let mut synthesized_batch = ToolExecutionController::new(self)
-                                .execute_tools_parallel(ToolExecutionRequest {
-                                    tool_calls: &deterministic_calls,
-                                    tx,
-                                    pre_executed: std::collections::HashMap::new(),
-                                    trace: Some(trace.clone()),
-                                    resource_policy: &resource_policy,
-                                    exposed_tool_names: &exposed_synth_tools,
-                                    action_checkpoint_active: false,
-                                    action_checkpoint_lookup_count: 0,
-                                    has_changes_before_tools: false,
-                                    destructive_scope: &destructive_scope,
-                                    lifecycle: &mut turn_state.tool_lifecycle,
-                                })
-                                .await;
+                            let mut synthesized_batch = ToolExecutionController::new(
+                                ToolExecutionContext::from_conversation(self),
+                            )
+                            .execute_tools_parallel(ToolExecutionRequest {
+                                tool_calls: &deterministic_calls,
+                                tx,
+                                pre_executed: std::collections::HashMap::new(),
+                                trace: Some(trace.clone()),
+                                resource_policy: &resource_policy,
+                                exposed_tool_names: &exposed_synth_tools,
+                                action_checkpoint_active: false,
+                                action_checkpoint_lookup_count: 0,
+                                has_changes_before_tools: false,
+                                destructive_scope: &destructive_scope,
+                                lifecycle: &mut turn_state.tool_lifecycle,
+                            })
+                            .await;
                             for (tc, result) in synthesized_batch.results_mut().iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
                                 append_provider_tool_result(
@@ -2028,27 +2023,29 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             ));
                             let exposed_synth_tools =
                                 HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
-                            let mut synthesized_batch = ToolExecutionController::new(self)
-                                .execute_tools_parallel(ToolExecutionRequest {
-                                    tool_calls: &synthesized_calls,
-                                    tx,
-                                    pre_executed: std::collections::HashMap::new(),
-                                    trace: Some(trace.clone()),
-                                    resource_policy: &resource_policy,
-                                    exposed_tool_names: &exposed_synth_tools,
-                                    // Synthesized edits have already passed
-                                    // validate_patch_synthesis_action(). Avoid
-                                    // applying the direct action-checkpoint
-                                    // guard again, or safe recovered patches can
-                                    // be rejected without giving the model a way
-                                    // to inspect and repair the arguments.
-                                    action_checkpoint_active: false,
-                                    action_checkpoint_lookup_count: 0,
-                                    has_changes_before_tools: false,
-                                    destructive_scope: &destructive_scope,
-                                    lifecycle: &mut turn_state.tool_lifecycle,
-                                })
-                                .await;
+                            let mut synthesized_batch = ToolExecutionController::new(
+                                ToolExecutionContext::from_conversation(self),
+                            )
+                            .execute_tools_parallel(ToolExecutionRequest {
+                                tool_calls: &synthesized_calls,
+                                tx,
+                                pre_executed: std::collections::HashMap::new(),
+                                trace: Some(trace.clone()),
+                                resource_policy: &resource_policy,
+                                exposed_tool_names: &exposed_synth_tools,
+                                // Synthesized edits have already passed
+                                // validate_patch_synthesis_action(). Avoid
+                                // applying the direct action-checkpoint
+                                // guard again, or safe recovered patches can
+                                // be rejected without giving the model a way
+                                // to inspect and repair the arguments.
+                                action_checkpoint_active: false,
+                                action_checkpoint_lookup_count: 0,
+                                has_changes_before_tools: false,
+                                destructive_scope: &destructive_scope,
+                                lifecycle: &mut turn_state.tool_lifecycle,
+                            })
+                            .await;
                             for (tc, result) in synthesized_batch.results_mut().iter_mut() {
                                 truncate_tool_result(result, &tc.name, &tc.id).await;
                                 append_provider_tool_result(
@@ -5229,21 +5226,22 @@ mod tests {
         let exposed_tool_names = HashSet::from(["git".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let batch = ToolExecutionController::new(&loop_instance)
-            .execute_tools_parallel(ToolExecutionRequest {
-                tool_calls: &tool_calls,
-                tx: None,
-                pre_executed: Default::default(),
-                trace: None,
-                resource_policy: &policy,
-                exposed_tool_names: &exposed_tool_names,
-                action_checkpoint_active: false,
-                action_checkpoint_lookup_count: 0,
-                has_changes_before_tools: false,
-                destructive_scope: &destructive_scope,
-                lifecycle: &mut lifecycle,
-            })
-            .await;
+        let batch =
+            ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
+                .execute_tools_parallel(ToolExecutionRequest {
+                    tool_calls: &tool_calls,
+                    tx: None,
+                    pre_executed: Default::default(),
+                    trace: None,
+                    resource_policy: &policy,
+                    exposed_tool_names: &exposed_tool_names,
+                    action_checkpoint_active: false,
+                    action_checkpoint_lookup_count: 0,
+                    has_changes_before_tools: false,
+                    destructive_scope: &destructive_scope,
+                    lifecycle: &mut lifecycle,
+                })
+                .await;
         let results = batch.results();
 
         assert_eq!(results.len(), 1);
@@ -5284,21 +5282,22 @@ mod tests {
         let exposed_tool_names = HashSet::from(["file_edit".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let batch = ToolExecutionController::new(&loop_instance)
-            .execute_tools_parallel(ToolExecutionRequest {
-                tool_calls: &tool_calls,
-                tx: None,
-                pre_executed: Default::default(),
-                trace: None,
-                resource_policy: &policy,
-                exposed_tool_names: &exposed_tool_names,
-                action_checkpoint_active: false,
-                action_checkpoint_lookup_count: 0,
-                has_changes_before_tools: false,
-                destructive_scope: &destructive_scope,
-                lifecycle: &mut lifecycle,
-            })
-            .await;
+        let batch =
+            ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
+                .execute_tools_parallel(ToolExecutionRequest {
+                    tool_calls: &tool_calls,
+                    tx: None,
+                    pre_executed: Default::default(),
+                    trace: None,
+                    resource_policy: &policy,
+                    exposed_tool_names: &exposed_tool_names,
+                    action_checkpoint_active: false,
+                    action_checkpoint_lookup_count: 0,
+                    has_changes_before_tools: false,
+                    destructive_scope: &destructive_scope,
+                    lifecycle: &mut lifecycle,
+                })
+                .await;
         let results = batch.results();
 
         assert_eq!(results.len(), 1);
@@ -5339,21 +5338,22 @@ mod tests {
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
 
-        let batch = ToolExecutionController::new(&loop_instance)
-            .execute_tools_parallel(ToolExecutionRequest {
-                tool_calls: &tool_calls,
-                tx: None,
-                pre_executed: Default::default(),
-                trace: None,
-                resource_policy: &policy,
-                exposed_tool_names: &exposed_tool_names,
-                action_checkpoint_active: false,
-                action_checkpoint_lookup_count: 0,
-                has_changes_before_tools: false,
-                destructive_scope: &destructive_scope,
-                lifecycle: &mut lifecycle,
-            })
-            .await;
+        let batch =
+            ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
+                .execute_tools_parallel(ToolExecutionRequest {
+                    tool_calls: &tool_calls,
+                    tx: None,
+                    pre_executed: Default::default(),
+                    trace: None,
+                    resource_policy: &policy,
+                    exposed_tool_names: &exposed_tool_names,
+                    action_checkpoint_active: false,
+                    action_checkpoint_lookup_count: 0,
+                    has_changes_before_tools: false,
+                    destructive_scope: &destructive_scope,
+                    lifecycle: &mut lifecycle,
+                })
+                .await;
         let results = batch.results();
 
         assert_eq!(results.len(), 1);

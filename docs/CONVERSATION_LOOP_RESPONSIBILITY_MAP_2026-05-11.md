@@ -74,9 +74,15 @@ destructive scope, pre-executed results, streaming, and lifecycle ownership
 explicit at the controller boundary.
 
 `ToolExecutionController` now owns the `execute_tools_parallel` implementation.
-It still borrows `ConversationLoop` for existing dependencies, so this is a
-behavior-preserving ownership split rather than a dependency rewrite. The next
-safe step is to replace that broad borrow with an explicit execution context.
+The first ownership split borrowed `ConversationLoop` for existing
+dependencies; the follow-up split replaced that broad borrow with an explicit
+execution context.
+
+`ToolExecutionContext` now snapshots the concrete dependencies needed by
+`ToolExecutionController`: registry, cost tracker, session id/store, hooks,
+approval channel, allowed tools, audit/denial trackers, active goal, and base
+tool context. The controller no longer holds a broad `ConversationLoop` borrow
+while executing tools.
 
 ## Extraction Rule
 

@@ -15,10 +15,12 @@ use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
-use crate::tools::ToolResult;
+use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 #[derive(Debug, Clone, Default)]
@@ -97,13 +99,58 @@ pub(super) struct ToolExecutionRequest<'a> {
     pub(super) lifecycle: &'a mut ToolCallLifecycle,
 }
 
-pub(super) struct ToolExecutionController<'a> {
-    conversation: &'a ConversationLoop,
+pub(super) struct ToolExecutionContext {
+    tool_registry: Arc<ToolRegistry>,
+    cost_tracker: Arc<Mutex<crate::cost_tracker::CostTracker>>,
+    session_id: String,
+    session_store: Option<Arc<crate::session_store::SessionStore>>,
+    hook_manager: Option<Arc<crate::engine::hooks::ToolHookManager>>,
+    approval_channel: Option<Arc<super::ToolApprovalChannel>>,
+    allowed_tools: Option<HashSet<String>>,
+    denial_tracker: Option<Arc<crate::security::DenialTracker>>,
+    audit_log: Option<Arc<crate::security::SecurityAuditLog>>,
+    active_goal: Option<crate::engine::session_goal::SessionGoal>,
+    base_tool_context: ToolContext,
 }
 
-impl<'a> ToolExecutionController<'a> {
-    pub(super) fn new(conversation: &'a ConversationLoop) -> Self {
-        Self { conversation }
+impl ToolExecutionContext {
+    pub(super) fn from_conversation(conversation: &ConversationLoop) -> Self {
+        Self {
+            tool_registry: conversation.tool_registry.clone(),
+            cost_tracker: conversation.cost_tracker.clone(),
+            session_id: conversation.session_id.clone(),
+            session_store: conversation.session_store.clone(),
+            hook_manager: conversation.hook_manager.clone(),
+            approval_channel: conversation.approval_channel.clone(),
+            allowed_tools: conversation.allowed_tools.clone(),
+            denial_tracker: conversation.denial_tracker.clone(),
+            audit_log: conversation.audit_log.clone(),
+            active_goal: conversation
+                .goal_manager
+                .as_ref()
+                .and_then(|manager| manager.current()),
+            base_tool_context: conversation.create_tool_context(),
+        }
+    }
+
+    fn tool_context(&self, trace: &Option<TraceCollector>) -> ToolContext {
+        match trace {
+            Some(trace) => self
+                .base_tool_context
+                .clone()
+                .with_trace_collector(trace.clone()),
+            None => self.base_tool_context.clone(),
+        }
+    }
+}
+
+pub(super) struct ToolExecutionController {
+    context: ToolExecutionContext,
+}
+
+impl ToolExecutionController {
+    pub(super) fn new(context: ToolExecutionContext) -> Self {
+        Self { context }
     }
 
     pub(super) async fn execute_tools_parallel(
@@ -123,15 +170,11 @@ impl<'a> ToolExecutionController<'a> {
             destructive_scope,
             lifecycle,
         } = request;
-        let conversation = self.conversation;
+        let execution = &self.context;
         let mut read_only_jobs = Vec::new();
         let mut read_write_calls = Vec::new();
         let mut denied_results = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
-        let active_goal = conversation
-            .goal_manager
-            .as_ref()
-            .and_then(|manager| manager.current());
         lifecycle.pending_batch(tool_calls);
 
         for (i, tc) in tool_calls.iter().enumerate() {
@@ -169,8 +212,8 @@ impl<'a> ToolExecutionController<'a> {
                     });
                 }
                 persist_tool_outcome_learning_event(
-                    conversation.session_store.as_ref(),
-                    &conversation.session_id,
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
                     tc,
                     &result,
                 );
@@ -202,8 +245,8 @@ impl<'a> ToolExecutionController<'a> {
                     });
                 }
                 persist_tool_outcome_learning_event(
-                    conversation.session_store.as_ref(),
-                    &conversation.session_id,
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
                     tc,
                     &result,
                 );
@@ -211,12 +254,12 @@ impl<'a> ToolExecutionController<'a> {
                 denied_results.push((tc.clone(), result));
                 continue;
             }
-            record_goal_drift_if_needed(&trace, active_goal.as_ref(), tc);
-            if !tool_allowed_by_context(&conversation.allowed_tools, &tc.name) {
+            record_goal_drift_if_needed(&trace, execution.active_goal.as_ref(), tc);
+            if !tool_allowed_by_context(&execution.allowed_tools, &tc.name) {
                 let result = tool_not_allowed_result(tc);
                 persist_tool_outcome_learning_event(
-                    conversation.session_store.as_ref(),
-                    &conversation.session_id,
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
                     tc,
                     &result,
                 );
@@ -261,8 +304,8 @@ impl<'a> ToolExecutionController<'a> {
                         });
                     }
                     persist_tool_outcome_learning_event(
-                        conversation.session_store.as_ref(),
-                        &conversation.session_id,
+                        execution.session_store.as_ref(),
+                        &execution.session_id,
                         tc,
                         &result,
                     );
@@ -300,8 +343,8 @@ impl<'a> ToolExecutionController<'a> {
                     });
                 }
                 persist_tool_outcome_learning_event(
-                    conversation.session_store.as_ref(),
-                    &conversation.session_id,
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
                     tc,
                     &result,
                 );
@@ -334,8 +377,8 @@ impl<'a> ToolExecutionController<'a> {
                         });
                     }
                     persist_tool_outcome_learning_event(
-                        conversation.session_store.as_ref(),
-                        &conversation.session_id,
+                        execution.session_store.as_ref(),
+                        &execution.session_id,
                         tc,
                         &result,
                     );
@@ -349,8 +392,8 @@ impl<'a> ToolExecutionController<'a> {
                 let mut pre_result = pre_result.clone();
                 attach_tool_execution_metadata(tc, &mut pre_result);
                 persist_tool_outcome_learning_event(
-                    conversation.session_store.as_ref(),
-                    &conversation.session_id,
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
                     tc,
                     &pre_result,
                 );
@@ -400,12 +443,12 @@ impl<'a> ToolExecutionController<'a> {
                         })
                         .await;
                 }
-                let registry = conversation.tool_registry.clone();
-                let context = conversation.create_tool_context_with_optional_trace(&trace);
+                let registry = execution.tool_registry.clone();
+                let context = execution.tool_context(&trace);
                 let tc_clone = tc.clone();
                 let tool_name = tc.name.clone();
-                let cost_tracker = conversation.cost_tracker.clone();
-                let hook_manager = conversation.hook_manager.clone();
+                let cost_tracker = execution.cost_tracker.clone();
+                let hook_manager = execution.hook_manager.clone();
                 let trace = trace.clone();
                 read_only_jobs.push(async move {
                     let started_at = std::time::Instant::now();
@@ -491,8 +534,8 @@ impl<'a> ToolExecutionController<'a> {
         while let Some((tc, result)) = readonly_stream.next().await {
             lifecycle.completed(&tc, &result);
             persist_tool_outcome_learning_event(
-                conversation.session_store.as_ref(),
-                &conversation.session_id,
+                execution.session_store.as_ref(),
+                &execution.session_id,
                 &tc,
                 &result,
             );
@@ -511,11 +554,11 @@ impl<'a> ToolExecutionController<'a> {
         for tc in read_write_calls {
             let tool_id = tc.id.clone();
             let tool_name = tc.name.clone();
-            if !tool_allowed_by_context(&conversation.allowed_tools, &tool_name) {
+            if !tool_allowed_by_context(&execution.allowed_tools, &tool_name) {
                 let result = tool_not_allowed_result(&tc);
                 persist_tool_outcome_learning_event(
-                    conversation.session_store.as_ref(),
-                    &conversation.session_id,
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
                     &tc,
                     &result,
                 );
@@ -542,18 +585,18 @@ impl<'a> ToolExecutionController<'a> {
                 });
             }
 
-            let (result, hook_context) = if let Some(tool) =
-                conversation.tool_registry.get(&tool_name)
+            let (result, hook_context) = if let Some(tool) = execution.tool_registry.get(&tool_name)
             {
-                let mut context = conversation.create_tool_context_with_optional_trace(&trace);
-                let drift_check = active_goal
+                let mut context = execution.tool_context(&trace);
+                let drift_check = execution
+                    .active_goal
                     .as_ref()
                     .map(|goal| {
                         crate::engine::goal_drift::GoalDriftDetector::new().check(goal, &tc)
                     })
                     .unwrap_or_else(crate::engine::goal_drift::DriftCheck::ok);
                 let drift_requires_approval = drift_check.requires_approval();
-                let pre_decision = if let Some(ref hooks) = conversation.hook_manager {
+                let pre_decision = if let Some(ref hooks) = execution.hook_manager {
                     let hook_start = hooks.current_record_sequence();
                     let decision = hooks.run_pre_tool(&tc, &context).await;
                     let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
@@ -585,7 +628,7 @@ impl<'a> ToolExecutionController<'a> {
                     )
                 } else if requires_approval {
                     let mut approved = false;
-                    if let (Some(ref channel), Some(tx)) = (&conversation.approval_channel, tx) {
+                    if let (Some(ref channel), Some(tx)) = (&execution.approval_channel, tx) {
                         let base_prompt = if drift_requires_approval {
                             format!(
                                 "Tool '{}' may drift from the current goal. Reason: {} Suggested action: {} Allow?",
@@ -693,14 +736,13 @@ impl<'a> ToolExecutionController<'a> {
                 attach_tool_execution_metadata(&tc, &mut result);
 
                 // ── Security Audit & Denial Tracking ──────────────────────
-                let params_summary = if let Some(tool) = conversation.tool_registry.get(&tool_name)
-                {
+                let params_summary = if let Some(tool) = execution.tool_registry.get(&tool_name) {
                     tool.to_classifier_input(&tc.arguments)
                 } else {
                     tool_name.clone()
                 };
 
-                if let Some(ref log) = conversation.audit_log {
+                if let Some(ref log) = execution.audit_log {
                     let decision = if result.success {
                         "EXECUTED"
                     } else if result
@@ -717,7 +759,7 @@ impl<'a> ToolExecutionController<'a> {
                         .await;
                 }
 
-                if let Some(ref tracker) = conversation.denial_tracker {
+                if let Some(ref tracker) = execution.denial_tracker {
                     if result.success {
                         tracker.record_success().await;
                     } else if result
@@ -743,7 +785,7 @@ impl<'a> ToolExecutionController<'a> {
                 // ─────────────────────────────────────────────────────────
 
                 {
-                    let mut tracker = conversation.cost_tracker.lock().await;
+                    let mut tracker = execution.cost_tracker.lock().await;
                     tracker.record_tool_execution(
                         &tool_name,
                         result.success,
@@ -759,7 +801,7 @@ impl<'a> ToolExecutionController<'a> {
                 (result, None)
             };
 
-            if let (Some(hooks), Some(context)) = (&conversation.hook_manager, &hook_context) {
+            if let (Some(hooks), Some(context)) = (&execution.hook_manager, &hook_context) {
                 let hook_start = hooks.current_record_sequence();
                 hooks.run_post_tool(&tc, &result, context).await;
                 let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
@@ -798,8 +840,8 @@ impl<'a> ToolExecutionController<'a> {
                 lifecycle.completed(&tc, &result);
             }
             persist_tool_outcome_learning_event(
-                conversation.session_store.as_ref(),
-                &conversation.session_id,
+                execution.session_store.as_ref(),
+                &execution.session_id,
                 &tc,
                 &result,
             );
