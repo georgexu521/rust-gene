@@ -68,6 +68,11 @@ pub(super) fn build_tool_execution_summary(
                         .unwrap_or(serde_json::Value::Null),
                 );
                 object.insert(
+                    "command_category".to_string(),
+                    serde_json::to_value(classification.category)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                object.insert(
                     "validation_family".to_string(),
                     serde_json::to_value(classification.validation_family)
                         .unwrap_or(serde_json::Value::Null),
@@ -247,14 +252,29 @@ pub(super) fn tool_execution_start_progress(
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NodeScript) => {
                 "Running Node validation"
             }
-            None => match classification.command_kind {
-                crate::tools::bash_tool::command_classifier::CommandKind::Inspection => {
+            None => match classification.category {
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::List => {
+                    "Listing with shell"
+                }
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::Search => {
+                    "Searching with shell"
+                }
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::Read => {
                     "Inspecting with shell"
                 }
-                crate::tools::bash_tool::command_classifier::CommandKind::Mutation => {
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::PackageInstall => {
+                    "Installing package"
+                }
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::DevServer => {
+                    "Starting dev server"
+                }
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::GitMutation => {
+                    "Running git mutation"
+                }
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::FileMutation => {
                     "Running shell mutation"
                 }
-                crate::tools::bash_tool::command_classifier::CommandKind::Dangerous => {
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::Destructive => {
                     "Reviewing dangerous shell command"
                 }
                 _ => "Executing shell command",
@@ -398,5 +418,6 @@ mod tests {
         assert_eq!(record.provider_content(), "Result: OK\ncompiled");
         assert_eq!(record.machine_metadata["tool"], "bash");
         assert_eq!(record.machine_metadata["command_kind"], "validation");
+        assert_eq!(record.machine_metadata["command_category"], "test_run");
     }
 }

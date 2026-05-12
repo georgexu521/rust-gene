@@ -12,6 +12,22 @@ pub enum CommandKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ShellCommandCategory {
+    Read,
+    List,
+    Search,
+    Validation,
+    PackageInstall,
+    DevServer,
+    TestRun,
+    FileMutation,
+    GitMutation,
+    Destructive,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ValidationFamily {
     BashSyntax,
     CargoTest,
@@ -33,7 +49,9 @@ pub enum ValidationFamily {
 pub struct CommandClassification {
     pub normalized_command: String,
     pub command_kind: CommandKind,
+    pub category: ShellCommandCategory,
     pub validation_family: Option<ValidationFamily>,
+    pub path_patterns: Vec<String>,
     pub safe_for_closeout: bool,
     pub shell_wrapped: bool,
     pub env_prefixed: bool,
@@ -49,41 +67,48 @@ pub fn classify_command(command: &str) -> CommandClassification {
     let normalized = normalize_command_for_match(command);
     let shell_wrapped = normalized.trim() != command.trim();
     let (base_command, env_prefixed) = strip_env_prefix(&normalized);
+    let base_command = base_command.to_string();
 
     if crate::security::is_dangerous_command(command) {
         return CommandClassification {
             normalized_command: normalized,
             command_kind: CommandKind::Dangerous,
+            category: ShellCommandCategory::Destructive,
             validation_family: None,
+            path_patterns: extract_path_patterns(&base_command),
             safe_for_closeout: false,
             shell_wrapped,
             env_prefixed,
         };
     }
 
-    if let Some(family) = validation_family(base_command) {
+    if let Some(family) = validation_family(&base_command) {
+        let category = if validation_family_is_test_run(family) {
+            ShellCommandCategory::TestRun
+        } else {
+            ShellCommandCategory::Validation
+        };
         return CommandClassification {
             normalized_command: normalized,
             command_kind: CommandKind::Validation,
+            category,
             validation_family: Some(family),
+            path_patterns: extract_path_patterns(&base_command),
             safe_for_closeout: true,
             shell_wrapped,
             env_prefixed,
         };
     }
 
-    let command_kind = if is_inspection_command(base_command) {
-        CommandKind::Inspection
-    } else if is_mutation_command(base_command) {
-        CommandKind::Mutation
-    } else {
-        CommandKind::Unknown
-    };
+    let category = shell_command_category(&base_command);
+    let command_kind = command_kind_for_category(category);
 
     CommandClassification {
         normalized_command: normalized,
         command_kind,
+        category,
         validation_family: None,
+        path_patterns: extract_path_patterns(&base_command),
         safe_for_closeout: false,
         shell_wrapped,
         env_prefixed,
@@ -207,6 +232,33 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
     }
 }
 
+fn validation_family_is_test_run(family: ValidationFamily) -> bool {
+    matches!(
+        family,
+        ValidationFamily::CargoTest
+            | ValidationFamily::NpmTest
+            | ValidationFamily::PnpmTest
+            | ValidationFamily::YarnTest
+            | ValidationFamily::Pytest
+            | ValidationFamily::PythonUnittest
+            | ValidationFamily::GoTest
+    )
+}
+
+fn command_kind_for_category(category: ShellCommandCategory) -> CommandKind {
+    match category {
+        ShellCommandCategory::Read | ShellCommandCategory::List | ShellCommandCategory::Search => {
+            CommandKind::Inspection
+        }
+        ShellCommandCategory::Validation | ShellCommandCategory::TestRun => CommandKind::Validation,
+        ShellCommandCategory::PackageInstall
+        | ShellCommandCategory::FileMutation
+        | ShellCommandCategory::GitMutation => CommandKind::Mutation,
+        ShellCommandCategory::Destructive => CommandKind::Dangerous,
+        ShellCommandCategory::DevServer | ShellCommandCategory::Unknown => CommandKind::Unknown,
+    }
+}
+
 fn is_project_validation_script(command: &str) -> bool {
     let command = command.trim();
     if command.is_empty()
@@ -237,7 +289,10 @@ fn is_project_validation_script(command: &str) -> bool {
 
 fn is_safe_rg_assertion(command: &str) -> bool {
     let command = command.trim();
-    let command = command.strip_prefix("! ").unwrap_or(command).trim();
+    let Some(command) = command.strip_prefix("! ") else {
+        return false;
+    };
+    let command = command.trim();
     if !command.starts_with("rg ") {
         return false;
     }
@@ -253,25 +308,78 @@ fn is_safe_rg_assertion(command: &str) -> bool {
         && !command.contains('<')
 }
 
-fn is_inspection_command(command: &str) -> bool {
+fn shell_command_category(command: &str) -> ShellCommandCategory {
     let lower = command.to_ascii_lowercase();
-    matches!(
-        lower.split_whitespace().next(),
-        Some("ls" | "cat" | "head" | "tail" | "sed" | "awk" | "rg" | "grep" | "find" | "pwd")
-    ) || lower.starts_with("git status")
+    let first = lower.split_whitespace().next();
+    if matches!(first, Some("ls" | "find")) {
+        return ShellCommandCategory::List;
+    }
+    if matches!(first, Some("rg" | "grep")) {
+        return ShellCommandCategory::Search;
+    }
+    if matches!(first, Some("cat" | "head" | "tail" | "sed" | "awk" | "pwd"))
+        || lower.starts_with("git status")
         || lower.starts_with("git diff")
         || lower.starts_with("git log")
         || lower.starts_with("git show")
+    {
+        return ShellCommandCategory::Read;
+    }
+    if is_package_install_command(&lower) {
+        return ShellCommandCategory::PackageInstall;
+    }
+    if is_dev_server_command(&lower) {
+        return ShellCommandCategory::DevServer;
+    }
+    if is_git_mutation_command(&lower) {
+        return ShellCommandCategory::GitMutation;
+    }
+    if is_legacy_mutation_command(&lower) {
+        return ShellCommandCategory::FileMutation;
+    }
+    ShellCommandCategory::Unknown
 }
 
-fn is_mutation_command(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    matches!(
-        lower.split_whitespace().next(),
-        Some("touch" | "mkdir" | "cp" | "mv" | "rm" | "chmod" | "chown" | "ln")
-    ) || lower.contains(" > ")
-        || lower.contains(" >> ")
-        || lower.starts_with("git add")
+fn is_package_install_command(lower: &str) -> bool {
+    lower.starts_with("pip install ")
+        || lower.starts_with("pip3 install ")
+        || lower.starts_with("python -m pip install ")
+        || lower.starts_with("python3 -m pip install ")
+        || lower.starts_with("uv pip install ")
+        || lower == "npm install"
+        || lower.starts_with("npm install ")
+        || lower.starts_with("npm i ")
+        || lower.starts_with("npm add ")
+        || lower.starts_with("pnpm install")
+        || lower.starts_with("pnpm add ")
+        || lower.starts_with("yarn install")
+        || lower.starts_with("yarn add ")
+        || lower.starts_with("cargo add ")
+        || lower.starts_with("cargo install ")
+        || lower.starts_with("brew install ")
+}
+
+fn is_dev_server_command(lower: &str) -> bool {
+    lower == "npm start"
+        || lower.starts_with("npm start ")
+        || lower == "npm run dev"
+        || lower.starts_with("npm run dev ")
+        || lower == "pnpm dev"
+        || lower.starts_with("pnpm dev ")
+        || lower == "pnpm start"
+        || lower.starts_with("pnpm start ")
+        || lower == "yarn dev"
+        || lower.starts_with("yarn dev ")
+        || lower == "yarn start"
+        || lower.starts_with("yarn start ")
+        || lower == "vite"
+        || lower.starts_with("vite ")
+        || lower == "next dev"
+        || lower.starts_with("next dev ")
+}
+
+fn is_git_mutation_command(lower: &str) -> bool {
+    lower.starts_with("git add")
         || lower.starts_with("git commit")
         || lower.starts_with("git checkout")
         || lower.starts_with("git switch")
@@ -280,8 +388,77 @@ fn is_mutation_command(command: &str) -> bool {
         || lower.starts_with("git merge")
         || lower.starts_with("git rebase")
         || lower.starts_with("git apply")
+        || lower.starts_with("git push")
+        || lower.starts_with("git pull")
+}
+
+fn is_legacy_mutation_command(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    matches!(
+        lower.split_whitespace().next(),
+        Some("touch" | "mkdir" | "cp" | "mv" | "rm" | "chmod" | "chown" | "ln")
+    ) || lower.contains(" > ")
+        || lower.contains(" >> ")
         || lower.starts_with("patch ")
         || lower.contains("sed -i")
+}
+
+fn extract_path_patterns(command: &str) -> Vec<String> {
+    let mut paths = command
+        .split_whitespace()
+        .filter_map(|token| {
+            let token = token.trim_matches(|ch| matches!(ch, '\'' | '"' | ',' | ';'));
+            if likely_path_token(token) {
+                Some(token.to_string())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn likely_path_token(token: &str) -> bool {
+    if token.is_empty()
+        || token.starts_with('-')
+        || token.contains('=')
+        || matches!(
+            token,
+            "bash"
+                | "sh"
+                | "zsh"
+                | "env"
+                | "git"
+                | "cargo"
+                | "npm"
+                | "pnpm"
+                | "yarn"
+                | "python"
+                | "python3"
+                | "pip"
+                | "pip3"
+        )
+    {
+        return false;
+    }
+    token == "."
+        || matches!(
+            token,
+            "src" | "tests" | "test" | "docs" | "scripts" | "fixtures"
+        )
+        || token.starts_with("./")
+        || token.starts_with("../")
+        || token.starts_with('/')
+        || token.starts_with("~/")
+        || token.contains('/')
+        || [
+            ".rs", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".toml", ".yaml", ".yml", ".md",
+            ".txt", ".sh", ".html", ".css",
+        ]
+        .iter()
+        .any(|suffix| token.ends_with(suffix))
 }
 
 #[cfg(test)]
@@ -294,6 +471,7 @@ mod tests {
             "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test -q -- --test-threads=1",
         );
         assert_eq!(class.command_kind, CommandKind::Validation);
+        assert_eq!(class.category, ShellCommandCategory::TestRun);
         assert_eq!(class.validation_family, Some(ValidationFamily::CargoTest));
         assert!(class.safe_for_closeout);
         assert!(class.env_prefixed);
@@ -303,6 +481,7 @@ mod tests {
     fn classifies_shell_wrapped_validation() {
         let class = classify_command("bash -lc 'env FOO=1 cargo check --quiet'");
         assert_eq!(class.command_kind, CommandKind::Validation);
+        assert_eq!(class.category, ShellCommandCategory::Validation);
         assert_eq!(class.validation_family, Some(ValidationFamily::CargoCheck));
         assert!(class.safe_for_closeout);
         assert!(class.shell_wrapped);
@@ -353,14 +532,43 @@ mod tests {
     fn classifies_rg_assertion_as_validation() {
         let class = classify_command("! rg 'bad_pattern' src/lib.rs");
         assert_eq!(class.command_kind, CommandKind::Validation);
+        assert_eq!(class.category, ShellCommandCategory::Validation);
         assert_eq!(class.validation_family, Some(ValidationFamily::RgAssertion));
+        assert_eq!(class.path_patterns, vec!["src/lib.rs"]);
         assert!(class.safe_for_closeout);
+    }
+
+    #[test]
+    fn classifies_shell_command_categories_and_paths() {
+        let list = classify_command("ls -la /tmp/example");
+        assert_eq!(list.command_kind, CommandKind::Inspection);
+        assert_eq!(list.category, ShellCommandCategory::List);
+        assert_eq!(list.path_patterns, vec!["/tmp/example"]);
+
+        let search = classify_command("rg TODO src");
+        assert_eq!(search.category, ShellCommandCategory::Search);
+        assert_eq!(search.path_patterns, vec!["src"]);
+
+        let package = classify_command("pip3 install pygame");
+        assert_eq!(package.command_kind, CommandKind::Mutation);
+        assert_eq!(package.category, ShellCommandCategory::PackageInstall);
+
+        let dev_server = classify_command("npm run dev");
+        assert_eq!(dev_server.command_kind, CommandKind::Unknown);
+        assert_eq!(dev_server.category, ShellCommandCategory::DevServer);
+
+        let git = classify_command("git add src/main.rs");
+        assert_eq!(git.command_kind, CommandKind::Mutation);
+        assert_eq!(git.category, ShellCommandCategory::GitMutation);
+        assert_eq!(git.path_patterns, vec!["src/main.rs"]);
     }
 
     #[test]
     fn dangerous_commands_are_not_safe_for_closeout() {
         let class = classify_command("rm -rf /");
         assert_eq!(class.command_kind, CommandKind::Dangerous);
+        assert_eq!(class.category, ShellCommandCategory::Destructive);
+        assert_eq!(class.path_patterns, vec!["/"]);
         assert!(!class.safe_for_closeout);
     }
 }

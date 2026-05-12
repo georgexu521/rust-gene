@@ -35,6 +35,7 @@ pub struct CommandEvidence {
     pub command: String,
     pub success: bool,
     pub command_kind: Option<String>,
+    pub command_category: Option<String>,
     pub validation_family: Option<String>,
     pub safe_for_closeout: bool,
     pub summary: String,
@@ -345,6 +346,9 @@ impl EvidenceLedger {
         let command_kind = serde_json::to_value(classification.command_kind)
             .ok()
             .and_then(|value| value.as_str().map(str::to_string));
+        let command_category = serde_json::to_value(classification.category)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string));
         let validation_family = serde_json::to_value(classification.validation_family)
             .ok()
             .and_then(|value| value.as_str().map(str::to_string));
@@ -354,6 +358,7 @@ impl EvidenceLedger {
             command: command.to_string(),
             success: result.success,
             command_kind,
+            command_category,
             validation_family,
             safe_for_closeout,
             summary: summary.clone(),

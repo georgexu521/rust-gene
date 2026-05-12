@@ -3354,6 +3354,7 @@ mod tests {
             .expect("tool summary metadata");
         assert_eq!(summary["tool"], "bash");
         assert_eq!(summary["command_kind"], "validation");
+        assert_eq!(summary["command_category"], "test_run");
         assert_eq!(summary["validation_family"], "cargo_test");
         assert_eq!(summary["safe_for_closeout"], true);
         let recovery = result
@@ -3429,7 +3430,7 @@ mod tests {
     fn test_tool_execution_start_progress_handles_generic_shell_and_tools() {
         assert_eq!(
             tool_execution_start_progress("bash", &serde_json::json!({"command": "ls src"})),
-            "Inspecting with shell: ls src"
+            "Listing with shell: ls src"
         );
         assert_eq!(
             tool_execution_start_progress(
@@ -5092,8 +5093,7 @@ mod tests {
                 "python3 -m unittest fixtures/live_backend/todo_api/test_todo_api.py".to_string(),
                 "python3 -c \"p='src/lib.rs'; assert True\"".to_string(),
                 "! rg 'bad_pattern' src/lib.rs".to_string(),
-                "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs".to_string(),
-                "rg 'good_pattern' src/lib.rs".to_string()
+                "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs".to_string()
             ]
         );
     }

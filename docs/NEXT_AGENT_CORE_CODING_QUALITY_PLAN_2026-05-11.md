@@ -284,6 +284,18 @@
   `bash_exposure`, `doctor_route_summary`, and `intent_router` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1245 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.2 started. Added a finer
+  `ShellCommandCategory` beside the legacy `CommandKind`, with categories for
+  read/list/search, validation, test runs, package installs, dev servers, file
+  mutation, git mutation, destructive commands, and unknown commands. Bash tool
+  metadata, `EvidenceLedger`, tool execution summaries, and shell progress
+  labels now use the shared classifier. Plain `rg ...` is no longer treated as
+  required validation; only explicit `! rg ...` assertions are.
+- Validation after the shell-command category slice: `cargo fmt --check`,
+  `git diff --check`, targeted `command_classifier`, `bash_tool`,
+  `evidence_ledger`, `tool_result`, `progress`, and live-eval required-command
+  tests, `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and
+  full `cargo test -q` all passed (`1246 passed; 0 failed`).
 
 ## 当前判断
 

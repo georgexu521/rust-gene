@@ -829,6 +829,7 @@ mod tests {
             .and_then(|d| d.get("command_classification"))
             .expect("classification metadata should be present");
         assert_eq!(classification["command_kind"], "unknown");
+        assert_eq!(classification["category"], "unknown");
         assert_eq!(classification["env_prefixed"], true);
         assert_eq!(classification["safe_for_closeout"], false);
     }
