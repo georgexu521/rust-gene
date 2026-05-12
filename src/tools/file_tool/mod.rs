@@ -9,7 +9,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 mod text_codec;
@@ -252,8 +252,24 @@ impl FileStateTracker {
 static FILE_STATE_TRACKER: Lazy<Mutex<FileStateTracker>> =
     Lazy::new(|| Mutex::new(FileStateTracker::default()));
 
+static FILE_MUTATION_LOCKS: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 fn tracker_key(session_id: &str, file_path: &str) -> String {
     format!("{}:{}", session_id, file_path)
+}
+
+async fn acquire_file_mutation_lock(state_key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    let lock = {
+        let mut locks = FILE_MUTATION_LOCKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        locks
+            .entry(state_key.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    lock.lock_owned().await
 }
 
 /// 标记文件已被读取（用于 must-read-before-edit 检查）
@@ -818,6 +834,7 @@ impl Tool for FileWriteTool {
         };
         info!("Writing file: {:?}", path);
         let identity = file_path_identity(path_str, &path, &context.working_dir);
+        let _file_guard = acquire_file_mutation_lock(&identity.state_key).await;
 
         let existed_before = path.exists();
         let existing_snapshot = if existed_before {
@@ -1300,6 +1317,7 @@ impl Tool for FileEditTool {
         info!("Editing file: {:?}", path);
         let identity = file_path_identity(path_str, &path, &context.working_dir);
         let state_key = identity.state_key.clone();
+        let _file_guard = acquire_file_mutation_lock(&state_key).await;
 
         // 读取文件内容
         if let Err(msg) = check_file_size_limit(&path, "edit") {
@@ -1411,6 +1429,22 @@ impl Tool for FileEditTool {
                     return ToolResult::error(format!(
                         "Refusing multi-occurrence file_edit on code file '{}' ({} replacement(s)). Use a unique old_string, line_start/line_end, or set PRIORITY_AGENT_ALLOW_BULK_CODE_EDIT=1 for an intentional bulk code edit.",
                         path_str, replacements
+                    ));
+                }
+                let before_write_snapshot = match read_text_file(&path, "verify before edit").await
+                {
+                    Ok(snapshot) => snapshot,
+                    Err(e) => return ToolResult::error(e),
+                };
+                let before_write_mtime = std::fs::metadata(&path)
+                    .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                if before_write_mtime != current_mtime
+                    || before_write_snapshot.content.as_str() != snapshot.content.as_str()
+                {
+                    return ToolResult::error(format!(
+                        "Refusing file_edit for '{}': file changed while this edit was being prepared. Re-read the file and retry.",
+                        path_str
                     ));
                 }
                 match write_text_file(
@@ -2335,6 +2369,48 @@ mod tests {
         assert!(bytes.starts_with(&[0xff, 0xfe]));
         let decoded = decode_text_file(Path::new(path), "test", bytes).unwrap();
         assert_eq!(decoded.content, "hello\n世界\n");
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn file_edit_serializes_concurrent_edits_on_same_file() {
+        let path = "/tmp/test_priority_agent_edit_lock.txt";
+        tokio::fs::write(path, "start\n").await.unwrap();
+
+        let left = FileEditTool;
+        let right = FileEditTool;
+        let left_context = ToolContext::new(".", "test-session-edit-lock-left");
+        let right_context = ToolContext::new(".", "test-session-edit-lock-right");
+        let left_params = json!({
+            "path": path,
+            "old_string": "start",
+            "new_string": "left"
+        });
+        let right_params = json!({
+            "path": path,
+            "old_string": "start",
+            "new_string": "right"
+        });
+
+        let (left_result, right_result) = tokio::join!(
+            left.execute(left_params, left_context),
+            right.execute(right_params, right_context)
+        );
+
+        let success_count = [left_result.success, right_result.success]
+            .into_iter()
+            .filter(|success| *success)
+            .count();
+        assert_eq!(
+            success_count, 1,
+            "exactly one edit should win the serialized old_string replacement"
+        );
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert!(
+            content == "left\n" || content == "right\n",
+            "unexpected final content: {content:?}"
+        );
 
         let _ = tokio::fs::remove_file(path).await;
     }

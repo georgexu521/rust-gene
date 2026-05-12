@@ -1,6 +1,7 @@
 use serde_json::json;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TextFileEncoding {
@@ -210,10 +211,38 @@ pub(super) async fn write_text_file(
             max_size_bytes
         ));
     }
-    tokio::fs::write(path, bytes)
+    write_bytes_atomically(path, bytes)
         .await
         .map_err(|e| format!("Failed to write file: {}", e))?;
     Ok(bytes_written)
+}
+
+async fn write_bytes_atomically(path: &Path, bytes: Vec<u8>) -> std::io::Result<()> {
+    let tmp_path = temporary_sibling_path(path);
+    tokio::fs::write(&tmp_path, bytes).await?;
+    if let Ok(metadata) = tokio::fs::metadata(path).await {
+        let _ = tokio::fs::set_permissions(&tmp_path, metadata.permissions()).await;
+    }
+    match tokio::fs::rename(&tmp_path, path).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            Err(error)
+        }
+    }
+}
+
+fn temporary_sibling_path(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "file".into());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(".{}.{}.{}.tmp", name, std::process::id(), nanos))
 }
 
 pub(super) fn text_format_json(snapshot: &TextFileSnapshot) -> serde_json::Value {

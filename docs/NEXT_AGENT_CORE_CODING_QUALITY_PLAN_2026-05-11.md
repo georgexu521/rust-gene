@@ -425,6 +425,17 @@
   `cargo clippy --all-features -- -D warnings`,
   `cargo check --features experimental-api-server -q`, and full `cargo test -q`
   all passed (`1268 passed; 0 failed`).
+- 2026-05-12: Phase 3 Batch 3.3 started. File mutations now use a per-canonical
+  path async lock shared by `file_edit` and `file_write`, so same-file edits
+  serialize instead of racing through separate read/write windows. `file_edit`
+  keeps the stale-read check and write inside that critical section, verifies
+  the file again just before write, and text writes now go through a temp-file
+  plus rename path so failures do not leave partial file contents.
+- Validation after the file-mutation lock slice: `cargo fmt --check`, `git diff
+  --check`, targeted `file_tool` and `checkpoint` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`,
+  `cargo check --features experimental-api-server -q`, and full `cargo test -q`
+  all passed (`1269 passed; 0 failed`).
 
 ## 当前判断
 
@@ -432,13 +443,13 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1268 passed; 0 failed`。
+- 最近全量本地测试基线是 `1269 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 
 - 主循环仍然过重，`src/engine/conversation_loop/mod.rs` 还有 5600+ 行。
 - shell 仍是普通工具，不是完整终端运行时。
-- 文件编辑工具已经有 stale-read 检测、路径身份修复、BOM/编码/换行保真，但还缺成熟产品里的编辑锁、diff、LSP、历史恢复等细节。
+- 文件编辑工具已经有 stale-read 检测、路径身份修复、BOM/编码/换行保真、per-file mutation lock 和 atomic write，但还缺成熟产品里的 diff、LSP、历史恢复等细节。
 
 ## 参考结论
 
