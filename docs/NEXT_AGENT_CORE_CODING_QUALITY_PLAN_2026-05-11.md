@@ -151,6 +151,18 @@
   `route_scoped_tools`, `runtime_diet`, and `patch_synthesis` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1209 passed; 0 failed`).
+- 2026-05-12: Phase 1 Batch 1.4 continued. Moved large tool-output
+  preparation behind `ToolResultNormalizer::normalize_after_execution`, so
+  `run_inner` no longer calls `truncate_tool_result` directly before appending
+  results. Large output truncation now also records structured
+  `output_truncation` metadata with original size, preview size, threshold, and
+  stored artifact path.
+- Validation after moving truncation behind the normalizer: `cargo fmt --check`,
+  `git diff --check`, targeted `tool_result`, `tool_execution`,
+  `evidence_ledger`, `closeout`, `route_scoped_tools`, `runtime_diet`, and
+  `patch_synthesis` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1210 passed; 0 failed`).
 
 ## 当前判断
 
@@ -158,7 +170,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1209 passed; 0 failed`。
+- 最近全量本地测试基线是 `1210 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

@@ -192,6 +192,36 @@ pub(crate) async fn truncate_tool_result(
                 last,
                 relevant_section
             );
+            merge_tool_result_data(
+                result,
+                "output_truncation",
+                serde_json::json!({
+                    "original_bytes": original_len,
+                    "preview_bytes": result.content.len(),
+                    "threshold_bytes": TOOL_RESULT_TRUNCATE_THRESHOLD,
+                    "stored_path": file_path.display().to_string(),
+                }),
+            );
+        }
+    }
+}
+
+fn merge_tool_result_data(result: &mut ToolResult, key: &str, value: serde_json::Value) {
+    match result.data.take() {
+        Some(serde_json::Value::Object(mut object)) => {
+            object.insert(key.to_string(), value);
+            result.data = Some(serde_json::Value::Object(object));
+        }
+        Some(existing) => {
+            result.data = Some(serde_json::json!({
+                "value": existing,
+                key: value,
+            }));
+        }
+        None => {
+            result.data = Some(serde_json::json!({
+                key: value,
+            }));
         }
     }
 }

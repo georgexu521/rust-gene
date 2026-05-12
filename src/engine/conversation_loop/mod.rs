@@ -42,9 +42,9 @@ pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExe
 use text_sanitizer::strip_think_blocks;
 #[cfg(test)]
 use text_sanitizer::VisibleTextSanitizer;
-pub(crate) use tool_execution::{
-    safe_prefix_by_bytes, safe_suffix_by_bytes, truncate_tool_result, READ_ONLY_TOOLS,
-};
+#[cfg(test)]
+use tool_execution::truncate_tool_result;
+pub(crate) use tool_execution::{safe_prefix_by_bytes, safe_suffix_by_bytes, READ_ONLY_TOOLS};
 use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
@@ -1554,14 +1554,14 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 successful_required_validation_commands.clear();
             }
             for (tc, result) in tool_batch.results_mut().iter_mut() {
-                truncate_tool_result(result, &tc.name, &tc.id).await;
                 append_provider_tool_result(
                     tc,
                     result,
                     &mut turn_state.evidence_ledger,
                     &mut tool_results_text,
                     &mut messages,
-                );
+                )
+                .await;
 
                 if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                     if let Some(note) = companion_context::companion_context_note(
@@ -1920,14 +1920,14 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             })
                             .await;
                             for (tc, result) in synthesized_batch.results_mut().iter_mut() {
-                                truncate_tool_result(result, &tc.name, &tc.id).await;
                                 append_provider_tool_result(
                                     tc,
                                     result,
                                     &mut turn_state.evidence_ledger,
                                     &mut tool_results_text,
                                     &mut messages,
-                                );
+                                )
+                                .await;
                                 if result.success && Self::is_code_write_tool_name(&tc.name) {
                                     action_checkpoint_requires_patch_before_validation = false;
                                     if let Some(path) = tc.arguments["path"].as_str() {
@@ -2047,14 +2047,14 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             })
                             .await;
                             for (tc, result) in synthesized_batch.results_mut().iter_mut() {
-                                truncate_tool_result(result, &tc.name, &tc.id).await;
                                 append_provider_tool_result(
                                     tc,
                                     result,
                                     &mut turn_state.evidence_ledger,
                                     &mut tool_results_text,
                                     &mut messages,
-                                );
+                                )
+                                .await;
                                 if result.success {
                                     any_tool_success = true;
                                 }

@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-11
+Last updated: 2026-05-12
 
 ## Summary
 
@@ -44,12 +44,11 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic local test baseline observed during the 2026-05-11
-provider reconnect, harness-split, evidence-label/env-alignment, and review
-hardening work:
+Latest deterministic local test baseline observed during the 2026-05-12
+tool-result normalizer and truncation-metadata work:
 
 ```text
-1209 passed; 0 failed
+1210 passed; 0 failed
 ```
 
 Validated locally with:
@@ -360,7 +359,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-11 with `1209 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-12 with `1210 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry

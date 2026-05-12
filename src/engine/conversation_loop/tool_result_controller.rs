@@ -1,3 +1,4 @@
+use super::tool_execution::truncate_tool_result;
 use super::tool_metadata::{build_tool_execution_summary, provider_tool_result_content};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::services::api::{Message, ToolCall};
@@ -48,16 +49,24 @@ impl ToolResultNormalizer {
             evidence_facts: evidence_facts(tool_call, result),
         }
     }
+
+    pub(super) async fn normalize_after_execution(
+        tool_call: &ToolCall,
+        result: &mut ToolResult,
+    ) -> NormalizedToolResult {
+        truncate_tool_result(result, &tool_call.name, &tool_call.id).await;
+        Self::normalize(tool_call, result)
+    }
 }
 
-pub(super) fn append_provider_tool_result(
+pub(super) async fn append_provider_tool_result(
     tool_call: &ToolCall,
-    result: &ToolResult,
+    result: &mut ToolResult,
     evidence_ledger: &mut EvidenceLedger,
     tool_results_text: &mut String,
     messages: &mut Vec<Message>,
 ) {
-    let normalized = ToolResultNormalizer::normalize(tool_call, result);
+    let normalized = ToolResultNormalizer::normalize_after_execution(tool_call, result).await;
     normalized.record_evidence(evidence_ledger, tool_call, result);
     tool_results_text.push_str(&normalized.ui_content);
     tool_results_text.push('\n');
@@ -124,19 +133,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn appends_provider_tool_result_and_records_evidence() {
+    #[tokio::test]
+    async fn appends_provider_tool_result_and_records_evidence() {
         let mut ledger = EvidenceLedger::new();
         let mut tool_results_text = String::new();
         let mut messages = Vec::new();
+        let mut result = ToolResult::success("ok");
 
         append_provider_tool_result(
             &tool_call("bash"),
-            &ToolResult::success("ok"),
+            &mut result,
             &mut ledger,
             &mut tool_results_text,
             &mut messages,
-        );
+        )
+        .await;
 
         assert_eq!(tool_results_text, "Result: OK\nok\n");
         assert_eq!(ledger.snapshot().command_facts, 1);
@@ -149,6 +160,33 @@ mod tests {
                 content
             } if tool_call_id == "call_1" && content == "Result: OK\nok"
         ));
+    }
+
+    #[tokio::test]
+    async fn normalize_after_execution_truncates_large_output_with_metadata() {
+        let mut result = ToolResult::success("A".repeat(40_000));
+        let normalized = ToolResultNormalizer::normalize_after_execution(
+            &ToolCall {
+                id: "call_large".to_string(),
+                name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "A", "path": "src"}),
+            },
+            &mut result,
+        )
+        .await;
+
+        assert!(normalized.model_content.contains("Output truncated"));
+        assert_eq!(
+            normalized.structured_metadata["tool_result_data"]["output_truncation"]
+                ["original_bytes"],
+            40_000
+        );
+        assert!(
+            normalized.structured_metadata["tool_result_data"]["output_truncation"]["stored_path"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("tool-results")
+        );
     }
 
     #[test]
