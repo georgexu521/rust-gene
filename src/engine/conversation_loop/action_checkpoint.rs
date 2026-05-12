@@ -1,6 +1,27 @@
 use super::ConversationLoop;
 use std::collections::HashSet;
 
+pub(super) struct FocusedRepairActionRequest<'a> {
+    pub(super) action_checkpoint_active: bool,
+    pub(super) any_tool_success: bool,
+    pub(super) batch_has_unsuccessful_tools: bool,
+    pub(super) failed_tool_evidence_present: bool,
+    pub(super) force_patch_synthesis_after_no_change: bool,
+    pub(super) force_patch_synthesis_reason: Option<&'static str>,
+    pub(super) action_checkpoint_no_change_rounds: usize,
+    pub(super) action_checkpoint_lookup_count: usize,
+    pub(super) exposed_tool_names: &'a HashSet<String>,
+}
+
+pub(super) struct FocusedRepairActionProposal {
+    pub(super) reminder: String,
+    pub(super) next_no_change_rounds: usize,
+    pub(super) enter_patch_synthesis: bool,
+    pub(super) trace_error: String,
+    pub(super) fallback_owner: &'static str,
+    pub(super) fallback_reason: String,
+}
+
 impl ConversationLoop {
     pub(super) const ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET: usize = 2;
 
@@ -79,6 +100,54 @@ impl ConversationLoop {
             exposed.join(", "),
             Self::targeted_lookup_budget_rule(targeted_lookups_used)
         )
+    }
+
+    pub(super) fn focused_repair_action_proposal(
+        request: FocusedRepairActionRequest<'_>,
+    ) -> Option<FocusedRepairActionProposal> {
+        let failed_tool_boundary = !request.any_tool_success
+            && request.batch_has_unsuccessful_tools
+            && request.failed_tool_evidence_present;
+        let should_intervene = request.action_checkpoint_active
+            && (failed_tool_boundary || request.force_patch_synthesis_after_no_change);
+        if !should_intervene {
+            return None;
+        }
+
+        let next_no_change_rounds = request.action_checkpoint_no_change_rounds + 1;
+        let lookup_rule = Self::targeted_lookup_budget_rule(request.action_checkpoint_lookup_count);
+        let mut exposed = request
+            .exposed_tool_names
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        exposed.sort();
+        let reminder = format!(
+            "Focused repair correction: the last tool call did not execute. The current request only permits these tools: {}. Use file_edit/file_write for exact replacements or line_start/line_end replacements from earlier line-numbered output. If a specific symbol or call site is missing, use the focused lookup budget, then patch. {}",
+            exposed.join(", "),
+            lookup_rule
+        );
+        let fallback_reason = if request.force_patch_synthesis_after_no_change {
+            request
+                .force_patch_synthesis_reason
+                .unwrap_or("repeated no-change checkpoint")
+                .to_string()
+        } else {
+            "repeated invalid tools in focused repair".to_string()
+        };
+        let trace_error = format!(
+            "action checkpoint entered patch synthesis: {}",
+            fallback_reason
+        );
+
+        Some(FocusedRepairActionProposal {
+            reminder,
+            next_no_change_rounds,
+            enter_patch_synthesis: next_no_change_rounds >= 2,
+            trace_error,
+            fallback_owner: "action_checkpoint",
+            fallback_reason,
+        })
     }
 
     pub(super) fn bash_allowed_at_action_checkpoint(

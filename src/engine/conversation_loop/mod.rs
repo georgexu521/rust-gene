@@ -33,6 +33,7 @@ mod turn_runtime_state;
 mod validation_runner;
 mod workflow_trace;
 
+use action_checkpoint::FocusedRepairActionRequest;
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use closeout_controller::FinalCloseoutContext;
 use context_budget_controller::ContextBudgetController;
@@ -1847,31 +1848,23 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 }
             }
 
-            if action_checkpoint_active
-                && ((!any_tool_success
-                    && batch_has_unsuccessful_tools
-                    && !failed_tool_evidence.is_empty())
-                    || force_patch_synthesis_after_no_change)
+            if let Some(repair_proposal) =
+                Self::focused_repair_action_proposal(FocusedRepairActionRequest {
+                    action_checkpoint_active,
+                    any_tool_success,
+                    batch_has_unsuccessful_tools,
+                    failed_tool_evidence_present: !failed_tool_evidence.is_empty(),
+                    force_patch_synthesis_after_no_change,
+                    force_patch_synthesis_reason,
+                    action_checkpoint_no_change_rounds,
+                    action_checkpoint_lookup_count,
+                    exposed_tool_names: &exposed_tool_names,
+                })
             {
-                action_checkpoint_no_change_rounds += 1;
-                let lookup_rule = Self::targeted_lookup_budget_rule(action_checkpoint_lookup_count);
-                let reminder = format!(
-                    "Focused repair correction: the last tool call did not execute. The current request only permits these tools: {}. Use file_edit/file_write for exact replacements or line_start/line_end replacements from earlier line-numbered output. If a specific symbol or call site is missing, use the focused lookup budget, then patch. {}",
-                    exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", "),
-                    lookup_rule
-                );
-                if action_checkpoint_no_change_rounds >= 2 {
+                action_checkpoint_no_change_rounds = repair_proposal.next_no_change_rounds;
+                if repair_proposal.enter_patch_synthesis {
                     trace.record(TraceEvent::WorkflowFallback {
-                        error: if force_patch_synthesis_after_no_change {
-                            format!(
-                                "action checkpoint entered patch synthesis: {}",
-                                force_patch_synthesis_reason
-                                    .unwrap_or("repeated no-change checkpoint")
-                            )
-                        } else {
-                            "action checkpoint entered patch synthesis after repeated invalid tools"
-                                .to_string()
-                        },
+                        error: repair_proposal.trace_error.clone(),
                     });
                     if !Self::patch_synthesis_enabled() {
                         let deterministic_calls = if Self::deterministic_patch_synthesis_enabled() {
@@ -1896,7 +1889,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         if !deterministic_calls.is_empty() {
                             trace.record(TraceEvent::WorkflowFallback {
                                 error: format!(
-                                    "deterministic patch synthesis produced {} file_edit action(s)",
+                                    "deterministic patch synthesis fallback owner={} reason={} produced {} file_edit action(s)",
+                                    repair_proposal.fallback_owner,
+                                    repair_proposal.fallback_reason,
                                     deterministic_calls.len()
                                 ),
                             });
@@ -2023,7 +2018,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         Ok(synthesized_calls) => {
                             trace.record(TraceEvent::WorkflowFallback {
                                 error: format!(
-                                    "patch synthesis produced {} file_edit action(s)",
+                                    "patch synthesis owner={} reason={} produced {} file_edit action(s)",
+                                    repair_proposal.fallback_owner,
+                                    repair_proposal.fallback_reason,
                                     synthesized_calls.len()
                                 ),
                             });
@@ -2181,9 +2178,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         }
                     }
                 } else {
-                    messages.push(Message::system(reminder.clone()));
+                    messages.push(Message::system(repair_proposal.reminder.clone()));
                     tool_results_text.push('\n');
-                    tool_results_text.push_str(&reminder);
+                    tool_results_text.push_str(&repair_proposal.reminder);
                     continue;
                 }
             }
@@ -3770,6 +3767,73 @@ Expected 1 occurrence(s) of old_string, but found 1487.
         let exhausted =
             ConversationLoop::action_checkpoint_unexposed_tool_message("file_read", &exposed, 2);
         assert!(exhausted.contains("targeted lookup budget has already been used"));
+    }
+
+    #[test]
+    fn focused_repair_action_proposal_records_budget_and_fallback_reason() {
+        let exposed = HashSet::from([
+            "grep".to_string(),
+            "file_edit".to_string(),
+            "file_read".to_string(),
+        ]);
+
+        let proposal =
+            ConversationLoop::focused_repair_action_proposal(FocusedRepairActionRequest {
+                action_checkpoint_active: true,
+                any_tool_success: false,
+                batch_has_unsuccessful_tools: true,
+                failed_tool_evidence_present: true,
+                force_patch_synthesis_after_no_change: false,
+                force_patch_synthesis_reason: None,
+                action_checkpoint_no_change_rounds: 0,
+                action_checkpoint_lookup_count: 1,
+                exposed_tool_names: &exposed,
+            })
+            .expect("focused repair failure should propose a recovery action");
+
+        assert!(!proposal.enter_patch_synthesis);
+        assert_eq!(proposal.next_no_change_rounds, 1);
+        assert_eq!(proposal.fallback_owner, "action_checkpoint");
+        assert_eq!(
+            proposal.fallback_reason,
+            "repeated invalid tools in focused repair"
+        );
+        assert!(proposal.reminder.contains("file_edit, file_read, grep"));
+        assert!(proposal
+            .reminder
+            .contains("One targeted file_read/grep lookup remains"));
+    }
+
+    #[test]
+    fn focused_repair_action_proposal_enters_patch_synthesis_after_budget() {
+        let exposed = HashSet::from(["file_edit".to_string()]);
+
+        let proposal =
+            ConversationLoop::focused_repair_action_proposal(FocusedRepairActionRequest {
+                action_checkpoint_active: true,
+                any_tool_success: true,
+                batch_has_unsuccessful_tools: false,
+                failed_tool_evidence_present: false,
+                force_patch_synthesis_after_no_change: true,
+                force_patch_synthesis_reason: Some("focused repair lookup budget exhausted"),
+                action_checkpoint_no_change_rounds: 1,
+                action_checkpoint_lookup_count: 2,
+                exposed_tool_names: &exposed,
+            })
+            .expect("forced no-change repair should propose patch synthesis");
+
+        assert!(proposal.enter_patch_synthesis);
+        assert_eq!(proposal.next_no_change_rounds, 2);
+        assert_eq!(
+            proposal.fallback_reason,
+            "focused repair lookup budget exhausted"
+        );
+        assert!(proposal
+            .trace_error
+            .contains("focused repair lookup budget exhausted"));
+        assert!(proposal
+            .reminder
+            .contains("targeted lookup budget has already been used"));
     }
 
     #[test]

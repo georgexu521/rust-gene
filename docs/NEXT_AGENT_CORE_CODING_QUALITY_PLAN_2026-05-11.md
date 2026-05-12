@@ -251,6 +251,18 @@
   `provider_health` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1241 passed; 0 failed`).
+- 2026-05-12: Phase 1 Batch 1.8 started. Added a structured
+  `FocusedRepairActionRequest -> FocusedRepairActionProposal` boundary for the
+  action-checkpoint repair path. The main loop now receives explicit failure
+  evidence, allowed lookup budget, exposed tools, fallback owner, and fallback
+  reason before entering patch synthesis; deterministic and model-led patch
+  synthesis traces now record `owner=action_checkpoint reason=...`.
+- Validation after the first focused-repair proposal slice:
+  `cargo fmt --check`, `git diff --check`, targeted `focused_repair`,
+  `action_checkpoint`, `patch_synthesis`, and `closeout` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`,
+  `bash scripts/workflow-production-gates.sh`, and full `cargo test -q` all
+  passed (`1243 passed; 0 failed`).
 
 ## 当前判断
 
@@ -258,7 +270,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1241 passed; 0 failed`。
+- 最近全量本地测试基线是 `1243 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

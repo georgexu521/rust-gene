@@ -26,7 +26,7 @@ Active next-stage direction:
   artifact. It records the Claude/opencode reference map, current
   `ConversationLoop` architecture map, current product capability table, and
   the recommended Batch 2-5 order.
-- Next implementation focus is finishing provider protocol hardening, then
+- Next implementation focus is finishing repair boundary extraction, then
   terminal/bash productization, an evidence ledger, and behavior-preserving
   `ConversationLoop` extraction.
 - The first provider-protocol regression matrix slice is complete:
@@ -48,11 +48,12 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-provider-protocol matrix, permission-controller, context-budget,
-tool-result-budget, schema-gate, and tool-result normalizer work:
+focused-repair proposal boundary, provider-protocol matrix,
+permission-controller, context-budget, tool-result-budget, schema-gate, and
+tool-result normalizer work:
 
 ```text
-1241 passed; 0 failed
+1243 passed; 0 failed
 ```
 
 Validated locally with:
@@ -61,6 +62,7 @@ Validated locally with:
 cargo fmt --check
 cargo test -q
 cargo clippy --all-features -- -D warnings
+bash scripts/workflow-production-gates.sh
 ```
 
 Latest expanded live-eval checkpoint:
