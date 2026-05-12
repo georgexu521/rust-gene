@@ -211,6 +211,12 @@ pub enum TraceEvent {
     RuntimeDietReport {
         prompt_tokens: u64,
         tool_schema_tokens: u64,
+        #[serde(default)]
+        total_request_tokens: u64,
+        #[serde(default)]
+        max_context_tokens: Option<u64>,
+        #[serde(default)]
+        remaining_context_tokens: Option<u64>,
         exposed_tools: usize,
         memory_snapshot_chars: usize,
         memory_snapshot_tokens: u64,
@@ -675,6 +681,9 @@ impl TraceEvent {
             TraceEvent::RuntimeDietReport {
                 prompt_tokens,
                 tool_schema_tokens,
+                total_request_tokens,
+                max_context_tokens,
+                remaining_context_tokens,
                 exposed_tools,
                 memory_snapshot_chars,
                 memory_snapshot_tokens,
@@ -687,10 +696,20 @@ impl TraceEvent {
                 closeout_visibility,
                 validation_evidence,
             } => {
-                let total = prompt_tokens.saturating_add(*tool_schema_tokens);
+                let total = if *total_request_tokens > 0 {
+                    *total_request_tokens
+                } else {
+                    prompt_tokens.saturating_add(*tool_schema_tokens)
+                };
                 let level = runtime_diet_level(*prompt_tokens, *exposed_tools);
+                let context_budget = match (remaining_context_tokens, max_context_tokens) {
+                    (Some(remaining), Some(max)) => {
+                        format!(" context_remaining={}/{}", remaining, max)
+                    }
+                    _ => String::new(),
+                };
                 format!(
-                    "{} prompt={} tool_schema={} total={} tools={} memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={}",
+                    "{} prompt={} tool_schema={} total={} tools={} memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={}{}",
                     level,
                     prompt_tokens,
                     tool_schema_tokens,
@@ -705,7 +724,8 @@ impl TraceEvent {
                     route_scoped_tools,
                     workflow_context,
                     closeout_visibility,
-                    validation_evidence
+                    validation_evidence,
+                    context_budget
                 )
             }
             TraceEvent::ApiRequestStarted {
@@ -1121,6 +1141,9 @@ mod tests {
         collector.record(TraceEvent::RuntimeDietReport {
             prompt_tokens: 1_200,
             tool_schema_tokens: 320,
+            total_request_tokens: 1_520,
+            max_context_tokens: Some(8_000),
+            remaining_context_tokens: Some(6_480),
             exposed_tools: 6,
             memory_snapshot_chars: 180,
             memory_snapshot_tokens: 45,
@@ -1138,6 +1161,8 @@ mod tests {
         let summary = format_trace_summary(&trace, 10);
         assert!(summary.contains("Runtime Diet: light"));
         assert!(summary.contains("prompt=1200"));
+        assert!(summary.contains("total=1520"));
+        assert!(summary.contains("context_remaining=6480/8000"));
         assert!(summary.contains("tools=6"));
         assert!(summary.contains("memory=180ch/~45t"));
         assert!(summary.contains("retrieval=2items/~80t"));
@@ -1150,6 +1175,9 @@ mod tests {
         let event = TraceEvent::RuntimeDietReport {
             prompt_tokens: RUNTIME_DIET_PROMPT_TOKEN_BUDGET + 1,
             tool_schema_tokens: 0,
+            total_request_tokens: RUNTIME_DIET_PROMPT_TOKEN_BUDGET + 1,
+            max_context_tokens: None,
+            remaining_context_tokens: None,
             exposed_tools: 1,
             memory_snapshot_chars: 0,
             memory_snapshot_tokens: 0,

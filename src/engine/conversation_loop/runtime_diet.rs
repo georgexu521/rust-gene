@@ -6,6 +6,9 @@ use crate::engine::trace::{TraceCollector, TraceEvent};
 pub(super) struct RuntimeDietSnapshot {
     pub(super) prompt_tokens: u64,
     pub(super) tool_schema_tokens: u64,
+    pub(super) total_request_tokens: u64,
+    pub(super) max_context_tokens: Option<u64>,
+    pub(super) remaining_context_tokens: Option<u64>,
     pub(super) exposed_tools: usize,
     pub(super) memory_snapshot_chars: usize,
     pub(super) memory_snapshot_tokens: u64,
@@ -23,6 +26,9 @@ impl RuntimeDietSnapshot {
         Self {
             prompt_tokens: 0,
             tool_schema_tokens: 0,
+            total_request_tokens: 0,
+            max_context_tokens: None,
+            remaining_context_tokens: None,
             exposed_tools: 0,
             memory_snapshot_chars: 0,
             memory_snapshot_tokens: 0,
@@ -64,6 +70,9 @@ pub(super) fn trace_runtime_diet_report(
     trace.record(TraceEvent::RuntimeDietReport {
         prompt_tokens: snapshot.prompt_tokens,
         tool_schema_tokens: snapshot.tool_schema_tokens,
+        total_request_tokens: snapshot.total_request_tokens,
+        max_context_tokens: snapshot.max_context_tokens,
+        remaining_context_tokens: snapshot.remaining_context_tokens,
         exposed_tools: snapshot.exposed_tools,
         memory_snapshot_chars: snapshot.memory_snapshot_chars,
         memory_snapshot_tokens: snapshot.memory_snapshot_tokens,

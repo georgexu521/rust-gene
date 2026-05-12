@@ -11,6 +11,7 @@ mod action_checkpoint;
 mod approval;
 mod closeout_controller;
 mod companion_context;
+mod context_budget_controller;
 mod patch_recovery;
 mod patch_repair_rules;
 mod pseudo_tool_text;
@@ -33,6 +34,7 @@ mod workflow_trace;
 
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use closeout_controller::FinalCloseoutContext;
+use context_budget_controller::ContextBudgetController;
 use patch_recovery::PatchSynthesisAction;
 use repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
@@ -73,9 +75,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, warn};
 
-use super::context_compressor::{
-    estimate_messages_tokens, estimate_tool_schemas_tokens, ContextCompressor,
-};
+use super::context_compressor::{estimate_messages_tokens, ContextCompressor};
 use super::hooks::ToolHookManager;
 use super::streaming::StreamEvent;
 
@@ -1103,21 +1103,23 @@ impl ConversationLoop {
             let mut no_gain_passes = 0u8;
             for pass in 0..3 {
                 let compressor = compressor_mutex.lock().await;
-                let tool_tokens = estimate_tool_schemas_tokens(&base_tools);
-                let msg_tokens = estimate_messages_tokens(&messages);
-                // `messages` already includes the system prompt at this point,
-                // so only add tool schema tokens as external request overhead.
-                if !compressor.preflight_check(&messages, 0, tool_tokens) {
+                let preflight =
+                    ContextBudgetController::observe_preflight(&compressor, &messages, &base_tools);
+                ContextBudgetController::record_runtime_diet(
+                    &mut turn_state.runtime_diet,
+                    &preflight.observation,
+                );
+                if !preflight.should_compact {
                     break;
                 }
                 debug!(
                     "Preflight compression pass {}/3 ({} msg + {} tool tokens)",
                     pass + 1,
-                    msg_tokens,
-                    tool_tokens
+                    preflight.observation.message_tokens,
+                    preflight.observation.tool_schema_tokens
                 );
                 drop(compressor);
-                let before_tokens = estimate_messages_tokens(&messages);
+                let before_tokens = preflight.observation.message_tokens;
                 messages = compressor_mutex
                     .lock()
                     .await
@@ -1283,16 +1285,12 @@ impl ConversationLoop {
                 }
             }
 
-            turn_state.runtime_diet.prompt_tokens = turn_state
-                .runtime_diet
-                .prompt_tokens
-                .max(estimate_messages_tokens(&request_messages));
-            turn_state.runtime_diet.tool_schema_tokens = turn_state
-                .runtime_diet
-                .tool_schema_tokens
-                .max(estimate_tool_schemas_tokens(&tools));
-            turn_state.runtime_diet.exposed_tools =
-                turn_state.runtime_diet.exposed_tools.max(tools.len());
+            let request_budget =
+                ContextBudgetController::observe_request(&request_messages, &tools);
+            ContextBudgetController::record_runtime_diet(
+                &mut turn_state.runtime_diet,
+                &request_budget,
+            );
 
             let mut request = ChatRequest::new(&self.model)
                 .with_messages(request_messages)
@@ -5632,6 +5630,60 @@ mod tests {
         assert_eq!(workflow_context, "none");
         assert_eq!(validation, "none");
         assert!(crate::engine::trace::format_trace_summary(&trace, 80).contains("Runtime Diet:"));
+    }
+
+    #[tokio::test]
+    async fn runtime_diet_report_records_context_budget_when_compressor_enabled() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::from(vec![ChatResponse {
+                content: "hello".to_string(),
+                tool_calls: None,
+                usage: None,
+            }])),
+        });
+        let trace_store = Arc::new(TraceStore::default());
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        )
+        .with_trace_store(trace_store.clone())
+        .with_compression(8_000)
+        .with_max_iterations(1);
+
+        let result = loop_instance
+            .run(vec![Message::user("请简单回复一句 hello")])
+            .await
+            .expect("loop should complete");
+
+        assert_eq!(result.content, "hello");
+        let trace = trace_store.latest().expect("trace should be recorded");
+        let budget = trace.events.iter().find_map(|event| {
+            if let TraceEvent::RuntimeDietReport {
+                total_request_tokens,
+                max_context_tokens,
+                remaining_context_tokens,
+                ..
+            } = event
+            {
+                Some((
+                    *total_request_tokens,
+                    *max_context_tokens,
+                    *remaining_context_tokens,
+                ))
+            } else {
+                None
+            }
+        });
+
+        let (total, max, remaining) = budget.expect("runtime diet budget should be recorded");
+        assert!(total > 0);
+        assert_eq!(max, Some(8_000));
+        assert!(remaining.unwrap() < 8_000);
+        assert!(
+            crate::engine::trace::format_trace_summary(&trace, 80).contains("context_remaining=")
+        );
     }
 
     #[tokio::test]

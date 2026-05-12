@@ -71,6 +71,14 @@ route on structured facts instead of rescanning raw tuples. The main loop now
 uses batch-level success and unsuccessful-result summaries for low-risk guard
 and retry decisions while leaving detailed evidence collection unchanged.
 
+`ContextBudgetController` now owns the first request-budget observation
+boundary. It calculates message tokens, tool schema tokens, total request
+tokens, exposed tool counts, and remaining/max context when a compressor is
+available. The current compression behavior is unchanged, but preflight
+compaction checks and runtime-diet reporting now consume the same structured
+budget observation instead of recalculating scattered token facts in
+`run_inner`.
+
 `ToolExecutionRequest` now names the input context for one tool execution
 batch. It keeps the existing execution semantics, but removes the long
 anonymous argument list and makes route policy, exposed tools, checkpoint facts,
