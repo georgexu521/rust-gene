@@ -48,22 +48,24 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-background-shell, shell-result duration/schema/artifacts, shell-command UI
-summary, shell-command category permission risk, shell-command category
-classifier, terminal provider-schema exposure diagnostic, explicit
+background-shell handles/output artifacts, shell-result
+duration/schema/artifacts, shell-command UI summary, shell-command category
+permission risk, shell-command category classifier, terminal provider-schema
+exposure diagnostic, explicit
 patch-synthesis fallback boundary, focused-repair proposal boundary,
 provider-protocol matrix, permission-controller, context-budget,
 tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1256 passed; 0 failed
+1257 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
 `bash_output` reads bounded output from that handle, `bash_cancel` stops the
 process group, foreground timeout results now carry structured
 `shell_result.timed_out=true`, and CLI/TUI tool views have explicit
-backgrounded/timed-out/cancelled states.
+backgrounded/timed-out/cancelled states. Long background output now also writes
+an `output_path` artifact under `.priority-agent/tool-results/<session>/...`.
 
 Validated locally with:
 

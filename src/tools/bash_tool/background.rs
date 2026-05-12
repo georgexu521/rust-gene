@@ -1,6 +1,6 @@
 use super::{
     classification_data, kill_process_tree, preview_text, sanitize_agent_runtime_env,
-    BashExecutionBackend,
+    shell_output_artifact_path, BashExecutionBackend,
 };
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
@@ -139,7 +139,7 @@ impl BackgroundShellSnapshot {
         output
     }
 
-    fn data(&self, max_chars: usize) -> serde_json::Value {
+    fn data(&self, max_chars: usize, output_path: Option<String>) -> serde_json::Value {
         let (stdout_preview, stdout_truncated) = preview_text(&self.stdout, max_chars);
         let (stderr_preview, stderr_truncated) = preview_text(&self.stderr, max_chars);
         json!({
@@ -156,6 +156,7 @@ impl BackgroundShellSnapshot {
                 "timed_out": self.timed_out(),
                 "cancelled": self.cancelled(),
                 "truncated": self.truncated() || stdout_truncated || stderr_truncated,
+                "output_path": output_path,
                 "stdout_preview": stdout_preview,
                 "stderr_preview": stderr_preview,
                 "classification": classification_data(&self.command),
@@ -432,6 +433,20 @@ fn background_content(snapshot: &BackgroundShellSnapshot, max_chars: usize) -> S
     lines.join("\n")
 }
 
+fn background_output_artifact_path(
+    snapshot: &BackgroundShellSnapshot,
+    context: &ToolContext,
+    max_chars: usize,
+) -> Option<String> {
+    let output = snapshot.combined_output();
+    let (_, preview_truncated) = preview_text(&output, max_chars);
+    if snapshot.truncated() || preview_truncated {
+        shell_output_artifact_path(context, &snapshot.working_dir, &snapshot.command, &output)
+    } else {
+        None
+    }
+}
+
 pub(super) fn background_started_content(snapshot: &BackgroundShellSnapshot) -> String {
     format!(
         "Started background shell command.\nHandle: {}\nStatus: {}.\nUse bash_output with this handle to read output; use bash_cancel to stop it.",
@@ -462,7 +477,7 @@ pub(super) fn background_shell_result_data(
             "status": snapshot.status.as_str(),
             "background": true,
         },
-        "shell_background": snapshot.data(DEFAULT_READ_PREVIEW_CHARS)["shell_background"].clone(),
+        "shell_background": snapshot.data(DEFAULT_READ_PREVIEW_CHARS, None)["shell_background"].clone(),
         "execution": {
             "exit_code": serde_json::Value::Null,
             "backend": snapshot.backend.as_str(),
@@ -502,7 +517,7 @@ impl Tool for BashOutputTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let handle = params["handle"].as_str().unwrap_or("");
         if handle.trim().is_empty() {
             return ToolResult::error("handle cannot be empty");
@@ -513,10 +528,13 @@ impl Tool for BashOutputTool {
             .clamp(200, 20_000) as usize;
 
         match read_background_shell(handle).await {
-            Ok(snapshot) => ToolResult::success_with_data(
-                background_content(&snapshot, max_chars),
-                snapshot.data(max_chars),
-            ),
+            Ok(snapshot) => {
+                let output_path = background_output_artifact_path(&snapshot, &context, max_chars);
+                ToolResult::success_with_data(
+                    background_content(&snapshot, max_chars),
+                    snapshot.data(max_chars, output_path),
+                )
+            }
             Err(err) => ToolResult::error(err),
         }
     }
@@ -547,21 +565,28 @@ impl Tool for BashCancelTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let handle = params["handle"].as_str().unwrap_or("");
         if handle.trim().is_empty() {
             return ToolResult::error("handle cannot be empty");
         }
 
         match cancel_background_shell(handle).await {
-            Ok(snapshot) => ToolResult::success_with_data(
-                format!(
-                    "Background shell {} is {}.",
-                    snapshot.handle,
-                    snapshot.status.as_str()
-                ),
-                snapshot.data(DEFAULT_READ_PREVIEW_CHARS),
-            ),
+            Ok(snapshot) => {
+                let output_path = background_output_artifact_path(
+                    &snapshot,
+                    &context,
+                    DEFAULT_READ_PREVIEW_CHARS,
+                );
+                ToolResult::success_with_data(
+                    format!(
+                        "Background shell {} is {}.",
+                        snapshot.handle,
+                        snapshot.status.as_str()
+                    ),
+                    snapshot.data(DEFAULT_READ_PREVIEW_CHARS, output_path),
+                )
+            }
             Err(err) => ToolResult::error(err),
         }
     }
@@ -636,5 +661,43 @@ mod tests {
             result.data.as_ref().unwrap()["shell_background"]["status"],
             "completed"
         );
+    }
+
+    #[tokio::test]
+    async fn bash_output_tool_writes_artifact_for_long_output() {
+        let dir = tempdir().expect("temp dir");
+        let snapshot = start_background_shell(
+            "printf '%12050s' x",
+            "printf '%12050s' x",
+            dir.path(),
+            BashExecutionBackend::Local,
+            30,
+        )
+        .await
+        .expect("start background shell");
+
+        for _ in 0..20 {
+            let read = read_background_shell(&snapshot.handle)
+                .await
+                .expect("read background shell");
+            if read.status.is_terminal() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        let result = BashOutputTool
+            .execute(
+                json!({"handle": snapshot.handle, "max_chars": 1000}),
+                ToolContext::new(dir.path(), "test-background-artifact"),
+            )
+            .await;
+
+        assert!(result.success, "output tool failed: {:?}", result.error);
+        let output_path = result.data.as_ref().unwrap()["shell_background"]["output_path"]
+            .as_str()
+            .expect("long background output should be stored");
+        assert!(output_path.starts_with(".priority-agent/tool-results/"));
+        assert!(dir.path().join(output_path).exists());
     }
 }
