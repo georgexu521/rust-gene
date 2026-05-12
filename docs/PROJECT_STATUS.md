@@ -48,7 +48,8 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-partial-read edit state, file-read/search evidence metadata, foreground PTY smoke, interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
+file-state tracker, partial-read edit state, file-read/search evidence metadata,
+foreground PTY smoke, interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
 duration/schema/artifacts, shell-command UI summary, shell-command category
 permission risk, shell-command category classifier, terminal provider-schema
 exposure diagnostic, explicit
@@ -57,7 +58,7 @@ provider-protocol matrix, permission-controller, context-budget,
 tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1264 passed; 0 failed
+1265 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -85,7 +86,10 @@ instead of relying only on rendered text.
 Read state now distinguishes full-file reads from targeted line-range reads.
 With `PRIORITY_AGENT_SMART_EDIT=1`, exact/insert edits require a full read,
 while line-range edits are allowed when the requested range is covered by a
-previous targeted read.
+previous targeted read. File state is now owned by `FileStateTracker`, and
+file read/edit/write metadata exposes lexical, resolved, canonical, display,
+and state-key path identity so relative, absolute, and canonicalized paths
+share the same stale-read boundary.
 
 Validated locally with:
 

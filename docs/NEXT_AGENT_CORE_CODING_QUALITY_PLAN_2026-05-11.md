@@ -402,6 +402,17 @@
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`,
   `cargo check --features experimental-api-server -q`, and full `cargo test -q`
   all passed (`1264 passed; 0 failed`).
+- 2026-05-12: Phase 3 Batch 3.1 continued. File read/edit/write now share a
+  `FileStateTracker` boundary instead of separate read-state and stale-read
+  maps, and tool metadata now exposes explicit path identity fields:
+  `lexical_path`, `resolved_path`, `canonical_path`, `display_path`, and
+  `state_key`. The display path logic handles macOS `/var` vs `/private/var`
+  canonicalization without weakening stale-read checks.
+- Validation after the file-state tracker slice: `cargo fmt --check`, `git
+  diff --check`, targeted `file_tool` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`,
+  `cargo check --features experimental-api-server -q`, and full `cargo test -q`
+  all passed (`1265 passed; 0 failed`).
 
 ## 当前判断
 
@@ -409,7 +420,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1264 passed; 0 failed`。
+- 最近全量本地测试基线是 `1265 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

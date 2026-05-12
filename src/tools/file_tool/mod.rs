@@ -109,6 +109,22 @@ struct FileReadRecord {
     ranges: Vec<(usize, usize)>,
 }
 
+/// 文件修改状态跟踪（用于检测外部修改）
+#[derive(Clone, Debug)]
+struct FileState {
+    mtime: std::time::SystemTime,
+    content_hash: u64,
+}
+
+#[derive(Clone, Debug)]
+struct FilePathIdentity {
+    lexical_path: String,
+    resolved_path: String,
+    canonical_path: String,
+    display_path: String,
+    state_key: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadBeforeEditStatus {
     Allowed,
@@ -116,36 +132,130 @@ enum ReadBeforeEditStatus {
     PartialOnly,
 }
 
-/// 文件读取状态跟踪（用于 must-read-before-edit 检查）
-/// 全局读取文件状态跟踪（按会话和规范文件身份）
-static READ_FILES: Lazy<Mutex<HashMap<String, HashMap<String, FileReadRecord>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+#[derive(Debug, Default)]
+struct FileStateTracker {
+    read_files: HashMap<String, HashMap<String, FileReadRecord>>,
+    file_states: HashMap<String, FileState>,
+}
+
+impl FileStateTracker {
+    fn mark_read_coverage(
+        &mut self,
+        session_id: &str,
+        file_path: &str,
+        line_range: Option<(usize, usize)>,
+    ) {
+        let session_files = self.read_files.entry(session_id.to_string()).or_default();
+        let record = session_files.entry(file_path.to_string()).or_default();
+        if let Some((start, end)) = line_range {
+            if start > 0 && end >= start {
+                record.ranges.push((start, end));
+            }
+        } else {
+            record.full_read = true;
+        }
+    }
+
+    fn mark_read_with_state(
+        &mut self,
+        session_id: &str,
+        file_path: &str,
+        content: &str,
+        mtime: std::time::SystemTime,
+        line_range: Option<(usize, usize)>,
+    ) {
+        self.mark_read_coverage(session_id, file_path, line_range);
+        let key = tracker_key(session_id, file_path);
+        self.file_states.insert(
+            key,
+            FileState {
+                mtime,
+                content_hash: compute_content_hash(content),
+            },
+        );
+    }
+
+    fn is_file_read(&self, session_id: &str, file_path: &str) -> bool {
+        self.read_files
+            .get(session_id)
+            .and_then(|files| files.get(file_path))
+            .is_some()
+    }
+
+    fn read_before_edit_status(
+        &self,
+        session_id: &str,
+        file_path: &str,
+        line_start: Option<usize>,
+        line_end: Option<usize>,
+    ) -> ReadBeforeEditStatus {
+        let Some(record) = self
+            .read_files
+            .get(session_id)
+            .and_then(|files| files.get(file_path))
+        else {
+            return ReadBeforeEditStatus::NotRead;
+        };
+        if record.full_read {
+            return ReadBeforeEditStatus::Allowed;
+        }
+        let Some((start, end)) = line_start.zip(line_end) else {
+            return ReadBeforeEditStatus::PartialOnly;
+        };
+        if record
+            .ranges
+            .iter()
+            .any(|(range_start, range_end)| *range_start <= start && *range_end >= end)
+        {
+            ReadBeforeEditStatus::Allowed
+        } else {
+            ReadBeforeEditStatus::PartialOnly
+        }
+    }
+
+    fn is_modified_since_read(
+        &self,
+        session_id: &str,
+        file_path: &str,
+        current_content: &str,
+        current_mtime: std::time::SystemTime,
+    ) -> bool {
+        let key = tracker_key(session_id, file_path);
+        if let Some(state) = self.file_states.get(&key) {
+            if current_mtime != state.mtime {
+                return true;
+            }
+            if compute_content_hash(current_content) != state.content_hash {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn clear_session(&mut self, session_id: &str) {
+        self.read_files.remove(session_id);
+        let prefix = format!("{}:", session_id);
+        self.file_states.retain(|key, _| !key.starts_with(&prefix));
+    }
+}
+
+static FILE_STATE_TRACKER: Lazy<Mutex<FileStateTracker>> =
+    Lazy::new(|| Mutex::new(FileStateTracker::default()));
+
+fn tracker_key(session_id: &str, file_path: &str) -> String {
+    format!("{}:{}", session_id, file_path)
+}
 
 /// 标记文件已被读取（用于 must-read-before-edit 检查）
 pub fn mark_file_read(session_id: &str, file_path: &str) {
-    mark_file_read_coverage(session_id, file_path, None);
-}
-
-fn mark_file_read_coverage(session_id: &str, file_path: &str, line_range: Option<(usize, usize)>) {
-    let mut tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
-    let session_files = tracker.entry(session_id.to_string()).or_default();
-    let record = session_files.entry(file_path.to_string()).or_default();
-    if let Some((start, end)) = line_range {
-        if start > 0 && end >= start {
-            record.ranges.push((start, end));
-        }
-    } else {
-        record.full_read = true;
-    }
+    let mut tracker = FILE_STATE_TRACKER.lock().unwrap_or_else(|e| e.into_inner());
+    tracker.mark_read_coverage(session_id, file_path, None);
 }
 
 /// 检查文件是否已被读取
 pub fn is_file_read(session_id: &str, file_path: &str) -> bool {
-    let tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
-    tracker
-        .get(session_id)
-        .and_then(|files| files.get(file_path))
-        .is_some()
+    let tracker = FILE_STATE_TRACKER.lock().unwrap_or_else(|e| e.into_inner());
+    tracker.is_file_read(session_id, file_path)
 }
 
 fn read_before_edit_status(
@@ -154,28 +264,8 @@ fn read_before_edit_status(
     line_start: Option<usize>,
     line_end: Option<usize>,
 ) -> ReadBeforeEditStatus {
-    let tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(record) = tracker
-        .get(session_id)
-        .and_then(|files| files.get(file_path))
-    else {
-        return ReadBeforeEditStatus::NotRead;
-    };
-    if record.full_read {
-        return ReadBeforeEditStatus::Allowed;
-    }
-    let Some((start, end)) = line_start.zip(line_end) else {
-        return ReadBeforeEditStatus::PartialOnly;
-    };
-    if record
-        .ranges
-        .iter()
-        .any(|(range_start, range_end)| *range_start <= start && *range_end >= end)
-    {
-        ReadBeforeEditStatus::Allowed
-    } else {
-        ReadBeforeEditStatus::PartialOnly
-    }
+    let tracker = FILE_STATE_TRACKER.lock().unwrap_or_else(|e| e.into_inner());
+    tracker.read_before_edit_status(session_id, file_path, line_start, line_end)
 }
 
 fn file_read_state_guidance(path: &str, status: ReadBeforeEditStatus) -> String {
@@ -194,26 +284,14 @@ fn file_read_state_guidance(path: &str, status: ReadBeforeEditStatus) -> String 
 
 /// 清除会话的读取状态
 pub fn clear_read_files(session_id: &str) {
-    let mut tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
-    tracker.remove(session_id);
-    let mut states = FILE_STATES.lock().unwrap_or_else(|e| e.into_inner());
-    let prefix = format!("{}:", session_id);
-    states.retain(|key, _| !key.starts_with(&prefix));
+    let mut tracker = FILE_STATE_TRACKER.lock().unwrap_or_else(|e| e.into_inner());
+    tracker.clear_session(session_id);
 }
-
-/// 文件修改状态跟踪（用于检测外部修改）
-#[derive(Clone)]
-struct FileState {
-    mtime: std::time::SystemTime,
-    content_hash: u64,
-}
-
-static FILE_STATES: Lazy<Mutex<HashMap<String, FileState>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 async fn read_directory_result(
     path: &Path,
     requested_path: &str,
+    identity: &FilePathIdentity,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> ToolResult {
@@ -305,7 +383,8 @@ async fn read_directory_result(
         content,
         json!({
             "path": requested_path,
-            "resolved_path": path.to_string_lossy().to_string(),
+            "resolved_path": identity.resolved_path,
+            "path_identity": path_identity_json(identity),
             "kind": "directory",
             "entry_count": total_entries,
             "displayed_entries": selected.len(),
@@ -340,6 +419,45 @@ fn file_state_key(path: &Path) -> String {
         .to_string()
 }
 
+fn file_path_identity(
+    requested_path: &str,
+    resolved_path: &Path,
+    working_dir: &Path,
+) -> FilePathIdentity {
+    let normalized_resolved_path = normalize_path(resolved_path);
+    let canonical_path = canonicalize_or_normalize(&normalized_resolved_path);
+    let normalized_working_dir = normalize_path(working_dir);
+    let canonical_working_dir = canonicalize_or_normalize(working_dir);
+    let display_path = relative_display_path(&normalized_resolved_path, &normalized_working_dir)
+        .or_else(|| relative_display_path(&canonical_path, &canonical_working_dir))
+        .unwrap_or_else(|| normalized_resolved_path.to_string_lossy().to_string());
+
+    FilePathIdentity {
+        lexical_path: requested_path.to_string(),
+        resolved_path: normalized_resolved_path.to_string_lossy().to_string(),
+        canonical_path: canonical_path.to_string_lossy().to_string(),
+        display_path,
+        state_key: file_state_key(&canonical_path),
+    }
+}
+
+fn relative_display_path(path: &Path, root: &Path) -> Option<String> {
+    path.strip_prefix(root)
+        .ok()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+fn path_identity_json(identity: &FilePathIdentity) -> serde_json::Value {
+    json!({
+        "lexical_path": identity.lexical_path,
+        "resolved_path": identity.resolved_path,
+        "canonical_path": identity.canonical_path,
+        "display_path": identity.display_path,
+        "state_key": identity.state_key,
+    })
+}
+
 fn json_line_number(value: usize) -> serde_json::Value {
     if value == 0 {
         serde_json::Value::Null
@@ -365,16 +483,8 @@ fn mark_file_read_with_state_and_coverage(
     mtime: std::time::SystemTime,
     line_range: Option<(usize, usize)>,
 ) {
-    mark_file_read_coverage(session_id, file_path, line_range);
-    let mut states = FILE_STATES.lock().unwrap_or_else(|e| e.into_inner());
-    let key = format!("{}:{}", session_id, file_path);
-    states.insert(
-        key,
-        FileState {
-            mtime,
-            content_hash: compute_content_hash(content),
-        },
-    );
+    let mut tracker = FILE_STATE_TRACKER.lock().unwrap_or_else(|e| e.into_inner());
+    tracker.mark_read_with_state(session_id, file_path, content, mtime, line_range);
 }
 
 /// 检查文件是否在读取后被外部修改
@@ -384,19 +494,8 @@ pub fn is_file_modified_since_read(
     current_content: &str,
     current_mtime: std::time::SystemTime,
 ) -> bool {
-    let states = FILE_STATES.lock().unwrap_or_else(|e| e.into_inner());
-    let key = format!("{}:{}", session_id, file_path);
-    if let Some(state) = states.get(&key) {
-        // 检查 mtime 是否变化
-        if current_mtime != state.mtime {
-            return true;
-        }
-        // 检查内容 hash 是否变化
-        if compute_content_hash(current_content) != state.content_hash {
-            return true;
-        }
-    }
-    false
+    let tracker = FILE_STATE_TRACKER.lock().unwrap_or_else(|e| e.into_inner());
+    tracker.is_modified_since_read(session_id, file_path, current_content, current_mtime)
 }
 
 /// 文件读取工具
@@ -469,6 +568,7 @@ impl Tool for FileReadTool {
             Err(msg) => return ToolResult::error(msg),
         };
         info!("Reading file: {:?}", path);
+        let identity = file_path_identity(path_str, &path, &context.working_dir);
 
         // 检查文件是否存在
         if !path.exists() {
@@ -476,7 +576,7 @@ impl Tool for FileReadTool {
         }
 
         if path.is_dir() {
-            return read_directory_result(&path, path_str, limit, offset).await;
+            return read_directory_result(&path, path_str, &identity, limit, offset).await;
         }
 
         // 检查是否是文件
@@ -510,7 +610,8 @@ impl Tool for FileReadTool {
                     ),
                     json!({
                         "path": path_str,
-                        "resolved_path": path.to_string_lossy().to_string(),
+                        "resolved_path": identity.resolved_path,
+                        "path_identity": path_identity_json(&identity),
                         "kind": "file",
                         "unchanged": true,
                         "total_lines": lines_count,
@@ -538,7 +639,7 @@ impl Tool for FileReadTool {
         let mtime = std::fs::metadata(&path)
             .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let state_key = file_state_key(&path);
+        let state_key = identity.state_key.clone();
 
         // 应用 limit 和 offset
         let lines: Vec<&str> = content.lines().collect();
@@ -609,7 +710,8 @@ impl Tool for FileReadTool {
             format!("{}{}", formatted, truncated_info),
             json!({
                 "path": path_str,
-                "resolved_path": path.to_string_lossy().to_string(),
+                "resolved_path": identity.resolved_path,
+                "path_identity": path_identity_json(&identity),
                 "kind": "file",
                 "total_lines": lines.len(),
                 "displayed_lines": selected_lines.len(),
@@ -702,6 +804,7 @@ impl Tool for FileWriteTool {
             Err(msg) => return ToolResult::error(msg),
         };
         info!("Writing file: {:?}", path);
+        let identity = file_path_identity(path_str, &path, &context.working_dir);
 
         let existed_before = path.exists();
 
@@ -746,6 +849,8 @@ impl Tool for FileWriteTool {
                     format!("File {} successfully: {}", action, path_str),
                     json!({
                         "path": path_str,
+                        "resolved_path": identity.resolved_path,
+                        "path_identity": path_identity_json(&identity),
                         "bytes_written": content.len(),
                         "existed_before": existed_before,
                         "guidance": if existed_before {
@@ -1148,7 +1253,8 @@ impl Tool for FileEditTool {
             Err(msg) => return ToolResult::error(msg),
         };
         info!("Editing file: {:?}", path);
-        let state_key = file_state_key(&path);
+        let identity = file_path_identity(path_str, &path, &context.working_dir);
+        let state_key = identity.state_key.clone();
 
         // 读取文件内容
         if let Err(msg) = check_file_size_limit(&path, "edit") {
@@ -1277,6 +1383,8 @@ impl Tool for FileEditTool {
                         info!("Successfully edited file: {:?}", path);
                         let data = json!({
                             "path": path_str,
+                            "resolved_path": identity.resolved_path,
+                            "path_identity": path_identity_json(&identity),
                             "replacements": replacements,
                         });
                         ToolResult::success_with_data(
@@ -1867,6 +1975,31 @@ mod tests {
     }
 
     #[test]
+    fn file_path_identity_records_requested_resolved_and_canonical_paths() {
+        let working = tempfile::tempdir().unwrap();
+        let file_path = working.path().join("src").join("main.rs");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, "fn main() {}\n").unwrap();
+        let resolved = resolve_path("./src/main.rs", working.path()).unwrap();
+
+        let identity = file_path_identity("./src/main.rs", &resolved, working.path());
+
+        assert_eq!(identity.lexical_path, "./src/main.rs");
+        assert_eq!(
+            identity.resolved_path,
+            file_path.to_string_lossy().to_string()
+        );
+        assert_eq!(
+            identity.canonical_path,
+            canonicalize_or_normalize(&file_path)
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(identity.display_path, "src/main.rs");
+        assert_eq!(identity.state_key, identity.canonical_path);
+    }
+
+    #[test]
     fn test_file_write_requires_confirmation_for_relative_path() {
         let tool = FileWriteTool;
         let params = json!({
@@ -1994,6 +2127,18 @@ mod tests {
             .contains("[3 lines total, showing lines 2-3]"));
         let data = result.data.expect("file read metadata");
         assert_eq!(data["kind"], "file");
+        assert_eq!(
+            data["path_identity"]["lexical_path"],
+            path.to_string_lossy().to_string()
+        );
+        assert_eq!(
+            data["path_identity"]["resolved_path"],
+            path.to_string_lossy().to_string()
+        );
+        assert_eq!(
+            data["path_identity"]["state_key"],
+            data["path_identity"]["canonical_path"]
+        );
         assert_eq!(data["line_start"], 2);
         assert_eq!(data["line_end"], 3);
         assert_eq!(data["total_lines"], 3);
@@ -2029,6 +2174,12 @@ mod tests {
         let result = tool.execute(params, context).await;
 
         assert!(result.success, "edit failed: {:?}", result.error);
+        let data = result.data.expect("file_edit metadata");
+        assert_eq!(data["path_identity"]["lexical_path"], path);
+        assert_eq!(
+            data["path_identity"]["state_key"],
+            data["path_identity"]["canonical_path"]
+        );
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert!(content.contains("baz qux"));
         assert!(!content.contains("foo bar"));
