@@ -77,7 +77,10 @@ tokens, exposed tool counts, and remaining/max context when a compressor is
 available. The current compression behavior is unchanged, but preflight
 compaction checks and runtime-diet reporting now consume the same structured
 budget observation instead of recalculating scattered token facts in
-`run_inner`.
+`run_inner`. It also records model-facing tool-result aggregate size and
+large-output truncation/artifact counts from normalized tool results, so traces
+can show whether context bloat is coming from the request shell or from
+tool-output payloads.
 
 `ToolExecutionRequest` now names the input context for one tool execution
 batch. It keeps the existing execution semantics, but removes the long

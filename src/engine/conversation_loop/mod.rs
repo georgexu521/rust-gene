@@ -1552,7 +1552,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 successful_required_validation_commands.clear();
             }
             for (tc, result) in tool_batch.results_mut().iter_mut() {
-                append_provider_tool_result(
+                let normalized = append_provider_tool_result(
                     tc,
                     result,
                     &mut turn_state.evidence_ledger,
@@ -1560,6 +1560,11 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     &mut messages,
                 )
                 .await;
+                let result_budget = ContextBudgetController::observe_tool_result(&normalized);
+                ContextBudgetController::record_tool_result_runtime_diet(
+                    &mut turn_state.runtime_diet,
+                    &result_budget,
+                );
 
                 if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                     if let Some(note) = companion_context::companion_context_note(
@@ -1918,7 +1923,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             })
                             .await;
                             for (tc, result) in synthesized_batch.results_mut().iter_mut() {
-                                append_provider_tool_result(
+                                let normalized = append_provider_tool_result(
                                     tc,
                                     result,
                                     &mut turn_state.evidence_ledger,
@@ -1926,6 +1931,12 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                     &mut messages,
                                 )
                                 .await;
+                                let result_budget =
+                                    ContextBudgetController::observe_tool_result(&normalized);
+                                ContextBudgetController::record_tool_result_runtime_diet(
+                                    &mut turn_state.runtime_diet,
+                                    &result_budget,
+                                );
                                 if result.success && Self::is_code_write_tool_name(&tc.name) {
                                     action_checkpoint_requires_patch_before_validation = false;
                                     if let Some(path) = tc.arguments["path"].as_str() {
@@ -2045,7 +2056,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             })
                             .await;
                             for (tc, result) in synthesized_batch.results_mut().iter_mut() {
-                                append_provider_tool_result(
+                                let normalized = append_provider_tool_result(
                                     tc,
                                     result,
                                     &mut turn_state.evidence_ledger,
@@ -2053,6 +2064,12 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                     &mut messages,
                                 )
                                 .await;
+                                let result_budget =
+                                    ContextBudgetController::observe_tool_result(&normalized);
+                                ContextBudgetController::record_tool_result_runtime_diet(
+                                    &mut turn_state.runtime_diet,
+                                    &result_budget,
+                                );
                                 if result.success {
                                     any_tool_success = true;
                                 }
@@ -5684,6 +5701,82 @@ mod tests {
         assert!(
             crate::engine::trace::format_trace_summary(&trace, 80).contains("context_remaining=")
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_diet_report_records_tool_result_budget_for_tool_turn() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS", "0");
+        let tmp = tempdir().expect("create temp dir");
+        let target = tmp.path().join("note.txt");
+        std::fs::write(&target, "tool result budget evidence").expect("write fixture");
+
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::from(vec![
+                ChatResponse {
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_read".to_string(),
+                        name: "file_read".to_string(),
+                        arguments: serde_json::json!({
+                            "path": target.to_string_lossy().to_string()
+                        }),
+                    }]),
+                    usage: None,
+                },
+                ChatResponse {
+                    content: "done".to_string(),
+                    tool_calls: None,
+                    usage: None,
+                },
+            ])),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileReadTool);
+        let trace_store = Arc::new(TraceStore::default());
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        )
+        .with_trace_store(trace_store.clone())
+        .with_max_iterations(3);
+
+        let result = loop_instance
+            .run(vec![Message::user("读取 note.txt")])
+            .await
+            .expect("loop should complete");
+
+        assert_eq!(result.content, "done");
+        let trace = trace_store.latest().expect("trace should be recorded");
+        let tool_budget = trace.events.iter().find_map(|event| {
+            if let TraceEvent::RuntimeDietReport {
+                tool_result_chars,
+                tool_result_tokens,
+                truncated_tool_results,
+                tool_result_artifacts,
+                ..
+            } = event
+            {
+                Some((
+                    *tool_result_chars,
+                    *tool_result_tokens,
+                    *truncated_tool_results,
+                    *tool_result_artifacts,
+                ))
+            } else {
+                None
+            }
+        });
+
+        let (chars, tokens, truncated, artifacts) =
+            tool_budget.expect("runtime diet tool budget should be recorded");
+        assert!(chars > 0);
+        assert!(tokens > 0);
+        assert_eq!(truncated, 0);
+        assert_eq!(artifacts, 0);
+        assert!(crate::engine::trace::format_trace_summary(&trace, 80).contains("tool_results="));
     }
 
     #[tokio::test]

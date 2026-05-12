@@ -185,6 +185,17 @@
   `prompt_context`, and `trace_summary_includes_runtime_diet_report` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1216 passed; 0 failed`).
+- 2026-05-12: Phase 1 Batch 1.5 continued. Extended
+  `ContextBudgetController` to observe model-facing tool result aggregate size
+  and large-output truncation/artifact records from `NormalizedToolResult`.
+  `RuntimeDietReport` now includes tool-result chars/tokens, truncated result
+  count, and artifact count, with a real tool-turn trace regression.
+- Validation after tool-result budget observation: `cargo fmt --check`,
+  `git diff --check`, targeted `context_budget`, `runtime_diet`,
+  `tool_result`, `prompt_context`, `trace_summary_includes_runtime_diet_report`,
+  and `evidence_ledger` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1219 passed; 0 failed`).
 
 ## 当前判断
 
@@ -192,7 +203,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1216 passed; 0 failed`。
+- 最近全量本地测试基线是 `1219 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

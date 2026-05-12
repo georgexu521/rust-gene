@@ -67,15 +67,16 @@ pub(super) async fn append_provider_tool_result(
     evidence_ledger: &mut EvidenceLedger,
     tool_results_text: &mut String,
     messages: &mut Vec<Message>,
-) {
+) -> NormalizedToolResult {
     let normalized = ToolResultNormalizer::normalize_after_execution(tool_call, result).await;
     normalized.record_evidence(evidence_ledger, tool_call, result);
     tool_results_text.push_str(&normalized.ui_content);
     tool_results_text.push('\n');
     messages.push(Message::tool(
         tool_call.id.clone(),
-        normalized.model_content,
+        normalized.model_content.clone(),
     ));
+    normalized
 }
 
 pub(super) fn invalid_tool_params_result(

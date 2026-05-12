@@ -217,6 +217,14 @@ pub enum TraceEvent {
         max_context_tokens: Option<u64>,
         #[serde(default)]
         remaining_context_tokens: Option<u64>,
+        #[serde(default)]
+        tool_result_chars: usize,
+        #[serde(default)]
+        tool_result_tokens: u64,
+        #[serde(default)]
+        truncated_tool_results: usize,
+        #[serde(default)]
+        tool_result_artifacts: usize,
         exposed_tools: usize,
         memory_snapshot_chars: usize,
         memory_snapshot_tokens: u64,
@@ -684,6 +692,10 @@ impl TraceEvent {
                 total_request_tokens,
                 max_context_tokens,
                 remaining_context_tokens,
+                tool_result_chars,
+                tool_result_tokens,
+                truncated_tool_results,
+                tool_result_artifacts,
                 exposed_tools,
                 memory_snapshot_chars,
                 memory_snapshot_tokens,
@@ -709,12 +721,16 @@ impl TraceEvent {
                     _ => String::new(),
                 };
                 format!(
-                    "{} prompt={} tool_schema={} total={} tools={} memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={}{}",
+                    "{} prompt={} tool_schema={} total={} tools={} tool_results={}ch/~{}t truncated={} artifacts={} memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={}{}",
                     level,
                     prompt_tokens,
                     tool_schema_tokens,
                     total,
                     exposed_tools,
+                    tool_result_chars,
+                    tool_result_tokens,
+                    truncated_tool_results,
+                    tool_result_artifacts,
                     memory_snapshot_chars,
                     memory_snapshot_tokens,
                     retrieval_items,
@@ -1144,6 +1160,10 @@ mod tests {
             total_request_tokens: 1_520,
             max_context_tokens: Some(8_000),
             remaining_context_tokens: Some(6_480),
+            tool_result_chars: 240,
+            tool_result_tokens: 60,
+            truncated_tool_results: 1,
+            tool_result_artifacts: 1,
             exposed_tools: 6,
             memory_snapshot_chars: 180,
             memory_snapshot_tokens: 45,
@@ -1163,6 +1183,9 @@ mod tests {
         assert!(summary.contains("prompt=1200"));
         assert!(summary.contains("total=1520"));
         assert!(summary.contains("context_remaining=6480/8000"));
+        assert!(summary.contains("tool_results=240ch/~60t"));
+        assert!(summary.contains("truncated=1"));
+        assert!(summary.contains("artifacts=1"));
         assert!(summary.contains("tools=6"));
         assert!(summary.contains("memory=180ch/~45t"));
         assert!(summary.contains("retrieval=2items/~80t"));
@@ -1178,6 +1201,10 @@ mod tests {
             total_request_tokens: RUNTIME_DIET_PROMPT_TOKEN_BUDGET + 1,
             max_context_tokens: None,
             remaining_context_tokens: None,
+            tool_result_chars: 0,
+            tool_result_tokens: 0,
+            truncated_tool_results: 0,
+            tool_result_artifacts: 0,
             exposed_tools: 1,
             memory_snapshot_chars: 0,
             memory_snapshot_tokens: 0,

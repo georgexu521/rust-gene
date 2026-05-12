@@ -45,10 +45,11 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-tool-result normalizer, schema-gate, and context-budget work:
+tool-result normalizer, schema-gate, context-budget, and tool-result-budget
+work:
 
 ```text
-1216 passed; 0 failed
+1219 passed; 0 failed
 ```
 
 Validated locally with:
@@ -359,7 +360,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-12 with `1216 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-12 with `1219 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry
