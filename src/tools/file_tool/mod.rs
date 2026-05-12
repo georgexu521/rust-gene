@@ -263,10 +263,22 @@ fn compute_content_hash(content: &str) -> u64 {
     hasher.finish()
 }
 
+fn content_hash_hex(content: &str) -> String {
+    format!("{:016x}", compute_content_hash(content))
+}
+
 fn file_state_key(path: &Path) -> String {
     canonicalize_or_normalize(path)
         .to_string_lossy()
         .to_string()
+}
+
+fn json_line_number(value: usize) -> serde_json::Value {
+    if value == 0 {
+        serde_json::Value::Null
+    } else {
+        json!(value)
+    }
 }
 
 /// 标记文件已被读取并记录状态（用于变更检测）
@@ -419,7 +431,27 @@ impl Tool for FileReadTool {
                         "[File unchanged since last read: {}] ({} lines)\nIf you need the full content, it was provided in a previous message.",
                         path_str, lines_count
                     ),
-                    json!({ "path": path_str, "unchanged": true, "total_lines": lines_count }),
+                    json!({
+                        "path": path_str,
+                        "resolved_path": path.to_string_lossy().to_string(),
+                        "kind": "file",
+                        "unchanged": true,
+                        "total_lines": lines_count,
+                        "displayed_lines": 0,
+                        "line_start": serde_json::Value::Null,
+                        "line_end": serde_json::Value::Null,
+                        "truncated": false,
+                        "targeted_read": false,
+                        "size_bytes": content.len(),
+                        "content_hash": content_hash_hex(&content),
+                        "display_format": "unchanged_notice",
+                        "content_format": {
+                            "visible_content": "unchanged_notice",
+                            "raw_content_in_tool_result": false,
+                            "display_prefix": serde_json::Value::Null,
+                            "truncation_hint_in_content": false
+                        }
+                    }),
                 );
             }
             cache.mark_read(&path);
@@ -453,6 +485,13 @@ impl Tool for FileReadTool {
         };
 
         let result = selected_lines.join("\n");
+        let truncated = end < lines.len() || start > 0;
+        let line_start_display = if selected_lines.is_empty() {
+            0
+        } else {
+            start + 1
+        };
+        let line_end_display = if selected_lines.is_empty() { 0 } else { end };
 
         // 添加行号信息
         let formatted = if lines.len() > 1 {
@@ -466,7 +505,7 @@ impl Tool for FileReadTool {
             result.clone()
         };
 
-        let truncated_info = if end < lines.len() || start > 0 {
+        let truncated_info = if truncated {
             format!(
                 "\n\n[{} lines total, showing lines {}-{}]",
                 lines.len(),
@@ -481,9 +520,24 @@ impl Tool for FileReadTool {
             format!("{}{}", formatted, truncated_info),
             json!({
                 "path": path_str,
+                "resolved_path": path.to_string_lossy().to_string(),
+                "kind": "file",
                 "total_lines": lines.len(),
                 "displayed_lines": selected_lines.len(),
-                "size_bytes": content.len()
+                "line_start": json_line_number(line_start_display),
+                "line_end": json_line_number(line_end_display),
+                "truncated": truncated,
+                "targeted_read": targeted_read,
+                "size_bytes": content.len(),
+                "content_hash": content_hash_hex(&content),
+                "selected_content_hash": content_hash_hex(&result),
+                "display_format": if lines.len() > 1 { "line_numbered_content" } else { "raw_content" },
+                "content_format": {
+                    "visible_content": if lines.len() > 1 { "line_numbered_display" } else { "raw_content" },
+                    "raw_content_in_tool_result": lines.len() <= 1,
+                    "display_prefix": if lines.len() > 1 { serde_json::Value::String("{line} | ".to_string()) } else { serde_json::Value::Null },
+                    "truncation_hint_in_content": truncated
+                }
             }),
         )
     }
@@ -1823,6 +1877,48 @@ mod tests {
         assert!(broad_repeat
             .content
             .contains("File unchanged since last read"));
+    }
+
+    #[tokio::test]
+    async fn file_read_records_raw_display_boundary_metadata() {
+        let read_tool = FileReadTool;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample.rs");
+        tokio::fs::write(&path, "alpha\nbeta\ngamma\n")
+            .await
+            .unwrap();
+
+        let result = read_tool
+            .execute(
+                json!({
+                    "path": path.to_string_lossy().to_string(),
+                    "offset": 2,
+                    "limit": 2
+                }),
+                ToolContext::new(".", "test-session-read-boundary"),
+            )
+            .await;
+
+        assert!(result.success, "read failed: {:?}", result.error);
+        assert!(result.content.contains("   2 | beta"));
+        assert!(result
+            .content
+            .contains("[3 lines total, showing lines 2-3]"));
+        let data = result.data.expect("file read metadata");
+        assert_eq!(data["kind"], "file");
+        assert_eq!(data["line_start"], 2);
+        assert_eq!(data["line_end"], 3);
+        assert_eq!(data["total_lines"], 3);
+        assert_eq!(data["displayed_lines"], 2);
+        assert_eq!(data["truncated"], true);
+        assert_eq!(data["display_format"], "line_numbered_content");
+        assert_eq!(
+            data["content_format"]["visible_content"],
+            "line_numbered_display"
+        );
+        assert_eq!(data["content_format"]["raw_content_in_tool_result"], false);
+        assert!(data["content_hash"].as_str().unwrap_or("").len() >= 8);
+        assert!(data["selected_content_hash"].as_str().unwrap_or("").len() >= 8);
     }
 
     // ===== FileEditTool 增强测试 =====

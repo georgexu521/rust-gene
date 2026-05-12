@@ -48,7 +48,7 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-foreground PTY smoke, interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
+file-read/search evidence metadata, foreground PTY smoke, interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
 duration/schema/artifacts, shell-command UI summary, shell-command category
 permission risk, shell-command category classifier, terminal provider-schema
 exposure diagnostic, explicit
@@ -57,7 +57,7 @@ provider-protocol matrix, permission-controller, context-budget,
 tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1260 passed; 0 failed
+1262 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -73,6 +73,15 @@ requiring PTY support; non-PTY bash returns a structured `mode=pty` recovery
 diagnostic instead of starting a command it cannot control. `bash mode=pty` now
 runs foreground commands through a `portable-pty` backend and records
 `terminal_requirement.pty_used=true` in the tool result.
+
+Current file-quality slice: `file_read` and `grep` now preserve a clearer
+raw/display boundary in structured tool data. File reads record path, resolved
+path, displayed line range, total/displayed line counts, truncation state,
+content hashes, and whether visible content contains line-number display
+prefixes. Grep records search kind, display format, raw match lines, line
+ranges, byte offsets, and line hashes. EvidenceLedger keeps those file-fact
+metadata fields so closeout and later repair logic can use structured facts
+instead of relying only on rendered text.
 
 Validated locally with:
 

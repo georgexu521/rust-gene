@@ -27,6 +27,13 @@ pub struct FileEvidence {
     pub tool: String,
     pub path: Option<String>,
     pub success: bool,
+    pub kind: Option<String>,
+    pub line_start: Option<u64>,
+    pub line_end: Option<u64>,
+    pub total_lines: Option<u64>,
+    pub displayed_lines: Option<u64>,
+    pub truncated: Option<bool>,
+    pub content_hash: Option<String>,
     pub summary: String,
 }
 
@@ -384,7 +391,14 @@ impl EvidenceLedger {
             tool: tool_call.name.clone(),
             path,
             success: result.success,
-            summary: result_summary(result),
+            kind: result_data_string(result, "kind"),
+            line_start: result_data_u64(result, "line_start"),
+            line_end: result_data_u64(result, "line_end"),
+            total_lines: result_data_u64(result, "total_lines"),
+            displayed_lines: result_data_u64(result, "displayed_lines"),
+            truncated: result_data_bool(result, "truncated"),
+            content_hash: result_data_string(result, "content_hash"),
+            summary: file_result_summary(result),
         });
     }
 
@@ -430,6 +444,65 @@ fn result_summary(result: &ToolResult) -> String {
         result.error.as_deref().unwrap_or("")
     };
     preview(text)
+}
+
+fn file_result_summary(result: &ToolResult) -> String {
+    let summary = result_summary(result);
+    let Some(data) = result.data.as_ref() else {
+        return summary;
+    };
+    let mut metadata = Vec::new();
+    for key in [
+        "kind",
+        "total_lines",
+        "displayed_lines",
+        "line_start",
+        "line_end",
+        "truncated",
+        "content_hash",
+        "display_format",
+    ] {
+        let Some(value) = data.get(key) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let rendered = value
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string());
+        metadata.push(format!("{key}={rendered}"));
+    }
+    if metadata.is_empty() {
+        return summary;
+    }
+    preview(&format!("[metadata: {}] {}", metadata.join(" "), summary))
+}
+
+fn result_data_string(result: &ToolResult, key: &str) -> Option<String> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get(key))
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
+fn result_data_u64(result: &ToolResult, key: &str) -> Option<u64> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get(key))
+        .and_then(|value| value.as_u64())
+}
+
+fn result_data_bool(result: &ToolResult, key: &str) -> Option<bool> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get(key))
+        .and_then(|value| value.as_bool())
 }
 
 fn preview(text: &str) -> String {
@@ -479,6 +552,39 @@ mod tests {
         assert_eq!(snapshot.changed_files, vec!["src/app.py".to_string()]);
         assert_eq!(snapshot.file_facts, 1);
         assert_eq!(snapshot.command_facts, 0);
+    }
+
+    #[test]
+    fn records_file_read_fact_metadata_from_tool_result_data() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "   2 | beta\n   3 | gamma",
+            serde_json::json!({
+                "kind": "file",
+                "line_start": 2,
+                "line_end": 3,
+                "total_lines": 3,
+                "displayed_lines": 2,
+                "truncated": true,
+                "content_hash": "abc123",
+                "display_format": "line_numbered_content"
+            }),
+        );
+
+        ledger.record_tool_result(
+            &tool_call("file_read", serde_json::json!({"path": "src/lib.rs"})),
+            &result,
+        );
+
+        let fact = &ledger.file_facts[0];
+        assert_eq!(fact.kind.as_deref(), Some("file"));
+        assert_eq!(fact.line_start, Some(2));
+        assert_eq!(fact.line_end, Some(3));
+        assert_eq!(fact.total_lines, Some(3));
+        assert_eq!(fact.displayed_lines, Some(2));
+        assert_eq!(fact.truncated, Some(true));
+        assert_eq!(fact.content_hash.as_deref(), Some("abc123"));
+        assert!(fact.summary.contains("line_numbered_content"));
     }
 
     #[test]

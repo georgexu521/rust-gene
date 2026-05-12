@@ -6,10 +6,17 @@ use crate::tools::file_tool::resolve_path;
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::hash::{Hash, Hasher};
 use tracing::info;
 
 /// Grep 文本搜索工具
 pub struct GrepTool;
+
+fn content_hash_hex(content: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
 
 fn grep_no_match_recovery(
     pattern: &str,
@@ -130,12 +137,26 @@ impl Tool for GrepTool {
                 }
 
                 if regex.is_match(line) {
+                    let regex_match = regex.find(line);
                     match_count += 1;
                     matches.push(json!({
                         "file": relative_path.to_string(),
+                        "resolved_file": file_path.to_string_lossy().to_string(),
                         "line": line_num + 1,
+                        "line_start": line_num + 1,
+                        "line_end": line_num + 1,
                         "content": line.to_string(),
-                        "match": regex.find(line).map(|m| m.as_str().to_string())
+                        "raw_line": line.to_string(),
+                        "line_hash": content_hash_hex(line),
+                        "match": regex_match.map(|m| m.as_str().to_string()),
+                        "match_start_byte": regex_match.map(|m| m.start()),
+                        "match_end_byte": regex_match.map(|m| m.end()),
+                        "content_format": {
+                            "visible_content": "raw_source_line",
+                            "raw_content_in_tool_result": true,
+                            "display_prefix": "{line}: ",
+                            "truncation_hint_in_content": false
+                        }
                     }));
                 }
             }
@@ -163,8 +184,19 @@ impl Tool for GrepTool {
                 ),
                 json!({
                     "pattern": pattern,
+                    "path": search_path.display().to_string(),
+                    "include": include_pattern,
+                    "kind": "search",
                     "total_matches": 0,
                     "truncated": false,
+                    "files_searched": files_searched,
+                    "display_format": "no_match_recovery",
+                    "content_format": {
+                        "visible_content": "recovery_text",
+                        "raw_content_in_tool_result": false,
+                        "display_prefix": serde_json::Value::Null,
+                        "truncation_hint_in_content": false
+                    },
                     "matches": [],
                     "search_recovery": recovery,
                 }),
@@ -200,9 +232,19 @@ impl Tool for GrepTool {
             output,
             json!({
                 "pattern": pattern,
+                "path": search_path.display().to_string(),
+                "include": include_pattern,
+                "kind": "search",
                 "total_matches": match_count,
                 "truncated": match_count >= MAX_MATCHES,
                 "files_searched": files_searched,
+                "display_format": "file_headers_with_line_numbers",
+                "content_format": {
+                    "visible_content": "grep_display",
+                    "raw_match_lines_in_data": true,
+                    "display_prefix": "{line}: ",
+                    "truncation_hint_in_content": match_count >= MAX_MATCHES
+                },
                 "matches": matches
             }),
         )
@@ -347,6 +389,16 @@ mod tests {
             result.data.as_ref().unwrap()["matches"][0]["match"],
             "summary_task"
         );
+        let data = result.data.as_ref().unwrap();
+        assert_eq!(data["kind"], "search");
+        assert_eq!(data["display_format"], "file_headers_with_line_numbers");
+        assert_eq!(data["content_format"]["raw_match_lines_in_data"], true);
+        assert_eq!(data["matches"][0]["line_start"], 1);
+        assert_eq!(data["matches"][0]["line_end"], 1);
+        assert_eq!(data["matches"][0]["match_start_byte"], 0);
+        assert_eq!(data["matches"][0]["match_end_byte"], "summary_task".len());
+        assert_eq!(data["matches"][0]["raw_line"], "summary_task() {");
+        assert!(data["matches"][0]["line_hash"].as_str().unwrap_or("").len() >= 8);
     }
 
     #[tokio::test]
