@@ -9,6 +9,10 @@ use async_trait::async_trait;
 use command_classifier::classify_command;
 use serde_json::json;
 use std::process::Stdio;
+use std::{
+    hash::{Hash, Hasher},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
@@ -216,6 +220,141 @@ fn build_audit(
 
 fn classification_data(command: &str) -> serde_json::Value {
     serde_json::to_value(classify_command(command)).unwrap_or_else(|_| json!({}))
+}
+
+fn preview_text(text: &str, max_chars: usize) -> (String, bool) {
+    let mut preview = String::new();
+    let mut truncated = false;
+    for (idx, ch) in text.chars().enumerate() {
+        if idx >= max_chars {
+            truncated = true;
+            break;
+        }
+        preview.push(ch);
+    }
+    (preview, truncated)
+}
+
+fn shell_output_artifact_path(
+    context: &ToolContext,
+    working_dir: &std::path::Path,
+    command: &str,
+    output: &str,
+) -> Option<String> {
+    if output.trim().is_empty() {
+        return None;
+    }
+    let session = context
+        .session_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let session = if session.trim().is_empty() {
+        "session".to_string()
+    } else {
+        session
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    command.hash(&mut hasher);
+    output.len().hash(&mut hasher);
+    let hash = hasher.finish();
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let relative = std::path::PathBuf::from(".priority-agent")
+        .join("tool-results")
+        .join(session)
+        .join(format!("bash-{millis}-{hash:x}.log"));
+    let path = working_dir.join(&relative);
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return None;
+        }
+    }
+    std::fs::write(&path, output).ok()?;
+    Some(relative.to_string_lossy().to_string())
+}
+
+struct ShellResultData<'a> {
+    audit: &'a serde_json::Value,
+    command: &'a str,
+    working_dir: &'a std::path::Path,
+    stdout: &'a str,
+    stderr: &'a str,
+    combined_output: &'a str,
+    exit_code: i32,
+    backend: BashExecutionBackend,
+    timed_out: bool,
+    context: &'a ToolContext,
+}
+
+fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) {
+    const MAX_OUTPUT_LEN: usize = 10000;
+    const STREAM_PREVIEW_CHARS: usize = 1200;
+
+    let (mut content_preview, content_truncated) =
+        preview_text(input.combined_output, MAX_OUTPUT_LEN);
+    if content_truncated {
+        content_preview.push_str(&format!(
+            "\n\n[Output truncated: {} bytes total]",
+            input.combined_output.len()
+        ));
+    }
+    content_preview = append_shell_compatibility_hint(content_preview);
+
+    let output_path = content_truncated
+        .then(|| {
+            shell_output_artifact_path(
+                input.context,
+                input.working_dir,
+                input.command,
+                input.combined_output,
+            )
+        })
+        .flatten();
+    let (stdout_preview, stdout_truncated) = preview_text(input.stdout, STREAM_PREVIEW_CHARS);
+    let (stderr_preview, stderr_truncated) = preview_text(input.stderr, STREAM_PREVIEW_CHARS);
+    let classification = classification_data(input.command);
+    let evidence_status = if input.timed_out {
+        "timed_out"
+    } else if input.exit_code == 0 {
+        "passed"
+    } else {
+        "failed"
+    };
+    let data = json!({
+        "audit": input.audit,
+        "command_classification": classification.clone(),
+        "shell_result": {
+            "command": input.command,
+            "cwd": input.working_dir.display().to_string(),
+            "exit_code": input.exit_code,
+            "stdout_preview": stdout_preview,
+            "stderr_preview": stderr_preview,
+            "output_path": output_path,
+            "duration_ms": serde_json::Value::Null,
+            "timed_out": input.timed_out,
+            "truncated": content_truncated || stdout_truncated || stderr_truncated,
+            "classification": classification,
+            "evidence_status": evidence_status,
+        },
+        "execution": {
+            "exit_code": input.exit_code,
+            "stdout_length": input.stdout.len(),
+            "stderr_length": input.stderr.len(),
+            "backend": input.backend.as_str(),
+            "truncated": content_truncated || stdout_truncated || stderr_truncated
+        }
+    });
+
+    (content_preview, data)
 }
 
 fn shell_compatibility_hint(output: &str) -> Option<&'static str> {
@@ -535,47 +674,28 @@ impl Tool for BashTool {
             result_content.push_str(&stderr);
         }
 
-        // 限制输出长度（UTF-8 安全）
-        const MAX_OUTPUT_LEN: usize = 10000;
-        let truncated = if result_content.len() > MAX_OUTPUT_LEN {
-            let char_count = result_content.chars().count();
-            if char_count > MAX_OUTPUT_LEN {
-                let truncated_content: String =
-                    result_content.chars().take(MAX_OUTPUT_LEN).collect();
-                format!(
-                    "{}\n\n[Output truncated: {} bytes total]",
-                    truncated_content,
-                    result_content.len()
-                )
-            } else {
-                result_content
-            }
-        } else {
-            result_content
-        };
-        let truncated = append_shell_compatibility_hint(truncated);
+        let (result_preview, result_data) = shell_result_data(ShellResultData {
+            audit: &audit,
+            command,
+            working_dir: &working_dir,
+            stdout: &stdout,
+            stderr: &stderr,
+            combined_output: &result_content,
+            exit_code,
+            backend,
+            timed_out: false,
+            context: &context,
+        });
 
         if output.status.success() {
-            ToolResult::success_with_data(
-                truncated,
-                json!({
-                    "audit": audit,
-                    "command_classification": classification_data(command),
-                    "execution": {
-                        "exit_code": exit_code,
-                        "stdout_length": stdout.len(),
-                        "stderr_length": stderr.len(),
-                        "backend": backend.as_str()
-                    }
-                }),
-            )
+            ToolResult::success_with_data(result_preview, result_data)
         } else {
-            error_with_audit(
+            let mut result = ToolResult::error_with_content(
                 format!("Command failed with exit code: {}", exit_code),
-                Some(truncated),
-                &audit,
-                command,
-            )
+                result_preview,
+            );
+            result.data = Some(result_data);
+            result
         }
     }
 
@@ -624,6 +744,7 @@ pub use crate::security::is_dangerous_command;
 mod tests {
     use super::*;
     use crate::test_utils::env_guard::EnvVarGuard;
+    use tempfile::tempdir;
 
     #[test]
     fn bash_tool_contract_keeps_output_non_user_facing() {
@@ -832,6 +953,46 @@ mod tests {
         assert_eq!(classification["category"], "unknown");
         assert_eq!(classification["env_prefixed"], true);
         assert_eq!(classification["safe_for_closeout"], false);
+        let shell_result = result
+            .data
+            .as_ref()
+            .and_then(|d| d.get("shell_result"))
+            .expect("shell_result metadata should be present");
+        assert_eq!(
+            shell_result["command"],
+            "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 echo classified"
+        );
+        assert_eq!(shell_result["exit_code"], 0);
+        assert_eq!(shell_result["evidence_status"], "passed");
+        assert_eq!(shell_result["classification"]["category"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_stores_long_output_artifact() {
+        let tool = BashTool;
+        let dir = tempdir().expect("create temp dir");
+        let params = json!({
+            "command": "printf '%12050s' x",
+            "description": "Generate long output",
+            "backend": "local"
+        });
+        let context = ToolContext::new(dir.path(), "test-session-artifact");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(result.success, "bash failed: {:?}", result.error);
+        assert!(result.content.contains("[Output truncated:"));
+        let shell_result = result
+            .data
+            .as_ref()
+            .and_then(|d| d.get("shell_result"))
+            .expect("shell_result metadata should be present");
+        assert_eq!(shell_result["truncated"], true);
+        let output_path = shell_result["output_path"]
+            .as_str()
+            .expect("long output should be stored");
+        assert!(output_path.starts_with(".priority-agent/tool-results/"));
+        assert!(dir.path().join(output_path).exists());
     }
 
     #[tokio::test]

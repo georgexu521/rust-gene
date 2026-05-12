@@ -48,15 +48,15 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-shell-command UI summary, shell-command category permission risk,
-shell-command category classifier, terminal provider-schema exposure
-diagnostic, explicit patch-synthesis fallback boundary, focused-repair
-proposal boundary, provider-protocol matrix, permission-controller,
-context-budget, tool-result-budget, schema-gate, and tool-result normalizer
-work:
+shell-result schema/artifacts, shell-command UI summary, shell-command
+category permission risk, shell-command category classifier, terminal
+provider-schema exposure diagnostic, explicit patch-synthesis fallback
+boundary, focused-repair proposal boundary, provider-protocol matrix,
+permission-controller, context-budget, tool-result-budget, schema-gate, and
+tool-result normalizer work:
 
 ```text
-1248 passed; 0 failed
+1249 passed; 0 failed
 ```
 
 Validated locally with:
@@ -493,6 +493,9 @@ Latest maintenance note:
 - TUI bash summaries now reuse the shared classifier, so terminal UI labels for
   listing, search, validation, package install, dev server, git mutation, and
   shell mutation match runtime evidence and permission semantics.
+- Bash tool results now include structured `shell_result` metadata and store
+  long combined output under `.priority-agent/tool-results/<session>/...` while
+  keeping provider-facing output bounded to a preview.
 - Code-change workflow strictness is now adaptive instead of medium-risk by
   default: required validation, first code change, failed verification,
   acceptance rejection, and repeated no-edit progress activate the heavier

@@ -315,6 +315,16 @@
   `tool_view` and `command_classifier` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1248 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.3 started. Bash results now include a structured
+  `shell_result` payload with command, cwd, exit code, stdout/stderr previews,
+  truncation status, output artifact path, classifier data, and evidence
+  status. Long combined output is written under
+  `.priority-agent/tool-results/<session>/...`, while model-facing content keeps
+  a bounded preview.
+- Validation after the shell-result schema/artifact slice: `cargo fmt --check`,
+  targeted `bash_tool`, `tool_result`, and `evidence_ledger` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1249 passed; 0 failed`).
 
 ## 当前判断
 
