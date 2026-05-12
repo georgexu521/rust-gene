@@ -381,6 +381,12 @@ fn summarize_bash(args: Option<&Value>, run: &ToolRunView) -> String {
         return terminal_summary(run, "Running shell command", "Ran shell command");
     };
     let command = command.trim();
+    if args
+        .and_then(|args| string_arg(args, "mode"))
+        .is_some_and(|mode| mode == "pty")
+    {
+        return terminal_summary(run, "Running PTY command", "Ran PTY command");
+    }
     let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
     let listed_count = (classification.category
         == crate::tools::bash_tool::command_classifier::ShellCommandCategory::List

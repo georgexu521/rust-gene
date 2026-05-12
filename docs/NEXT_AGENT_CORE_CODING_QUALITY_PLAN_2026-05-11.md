@@ -370,6 +370,16 @@
   --check`, targeted `command_classifier`, `bash_tool`, `permissions`, and
   `tool_view` tests, `cargo check -q`, `cargo clippy --all-features -- -D
   warnings`, and full `cargo test -q` all passed (`1259 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.5 continued. Added the first real foreground PTY
+  smoke path. `bash` now accepts `mode=pty`, runs the command through
+  `portable-pty`, captures merged terminal output, preserves timeout handling,
+  and annotates tool results with `terminal_requirement.pty_used=true`. This is
+  intentionally not a full interactive session yet; it proves TTY-backed command
+  execution before adding input streams and resumable terminal sessions.
+- Validation after the foreground PTY smoke slice: `cargo fmt --check`, `git
+  diff --check`, targeted `bash_tool` tests, `cargo check -q`, `cargo clippy
+  --all-features -- -D warnings`, and full `cargo test -q` all passed (`1260
+  passed; 0 failed`).
 
 ## 当前判断
 
@@ -377,7 +387,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1259 passed; 0 failed`。
+- 最近全量本地测试基线是 `1260 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

@@ -4,6 +4,7 @@
 
 mod background;
 pub mod command_classifier;
+mod pty;
 
 use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolResult};
 use async_trait::async_trait;
@@ -431,19 +432,21 @@ fn pty_unavailable_result(
     working_dir: &std::path::Path,
 ) -> ToolResult {
     let classification = classification_data(command);
-    let message = "Interactive command requires PTY support";
+    let message = "Interactive command requires mode=pty";
     let content = "This command looks interactive and requires a PTY-backed terminal. \
-Current bash execution is non-interactive, so the command was not started.";
+Current bash execution mode is non-interactive, so the command was not started. \
+Retry with mode=\"pty\" for PTY-backed foreground execution.";
     let mut result = ToolResult::error_with_content(message, content);
-    result.error_code = Some(ToolErrorCode::Unavailable);
+    result.error_code = Some(ToolErrorCode::InvalidParams);
     result.data = Some(json!({
         "audit": audit,
         "command_classification": classification.clone(),
         "terminal_requirement": {
             "requires_pty": true,
-            "pty_available": false,
-            "reason": "interactive command requires a PTY; the PTY backend is not implemented or enabled yet",
-            "suggested_recovery": "Use a non-interactive command, run a script with explicit arguments, or enable PTY support when available."
+            "pty_available": true,
+            "pty_used": false,
+            "reason": "interactive command requires a PTY-backed execution mode",
+            "suggested_recovery": "Retry this bash command with mode=\"pty\", or use a non-interactive command/script with explicit arguments."
         },
         "shell_result": {
             "command": command,
@@ -460,6 +463,87 @@ Current bash execution is non-interactive, so the command was not started.";
         }
     }));
     result
+}
+
+fn attach_pty_metadata(data: &mut serde_json::Value, command_requires_pty: bool) {
+    if let Some(object) = data.as_object_mut() {
+        object.insert(
+            "terminal_requirement".to_string(),
+            json!({
+                "requires_pty": command_requires_pty,
+                "pty_available": true,
+                "pty_used": true,
+                "backend": "portable_pty"
+            }),
+        );
+        if let Some(shell_result) = object
+            .get_mut("shell_result")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            shell_result.insert("pty".to_string(), serde_json::Value::Bool(true));
+        }
+    }
+}
+
+async fn execute_pty_command(
+    audit: &serde_json::Value,
+    command: &str,
+    actual_command: &str,
+    working_dir: &std::path::Path,
+    timeout: u64,
+    backend: BashExecutionBackend,
+    context: &ToolContext,
+) -> ToolResult {
+    let classification = classify_command(command);
+    let pty_output = match pty::run_pty_shell(
+        actual_command.to_string(),
+        working_dir.to_path_buf(),
+        timeout,
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(err) => {
+            let mut result = error_with_audit(err, None, audit, command);
+            result.error_code = Some(ToolErrorCode::Unavailable);
+            return result;
+        }
+    };
+    let (result_preview, mut result_data) = shell_result_data(ShellResultData {
+        audit,
+        command,
+        working_dir,
+        stdout: &pty_output.output,
+        stderr: "",
+        combined_output: &pty_output.output,
+        exit_code: pty_output.exit_code,
+        backend,
+        timed_out: pty_output.timed_out,
+        context,
+    });
+    attach_pty_metadata(&mut result_data, classification.requires_pty());
+
+    if pty_output.exit_code == 0 && !pty_output.timed_out {
+        ToolResult::success_with_data(result_preview, result_data)
+    } else if pty_output.timed_out {
+        let mut result = ToolResult::error_with_content(
+            format!("PTY command timed out after {} seconds", timeout),
+            result_preview,
+        );
+        result.error_code = Some(ToolErrorCode::Timeout);
+        result.data = Some(result_data);
+        result
+    } else {
+        let mut result = ToolResult::error_with_content(
+            format!(
+                "PTY command failed with exit code: {}",
+                pty_output.exit_code
+            ),
+            result_preview,
+        );
+        result.data = Some(result_data);
+        result
+    }
 }
 
 #[async_trait]
@@ -495,8 +579,8 @@ impl Tool for BashTool {
                 },
                 "mode": {
                     "type": "string",
-                    "enum": ["foreground", "background"],
-                    "description": "Run normally or start a background command and return a handle.",
+                    "enum": ["foreground", "background", "pty"],
+                    "description": "Run normally, start a background command and return a handle, or run a foreground command through a PTY-backed terminal.",
                     "default": "foreground"
                 },
                 "working_dir": {
@@ -532,8 +616,8 @@ impl Tool for BashTool {
         let description = params["description"].as_str().unwrap_or(command);
         let timeout = effective_timeout_secs(params["timeout"].as_u64());
         let mode = params["mode"].as_str().unwrap_or("foreground");
-        if !matches!(mode, "foreground" | "background") {
-            return ToolResult::error("mode must be 'foreground' or 'background'");
+        if !matches!(mode, "foreground" | "background" | "pty") {
+            return ToolResult::error("mode must be 'foreground', 'background', or 'pty'");
         }
 
         // working_dir 安全校验
@@ -652,7 +736,7 @@ impl Tool for BashTool {
         }
 
         let classification = classify_command(command);
-        if classification.requires_pty() {
+        if classification.requires_pty() && mode != "pty" {
             return pty_unavailable_result(&audit, command, &working_dir);
         }
 
@@ -685,6 +769,19 @@ impl Tool for BashTool {
                 ),
                 Err(err) => error_with_audit(err, None, &audit, command),
             };
+        }
+
+        if mode == "pty" {
+            return execute_pty_command(
+                &audit,
+                command,
+                &actual_command,
+                &working_dir,
+                timeout,
+                backend,
+                &context,
+            )
+            .await;
         }
 
         cmd.arg("-c")
@@ -1086,12 +1183,39 @@ mod tests {
         let result = tool.execute(params, context).await;
 
         assert!(!result.success);
-        assert_eq!(result.error_code, Some(ToolErrorCode::Unavailable));
+        assert_eq!(result.error_code, Some(ToolErrorCode::InvalidParams));
         let data = result.data.as_ref().expect("diagnostic data");
         assert_eq!(data["command_classification"]["category"], "interactive");
         assert_eq!(data["terminal_requirement"]["requires_pty"], true);
-        assert_eq!(data["terminal_requirement"]["pty_available"], false);
+        assert_eq!(data["terminal_requirement"]["pty_available"], true);
+        assert_eq!(data["terminal_requirement"]["pty_used"], false);
         assert_eq!(data["shell_result"]["evidence_status"], "not_run");
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_pty_mode_runs_with_tty_stdout() {
+        let tool = BashTool;
+        let dir = tempdir().expect("create temp dir");
+        let params = json!({
+            "command": "test -t 1 && printf tty || printf notty",
+            "description": "Check PTY stdout",
+            "backend": "local",
+            "mode": "pty",
+            "working_dir": dir.path(),
+            "timeout": 5
+        });
+        let context = ToolContext::new(dir.path(), "test-session-pty-mode");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(result.success, "pty bash failed: {:?}", result.error);
+        assert!(result.content.contains("tty"));
+        assert!(!result.content.contains("notty"));
+        let data = result.data.as_ref().expect("pty result data");
+        assert_eq!(data["terminal_requirement"]["pty_used"], true);
+        assert_eq!(data["terminal_requirement"]["pty_available"], true);
+        assert_eq!(data["shell_result"]["pty"], true);
+        assert_eq!(data["shell_result"]["evidence_status"], "passed");
     }
 
     #[tokio::test]

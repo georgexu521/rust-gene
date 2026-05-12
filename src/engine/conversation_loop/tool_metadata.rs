@@ -216,6 +216,10 @@ pub(super) fn tool_execution_start_progress(
         let Some(command) = arguments["command"].as_str() else {
             return "Executing bash...".to_string();
         };
+        if arguments["mode"].as_str() == Some("pty") {
+            let command = safe_prefix_by_bytes(command, 80);
+            return format!("Running PTY command: {}", command);
+        }
         let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
         let prefix = match classification.validation_family {
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoTest) => {
