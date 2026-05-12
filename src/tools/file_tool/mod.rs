@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde_json::json;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -104,16 +103,40 @@ fn desanitize(input: &str) -> String {
         .replace("<NEWLINE>", "\n")
 }
 
+#[derive(Clone, Debug, Default)]
+struct FileReadRecord {
+    full_read: bool,
+    ranges: Vec<(usize, usize)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadBeforeEditStatus {
+    Allowed,
+    NotRead,
+    PartialOnly,
+}
+
 /// 文件读取状态跟踪（用于 must-read-before-edit 检查）
-/// 全局读取文件状态跟踪（按会话）
-static READ_FILES: Lazy<Mutex<HashMap<String, HashSet<String>>>> =
+/// 全局读取文件状态跟踪（按会话和规范文件身份）
+static READ_FILES: Lazy<Mutex<HashMap<String, HashMap<String, FileReadRecord>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// 标记文件已被读取（用于 must-read-before-edit 检查）
 pub fn mark_file_read(session_id: &str, file_path: &str) {
+    mark_file_read_coverage(session_id, file_path, None);
+}
+
+fn mark_file_read_coverage(session_id: &str, file_path: &str, line_range: Option<(usize, usize)>) {
     let mut tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
     let session_files = tracker.entry(session_id.to_string()).or_default();
-    session_files.insert(file_path.to_string());
+    let record = session_files.entry(file_path.to_string()).or_default();
+    if let Some((start, end)) = line_range {
+        if start > 0 && end >= start {
+            record.ranges.push((start, end));
+        }
+    } else {
+        record.full_read = true;
+    }
 }
 
 /// 检查文件是否已被读取
@@ -121,8 +144,52 @@ pub fn is_file_read(session_id: &str, file_path: &str) -> bool {
     let tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
     tracker
         .get(session_id)
-        .map(|s: &HashSet<String>| s.contains(file_path))
-        .unwrap_or(false)
+        .and_then(|files| files.get(file_path))
+        .is_some()
+}
+
+fn read_before_edit_status(
+    session_id: &str,
+    file_path: &str,
+    line_start: Option<usize>,
+    line_end: Option<usize>,
+) -> ReadBeforeEditStatus {
+    let tracker = READ_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(record) = tracker
+        .get(session_id)
+        .and_then(|files| files.get(file_path))
+    else {
+        return ReadBeforeEditStatus::NotRead;
+    };
+    if record.full_read {
+        return ReadBeforeEditStatus::Allowed;
+    }
+    let Some((start, end)) = line_start.zip(line_end) else {
+        return ReadBeforeEditStatus::PartialOnly;
+    };
+    if record
+        .ranges
+        .iter()
+        .any(|(range_start, range_end)| *range_start <= start && *range_end >= end)
+    {
+        ReadBeforeEditStatus::Allowed
+    } else {
+        ReadBeforeEditStatus::PartialOnly
+    }
+}
+
+fn file_read_state_guidance(path: &str, status: ReadBeforeEditStatus) -> String {
+    match status {
+        ReadBeforeEditStatus::Allowed => String::new(),
+        ReadBeforeEditStatus::NotRead => format!(
+            "File '{}' has not been read yet. You must read a file before editing it. Use file_read tool first.",
+            path
+        ),
+        ReadBeforeEditStatus::PartialOnly => format!(
+            "File '{}' has only been partially read in this session. Re-read the full file before exact/insert edits, or use line_start/line_end within a previously read range.",
+            path
+        ),
+    }
 }
 
 /// 清除会话的读取状态
@@ -288,7 +355,17 @@ pub fn mark_file_read_with_state(
     content: &str,
     mtime: std::time::SystemTime,
 ) {
-    mark_file_read(session_id, file_path);
+    mark_file_read_with_state_and_coverage(session_id, file_path, content, mtime, None);
+}
+
+fn mark_file_read_with_state_and_coverage(
+    session_id: &str,
+    file_path: &str,
+    content: &str,
+    mtime: std::time::SystemTime,
+    line_range: Option<(usize, usize)>,
+) {
+    mark_file_read_coverage(session_id, file_path, line_range);
     let mut states = FILE_STATES.lock().unwrap_or_else(|e| e.into_inner());
     let key = format!("{}:{}", session_id, file_path);
     states.insert(
@@ -442,6 +519,7 @@ impl Tool for FileReadTool {
                         "line_end": serde_json::Value::Null,
                         "truncated": false,
                         "targeted_read": false,
+                        "read_coverage": "full",
                         "size_bytes": content.len(),
                         "content_hash": content_hash_hex(&content),
                         "display_format": "unchanged_notice",
@@ -457,12 +535,10 @@ impl Tool for FileReadTool {
             cache.mark_read(&path);
         }
 
-        // 标记文件已被读取（用于 must-read-before-edit 检查）
         let mtime = std::fs::metadata(&path)
             .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         let state_key = file_state_key(&path);
-        mark_file_read_with_state(&context.session_id, &state_key, &content, mtime);
 
         // 应用 limit 和 offset
         let lines: Vec<&str> = content.lines().collect();
@@ -492,6 +568,19 @@ impl Tool for FileReadTool {
             start + 1
         };
         let line_end_display = if selected_lines.is_empty() { 0 } else { end };
+        let read_coverage = if targeted_read {
+            (line_start_display > 0 && line_end_display >= line_start_display)
+                .then_some((line_start_display, line_end_display))
+        } else {
+            None
+        };
+        mark_file_read_with_state_and_coverage(
+            &context.session_id,
+            &state_key,
+            &content,
+            mtime,
+            read_coverage,
+        );
 
         // 添加行号信息
         let formatted = if lines.len() > 1 {
@@ -528,6 +617,7 @@ impl Tool for FileReadTool {
                 "line_end": json_line_number(line_end_display),
                 "truncated": truncated,
                 "targeted_read": targeted_read,
+                "read_coverage": if targeted_read { "partial" } else { "full" },
                 "size_bytes": content.len(),
                 "content_hash": content_hash_hex(&content),
                 "selected_content_hash": content_hash_hex(&result),
@@ -1078,14 +1168,12 @@ impl Tool for FileEditTool {
             .as_ref()
             .map(|v| v.as_str())
             == Ok("1")
-            && !is_file_read(&context.session_id, &state_key)
         {
-            return ToolResult::error(
-                format!(
-                    "File '{}' has not been read yet. You must read a file before editing it. Use file_read tool first.",
-                    path_str
-                )
-            );
+            let status =
+                read_before_edit_status(&context.session_id, &state_key, line_start, line_end);
+            if status != ReadBeforeEditStatus::Allowed {
+                return ToolResult::error(file_read_state_guidance(path_str, status));
+            }
         }
 
         // 2. 文件修改检测：检查文件是否在读取后被外部修改
@@ -1911,6 +1999,7 @@ mod tests {
         assert_eq!(data["total_lines"], 3);
         assert_eq!(data["displayed_lines"], 2);
         assert_eq!(data["truncated"], true);
+        assert_eq!(data["read_coverage"], "partial");
         assert_eq!(data["display_format"], "line_numbered_content");
         assert_eq!(
             data["content_format"]["visible_content"],
@@ -2024,6 +2113,96 @@ mod tests {
         assert_eq!(content, "hello changed\n");
 
         let _ = tokio::fs::remove_dir_all(&root).await;
+        clear_read_files(session_id);
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_smart_edit_rejects_exact_edit_after_partial_read() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_SMART_EDIT", "1");
+        let read_tool = FileReadTool;
+        let edit_tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_partial_read_exact.txt";
+        let session_id = "test-session-edit-partial-read-exact";
+        tokio::fs::write(path, "line1\nline2\nline3\n")
+            .await
+            .unwrap();
+
+        let read_result = read_tool
+            .execute(
+                json!({
+                    "path": path,
+                    "offset": 2,
+                    "limit": 1
+                }),
+                ToolContext::new(".", session_id),
+            )
+            .await;
+        assert!(read_result.success, "read failed: {:?}", read_result.error);
+
+        let edit_result = edit_tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "line2",
+                    "new_string": "edited"
+                }),
+                ToolContext::new(".", session_id),
+            )
+            .await;
+
+        assert!(!edit_result.success);
+        let err = edit_result.error.unwrap_or_default();
+        assert!(err.contains("only been partially read"));
+        assert!(err.contains("line_start/line_end"));
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(content, "line1\nline2\nline3\n");
+
+        let _ = tokio::fs::remove_file(path).await;
+        clear_read_files(session_id);
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_smart_edit_allows_line_range_after_partial_read() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_SMART_EDIT", "1");
+        let read_tool = FileReadTool;
+        let edit_tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_partial_read_line_range.txt";
+        let session_id = "test-session-edit-partial-read-line-range";
+        tokio::fs::write(path, "line1\nline2\nline3\n")
+            .await
+            .unwrap();
+
+        let read_result = read_tool
+            .execute(
+                json!({
+                    "path": path,
+                    "offset": 2,
+                    "limit": 1
+                }),
+                ToolContext::new(".", session_id),
+            )
+            .await;
+        assert!(read_result.success, "read failed: {:?}", read_result.error);
+
+        let edit_result = edit_tool
+            .execute(
+                json!({
+                    "path": path,
+                    "line_start": 2,
+                    "line_end": 2,
+                    "new_string": "edited"
+                }),
+                ToolContext::new(".", session_id),
+            )
+            .await;
+
+        assert!(edit_result.success, "edit failed: {:?}", edit_result.error);
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(content, "line1\nedited\nline3\n");
+
+        let _ = tokio::fs::remove_file(path).await;
         clear_read_files(session_id);
     }
 

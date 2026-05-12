@@ -391,6 +391,17 @@
   --check`, `git diff --check`, targeted `file_tool`, `grep`, and
   `evidence_ledger` tests, `cargo check -q`, `cargo clippy --all-features -- -D
   warnings`, and full `cargo test -q` all passed (`1262 passed; 0 failed`).
+- 2026-05-12: Phase 3 Batch 3.1 started. Read state now records full-file reads
+  separately from targeted line-range reads. With `PRIORITY_AGENT_SMART_EDIT=1`,
+  exact/insert edits require a full read, while `line_start`/`line_end` edits
+  are allowed when the requested line range is covered by a previous targeted
+  read. This prevents a narrow `file_read offset/limit` from being treated as
+  full-file context.
+- Validation after the partial-read edit-state slice: `cargo fmt --check`, `git
+  diff --check`, targeted `file_tool` and `evidence_ledger` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`,
+  `cargo check --features experimental-api-server -q`, and full `cargo test -q`
+  all passed (`1264 passed; 0 failed`).
 
 ## 当前判断
 
@@ -398,7 +409,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1262 passed; 0 failed`。
+- 最近全量本地测试基线是 `1264 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

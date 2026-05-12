@@ -459,6 +459,7 @@ fn file_result_summary(result: &ToolResult) -> String {
         "line_start",
         "line_end",
         "truncated",
+        "read_coverage",
         "content_hash",
         "display_format",
     ] {
