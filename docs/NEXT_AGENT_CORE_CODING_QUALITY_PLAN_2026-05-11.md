@@ -296,6 +296,16 @@
   `evidence_ledger`, `tool_result`, `progress`, and live-eval required-command
   tests, `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and
   full `cargo test -q` all passed (`1246 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.2 continued. `PermissionContext` now uses the
+  shared shell command category for bash risk: read/list/search/validation/test
+  commands are low risk, package installs/dev servers/file mutations/git
+  mutations remain medium or higher, and high-risk/network/outside-workspace
+  checks still override to high. Permission explanations include the shell
+  category so approval prompts and diagnostics share the same semantic source.
+- Validation after the permission-risk category slice: `cargo fmt --check`,
+  targeted `permissions` and `command_classifier` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1247 passed; 0 failed`).
 
 ## 当前判断
 

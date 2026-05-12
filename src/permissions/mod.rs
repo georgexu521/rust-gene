@@ -511,16 +511,36 @@ impl PermissionContext {
                 let cmd = params["command"]
                     .as_str()
                     .or_else(|| params["cmd"].as_str())
-                    .unwrap_or_default()
-                    .to_lowercase();
-                if Self::is_high_risk_command(&cmd)
-                    || Self::has_external_network_command(&cmd)
-                    || Self::has_remote_git_command(&cmd)
-                    || self.bash_references_outside_workspace_path(&cmd)
+                    .unwrap_or_default();
+                let lower = cmd.to_lowercase();
+                let classification =
+                    crate::tools::bash_tool::command_classifier::classify_command(cmd);
+                if Self::is_high_risk_command(cmd)
+                    || Self::has_external_network_command(&lower)
+                    || Self::has_remote_git_command(&lower)
+                    || self.bash_references_outside_workspace_path(&lower)
                 {
                     RiskLevel::High
                 } else {
-                    RiskLevel::Medium
+                    match classification.category {
+                        crate::tools::bash_tool::command_classifier::ShellCommandCategory::Read
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::List
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::Search
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::Validation
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::TestRun => {
+                            RiskLevel::Low
+                        }
+                        crate::tools::bash_tool::command_classifier::ShellCommandCategory::Destructive => {
+                            RiskLevel::High
+                        }
+                        crate::tools::bash_tool::command_classifier::ShellCommandCategory::PackageInstall
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::DevServer
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::FileMutation
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::GitMutation
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::Unknown => {
+                            RiskLevel::Medium
+                        }
+                    }
                 }
             }
             "file_write" | "file_edit" => {
@@ -794,6 +814,11 @@ impl PermissionContext {
         let mut warnings = Vec::new();
         if tool_name == "bash" {
             let cmd = params["command"].as_str().unwrap_or_default();
+            let classification = crate::tools::bash_tool::command_classifier::classify_command(cmd);
+            reasons.push(format!(
+                "Shell command category: {:?}",
+                classification.category
+            ));
             if Self::is_high_risk_command(cmd) {
                 warnings.push("HIGH_RISK_COMMAND: dangerous shell command detected".to_string());
             }
@@ -1159,11 +1184,32 @@ mod tests {
         };
 
         let bash_params = serde_json::json!({"command": "ls -la"});
-        assert!(ctx.requires_confirmation("bash", &bash_params));
+        let package_install = serde_json::json!({"command": "pip3 install pygame"});
+        assert!(!ctx.requires_confirmation("bash", &bash_params));
+        assert!(ctx.requires_confirmation("bash", &package_install));
         assert!(ctx.requires_confirmation("agent", &serde_json::Value::Null));
         assert!(!ctx.requires_confirmation("file_read", &serde_json::Value::Null));
         let safe_write = serde_json::json!({"path": "src/main.rs", "content": "fn main() {}"});
         assert!(ctx.requires_confirmation("file_write", &safe_write));
+    }
+
+    #[test]
+    fn bash_permission_explanation_includes_command_category() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoLowRisk,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("."),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        let decision = ctx.explain_decision("bash", &serde_json::json!({"command": "rg TODO src"}));
+
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("Shell command category: Search")));
+        assert_eq!(decision.risk_level, RiskLevel::Low);
     }
 
     #[test]

@@ -48,14 +48,14 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-shell-command category classifier, terminal provider-schema exposure
-diagnostic, explicit patch-synthesis fallback boundary, focused-repair
-proposal boundary, provider-protocol matrix, permission-controller,
-context-budget, tool-result-budget, schema-gate, and tool-result normalizer
-work:
+shell-command category permission risk, shell-command category classifier,
+terminal provider-schema exposure diagnostic, explicit patch-synthesis fallback
+boundary, focused-repair proposal boundary, provider-protocol matrix,
+permission-controller, context-budget, tool-result-budget, schema-gate, and
+tool-result normalizer work:
 
 ```text
-1246 passed; 0 failed
+1247 passed; 0 failed
 ```
 
 Validated locally with:
@@ -485,6 +485,10 @@ Latest maintenance note:
   bash result metadata, evidence, tool summaries, and progress labels. Ordinary
   `rg ...` commands are search operations; only explicit `! rg ...` assertions
   count as required validation.
+- Bash permission risk now uses that shared category: read/list/search and
+  validation commands are low risk, while package install, dev server, file
+  mutation, git mutation, network, outside-workspace, and destructive commands
+  keep stronger confirmation behavior.
 - Code-change workflow strictness is now adaptive instead of medium-risk by
   default: required validation, first code change, failed verification,
   acceptance rejection, and repeated no-edit progress activate the heavier
