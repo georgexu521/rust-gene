@@ -539,6 +539,7 @@ impl PermissionContext {
                         }
                         crate::tools::bash_tool::command_classifier::ShellCommandCategory::PackageInstall
                         | crate::tools::bash_tool::command_classifier::ShellCommandCategory::DevServer
+                        | crate::tools::bash_tool::command_classifier::ShellCommandCategory::Interactive
                         | crate::tools::bash_tool::command_classifier::ShellCommandCategory::FileMutation
                         | crate::tools::bash_tool::command_classifier::ShellCommandCategory::GitMutation
                         | crate::tools::bash_tool::command_classifier::ShellCommandCategory::Unknown => {

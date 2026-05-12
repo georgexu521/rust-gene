@@ -360,6 +360,16 @@
   `git diff --check`, targeted `bash_tool`, `intent_router`, and core-tool
   registry tests, `cargo check -q`, `cargo clippy --all-features -- -D
   warnings`, and full `cargo test -q` all passed (`1258 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.5 started. Added the PTY boundary diagnostic for
+  obvious interactive commands. `bash` now classifies bare REPL/shell commands,
+  `node -i`, bare `ssh` sessions, explicit SSH PTY requests, and package
+  scaffolding prompts such as `npm init` as `interactive`; because the current
+  backend is non-PTY, it returns a structured `terminal_requirement` result with
+  `evidence_status=not_run` instead of hanging or implying the command ran.
+- Validation after the PTY diagnostic slice: `cargo fmt --check`, `git diff
+  --check`, targeted `command_classifier`, `bash_tool`, `permissions`, and
+  `tool_view` tests, `cargo check -q`, `cargo clippy --all-features -- -D
+  warnings`, and full `cargo test -q` all passed (`1259 passed; 0 failed`).
 
 ## 当前判断
 
@@ -367,7 +377,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1258 passed; 0 failed`。
+- 最近全量本地测试基线是 `1259 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

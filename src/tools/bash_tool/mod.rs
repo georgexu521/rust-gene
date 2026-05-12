@@ -5,7 +5,7 @@
 mod background;
 pub mod command_classifier;
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolResult};
 use async_trait::async_trait;
 use background::{background_shell_result_data, background_started_content};
 pub use background::{BashCancelTool, BashOutputTool, BashTasksTool};
@@ -425,6 +425,43 @@ fn timeout_result(
     result
 }
 
+fn pty_unavailable_result(
+    audit: &serde_json::Value,
+    command: &str,
+    working_dir: &std::path::Path,
+) -> ToolResult {
+    let classification = classification_data(command);
+    let message = "Interactive command requires PTY support";
+    let content = "This command looks interactive and requires a PTY-backed terminal. \
+Current bash execution is non-interactive, so the command was not started.";
+    let mut result = ToolResult::error_with_content(message, content);
+    result.error_code = Some(ToolErrorCode::Unavailable);
+    result.data = Some(json!({
+        "audit": audit,
+        "command_classification": classification.clone(),
+        "terminal_requirement": {
+            "requires_pty": true,
+            "pty_available": false,
+            "reason": "interactive command requires a PTY; the PTY backend is not implemented or enabled yet",
+            "suggested_recovery": "Use a non-interactive command, run a script with explicit arguments, or enable PTY support when available."
+        },
+        "shell_result": {
+            "command": command,
+            "cwd": working_dir.display().to_string(),
+            "exit_code": serde_json::Value::Null,
+            "stdout_preview": "",
+            "stderr_preview": content,
+            "output_path": serde_json::Value::Null,
+            "duration_ms": serde_json::Value::Null,
+            "timed_out": false,
+            "truncated": false,
+            "classification": classification,
+            "evidence_status": "not_run"
+        }
+    }));
+    result
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -612,6 +649,11 @@ impl Tool for BashTool {
                     command,
                 );
             }
+        }
+
+        let classification = classify_command(command);
+        if classification.requires_pty() {
+            return pty_unavailable_result(&audit, command, &working_dir);
         }
 
         // 执行命令（带超时 + 子进程 kill）
@@ -1029,6 +1071,27 @@ mod tests {
         assert_eq!(shell_result["exit_code"], 0);
         assert_eq!(shell_result["evidence_status"], "passed");
         assert_eq!(shell_result["classification"]["category"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_rejects_interactive_command_with_pty_diagnostic() {
+        let tool = BashTool;
+        let params = json!({
+            "command": "python3",
+            "description": "Start interactive Python",
+            "backend": "local"
+        });
+        let context = ToolContext::new(".", "test-session-pty-diagnostic");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(!result.success);
+        assert_eq!(result.error_code, Some(ToolErrorCode::Unavailable));
+        let data = result.data.as_ref().expect("diagnostic data");
+        assert_eq!(data["command_classification"]["category"], "interactive");
+        assert_eq!(data["terminal_requirement"]["requires_pty"], true);
+        assert_eq!(data["terminal_requirement"]["pty_available"], false);
+        assert_eq!(data["shell_result"]["evidence_status"], "not_run");
     }
 
     #[tokio::test]

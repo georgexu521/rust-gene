@@ -268,6 +268,9 @@ pub(super) fn tool_execution_start_progress(
                 crate::tools::bash_tool::command_classifier::ShellCommandCategory::DevServer => {
                     "Starting dev server"
                 }
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::Interactive => {
+                    "Checking terminal requirement"
+                }
                 crate::tools::bash_tool::command_classifier::ShellCommandCategory::GitMutation => {
                     "Running git mutation"
                 }

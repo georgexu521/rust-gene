@@ -48,7 +48,7 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-background-shell handles/output artifacts/task listing, shell-result
+interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
 duration/schema/artifacts, shell-command UI summary, shell-command category
 permission risk, shell-command category classifier, terminal provider-schema
 exposure diagnostic, explicit
@@ -57,7 +57,7 @@ provider-protocol matrix, permission-controller, context-budget,
 tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1258 passed; 0 failed
+1259 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -67,7 +67,11 @@ process group, foreground timeout results now carry structured
 backgrounded/timed-out/cancelled states. Long background output now also writes
 an `output_path` artifact under `.priority-agent/tool-results/<session>/...`.
 `bash_tasks` lists known background shell handles when the model needs to
-recover or inspect active tasks.
+recover or inspect active tasks. Obvious interactive commands such as bare
+`python3`, `node -i`, bare `ssh` sessions, and `npm init` are now classified as
+requiring PTY support; non-PTY bash returns a structured
+`terminal_requirement` diagnostic instead of starting a command it cannot
+control.
 
 Validated locally with:
 

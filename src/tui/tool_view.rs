@@ -429,6 +429,13 @@ fn summarize_bash(args: Option<&Value>, run: &ToolRunView) -> String {
             crate::tools::bash_tool::command_classifier::ShellCommandCategory::DevServer => {
                 terminal_summary(run, "Starting dev server", "Started dev server")
             }
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::Interactive => {
+                terminal_summary(
+                    run,
+                    "Checking terminal requirement",
+                    "Checked terminal requirement",
+                )
+            }
             crate::tools::bash_tool::command_classifier::ShellCommandCategory::GitMutation => {
                 terminal_summary(run, "Running git command", "Ran git command")
             }

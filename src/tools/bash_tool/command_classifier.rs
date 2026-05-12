@@ -19,6 +19,7 @@ pub enum ShellCommandCategory {
     Validation,
     PackageInstall,
     DevServer,
+    Interactive,
     TestRun,
     FileMutation,
     GitMutation,
@@ -60,6 +61,10 @@ pub struct CommandClassification {
 impl CommandClassification {
     pub fn is_safe_validation(&self) -> bool {
         self.command_kind == CommandKind::Validation && self.safe_for_closeout
+    }
+
+    pub fn requires_pty(&self) -> bool {
+        self.category == ShellCommandCategory::Interactive
     }
 }
 
@@ -223,7 +228,7 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
         Some(ValidationFamily::PythonUnittest)
     } else if lower == "go test" || lower.starts_with("go test ") {
         Some(ValidationFamily::GoTest)
-    } else if lower.starts_with("node ") {
+    } else if lower.starts_with("node ") && !lower.starts_with("node -i") {
         Some(ValidationFamily::NodeScript)
     } else if lower.starts_with("python3 -c ") || lower.starts_with("python -c ") {
         Some(ValidationFamily::Pytest)
@@ -255,7 +260,9 @@ fn command_kind_for_category(category: ShellCommandCategory) -> CommandKind {
         | ShellCommandCategory::FileMutation
         | ShellCommandCategory::GitMutation => CommandKind::Mutation,
         ShellCommandCategory::Destructive => CommandKind::Dangerous,
-        ShellCommandCategory::DevServer | ShellCommandCategory::Unknown => CommandKind::Unknown,
+        ShellCommandCategory::DevServer
+        | ShellCommandCategory::Interactive
+        | ShellCommandCategory::Unknown => CommandKind::Unknown,
     }
 }
 
@@ -331,6 +338,9 @@ fn shell_command_category(command: &str) -> ShellCommandCategory {
     if is_dev_server_command(&lower) {
         return ShellCommandCategory::DevServer;
     }
+    if is_interactive_command(&lower) {
+        return ShellCommandCategory::Interactive;
+    }
     if is_git_mutation_command(&lower) {
         return ShellCommandCategory::GitMutation;
     }
@@ -376,6 +386,75 @@ fn is_dev_server_command(lower: &str) -> bool {
         || lower.starts_with("vite ")
         || lower == "next dev"
         || lower.starts_with("next dev ")
+}
+
+fn is_interactive_command(lower: &str) -> bool {
+    let lower = lower.trim();
+    let first = lower.split_whitespace().next();
+    if matches!(
+        first,
+        Some(
+            "bash"
+                | "sh"
+                | "zsh"
+                | "fish"
+                | "python"
+                | "python3"
+                | "node"
+                | "irb"
+                | "psql"
+                | "mysql"
+                | "sqlite3"
+                | "redis-cli"
+        )
+    ) && lower.split_whitespace().count() == 1
+    {
+        return true;
+    }
+
+    lower.starts_with("python -i")
+        || lower.starts_with("python3 -i")
+        || lower.starts_with("node -i")
+        || is_interactive_ssh_command(lower)
+        || lower == "npm init"
+        || lower.starts_with("npm init ")
+        || lower.starts_with("pnpm create ")
+        || lower.starts_with("yarn create ")
+}
+
+fn is_interactive_ssh_command(lower: &str) -> bool {
+    let tokens = lower.split_whitespace().collect::<Vec<_>>();
+    if tokens.first() != Some(&"ssh") {
+        return false;
+    }
+    if tokens
+        .iter()
+        .skip(1)
+        .any(|token| matches!(*token, "-t" | "-tt"))
+    {
+        return true;
+    }
+
+    let mut index = 1usize;
+    while index < tokens.len() {
+        let token = tokens[index];
+        if matches!(
+            token,
+            "-b" | "-c" | "-e" | "-f" | "-i" | "-j" | "-l" | "-m" | "-o" | "-p" | "-s" | "-w"
+        ) {
+            index += 2;
+            continue;
+        }
+        if token.starts_with('-') {
+            index += 1;
+            continue;
+        }
+
+        let remote_command_tokens = tokens.len().saturating_sub(index + 1);
+        return remote_command_tokens == 0;
+    }
+
+    false
 }
 
 fn is_git_mutation_command(lower: &str) -> bool {
@@ -556,6 +635,28 @@ mod tests {
         let dev_server = classify_command("npm run dev");
         assert_eq!(dev_server.command_kind, CommandKind::Unknown);
         assert_eq!(dev_server.category, ShellCommandCategory::DevServer);
+
+        let interactive = classify_command("python3");
+        assert_eq!(interactive.command_kind, CommandKind::Unknown);
+        assert_eq!(interactive.category, ShellCommandCategory::Interactive);
+        assert!(interactive.requires_pty());
+
+        let node_repl = classify_command("node -i");
+        assert_eq!(node_repl.category, ShellCommandCategory::Interactive);
+        assert_eq!(node_repl.validation_family, None);
+        assert!(node_repl.requires_pty());
+
+        let script = classify_command("python3 script.py");
+        assert_eq!(script.category, ShellCommandCategory::Unknown);
+        assert!(!script.requires_pty());
+
+        let ssh_session = classify_command("ssh -p 2222 example.com");
+        assert_eq!(ssh_session.category, ShellCommandCategory::Interactive);
+        assert!(ssh_session.requires_pty());
+
+        let ssh_remote_command = classify_command("ssh example.com ls -la");
+        assert_eq!(ssh_remote_command.category, ShellCommandCategory::Unknown);
+        assert!(!ssh_remote_command.requires_pty());
 
         let git = classify_command("git add src/main.rs");
         assert_eq!(git.command_kind, CommandKind::Mutation);
