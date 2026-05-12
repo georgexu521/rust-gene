@@ -65,6 +65,10 @@ pub enum ErrorCategory {
     ConnectionError,
     /// JSON 解析错误（API 返回了畸形响应）
     MalformedResponse,
+    /// 请求 schema / 参数不符合 provider 要求
+    RequestSchema,
+    /// provider 对消息协议顺序或 tool-call 关联的拒绝
+    ProviderProtocol,
     /// 未知错误
     Unknown,
 }
@@ -82,6 +86,8 @@ impl fmt::Display for ErrorCategory {
             ErrorCategory::Timeout => write!(f, "timeout"),
             ErrorCategory::ConnectionError => write!(f, "connection_error"),
             ErrorCategory::MalformedResponse => write!(f, "malformed_response"),
+            ErrorCategory::RequestSchema => write!(f, "schema"),
+            ErrorCategory::ProviderProtocol => write!(f, "provider_protocol"),
             ErrorCategory::Unknown => write!(f, "unknown"),
         }
     }
@@ -193,6 +199,21 @@ impl ErrorClassifier {
                         RecoveryAction::CompressAndRetry,
                         "Context window overflow".to_string(),
                     )
+                } else if Self::is_provider_protocol_error(&body_lower) {
+                    ClassifiedError::new(
+                        ErrorCategory::ProviderProtocol,
+                        RecoveryAction::Abort,
+                        format!(
+                            "Provider protocol rejected request: {}",
+                            truncate(body, 200)
+                        ),
+                    )
+                } else if Self::is_request_schema_error(&body_lower) {
+                    ClassifiedError::new(
+                        ErrorCategory::RequestSchema,
+                        RecoveryAction::Abort,
+                        format!("Request schema rejected: {}", truncate(body, 200)),
+                    )
                 } else {
                     ClassifiedError::new(
                         ErrorCategory::Unknown,
@@ -228,7 +249,22 @@ impl ErrorClassifier {
         let msg = err.to_string();
         let msg_lower = msg.to_lowercase();
 
-        if msg_lower.contains("timeout") || msg_lower.contains("timed out") {
+        if Self::is_provider_protocol_error(&msg_lower) {
+            ClassifiedError::new(
+                ErrorCategory::ProviderProtocol,
+                RecoveryAction::Abort,
+                format!(
+                    "Provider protocol rejected request: {}",
+                    truncate(&msg, 200)
+                ),
+            )
+        } else if Self::is_request_schema_error(&msg_lower) {
+            ClassifiedError::new(
+                ErrorCategory::RequestSchema,
+                RecoveryAction::Abort,
+                format!("Request schema rejected: {}", truncate(&msg, 200)),
+            )
+        } else if msg_lower.contains("timeout") || msg_lower.contains("timed out") {
             ClassifiedError::new(
                 ErrorCategory::Timeout,
                 RecoveryAction::RetryWithBackoff { backoff_ms: 3000 },
@@ -278,6 +314,30 @@ impl ErrorClassifier {
             "input length",
             "max_tokens",
             "context_length_exceeded",
+        ];
+        indicators.iter().any(|i| body.contains(i))
+    }
+
+    fn is_provider_protocol_error(body: &str) -> bool {
+        let indicators = [
+            "does not follow tool call",
+            "tool call result",
+            "tool_call_id",
+            "tool_calls",
+            "messages with role 'tool'",
+            "missing tool response",
+        ];
+        indicators.iter().any(|i| body.contains(i))
+    }
+
+    fn is_request_schema_error(body: &str) -> bool {
+        let indicators = [
+            "invalid params",
+            "bad_request",
+            "invalid request",
+            "schema",
+            "json schema",
+            "invalid parameter",
         ];
         indicators.iter().any(|i| body.contains(i))
     }
@@ -337,6 +397,25 @@ mod tests {
             ErrorClassifier::from_http(400, "This model's maximum context length is 128000 tokens");
         assert_eq!(err.category, ErrorCategory::ContextOverflow);
         assert_eq!(err.action, RecoveryAction::CompressAndRetry);
+    }
+
+    #[test]
+    fn test_classify_provider_protocol_bad_request() {
+        let err = ErrorClassifier::from_http(
+            400,
+            "bad_request_error: invalid params, tool call result does not follow tool call",
+        );
+        assert_eq!(err.category, ErrorCategory::ProviderProtocol);
+        assert_eq!(err.action, RecoveryAction::Abort);
+        assert!(!err.retryable);
+    }
+
+    #[test]
+    fn test_classify_request_schema_bad_request() {
+        let err = ErrorClassifier::from_http(400, "bad_request_error: invalid params");
+        assert_eq!(err.category, ErrorCategory::RequestSchema);
+        assert_eq!(err.action, RecoveryAction::Abort);
+        assert!(!err.retryable);
     }
 
     #[test]

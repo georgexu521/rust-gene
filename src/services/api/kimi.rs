@@ -4,8 +4,8 @@
 
 use crate::services::api::retry::ProviderRetryPolicy;
 use crate::services::api::{
-    normalize_tool_message_sequence, sanitize_assistant_content, ChatRequest, ChatResponse,
-    LlmProvider, Message, ToolCall, Usage,
+    provider_protocol::{normalize_messages_for_provider, ProviderProtocolFamily},
+    sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
 };
 use anyhow::{bail, Context, Result};
 use async_openai::{
@@ -204,46 +204,7 @@ impl LlmProvider for KimiClient {
             self.config.thinking_enabled
         );
 
-        let messages: Vec<ChatCompletionRequestMessage> =
-            normalize_tool_message_sequence(request.messages)
-                .into_iter()
-                .map(convert_message)
-                .collect();
-
-        let mut req = CreateChatCompletionRequest {
-            model: request.model.clone(),
-            messages,
-            temperature: request.temperature,
-            max_completion_tokens: request.max_tokens,
-            tools: None,
-            tool_choice: request
-                .tool_choice
-                .map(super::openai_compat::convert_tool_choice),
-            ..Default::default()
-        };
-
-        // 如果有 thinking budget，添加到请求中
-        if let Some(budget) = self.config.thinking_budget {
-            req.max_completion_tokens = Some(budget);
-        }
-
-        // 添加工具（如果提供）
-        if let Some(tools) = request.tools {
-            req.tools = Some(
-                tools
-                    .into_iter()
-                    .map(|t| ChatCompletionTool {
-                        r#type: ChatCompletionToolType::Function,
-                        function: FunctionObject {
-                            name: t.name,
-                            description: Some(t.description),
-                            parameters: Some(t.parameters),
-                            strict: None,
-                        },
-                    })
-                    .collect(),
-            );
-        }
+        let req = convert_request_for_kimi(request, self.config.thinking_budget);
 
         debug!("Request: {:?}", req);
 
@@ -313,46 +274,7 @@ impl LlmProvider for KimiClient {
             self.config.thinking_enabled
         );
 
-        let messages: Vec<ChatCompletionRequestMessage> =
-            normalize_tool_message_sequence(request.messages)
-                .into_iter()
-                .map(convert_message)
-                .collect();
-
-        let mut req = CreateChatCompletionRequest {
-            model: request.model.clone(),
-            messages,
-            temperature: request.temperature,
-            max_completion_tokens: request.max_tokens,
-            tools: None,
-            tool_choice: request
-                .tool_choice
-                .map(super::openai_compat::convert_tool_choice),
-            ..Default::default()
-        };
-
-        // 如果有 thinking budget，添加到请求中
-        if let Some(budget) = self.config.thinking_budget {
-            req.max_completion_tokens = Some(budget);
-        }
-
-        // 添加工具（如果提供）
-        if let Some(tools) = request.tools {
-            req.tools = Some(
-                tools
-                    .into_iter()
-                    .map(|t| ChatCompletionTool {
-                        r#type: ChatCompletionToolType::Function,
-                        function: FunctionObject {
-                            name: t.name,
-                            description: Some(t.description),
-                            parameters: Some(t.parameters),
-                            strict: None,
-                        },
-                    })
-                    .collect(),
-            );
-        }
+        let mut req = convert_request_for_kimi(request, self.config.thinking_budget);
 
         // 启用流式响应
         req.stream = Some(true);
@@ -380,6 +302,52 @@ impl LlmProvider for KimiClient {
     }
 }
 
+fn convert_request_for_kimi(
+    request: ChatRequest,
+    thinking_budget: Option<u32>,
+) -> CreateChatCompletionRequest {
+    let messages: Vec<ChatCompletionRequestMessage> =
+        normalize_messages_for_provider(ProviderProtocolFamily::Kimi, request.messages)
+            .into_iter()
+            .map(convert_message)
+            .collect();
+
+    let mut req = CreateChatCompletionRequest {
+        model: request.model.clone(),
+        messages,
+        temperature: request.temperature,
+        max_completion_tokens: request.max_tokens,
+        tools: None,
+        tool_choice: request
+            .tool_choice
+            .map(super::openai_compat::convert_tool_choice),
+        ..Default::default()
+    };
+
+    if let Some(budget) = thinking_budget {
+        req.max_completion_tokens = Some(budget);
+    }
+
+    if let Some(tools) = request.tools {
+        req.tools = Some(
+            tools
+                .into_iter()
+                .map(|t| ChatCompletionTool {
+                    r#type: ChatCompletionToolType::Function,
+                    function: FunctionObject {
+                        name: t.name,
+                        description: Some(t.description),
+                        parameters: Some(t.parameters),
+                        strict: None,
+                    },
+                })
+                .collect(),
+        );
+    }
+
+    req
+}
+
 /// 将内部 Message 转换为 OpenAI 格式
 fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
     match msg {
@@ -395,7 +363,7 @@ fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
             } else {
                 Some(ChatCompletionRequestAssistantMessageContent::Text(content))
             };
-            let tool_calls = tool_calls.map(|calls| {
+            let tool_calls = tool_calls.filter(|calls| !calls.is_empty()).map(|calls| {
                 calls
                     .into_iter()
                     .map(|call| ChatCompletionMessageToolCall {
@@ -431,6 +399,24 @@ fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
 mod tests {
     use super::*;
     use crate::test_utils::env_guard::EnvVarGuard;
+    use serde_json::Value;
+
+    fn tool_call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "Cargo.toml"}),
+        }
+    }
+
+    fn converted_request_json(messages: Vec<Message>, thinking_budget: Option<u32>) -> Value {
+        let request = ChatRequest::new("kimi-k2.5").with_messages(messages);
+        serde_json::to_value(convert_request_for_kimi(request, thinking_budget)).unwrap()
+    }
+
+    fn request_messages(json: &Value) -> &[Value] {
+        json["messages"].as_array().unwrap()
+    }
 
     #[test]
     fn test_kimi_config_from_env() {
@@ -449,19 +435,53 @@ mod tests {
 
     #[test]
     fn assistant_tool_call_omits_empty_content_for_strict_providers() {
-        let message = convert_message(Message::assistant_with_tools(
-            "",
-            vec![ToolCall {
-                id: "call_1".to_string(),
-                name: "file_read".to_string(),
-                arguments: serde_json::json!({"path": "Cargo.toml"}),
-            }],
-        ));
+        let message = convert_message(Message::assistant_with_tools("", vec![tool_call("call_1")]));
         let ChatCompletionRequestMessage::Assistant(assistant) = message else {
             panic!("expected assistant message");
         };
 
         assert!(assistant.content.is_none());
         assert_eq!(assistant.tool_calls.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn request_serializes_tool_result_roundtrip_for_kimi() {
+        let json = converted_request_json(
+            vec![
+                Message::user("inspect"),
+                Message::assistant_with_tools("", vec![tool_call("call_1")]),
+                Message::tool("call_1", "Result: OK\ncontent"),
+            ],
+            None,
+        );
+        let messages = request_messages(&json);
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1]["role"], "assistant");
+        assert!(
+            messages[1].get("content").is_none() || messages[1]["content"].is_null(),
+            "pure tool-call assistant content should be omitted/null: {}",
+            messages[1]
+        );
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn thinking_budget_request_keeps_tool_result_protocol_shape() {
+        let json = converted_request_json(
+            vec![
+                Message::assistant_with_tools("Need a file.", vec![tool_call("call_1")]),
+                Message::tool("call_1", "Error: missing file"),
+            ],
+            Some(2048),
+        );
+        let messages = request_messages(&json);
+
+        assert_eq!(json["max_completion_tokens"], 2048);
+        assert_eq!(messages[0]["content"], "Need a file.");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[1]["tool_call_id"], "call_1");
     }
 }

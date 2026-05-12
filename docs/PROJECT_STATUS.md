@@ -26,13 +26,16 @@ Active next-stage direction:
   artifact. It records the Claude/opencode reference map, current
   `ConversationLoop` architecture map, current product capability table, and
   the recommended Batch 2-5 order.
-- Next implementation focus is provider-safe tool result normalization,
-  terminal/bash productization, an evidence ledger, then behavior-preserving
+- Next implementation focus is finishing provider protocol hardening, then
+  terminal/bash productization, an evidence ledger, and behavior-preserving
   `ConversationLoop` extraction.
-- The first Batch 2 provider-safe serialization slice is complete: strict
-  OpenAI-compatible providers now receive pure assistant `tool_calls` messages
-  without an empty `content` field in OpenAI-compatible and Kimi request
-  conversion.
+- The first provider-protocol regression matrix slice is complete:
+  OpenAI-compatible, MiniMax, and Kimi request conversion now share provider
+  message normalization; pure assistant `tool_calls` omit empty content,
+  orphan/aborted tool results are dropped before provider requests, MiniMax
+  keeps system-message merging, and provider 400s that mention tool-result
+  ordering are classified as `provider_protocol` instead of generic unknown
+  failures.
 
 The recent closure plan is complete:
 
@@ -45,11 +48,11 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-tool-result normalizer, schema-gate, context-budget, tool-result-budget, and
-permission-controller work:
+provider-protocol matrix, permission-controller, context-budget,
+tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1226 passed; 0 failed
+1241 passed; 0 failed
 ```
 
 Validated locally with:

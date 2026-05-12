@@ -3,8 +3,8 @@
 //! 将内部类型转换为 async-openai 类型，供 Kimi/OpenAI 等兼容 API 使用
 
 use crate::services::api::{
-    normalize_tool_message_sequence, sanitize_assistant_content, ChatRequest, ChatResponse,
-    Message, ToolCall, ToolChoice, Usage,
+    provider_protocol::{normalize_messages_for_provider, ProviderProtocolFamily},
+    sanitize_assistant_content, ChatRequest, ChatResponse, Message, ToolCall, ToolChoice, Usage,
 };
 use anyhow::{Context, Result};
 use async_openai::types::{
@@ -18,7 +18,7 @@ use async_openai::types::{
 
 pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletionRequest {
     let messages: Vec<ChatCompletionRequestMessage> =
-        normalize_tool_message_sequence(request.messages)
+        normalize_messages_for_provider(ProviderProtocolFamily::OpenAiCompatible, request.messages)
             .into_iter()
             .map(convert_message)
             .collect();
@@ -133,7 +133,7 @@ pub fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
             } else {
                 Some(ChatCompletionRequestAssistantMessageContent::Text(content))
             };
-            let tool_calls = tool_calls.map(|calls| {
+            let tool_calls = tool_calls.filter(|calls| !calls.is_empty()).map(|calls| {
                 calls
                     .into_iter()
                     .map(|call| ChatCompletionMessageToolCall {
@@ -168,6 +168,7 @@ pub fn convert_message(msg: Message) -> ChatCompletionRequestMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn tool_call() -> ToolCall {
         ToolCall {
@@ -175,6 +176,23 @@ mod tests {
             name: "file_read".to_string(),
             arguments: serde_json::json!({"path": "Cargo.toml"}),
         }
+    }
+
+    fn tool_call_with_id(id: &str, name: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: serde_json::json!({"path": "Cargo.toml"}),
+        }
+    }
+
+    fn converted_request_json(messages: Vec<Message>) -> Value {
+        let request = ChatRequest::new("test-model").with_messages(messages);
+        serde_json::to_value(convert_request(request, "fallback-model")).unwrap()
+    }
+
+    fn request_messages(json: &Value) -> &[Value] {
+        json["messages"].as_array().unwrap()
     }
 
     #[test]
@@ -227,5 +245,76 @@ mod tests {
             }
             other => panic!("expected named tool choice, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn request_serializes_pure_tool_call_roundtrip() {
+        let json = converted_request_json(vec![
+            Message::user("inspect"),
+            Message::assistant_with_tools("", vec![tool_call()]),
+            Message::tool("call_1", "Result: OK\ncontent"),
+        ]);
+        let messages = request_messages(&json);
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1]["role"], "assistant");
+        assert!(
+            messages[1].get("content").is_none() || messages[1]["content"].is_null(),
+            "pure tool-call assistant content should be omitted/null: {}",
+            messages[1]
+        );
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn request_serializes_text_plus_multiple_tool_call_roundtrip() {
+        let json = converted_request_json(vec![
+            Message::assistant_with_tools(
+                "I will read two files.",
+                vec![
+                    tool_call_with_id("call_1", "file_read"),
+                    tool_call_with_id("call_2", "grep"),
+                ],
+            ),
+            Message::tool("call_1", "Result: OK\nfirst"),
+            Message::tool("call_2", "Error: no matches"),
+        ]);
+        let messages = request_messages(&json);
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["content"], "I will read two files.");
+        assert_eq!(messages[0]["tool_calls"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[1]["tool_call_id"], "call_1");
+        assert_eq!(messages[2]["tool_call_id"], "call_2");
+    }
+
+    #[test]
+    fn request_drops_aborted_orphan_tool_result_before_serialization() {
+        let json = converted_request_json(vec![
+            Message::user("continue"),
+            Message::tool("call_aborted", "Tool aborted"),
+            Message::assistant("I can continue without it."),
+        ]);
+        let messages = request_messages(&json);
+
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|msg| msg["role"] != "tool"));
+    }
+
+    #[test]
+    fn assistant_with_empty_tool_list_does_not_emit_empty_tool_calls() {
+        let json = converted_request_json(vec![Message::Assistant {
+            content: "done".to_string(),
+            tool_calls: Some(Vec::new()),
+        }]);
+        let assistant = &request_messages(&json)[0];
+
+        assert_eq!(assistant["role"], "assistant");
+        assert!(
+            assistant.get("tool_calls").is_none() || assistant["tool_calls"].is_null(),
+            "empty tool_calls array should not be serialized: {assistant}"
+        );
     }
 }

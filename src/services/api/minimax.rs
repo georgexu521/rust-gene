@@ -4,7 +4,8 @@
 
 use crate::services::api::retry::ProviderRetryPolicy;
 use crate::services::api::{
-    sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, ToolCall, Usage,
+    provider_protocol::{normalize_messages_for_provider, ProviderProtocolFamily},
+    sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
 };
 use anyhow::{bail, Context, Result};
 use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
@@ -89,31 +90,8 @@ impl MiniMaxClient {
         Some((status, body))
     }
 
-    fn normalize_messages_for_minimax(
-        messages: Vec<crate::services::api::Message>,
-    ) -> Vec<crate::services::api::Message> {
-        let mut system_parts: Vec<String> = Vec::new();
-        let mut others: Vec<crate::services::api::Message> = Vec::new();
-
-        for msg in messages {
-            match msg {
-                crate::services::api::Message::System { content } => system_parts.push(content),
-                other => others.push(other),
-            }
-        }
-
-        if system_parts.is_empty() {
-            return others;
-        }
-
-        let merged_system = crate::services::api::Message::System {
-            content: system_parts.join("\n\n"),
-        };
-
-        let mut normalized = Vec::with_capacity(others.len() + 1);
-        normalized.push(merged_system);
-        normalized.extend(others);
-        normalized
+    fn normalize_messages_for_minimax(messages: Vec<Message>) -> Vec<Message> {
+        normalize_messages_for_provider(ProviderProtocolFamily::MiniMax, messages)
     }
 }
 
@@ -301,7 +279,23 @@ impl LlmProvider for MiniMaxClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::api::openai_compat::convert_request;
     use crate::services::api::retry::is_retryable_provider_error;
+    use serde_json::Value;
+
+    fn tool_call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "Cargo.toml"}),
+        }
+    }
+
+    fn converted_minimax_request_json(messages: Vec<Message>) -> Value {
+        let mut request = ChatRequest::new("MiniMax-M2.7").with_messages(messages);
+        request.messages = MiniMaxClient::normalize_messages_for_minimax(request.messages);
+        serde_json::to_value(convert_request(request, "MiniMax-M2.7")).unwrap()
+    }
 
     #[test]
     fn test_minimax_client_defaults() {
@@ -394,5 +388,43 @@ mod tests {
             "bad_request_error: invalid params"
         ));
         assert!(!is_retryable_provider_error("401 unauthorized"));
+    }
+
+    #[test]
+    fn minimax_request_serializes_tool_result_roundtrip() {
+        let json = converted_minimax_request_json(vec![
+            Message::system("system"),
+            Message::user("inspect"),
+            Message::assistant_with_tools("", vec![tool_call("call_1")]),
+            Message::tool("call_1", "Result: OK\ncontent"),
+        ]);
+        let messages = json["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert!(
+            messages[2].get("content").is_none() || messages[2]["content"].is_null(),
+            "pure tool-call assistant content should be omitted/null: {}",
+            messages[2]
+        );
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn minimax_merges_system_messages_before_serialization() {
+        let json = converted_minimax_request_json(vec![
+            Message::system("first"),
+            Message::user("inspect"),
+            Message::system("second"),
+        ]);
+        let messages = json["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "first\n\nsecond");
+        assert_eq!(messages[1]["role"], "user");
     }
 }

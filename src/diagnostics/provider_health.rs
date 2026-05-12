@@ -306,9 +306,14 @@ pub fn provider_health_error_category(error: &str) -> &'static str {
         || lower.contains("429")
     {
         "rate_limit"
+    } else if lower.contains("does not follow tool call")
+        || lower.contains("tool call result")
+        || lower.contains("tool_call_id")
+    {
+        "protocol"
     } else if lower.contains("invalid params")
         || lower.contains("bad_request")
-        || lower.contains("does not follow tool call")
+        || lower.contains("schema")
         || lower.contains("400")
     {
         "schema"
@@ -341,6 +346,10 @@ mod tests {
             provider_health_error_category(
                 "invalid params, tool call result does not follow tool call (2013)"
             ),
+            "protocol"
+        );
+        assert_eq!(
+            provider_health_error_category("bad_request_error: invalid params"),
             "schema"
         );
         assert_eq!(

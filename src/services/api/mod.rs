@@ -7,6 +7,7 @@ pub mod minimax;
 pub mod openai;
 pub mod openai_compat;
 pub mod provider;
+pub mod provider_protocol;
 pub mod retry;
 
 use async_openai::types::ChatCompletionResponseStream;
