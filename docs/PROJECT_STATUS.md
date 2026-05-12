@@ -49,7 +49,7 @@ tool-result normalizer, schema-gate, context-budget, tool-result-budget, and
 permission-controller work:
 
 ```text
-1223 passed; 0 failed
+1226 passed; 0 failed
 ```
 
 Validated locally with:
@@ -360,7 +360,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-12 with `1223 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-12 with `1226 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry

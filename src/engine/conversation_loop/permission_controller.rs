@@ -25,6 +25,29 @@ impl PermissionRequestKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionToolFamily {
+    Shell,
+    File,
+    ExternalDirectory,
+    Task,
+    Subagent,
+    Other,
+}
+
+impl PermissionToolFamily {
+    fn as_str(self) -> &'static str {
+        match self {
+            PermissionToolFamily::Shell => "shell",
+            PermissionToolFamily::File => "file",
+            PermissionToolFamily::ExternalDirectory => "external_directory",
+            PermissionToolFamily::Task => "task",
+            PermissionToolFamily::Subagent => "subagent",
+            PermissionToolFamily::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct PermissionRequestRecord {
     pub(super) id: String,
@@ -108,6 +131,7 @@ impl PermissionController {
             .iter()
             .map(|(_, rule)| rule.pattern.clone())
             .collect::<Vec<_>>();
+        let family = permission_tool_family(tool_name, &permission_explanation);
         let allowed_always_rules = permission_explanation
             .matched_rules
             .iter()
@@ -132,6 +156,7 @@ impl PermissionController {
                 "tool_requires": tool_requires,
                 "raw_tool_requires": raw_tool_requires,
                 "drift_requires_approval": drift_requires_approval,
+                "permission_family": family.as_str(),
                 "permission_decision": format!("{:?}", permission_explanation.decision),
                 "risk_level": format!("{:?}", permission_explanation.risk_level),
                 "warnings": permission_explanation.warnings,
@@ -240,6 +265,27 @@ impl PermissionController {
     }
 }
 
+fn permission_tool_family(
+    tool_name: &str,
+    permission_explanation: &crate::permissions::ExplainableDecision,
+) -> PermissionToolFamily {
+    if permission_explanation
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("OUTSIDE_WORKSPACE"))
+    {
+        return PermissionToolFamily::ExternalDirectory;
+    }
+
+    match tool_name {
+        "bash" | "powershell" => PermissionToolFamily::Shell,
+        "file_read" | "file_write" | "file_edit" | "glob" | "grep" => PermissionToolFamily::File,
+        "task_create" | "task_update" | "task_stop" | "task_output" => PermissionToolFamily::Task,
+        "agent" | "send_message" => PermissionToolFamily::Subagent,
+        _ => PermissionToolFamily::Other,
+    }
+}
+
 fn permission_prompt(
     tool_call: &ToolCall,
     tool: &dyn Tool,
@@ -318,6 +364,34 @@ mod tests {
         }
     }
 
+    struct NamedTool {
+        name: &'static str,
+        requires_confirmation: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for NamedTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            "test tool"
+        }
+
+        fn parameters(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+
+        async fn execute(&self, _params: serde_json::Value, _context: ToolContext) -> ToolResult {
+            ToolResult::success("ok")
+        }
+
+        fn requires_confirmation(&self, _params: &serde_json::Value) -> bool {
+            self.requires_confirmation
+        }
+    }
+
     #[test]
     fn evaluates_tool_confirmation_as_structured_request() {
         let tmp = tempdir().expect("tempdir");
@@ -375,5 +449,93 @@ mod tests {
             result.data.as_ref().unwrap()["permission_request"]["session_id"],
             "session-1"
         );
+    }
+
+    #[test]
+    fn external_file_edit_records_external_directory_family() {
+        let tmp = tempdir().expect("tempdir");
+        let context = ToolContext::new(tmp.path(), "session-1");
+        let tool_call = ToolCall {
+            id: "call_edit_external".to_string(),
+            name: "file_edit".to_string(),
+            arguments: json!({
+                "path": "/Users/georgexu/Desktop/outside.rs",
+                "old_string": "a",
+                "new_string": "b"
+            }),
+        };
+
+        let evaluation = PermissionController::evaluate_tool_permission(
+            "session-1",
+            &tool_call,
+            &NamedTool {
+                name: "file_edit",
+                requires_confirmation: true,
+            },
+            &context,
+            &DriftCheck::ok(),
+        );
+
+        let metadata = &evaluation.record.as_ref().unwrap().metadata;
+        assert!(evaluation.requires_approval);
+        assert_eq!(metadata["permission_family"], "external_directory");
+        assert_eq!(metadata["permission_requires"], true);
+    }
+
+    #[test]
+    fn explicit_task_rule_records_task_family() {
+        let tmp = tempdir().expect("tempdir");
+        let mut context = ToolContext::new(tmp.path(), "session-1");
+        context.permission_context.rules =
+            crate::permissions::PermissionRules::new().ask("task_stop");
+        let tool_call = ToolCall {
+            id: "call_task_stop".to_string(),
+            name: "task_stop".to_string(),
+            arguments: json!({"task_id": "task_123"}),
+        };
+
+        let evaluation = PermissionController::evaluate_tool_permission(
+            "session-1",
+            &tool_call,
+            &NamedTool {
+                name: "task_stop",
+                requires_confirmation: false,
+            },
+            &context,
+            &DriftCheck::ok(),
+        );
+
+        let metadata = &evaluation.record.as_ref().unwrap().metadata;
+        assert!(evaluation.requires_approval);
+        assert_eq!(metadata["permission_family"], "task");
+        assert_eq!(metadata["permission_requires"], true);
+    }
+
+    #[test]
+    fn explicit_subagent_rule_records_subagent_family() {
+        let tmp = tempdir().expect("tempdir");
+        let mut context = ToolContext::new(tmp.path(), "session-1");
+        context.permission_context.rules = crate::permissions::PermissionRules::new().ask("agent");
+        let tool_call = ToolCall {
+            id: "call_agent".to_string(),
+            name: "agent".to_string(),
+            arguments: json!({"description": "inspect module", "prompt": "inspect"}),
+        };
+
+        let evaluation = PermissionController::evaluate_tool_permission(
+            "session-1",
+            &tool_call,
+            &NamedTool {
+                name: "agent",
+                requires_confirmation: true,
+            },
+            &context,
+            &DriftCheck::ok(),
+        );
+
+        let metadata = &evaluation.record.as_ref().unwrap().metadata;
+        assert!(evaluation.requires_approval);
+        assert_eq!(metadata["permission_family"], "subagent");
+        assert_eq!(metadata["permission_requires"], true);
     }
 }

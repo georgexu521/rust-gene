@@ -110,10 +110,12 @@ read-write tool execution. It builds structured permission request records,
 constructs approval prompts, submits user approval requests, records once-mode
 approval grants, emits structured permission-denied `ToolResult` metadata, and
 classifies permission-denied results without relying only on error-string
-matching. `ToolResultNormalizer` now marks permission-denied results as
-permission evidence, and `EvidenceLedger` records those permission facts. The
-surrounding execution controller still owns hooks, actual tool execution, audit
-logging, and result ordering.
+matching. Permission request metadata now classifies shell, file,
+external-directory, task, and subagent permission families without changing
+default approval behavior. `ToolResultNormalizer` now marks permission-denied
+results as permission evidence, and `EvidenceLedger` records those permission
+facts. The surrounding execution controller still owns hooks, actual tool
+execution, audit logging, and result ordering.
 
 `ToolExecutionController` now separates the two execution lanes internally:
 read-only job creation, read-only result collection, and sequential read-write
