@@ -48,15 +48,15 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-shell-result schema/artifacts, shell-command UI summary, shell-command
-category permission risk, shell-command category classifier, terminal
-provider-schema exposure diagnostic, explicit patch-synthesis fallback
+shell-result duration/schema/artifacts, shell-command UI summary,
+shell-command category permission risk, shell-command category classifier,
+terminal provider-schema exposure diagnostic, explicit patch-synthesis fallback
 boundary, focused-repair proposal boundary, provider-protocol matrix,
 permission-controller, context-budget, tool-result-budget, schema-gate, and
 tool-result normalizer work:
 
 ```text
-1249 passed; 0 failed
+1250 passed; 0 failed
 ```
 
 Validated locally with:
@@ -495,7 +495,8 @@ Latest maintenance note:
   shell mutation match runtime evidence and permission semantics.
 - Bash tool results now include structured `shell_result` metadata and store
   long combined output under `.priority-agent/tool-results/<session>/...` while
-  keeping provider-facing output bounded to a preview.
+  keeping provider-facing output bounded to a preview. Tool execution metadata
+  fills `shell_result.duration_ms` after the controller measures elapsed time.
 - Code-change workflow strictness is now adaptive instead of medium-risk by
   default: required validation, first code change, failed verification,
   acceptance rejection, and repeated no-edit progress activate the heavier

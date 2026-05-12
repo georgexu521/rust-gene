@@ -288,6 +288,7 @@ pub(super) fn tool_execution_start_progress(
 }
 
 pub(super) fn attach_tool_execution_metadata(tool_call: &ToolCall, result: &mut ToolResult) {
+    fill_shell_result_duration(result);
     let summary = build_tool_execution_summary(tool_call, result);
     merge_tool_result_metadata(result, "tool_summary", summary);
 
@@ -322,6 +323,24 @@ pub(super) fn attach_tool_execution_metadata(tool_call: &ToolCall, result: &mut 
         "recovery_category": plan.category,
     });
     merge_tool_result_metadata(result, "recovery", metadata);
+}
+
+fn fill_shell_result_duration(result: &mut ToolResult) {
+    let Some(duration_ms) = result.duration_ms else {
+        return;
+    };
+    let Some(shell_result) = result
+        .data
+        .as_mut()
+        .and_then(|data| data.get_mut("shell_result"))
+        .and_then(|value| value.as_object_mut())
+    else {
+        return;
+    };
+    shell_result.insert(
+        "duration_ms".to_string(),
+        serde_json::Value::Number(duration_ms.into()),
+    );
 }
 
 pub(super) fn persist_tool_outcome_learning_event(
@@ -419,5 +438,30 @@ mod tests {
         assert_eq!(record.machine_metadata["tool"], "bash");
         assert_eq!(record.machine_metadata["command_kind"], "validation");
         assert_eq!(record.machine_metadata["command_category"], "test_run");
+    }
+
+    #[test]
+    fn attach_tool_execution_metadata_fills_shell_result_duration() {
+        let mut result = ToolResult::success_with_data(
+            "ok",
+            serde_json::json!({
+                "shell_result": {
+                    "duration_ms": null,
+                    "command": "cargo test -q"
+                }
+            }),
+        );
+        result.duration_ms = Some(42);
+
+        attach_tool_execution_metadata(&tool_call("bash"), &mut result);
+
+        assert_eq!(
+            result.data.as_ref().unwrap()["shell_result"]["duration_ms"],
+            42
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["tool_summary"]["duration_ms"],
+            42
+        );
     }
 }

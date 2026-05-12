@@ -325,6 +325,14 @@
   targeted `bash_tool`, `tool_result`, and `evidence_ledger` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1249 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.3 continued. Tool execution metadata now writes
+  the measured runtime duration back into `shell_result.duration_ms`, so the
+  structured shell schema no longer leaves duration as a placeholder after the
+  controller records elapsed time.
+- Validation after the shell-result duration slice: `cargo fmt --check`,
+  targeted `tool_result`, `bash_tool`, and shell-result duration tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1250 passed; 0 failed`).
 
 ## 当前判断
 
