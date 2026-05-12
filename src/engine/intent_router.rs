@@ -263,6 +263,11 @@ impl IntentRouter {
         }
 
         if has_terminal_operation_signal {
+            let recommended_tools = if is_background_shell_followup(&lower, zh) {
+                vec!["bash".into(), "bash_output".into(), "bash_cancel".into()]
+            } else {
+                vec!["bash".into()]
+            };
             return IntentRoute {
                 intent: IntentKind::DirectAnswer,
                 confidence: 0.74,
@@ -270,7 +275,7 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Light,
                 reasoning: ReasoningPolicy::Medium,
                 risk: RiskLevel::Medium,
-                recommended_tools: vec!["bash".into()],
+                recommended_tools,
                 reason: "prompt asks to inspect or change local runtime state through the terminal"
                     .into(),
             };
@@ -697,6 +702,11 @@ fn is_terminal_operation_request(lower: &str, zh: &str) -> bool {
             "pytest",
             "venv",
             "virtualenv",
+            "background",
+            "handle",
+            "process",
+            "server",
+            "watch",
         ],
     ) || contains_any(
         zh,
@@ -709,6 +719,10 @@ fn is_terminal_operation_request(lower: &str, zh: &str) -> bool {
             "依赖",
             "模块",
             "环境",
+            "后台",
+            "句柄",
+            "进程",
+            "服务器",
         ],
     );
     let terminal_action = contains_any(
@@ -727,6 +741,9 @@ fn is_terminal_operation_request(lower: &str, zh: &str) -> bool {
             "is installed",
             "package",
             "dependency",
+            "read output",
+            "cancel",
+            "stop",
         ],
     ) || contains_any(
         zh,
@@ -743,10 +760,26 @@ fn is_terminal_operation_request(lower: &str, zh: &str) -> bool {
             "怎么运行",
             "跑一下",
             "装一下",
+            "读取输出",
+            "取消",
+            "停止",
         ],
     );
 
     terminal_subject && terminal_action
+}
+
+fn is_background_shell_followup(lower: &str, zh: &str) -> bool {
+    contains_any(
+        lower,
+        &[
+            "background",
+            "handle",
+            "process",
+            "bash_output",
+            "bash_cancel",
+        ],
+    ) || contains_any(zh, &["后台", "句柄", "进程"])
 }
 
 fn is_local_inspection_request(lower: &str, zh: &str) -> bool {
@@ -860,6 +893,16 @@ mod tests {
         assert_eq!(route.workflow, WorkflowKind::Direct);
         assert_eq!(route.risk, RiskLevel::Medium);
         assert!(route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_background_shell_handle_question_as_terminal_operation() {
+        let route = IntentRouter::new().route("读取这个后台 shell 句柄的输出，然后停止它");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert!(route.recommended_tools.contains(&"bash".to_string()));
+        assert!(route.recommended_tools.contains(&"bash_output".to_string()));
+        assert!(route.recommended_tools.contains(&"bash_cancel".to_string()));
     }
 
     #[test]

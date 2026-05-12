@@ -2,10 +2,13 @@
 //!
 //! 对应 Claude Code 中的 BashTool
 
+mod background;
 pub mod command_classifier;
 
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
+use background::{background_shell_result_data, background_started_content};
+pub use background::{BashCancelTool, BashOutputTool};
 use command_classifier::classify_command;
 use serde_json::json;
 use std::process::Stdio;
@@ -396,6 +399,32 @@ fn error_with_audit(
     result
 }
 
+fn timeout_result(
+    timeout: u64,
+    audit: &serde_json::Value,
+    command: &str,
+    working_dir: &std::path::Path,
+    backend: BashExecutionBackend,
+    context: &ToolContext,
+) -> ToolResult {
+    let message = format!("Command timed out after {} seconds", timeout);
+    let (result_preview, result_data) = shell_result_data(ShellResultData {
+        audit,
+        command,
+        working_dir,
+        stdout: "",
+        stderr: &message,
+        combined_output: &format!("[stderr]:\n{message}"),
+        exit_code: -1,
+        backend,
+        timed_out: true,
+        context,
+    });
+    let mut result = ToolResult::error_with_content(message, result_preview);
+    result.data = Some(result_data);
+    result
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -426,6 +455,12 @@ impl Tool for BashTool {
                     "type": "integer",
                     "description": "Timeout in seconds (default: 60)",
                     "default": 60
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["foreground", "background"],
+                    "description": "Run normally or start a background command and return a handle.",
+                    "default": "foreground"
                 },
                 "working_dir": {
                     "type": "string",
@@ -459,6 +494,10 @@ impl Tool for BashTool {
 
         let description = params["description"].as_str().unwrap_or(command);
         let timeout = effective_timeout_secs(params["timeout"].as_u64());
+        let mode = params["mode"].as_str().unwrap_or("foreground");
+        if !matches!(mode, "foreground" | "background") {
+            return ToolResult::error("mode must be 'foreground' or 'background'");
+        }
 
         // working_dir 安全校验
         let working_dir = if let Some(wd_str) = params["working_dir"].as_str() {
@@ -588,6 +627,24 @@ impl Tool for BashTool {
             },
         };
 
+        if mode == "background" {
+            return match background::start_background_shell(
+                command,
+                &actual_command,
+                &working_dir,
+                backend,
+                timeout,
+            )
+            .await
+            {
+                Ok(snapshot) => ToolResult::success_with_data(
+                    background_started_content(&snapshot),
+                    background_shell_result_data(&snapshot),
+                ),
+                Err(err) => error_with_audit(err, None, &audit, command),
+            };
+        }
+
         cmd.arg("-c")
             .arg(&actual_command)
             .current_dir(&working_dir)
@@ -623,10 +680,10 @@ impl Tool for BashTool {
         let wait_fut = child.wait_with_output();
         tokio::pin!(wait_fut);
 
-        let output = tokio::select! {
+        let (output, timed_out) = tokio::select! {
             res = &mut wait_fut => {
                 match res {
-                    Ok(output) => output,
+                    Ok(output) => (output, false),
                     Err(e) => {
                         error!("Failed to execute command: {}", e);
                         return error_with_audit(format!("Failed to execute command: {}", e), None, &audit, command);
@@ -638,13 +695,13 @@ impl Tool for BashTool {
                 kill_process_tree(child_pid);
 
                 match tokio::time::timeout(std::time::Duration::from_secs(2), &mut wait_fut).await {
-                    Ok(Ok(output)) => output,
+                    Ok(Ok(output)) => (output, true),
                     Ok(Err(e)) => {
                         error!("Command timed out and failed while collecting output: {}", e);
-                        return error_with_audit(format!("Command timed out after {} seconds", timeout), None, &audit, command);
+                        return timeout_result(timeout, &audit, command, &working_dir, backend, &context);
                     }
                     Err(_) => {
-                        return error_with_audit(format!("Command timed out after {} seconds", timeout), None, &audit, command);
+                        return timeout_result(timeout, &audit, command, &working_dir, backend, &context);
                     }
                 }
             }
@@ -683,12 +740,19 @@ impl Tool for BashTool {
             combined_output: &result_content,
             exit_code,
             backend,
-            timed_out: false,
+            timed_out,
             context: &context,
         });
 
         if output.status.success() {
             ToolResult::success_with_data(result_preview, result_data)
+        } else if timed_out {
+            let mut result = ToolResult::error_with_content(
+                format!("Command timed out after {} seconds", timeout),
+                result_preview,
+            );
+            result.data = Some(result_data);
+            result
         } else {
             let mut result = ToolResult::error_with_content(
                 format!("Command failed with exit code: {}", exit_code),
@@ -993,6 +1057,81 @@ mod tests {
             .expect("long output should be stored");
         assert!(output_path.starts_with(".priority-agent/tool-results/"));
         assert!(dir.path().join(output_path).exists());
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_background_mode_returns_readable_handle() {
+        let tool = BashTool;
+        let dir = tempdir().expect("create temp dir");
+        let params = json!({
+            "command": "printf background-ready; sleep 5",
+            "description": "Start background shell",
+            "backend": "local",
+            "mode": "background",
+            "working_dir": dir.path()
+        });
+        let context = ToolContext::new(dir.path(), "test-session-background");
+
+        let result = tool.execute(params, context.clone()).await;
+
+        assert!(result.success, "bash failed: {:?}", result.error);
+        let shell_result = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("shell_result"))
+            .expect("shell_result metadata");
+        assert_eq!(shell_result["background"], true);
+        assert_eq!(shell_result["status"], "running");
+        let handle = shell_result["handle"].as_str().expect("background handle");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let output = BashOutputTool
+            .execute(
+                json!({"handle": handle, "max_chars": 1000}),
+                context.clone(),
+            )
+            .await;
+        assert!(output.success, "output failed: {:?}", output.error);
+        assert!(output.content.contains("background-ready"));
+
+        let cancelled = BashCancelTool
+            .execute(json!({"handle": handle}), context)
+            .await;
+        assert!(cancelled.success, "cancel failed: {:?}", cancelled.error);
+        assert_eq!(
+            cancelled.data.as_ref().unwrap()["shell_background"]["status"],
+            "cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_timeout_records_shell_result_status() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.remove("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS");
+
+        let tool = BashTool;
+        let params = json!({
+            "command": "sleep 2",
+            "description": "Timeout shell command",
+            "backend": "local",
+            "timeout": 1
+        });
+        let context = ToolContext::new(".", "test-session-timeout");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error_code,
+            Some(crate::tools::ToolErrorCode::Timeout)
+        );
+        let shell_result = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("shell_result"))
+            .expect("shell_result metadata");
+        assert_eq!(shell_result["timed_out"], true);
+        assert_eq!(shell_result["evidence_status"], "timed_out");
     }
 
     #[tokio::test]

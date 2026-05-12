@@ -5,7 +5,10 @@ use std::time::{Duration, Instant};
 pub enum ToolRunStatus {
     Queued,
     Running,
+    Backgrounded,
     WaitingPermission,
+    TimedOut,
+    Cancelled,
     Completed,
     Failed,
 }
@@ -73,12 +76,21 @@ impl ToolRunView {
     }
 
     pub fn mark_complete(&mut self, result: String) {
-        self.status = if result.contains("Result: ERROR") || result.contains("[Error:") {
+        let body = tool_result_body(&result).to_string();
+        self.status = if body.contains("Started background shell command") {
+            ToolRunStatus::Backgrounded
+        } else if body.contains("Command timed out after")
+            || body.contains(" is timed_out.")
+            || body.contains(" is timed out.")
+        {
+            ToolRunStatus::TimedOut
+        } else if body.contains(" is cancelled.") || body.contains(" is canceled.") {
+            ToolRunStatus::Cancelled
+        } else if result.contains("Result: ERROR") || result.contains("[Error:") {
             ToolRunStatus::Failed
         } else {
             ToolRunStatus::Completed
         };
-        let body = tool_result_body(&result).to_string();
         self.result_preview = Some(compact_line(&body, 180));
         self.result_body = Some(body);
         self.completed_at = Some(Instant::now());
@@ -99,6 +111,14 @@ impl ToolRunView {
         let args = self.arguments.as_ref();
         match self.name.as_str() {
             "bash" => summarize_bash(args, self),
+            "bash_output" => {
+                terminal_summary(self, "Reading background shell", "Read background shell")
+            }
+            "bash_cancel" => terminal_summary(
+                self,
+                "Stopping background shell",
+                "Stopped background shell",
+            ),
             "powershell" => {
                 summarize_command_tool("Running PowerShell", "Ran PowerShell", args, self)
             }
@@ -138,6 +158,8 @@ impl ToolRunView {
             "bash" => {
                 string_arg(args, "command").map(|cmd| format!("└ $ {}", compact_line(cmd, 120)))
             }
+            "bash_output" | "bash_cancel" => string_arg(args, "handle")
+                .map(|handle| format!("└ handle: {}", compact_line(handle, 120))),
             "powershell" => first_string_arg(args, &["command", "script_path"])
                 .map(|cmd| format!("└ {}", compact_line(cmd, 120))),
             "repl" => first_string_arg(args, &["code", "command"])
@@ -175,7 +197,10 @@ impl ToolRunView {
         let status_hint = match self.status {
             ToolRunStatus::Queued => "waiting",
             ToolRunStatus::Running => "running",
+            ToolRunStatus::Backgrounded => "backgrounded",
             ToolRunStatus::WaitingPermission => "waiting for permission",
+            ToolRunStatus::TimedOut => "timed out",
+            ToolRunStatus::Cancelled => "cancelled",
             ToolRunStatus::Completed => "done",
             ToolRunStatus::Failed => "failed",
         };
@@ -655,6 +680,9 @@ fn display_name(path: &str) -> String {
 fn terminal_summary(run: &ToolRunView, active: &str, completed: &str) -> String {
     match run.status {
         ToolRunStatus::Completed => completed.to_string(),
+        ToolRunStatus::Backgrounded => format!("{} in background", completed),
+        ToolRunStatus::TimedOut => format!("{} timed out", completed),
+        ToolRunStatus::Cancelled => format!("{} cancelled", completed),
         ToolRunStatus::Failed => format!("{} failed", completed),
         ToolRunStatus::WaitingPermission => format!("Waiting to {}", active.to_ascii_lowercase()),
         ToolRunStatus::Queued | ToolRunStatus::Running => active.to_string(),
@@ -671,6 +699,9 @@ fn summarize_search_terminal(run: &ToolRunView, active: &str, completed: &str) -
                 .unwrap_or_default();
             format!("{} ({} lines)", completed, lines)
         }
+        ToolRunStatus::Backgrounded => format!("{} in background", completed),
+        ToolRunStatus::TimedOut => format!("{} timed out", completed),
+        ToolRunStatus::Cancelled => format!("{} cancelled", completed),
         ToolRunStatus::Failed => format!("{} failed", completed),
         _ => active.to_string(),
     }
@@ -769,6 +800,30 @@ mod tests {
         let mut search = ToolRunView::new("tool_search".to_string(), "bash".to_string());
         search.arguments = Some(json!({ "command": "rg TODO src" }));
         assert_eq!(search.summary(), "Searching files");
+    }
+
+    #[test]
+    fn shell_lifecycle_statuses_render_background_timeout_and_cancel() {
+        let mut background = ToolRunView::new("tool_bg".to_string(), "bash".to_string());
+        background.arguments = Some(json!({ "command": "npm run dev", "mode": "background" }));
+        background.mark_complete(
+            "Result: OK\nStarted background shell command.\nHandle: shell_123\nStatus: running."
+                .to_string(),
+        );
+        assert_eq!(background.status, ToolRunStatus::Backgrounded);
+        assert!(background.render_lines(false)[0].contains("backgrounded"));
+
+        let mut timed_out = ToolRunView::new("tool_timeout".to_string(), "bash".to_string());
+        timed_out.arguments = Some(json!({ "command": "sleep 60" }));
+        timed_out.mark_complete("Result: ERROR\nCommand timed out after 1 seconds".to_string());
+        assert_eq!(timed_out.status, ToolRunStatus::TimedOut);
+        assert!(timed_out.render_lines(false)[0].contains("timed out"));
+
+        let mut cancelled = ToolRunView::new("tool_cancel".to_string(), "bash_cancel".to_string());
+        cancelled.arguments = Some(json!({ "handle": "shell_123" }));
+        cancelled.mark_complete("Result: OK\nBackground shell shell_123 is cancelled.".to_string());
+        assert_eq!(cancelled.status, ToolRunStatus::Cancelled);
+        assert!(cancelled.render_lines(false)[0].contains("cancelled"));
     }
 
     #[test]

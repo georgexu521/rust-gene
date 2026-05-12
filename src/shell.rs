@@ -670,12 +670,20 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                 assistant_printer.finish_line_if_needed()?;
                 with_tool_run(&mut tool_runs, &id, |run| run.mark_complete(result));
                 if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
-                    let marker = if run.status == crate::tui::tool_view::ToolRunStatus::Failed {
-                        "✗"
-                    } else {
-                        "✓"
+                    let marker = match run.status {
+                        crate::tui::tool_view::ToolRunStatus::Failed
+                        | crate::tui::tool_view::ToolRunStatus::TimedOut => "✗",
+                        crate::tui::tool_view::ToolRunStatus::Cancelled => "×",
+                        crate::tui::tool_view::ToolRunStatus::Backgrounded => "↪",
+                        _ => "✓",
                     };
-                    let color = if marker == "✗" { RED } else { GREEN };
+                    let color = if marker == "✗" {
+                        RED
+                    } else if marker == "×" {
+                        YELLOW
+                    } else {
+                        GREEN
+                    };
                     println_tool_line(marker, color, &run.render_lines(false).join("\n"), true);
                 }
             }

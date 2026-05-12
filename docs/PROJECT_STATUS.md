@@ -26,9 +26,9 @@ Active next-stage direction:
   artifact. It records the Claude/opencode reference map, current
   `ConversationLoop` architecture map, current product capability table, and
   the recommended Batch 2-5 order.
-- Next implementation focus is finishing repair boundary extraction, then
-  terminal/bash productization, an evidence ledger, and behavior-preserving
-  `ConversationLoop` extraction.
+- Current implementation focus is Phase 2 terminal/bash productization after
+  the main-loop, provider-protocol, focused-repair, permission, context-budget,
+  and shell-result schema slices.
 - The first provider-protocol regression matrix slice is complete:
   OpenAI-compatible, MiniMax, and Kimi request conversion now share provider
   message normalization; pure assistant `tool_calls` omit empty content,
@@ -48,16 +48,22 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-shell-result duration/schema/artifacts, shell-command UI summary,
-shell-command category permission risk, shell-command category classifier,
-terminal provider-schema exposure diagnostic, explicit patch-synthesis fallback
-boundary, focused-repair proposal boundary, provider-protocol matrix,
-permission-controller, context-budget, tool-result-budget, schema-gate, and
-tool-result normalizer work:
+background-shell, shell-result duration/schema/artifacts, shell-command UI
+summary, shell-command category permission risk, shell-command category
+classifier, terminal provider-schema exposure diagnostic, explicit
+patch-synthesis fallback boundary, focused-repair proposal boundary,
+provider-protocol matrix, permission-controller, context-budget,
+tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1250 passed; 0 failed
+1256 passed; 0 failed
 ```
+
+Current terminal slice: `bash mode=background` returns a shell handle,
+`bash_output` reads bounded output from that handle, `bash_cancel` stops the
+process group, foreground timeout results now carry structured
+`shell_result.timed_out=true`, and CLI/TUI tool views have explicit
+backgrounded/timed-out/cancelled states.
 
 Validated locally with:
 

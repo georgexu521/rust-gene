@@ -638,16 +638,19 @@ fn render_tool_runs_message<'a>(runs: &'a [ToolRunView], app: &'a TuiApp) -> Par
         let accent = match run.status {
             ToolRunStatus::Queued | ToolRunStatus::Running => app.theme.status_thinking,
             ToolRunStatus::WaitingPermission => app.theme.warning,
-            ToolRunStatus::Completed => app.theme.text_dim,
-            ToolRunStatus::Failed => app.theme.error,
+            ToolRunStatus::Backgrounded | ToolRunStatus::Completed => app.theme.text_dim,
+            ToolRunStatus::Cancelled => app.theme.warning,
+            ToolRunStatus::TimedOut | ToolRunStatus::Failed => app.theme.error,
         };
         for (line_idx, line) in run.render_lines(expanded).into_iter().enumerate() {
             let prefix = if line_idx == 0 {
                 match run.status {
                     ToolRunStatus::Queued | ToolRunStatus::Running => "● ",
                     ToolRunStatus::WaitingPermission => "? ",
+                    ToolRunStatus::Backgrounded => "↪ ",
                     ToolRunStatus::Completed => "✓ ",
-                    ToolRunStatus::Failed => "✗ ",
+                    ToolRunStatus::Cancelled => "× ",
+                    ToolRunStatus::TimedOut | ToolRunStatus::Failed => "✗ ",
                 }
             } else {
                 "  "

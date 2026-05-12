@@ -2944,6 +2944,8 @@ mod tests {
             "agent",
             "ask_user",
             "bash",
+            "bash_cancel",
+            "bash_output",
             "calculate",
             "datetime",
             "diff",
@@ -3110,6 +3112,8 @@ mod tests {
             "file_write",
             "file_edit",
             "bash",
+            "bash_output",
+            "bash_cancel",
             "diff",
             "web_search",
             "memory_save",
@@ -3123,6 +3127,8 @@ mod tests {
         assert!(exposed.contains("file_write"));
         assert!(exposed.contains("file_edit"));
         assert!(exposed.contains("bash"));
+        assert!(exposed.contains("bash_output"));
+        assert!(exposed.contains("bash_cancel"));
         assert!(exposed.contains("diff"));
         assert!(!exposed.contains("web_search"));
         assert!(!exposed.contains("memory_save"));
@@ -3239,14 +3245,14 @@ mod tests {
                 prompt: "帮我做一个贪吃蛇游戏吧，用 python 做吧",
                 intent: IntentKind::CodeChange,
                 workflow: WorkflowKind::CodeChange,
-                max_tools: 12,
+                max_tools: 14,
             },
             Sample {
                 label: "running issue debug",
                 prompt: "我在运行中发现了一个问题，你帮我看看是怎么回事吧",
                 intent: IntentKind::Debugging,
                 workflow: WorkflowKind::BugFix,
-                max_tools: 12,
+                max_tools: 14,
             },
             Sample {
                 label: "reference comparison",

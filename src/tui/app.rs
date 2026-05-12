@@ -2848,7 +2848,7 @@ impl TuiApp {
         let failed_tool = self
             .tool_runs_snapshot
             .iter()
-            .any(|run| run.status == ToolRunStatus::Failed);
+            .any(|run| matches!(run.status, ToolRunStatus::Failed | ToolRunStatus::TimedOut));
         let stream_error = assistant_response.contains("[Error:");
         let has_response = !assistant_response.trim().is_empty();
         let trace = self

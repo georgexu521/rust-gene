@@ -333,6 +333,18 @@
   targeted `tool_result`, `bash_tool`, and shell-result duration tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1250 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.4 started. Added the first real background shell
+  task boundary: `bash` now supports `mode=background` and returns a shell
+  handle; `bash_output` reads bounded live output for that handle; `bash_cancel`
+  stops the process group. Foreground bash timeout results now also carry a
+  structured `shell_result` with `timed_out=true`, and CLI/TUI tool views can
+  display `backgrounded`, `timed out`, and `cancelled` states instead of
+  treating every finished tool call as simply done/failed.
+- Validation after the first background-shell slice: `cargo fmt --check`,
+  `git diff --check`, targeted `bash_tool`, `tool_view`, `intent_router`,
+  `route_scoped_tools`, `permissions`, runtime-diet, and core-tool registry
+  tests, `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and
+  full `cargo test -q` all passed (`1256 passed; 0 failed`).
 
 ## 当前判断
 
@@ -340,7 +352,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1243 passed; 0 failed`。
+- 最近全量本地测试基线是 `1256 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

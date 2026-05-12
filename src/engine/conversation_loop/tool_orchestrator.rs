@@ -133,6 +133,8 @@ impl ConversationLoop {
                     "file_write",
                     "file_edit",
                     "bash",
+                    "bash_output",
+                    "bash_cancel",
                     "diff",
                     "git",
                     "format",
@@ -147,6 +149,8 @@ impl ConversationLoop {
                     "file_write",
                     "file_edit",
                     "bash",
+                    "bash_output",
+                    "bash_cancel",
                     "diff",
                     "git",
                     "format",
@@ -191,7 +195,6 @@ impl ConversationLoop {
                 WorkflowKind::Direct => &["file_read", "glob", "ask_user"],
             },
         };
-
         allowlist.extend(tools.iter().map(|tool| (*tool).to_string()));
         allowlist
     }

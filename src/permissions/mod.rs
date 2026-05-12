@@ -432,6 +432,7 @@ impl PermissionContext {
                 "file_read"
                     | "glob"
                     | "grep"
+                    | "bash_output"
                     | "project_list"
                     | "memory_load"
                     | "skills_list"
@@ -504,9 +505,12 @@ impl PermissionContext {
 
     fn risk_level(&self, tool_name: &str, params: &serde_json::Value) -> RiskLevel {
         match tool_name {
-            "file_read" | "glob" | "grep" | "project_list" | "memory_load" => RiskLevel::Low,
+            "file_read" | "glob" | "grep" | "bash_output" | "project_list" | "memory_load" => {
+                RiskLevel::Low
+            }
             "memory_clear" | "mcp" => RiskLevel::High,
             "agent" => RiskLevel::Medium,
+            "bash_cancel" => RiskLevel::Medium,
             "bash" => {
                 let cmd = params["command"]
                     .as_str()
