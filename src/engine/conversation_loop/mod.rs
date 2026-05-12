@@ -14,6 +14,7 @@ mod companion_context;
 mod context_budget_controller;
 mod patch_recovery;
 mod patch_repair_rules;
+mod permission_controller;
 mod pseudo_tool_text;
 mod repair_controller;
 mod runtime_diet;
@@ -5267,6 +5268,14 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("requires user confirmation"));
+        assert_eq!(
+            results[0].1.data.as_ref().unwrap()["permission_request"]["kind"],
+            "runtime_rule"
+        );
+        assert_eq!(
+            results[0].1.data.as_ref().unwrap()["permission_request"]["metadata"]["tool_name"],
+            "git"
+        );
     }
 
     #[tokio::test]

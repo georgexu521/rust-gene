@@ -196,6 +196,21 @@
   and `evidence_ledger` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1219 passed; 0 failed`).
+- 2026-05-12: Phase 1 Batch 1.6 started. Added
+  `PermissionController` as the first explicit runtime permission boundary for
+  read-write tool execution. It now owns permission request records, approval
+  prompt construction, user approval submission, once-mode approval grants,
+  structured permission-denied `ToolResult` metadata, and permission-denied
+  classification. The existing tool execution order and approval semantics are
+  unchanged, but denied permission results now carry `permission_request`
+  metadata through `ToolResultNormalizer` and permission facts into
+  `EvidenceLedger`.
+- Validation after the first permission-controller slice: `cargo fmt --check`,
+  `git diff --check`, targeted `permission_controller`, `permissions`,
+  `tool_exposure`, `bash_tool`, `tool_result`, `evidence_ledger`, and
+  `test_tool_specific_confirmation_blocks_git_push_without_approval` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1223 passed; 0 failed`).
 
 ## 当前判断
 
@@ -203,7 +218,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1219 passed; 0 failed`。
+- 最近全量本地测试基线是 `1223 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 

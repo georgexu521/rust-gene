@@ -12,6 +12,7 @@ pub(super) enum NormalizedEvidenceFact {
     Validation,
     File,
     ChangedFile,
+    Permission,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,7 +119,7 @@ fn structured_metadata(tool_call: &ToolCall, result: &ToolResult) -> serde_json:
 }
 
 fn evidence_facts(tool_call: &ToolCall, result: &ToolResult) -> Vec<NormalizedEvidenceFact> {
-    match tool_call.name.as_str() {
+    let mut facts = match tool_call.name.as_str() {
         "bash" => bash_evidence_facts(tool_call),
         "file_read" | "glob" | "grep" => vec![NormalizedEvidenceFact::File],
         "file_write" | "file_edit" => {
@@ -129,7 +130,16 @@ fn evidence_facts(tool_call: &ToolCall, result: &ToolResult) -> Vec<NormalizedEv
             facts
         }
         _ => Vec::new(),
+    };
+    if result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("permission_request"))
+        .is_some()
+    {
+        facts.push(NormalizedEvidenceFact::Permission);
     }
+    facts
 }
 
 fn bash_evidence_facts(tool_call: &ToolCall) -> Vec<NormalizedEvidenceFact> {
@@ -267,6 +277,34 @@ mod tests {
                 NormalizedEvidenceFact::File,
                 NormalizedEvidenceFact::ChangedFile
             ]
+        );
+    }
+
+    #[test]
+    fn normalizes_permission_denied_evidence_category() {
+        let mut result = ToolResult::error("Permission denied: 'git' requires user confirmation.");
+        result.data = Some(serde_json::json!({
+            "permission_request": {
+                "kind": "runtime_rule",
+                "rejection_feedback": "Permission denied: 'git' requires user confirmation."
+            }
+        }));
+        let normalized = ToolResultNormalizer::normalize(
+            &ToolCall {
+                id: "call_permission".to_string(),
+                name: "git".to_string(),
+                arguments: serde_json::json!({"action": "push"}),
+            },
+            &result,
+        );
+
+        assert_eq!(
+            normalized.evidence_facts,
+            vec![NormalizedEvidenceFact::Permission]
+        );
+        assert_eq!(
+            normalized.structured_metadata["tool_result_data"]["permission_request"]["kind"],
+            "runtime_rule"
         );
     }
 }

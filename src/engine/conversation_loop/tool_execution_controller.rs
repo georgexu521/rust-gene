@@ -1,3 +1,4 @@
+use super::permission_controller::PermissionController;
 use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, ToolCallStatus};
 use super::tool_execution::{is_read_only, read_only_tool_concurrency};
 use super::tool_metadata::{
@@ -23,7 +24,7 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct ToolExecutionBatch {
@@ -466,7 +467,6 @@ impl ToolExecutionController {
                         crate::engine::goal_drift::GoalDriftDetector::new().check(goal, &tc)
                     })
                     .unwrap_or_else(crate::engine::goal_drift::DriftCheck::ok);
-                let drift_requires_approval = drift_check.requires_approval();
                 let pre_decision = if let Some(ref hooks) = execution.hook_manager {
                     let hook_start = hooks.current_record_sequence();
                     let decision = hooks.run_pre_tool(&tc, &context).await;
@@ -481,96 +481,33 @@ impl ToolExecutionController {
                 };
 
                 let started_at = std::time::Instant::now();
-                let requires_approval = {
-                    let permission_requires = context
-                        .permission_context
-                        .requires_confirmation(&tool_name, &tc.arguments);
-                    let tool_requires = tool.requires_confirmation(&tc.arguments)
-                        && !context
-                            .permission_context
-                            .auto_approves_tool_confirmation(&tool_name, &tc.arguments);
-                    permission_requires || tool_requires || drift_requires_approval
-                };
+                let permission_evaluation = PermissionController::evaluate_tool_permission(
+                    &execution.session_id,
+                    &tc,
+                    tool,
+                    &context,
+                    &drift_check,
+                );
                 let mut result = if !pre_decision.allow {
                     ToolResult::error(
                         pre_decision
                             .reason
                             .unwrap_or_else(|| format!("blocked by pre-tool hook: {}", tool_name)),
                     )
-                } else if requires_approval {
-                    let mut approved = false;
-                    if let (Some(ref channel), Some(tx)) = (&execution.approval_channel, tx) {
-                        let base_prompt = if drift_requires_approval {
-                            format!(
-                                "Tool '{}' may drift from the current goal. Reason: {} Suggested action: {} Allow?",
-                                tool_name,
-                                drift_check.reason,
-                                drift_check
-                                    .suggested_action
-                                    .as_deref()
-                                    .unwrap_or("review before executing")
-                            )
-                        } else if tool_name == "mcp_tool" {
-                            let server = tc.arguments["server_name"].as_str().unwrap_or("");
-                            let t = tc.arguments["tool_name"].as_str().unwrap_or("");
-                            format!(
-                                "MCP tool '{}' on server '{}' requires approval. Allow?",
-                                t, server
-                            )
-                        } else if let Some(prompt) = tool.confirmation_prompt(&tc.arguments) {
-                            prompt
-                        } else {
-                            format!("Tool '{}' requires approval. Allow?", tool_name)
-                        };
-                        let prompt = if drift_requires_approval {
-                            base_prompt
-                        } else {
-                            let explanation = context
-                                .permission_context
-                                .explain_decision(&tool_name, &tc.arguments)
-                                .concise_summary();
-                            format!("{}\nPermission explanation: {}", base_prompt, explanation)
-                        };
-                        let _ = tx
-                            .send(StreamEvent::PermissionRequest {
-                                id: tool_id.clone(),
-                                tool_name: tool_name.clone(),
-                                arguments: tc.arguments.clone(),
-                                prompt: prompt.clone(),
-                            })
-                            .await;
-                        if let Some(ref trace) = trace {
-                            trace.record(TraceEvent::PermissionRequested {
-                                tool: tool_name.clone(),
-                                call_id: tool_id.clone(),
-                                prompt: prompt.clone(),
-                            });
-                        }
-                        let request = super::ToolApprovalRequest {
-                            tool_call: tc.clone(),
-                            prompt,
-                            review: None,
-                        };
-                        match channel.submit(request).await {
-                            Ok(is_approved) => approved = is_approved,
-                            Err(e) => {
-                                warn!("Tool approval error: {}", e);
-                            }
-                        }
-                        if let Some(ref trace) = trace {
-                            trace.record(TraceEvent::PermissionResolved {
-                                tool: tool_name.clone(),
-                                call_id: tool_id.clone(),
-                                approved,
-                            });
-                        }
-                    }
+                } else if permission_evaluation.requires_approval {
+                    let approved = PermissionController::request_user_permission(
+                        &tc,
+                        &permission_evaluation,
+                        execution.approval_channel.as_ref(),
+                        tx,
+                        trace,
+                    )
+                    .await;
                     if approved {
-                        if context.permission_context.mode
-                            == crate::permissions::PermissionMode::Once
-                        {
-                            context.permission_context.grant_once(&tool_name);
-                        }
+                        PermissionController::record_approved_session_rule(
+                            &mut context,
+                            &tool_name,
+                        );
                         if let Some(tx) = tx {
                             let _ = tx
                                 .send(StreamEvent::ToolExecutionProgress {
@@ -584,10 +521,10 @@ impl ToolExecutionController {
                         }
                         tool.execute(tc.arguments.clone(), context.clone()).await
                     } else {
-                        ToolResult::error(format!(
-                            "Permission denied: '{}' requires user confirmation.",
-                            tool_name
-                        ))
+                        PermissionController::denied_result(
+                            &tool_name,
+                            permission_evaluation.record.as_ref(),
+                        )
                     }
                 } else {
                     if let Some(tx) = tx {
@@ -616,12 +553,7 @@ impl ToolExecutionController {
                 if let Some(ref log) = execution.audit_log {
                     let decision = if result.success {
                         "EXECUTED"
-                    } else if result
-                        .error
-                        .as_deref()
-                        .unwrap_or("")
-                        .contains("Permission denied")
-                    {
+                    } else if PermissionController::is_permission_denied(&result) {
                         "DENIED"
                     } else {
                         "FAILED"
@@ -633,11 +565,7 @@ impl ToolExecutionController {
                 if let Some(ref tracker) = execution.denial_tracker {
                     if result.success {
                         tracker.record_success().await;
-                    } else if result
-                        .error
-                        .as_deref()
-                        .unwrap_or("")
-                        .contains("Permission denied")
+                    } else if PermissionController::is_permission_denied(&result)
                         || result
                             .error
                             .as_deref()
@@ -700,12 +628,7 @@ impl ToolExecutionController {
                 record_mcp_resource_trace(&trace_ref, &tc, &result);
                 record_web_retrieval_trace(&trace_ref, &tc, &result);
             }
-            if result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Permission denied")
-            {
+            if PermissionController::is_permission_denied(&result) {
                 lifecycle.denied(&tc);
             } else {
                 lifecycle.completed(&tc, &result);

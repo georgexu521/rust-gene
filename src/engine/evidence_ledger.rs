@@ -19,6 +19,7 @@ pub struct EvidenceLedger {
     file_facts: Vec<FileEvidence>,
     command_facts: Vec<CommandEvidence>,
     validation_facts: Vec<ValidationEvidence>,
+    permission_facts: Vec<PermissionEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,6 +49,14 @@ pub struct ValidationEvidence {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionEvidence {
+    pub tool: String,
+    pub kind: Option<String>,
+    pub approved: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvidenceSnapshot {
     pub changed_files: Vec<String>,
     pub file_facts: usize,
@@ -55,6 +64,8 @@ pub struct EvidenceSnapshot {
     pub validation_facts: usize,
     pub passed_validation_facts: usize,
     pub failed_validation_facts: usize,
+    pub permission_facts: usize,
+    pub denied_permission_facts: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +138,7 @@ impl EvidenceLedger {
     }
 
     pub fn record_tool_result(&mut self, tool_call: &ToolCall, result: &ToolResult) {
+        self.record_permission_tool_result(tool_call, result);
         match tool_call.name.as_str() {
             "bash" => self.record_bash_tool_result(tool_call, result),
             "file_read" | "file_write" | "file_edit" | "glob" | "grep" => {
@@ -164,6 +176,11 @@ impl EvidenceLedger {
             .filter(|fact| fact.passed)
             .count();
         let failed_validation_facts = self.validation_facts.len() - passed_validation_facts;
+        let denied_permission_facts = self
+            .permission_facts
+            .iter()
+            .filter(|fact| !fact.approved)
+            .count();
         EvidenceSnapshot {
             changed_files: self.changed_files.iter().cloned().collect(),
             file_facts: self.file_facts.len(),
@@ -171,6 +188,8 @@ impl EvidenceLedger {
             validation_facts: self.validation_facts.len(),
             passed_validation_facts,
             failed_validation_facts,
+            permission_facts: self.permission_facts.len(),
+            denied_permission_facts,
         }
     }
 
@@ -241,6 +260,10 @@ impl EvidenceLedger {
 
     pub fn validation_facts(&self) -> &[ValidationEvidence] {
         &self.validation_facts
+    }
+
+    pub fn permission_facts(&self) -> &[PermissionEvidence] {
+        &self.permission_facts
     }
 
     pub fn unsupported_filesystem_claims(&self, answer: &str) -> Vec<String> {
@@ -359,6 +382,31 @@ impl EvidenceLedger {
             summary: result_summary(result),
         });
     }
+
+    fn record_permission_tool_result(&mut self, tool_call: &ToolCall, result: &ToolResult) {
+        let Some(permission_request) = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("permission_request"))
+        else {
+            return;
+        };
+        let kind = permission_request
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        let summary = permission_request
+            .get("rejection_feedback")
+            .and_then(|value| value.as_str())
+            .or(result.error.as_deref())
+            .unwrap_or("permission request recorded");
+        self.permission_facts.push(PermissionEvidence {
+            tool: tool_call.name.clone(),
+            kind,
+            approved: result.success,
+            summary: preview(summary),
+        });
+    }
 }
 
 fn result_summary(result: &ToolResult) -> String {
@@ -434,6 +482,32 @@ mod tests {
         assert_eq!(
             ledger.runtime_validation_label().as_deref(),
             Some("passed:1/1")
+        );
+    }
+
+    #[test]
+    fn records_permission_denial_as_permission_fact() {
+        let mut ledger = EvidenceLedger::new();
+        let mut result = ToolResult::error("Permission denied: 'git' requires user confirmation.");
+        result.error_code = Some(crate::tools::ToolErrorCode::PermissionDenied);
+        result.data = Some(serde_json::json!({
+            "permission_request": {
+                "kind": "runtime_rule",
+                "rejection_feedback": "Permission denied: 'git' requires user confirmation."
+            }
+        }));
+        ledger.record_tool_result(
+            &tool_call("git", serde_json::json!({"action": "push"})),
+            &result,
+        );
+
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.permission_facts, 1);
+        assert_eq!(snapshot.denied_permission_facts, 1);
+        assert_eq!(ledger.permission_facts()[0].tool, "git");
+        assert_eq!(
+            ledger.permission_facts()[0].kind.as_deref(),
+            Some("runtime_rule")
         );
     }
 
