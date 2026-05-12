@@ -223,13 +223,25 @@ fn format_terminal_bash_exposure(
     } else {
         "route_scoped=off"
     };
-    if report.model_exposed {
-        format!("exposed for terminal requests ({})", scope)
+    let schema = if report.provider_schema_compatible {
+        "schema=ok".to_string()
     } else {
         format!(
-            "hidden for terminal requests: {} ({})",
+            "schema=bad: {}",
+            report
+                .provider_schema_reason
+                .as_deref()
+                .unwrap_or("unknown schema issue")
+        )
+    };
+    if report.model_exposed {
+        format!("exposed for terminal requests ({}, {})", scope, schema)
+    } else {
+        format!(
+            "hidden for terminal requests: {} ({}, {})",
             report.hidden_reason.as_deref().unwrap_or("unknown reason"),
-            scope
+            scope,
+            schema
         )
     }
 }
@@ -1995,6 +2007,8 @@ mod tests {
             route_scoped_tools: true,
             route_exposed: true,
             route_reason: None,
+            provider_schema_compatible: true,
+            provider_schema_reason: None,
             model_exposed,
             hidden_reason: hidden_reason.map(str::to_string),
         }
@@ -2006,6 +2020,7 @@ mod tests {
 
         assert!(line.contains("exposed for terminal requests"));
         assert!(line.contains("route_scoped=on"));
+        assert!(line.contains("schema=ok"));
     }
 
     #[test]

@@ -48,12 +48,13 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-explicit patch-synthesis fallback boundary, focused-repair proposal boundary,
-provider-protocol matrix, permission-controller, context-budget,
-tool-result-budget, schema-gate, and tool-result normalizer work:
+terminal provider-schema exposure diagnostic, explicit patch-synthesis fallback
+boundary, focused-repair proposal boundary, provider-protocol matrix,
+permission-controller, context-budget, tool-result-budget, schema-gate, and
+tool-result normalizer work:
 
 ```text
-1244 passed; 0 failed
+1245 passed; 0 failed
 ```
 
 Validated locally with:
@@ -476,6 +477,9 @@ Latest maintenance note:
   synthesis runs before deterministic repair; deterministic patch synthesis is
   reserved for no-evidence cases, model synthesis failures, or explicit
   patch-synthesis opt-out.
+- `/status` and `/doctor` terminal diagnostics now include bash provider-schema
+  compatibility (`schema=ok` or a concrete schema failure reason) alongside
+  registry, availability, permission, and route exposure checks.
 - Code-change workflow strictness is now adaptive instead of medium-risk by
   default: required validation, first code change, failed verification,
   acceptance rejection, and repeated no-edit progress activate the heavier

@@ -274,6 +274,16 @@
   `cargo clippy --all-features -- -D warnings`,
   `bash scripts/workflow-production-gates.sh`, and full `cargo test -q` all
   passed (`1244 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.1 started. `tool_exposure` diagnostics now also
+  report provider-facing tool schema compatibility, and `/status` / `/doctor`
+  bash exposure output includes `schema=ok` or a concrete schema reason. This
+  keeps terminal availability debugging in runtime diagnostics instead of
+  pushing more rules into prompts.
+- Validation after the provider-schema exposure diagnostic slice:
+  `cargo fmt --check`, `git diff --check`, targeted `tool_exposure`,
+  `bash_exposure`, `doctor_route_summary`, and `intent_router` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1245 passed; 0 failed`).
 
 ## 当前判断
 
