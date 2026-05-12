@@ -48,8 +48,9 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-file-state tracker, partial-read edit state, file-read/search evidence metadata,
-foreground PTY smoke, interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
+file text codec, file-state tracker, partial-read edit state,
+file-read/search evidence metadata, foreground PTY smoke,
+interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
 duration/schema/artifacts, shell-command UI summary, shell-command category
 permission risk, shell-command category classifier, terminal provider-schema
 exposure diagnostic, explicit
@@ -58,7 +59,7 @@ provider-protocol matrix, permission-controller, context-budget,
 tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1265 passed; 0 failed
+1268 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -89,7 +90,9 @@ while line-range edits are allowed when the requested range is covered by a
 previous targeted read. File state is now owned by `FileStateTracker`, and
 file read/edit/write metadata exposes lexical, resolved, canonical, display,
 and state-key path identity so relative, absolute, and canonicalized paths
-share the same stale-read boundary.
+share the same stale-read boundary. File reads now expose `text_format`
+metadata for encoding, BOM, and line ending; edits and writes preserve UTF-8
+BOM, UTF-16LE BOM, and LF/CRLF style instead of normalizing files by accident.
 
 Validated locally with:
 

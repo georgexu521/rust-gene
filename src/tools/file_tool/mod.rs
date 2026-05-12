@@ -12,6 +12,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
+mod text_codec;
+
+use text_codec::{
+    detect_line_ending, normalize_text_line_endings, read_text_file, split_leading_text_bom,
+    text_format_json, text_write_format_json, write_text_file, TextFileEncoding,
+};
+
+#[cfg(test)]
+use text_codec::{decode_text_file, encode_text_content, LineEndingStyle};
+
 const MAX_EDITABLE_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 const DEFAULT_MAX_FILE_EDIT_REPLACEMENTS: usize = 20;
 const MAX_MATCH_CONTEXT_OCCURRENCES: usize = 12;
@@ -588,13 +598,14 @@ impl Tool for FileReadTool {
         }
 
         // 读取文件内容
-        let content = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => content,
+        let snapshot = match read_text_file(&path, "read").await {
+            Ok(snapshot) => snapshot,
             Err(e) => {
-                error!("Failed to read file: {}", e);
-                return ToolResult::error(format!("Failed to read file: {}", e));
+                error!("{}", e);
+                return ToolResult::error(e);
             }
         };
+        let content = snapshot.content.as_str();
 
         let targeted_read = limit.is_some() || offset.is_some();
 
@@ -621,8 +632,9 @@ impl Tool for FileReadTool {
                         "truncated": false,
                         "targeted_read": false,
                         "read_coverage": "full",
-                        "size_bytes": content.len(),
-                        "content_hash": content_hash_hex(&content),
+                        "size_bytes": snapshot.byte_len,
+                        "content_hash": content_hash_hex(content),
+                        "text_format": text_format_json(&snapshot),
                         "display_format": "unchanged_notice",
                         "content_format": {
                             "visible_content": "unchanged_notice",
@@ -678,7 +690,7 @@ impl Tool for FileReadTool {
         mark_file_read_with_state_and_coverage(
             &context.session_id,
             &state_key,
-            &content,
+            content,
             mtime,
             read_coverage,
         );
@@ -720,9 +732,10 @@ impl Tool for FileReadTool {
                 "truncated": truncated,
                 "targeted_read": targeted_read,
                 "read_coverage": if targeted_read { "partial" } else { "full" },
-                "size_bytes": content.len(),
-                "content_hash": content_hash_hex(&content),
+                "size_bytes": snapshot.byte_len,
+                "content_hash": content_hash_hex(content),
                 "selected_content_hash": content_hash_hex(&result),
+                "text_format": text_format_json(&snapshot),
                 "display_format": if lines.len() > 1 { "line_numbered_content" } else { "raw_content" },
                 "content_format": {
                     "visible_content": if lines.len() > 1 { "line_numbered_display" } else { "raw_content" },
@@ -807,6 +820,31 @@ impl Tool for FileWriteTool {
         let identity = file_path_identity(path_str, &path, &context.working_dir);
 
         let existed_before = path.exists();
+        let existing_snapshot = if existed_before {
+            if let Err(msg) = check_file_size_limit(&path, "write") {
+                return ToolResult::error(msg);
+            }
+            match read_text_file(&path, "write").await {
+                Ok(snapshot) => Some(snapshot),
+                Err(e) => return ToolResult::error(e),
+            }
+        } else {
+            None
+        };
+        let (content_has_bom, content_body) = split_leading_text_bom(content);
+        let encoding = existing_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.encoding)
+            .unwrap_or(TextFileEncoding::Utf8);
+        let has_bom = existing_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.has_bom)
+            .unwrap_or(false)
+            || content_has_bom;
+        let line_ending = existing_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.line_ending)
+            .unwrap_or_else(|| detect_line_ending(content_body));
 
         // 检查父目录是否存在，不存在则创建
         if let Some(parent) = path.parent() {
@@ -832,8 +870,17 @@ impl Tool for FileWriteTool {
         }
 
         // 写入文件
-        match tokio::fs::write(&path, content).await {
-            Ok(_) => {
+        match write_text_file(
+            &path,
+            content_body,
+            encoding,
+            has_bom,
+            line_ending,
+            MAX_EDITABLE_FILE_SIZE_BYTES,
+        )
+        .await
+        {
+            Ok(bytes_written) => {
                 // 使文件缓存失效
                 if let Some(ref cache) = context.file_cache {
                     cache.invalidate_content(&path);
@@ -851,8 +898,9 @@ impl Tool for FileWriteTool {
                         "path": path_str,
                         "resolved_path": identity.resolved_path,
                         "path_identity": path_identity_json(&identity),
-                        "bytes_written": content.len(),
+                        "bytes_written": bytes_written,
                         "existed_before": existed_before,
+                        "text_format": text_write_format_json(encoding, has_bom, line_ending),
                         "guidance": if existed_before {
                             "file_write replaced the entire file; use file_edit for targeted existing-file changes"
                         } else {
@@ -861,10 +909,7 @@ impl Tool for FileWriteTool {
                     }),
                 )
             }
-            Err(e) => {
-                error!("Failed to write file: {}", e);
-                ToolResult::error(format!("Failed to write file: {}", e))
-            }
+            Err(e) => ToolResult::error(e),
         }
     }
 
@@ -1260,12 +1305,13 @@ impl Tool for FileEditTool {
         if let Err(msg) = check_file_size_limit(&path, "edit") {
             return ToolResult::error(msg);
         }
-        let content = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => content,
+        let snapshot = match read_text_file(&path, "edit").await {
+            Ok(snapshot) => snapshot,
             Err(e) => {
-                return ToolResult::error(format!("Failed to read file: {}", e));
+                return ToolResult::error(e);
             }
         };
+        let content = snapshot.content.clone();
 
         // ── Smart Edit 检查 ───────────────────────────────────────────
         // 1. Must-read-before-edit: 检查文件是否已被读取
@@ -1306,11 +1352,14 @@ impl Tool for FileEditTool {
             == Ok("1")
         {
             (
-                desanitize(&normalize_quotes(old_string)),
-                desanitize(&normalize_quotes(new_string)),
+                normalize_text_line_endings(&desanitize(&normalize_quotes(old_string))),
+                normalize_text_line_endings(&desanitize(&normalize_quotes(new_string))),
             )
         } else {
-            (old_string.to_string(), new_string.to_string())
+            (
+                normalize_text_line_endings(old_string),
+                normalize_text_line_endings(new_string),
+            )
         };
 
         // 创建 checkpoint（文件修改前自动快照）
@@ -1364,8 +1413,17 @@ impl Tool for FileEditTool {
                         path_str, replacements
                     ));
                 }
-                match tokio::fs::write(&path, &new_content).await {
-                    Ok(_) => {
+                match write_text_file(
+                    &path,
+                    &new_content,
+                    snapshot.encoding,
+                    snapshot.has_bom,
+                    snapshot.line_ending,
+                    MAX_EDITABLE_FILE_SIZE_BYTES,
+                )
+                .await
+                {
+                    Ok(bytes_written) => {
                         // 使文件缓存失效
                         if let Some(ref cache) = context.file_cache {
                             cache.invalidate_content(&path);
@@ -1386,6 +1444,12 @@ impl Tool for FileEditTool {
                             "resolved_path": identity.resolved_path,
                             "path_identity": path_identity_json(&identity),
                             "replacements": replacements,
+                            "bytes_written": bytes_written,
+                            "text_format": text_write_format_json(
+                                snapshot.encoding,
+                                snapshot.has_bom,
+                                snapshot.line_ending
+                            ),
                         });
                         ToolResult::success_with_data(
                             format!(
@@ -1395,10 +1459,7 @@ impl Tool for FileEditTool {
                             data,
                         )
                     }
-                    Err(e) => {
-                        error!("Failed to write file: {}", e);
-                        ToolResult::error(format!("Failed to write file: {}", e))
-                    }
+                    Err(e) => ToolResult::error(e),
                 }
             }
             Err(e) => ToolResult::error(e),
@@ -2183,6 +2244,97 @@ mod tests {
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert!(content.contains("baz qux"));
         assert!(!content.contains("foo bar"));
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn file_edit_preserves_crlf_line_endings() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_crlf.txt";
+        tokio::fs::write(path, b"alpha\r\nbeta\r\ngamma\r\n")
+            .await
+            .unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "beta\n",
+                    "new_string": "beta edited\n"
+                }),
+                ToolContext::new(".", "test-session-edit-crlf"),
+            )
+            .await;
+
+        assert!(result.success, "edit failed: {:?}", result.error);
+        let data = result.data.expect("file_edit metadata");
+        assert_eq!(data["text_format"]["line_ending"], "CRLF");
+        let bytes = tokio::fs::read(path).await.unwrap();
+        assert_eq!(bytes, b"alpha\r\nbeta edited\r\ngamma\r\n");
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn file_read_reports_utf8_bom_and_normalizes_crlf_display() {
+        let tool = FileReadTool;
+        let path = "/tmp/test_priority_agent_read_bom_crlf.txt";
+        let mut bytes = vec![0xef, 0xbb, 0xbf];
+        bytes.extend_from_slice(b"alpha\r\nbeta\r\n");
+        tokio::fs::write(path, bytes).await.unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path
+                }),
+                ToolContext::new(".", "test-session-read-bom-crlf"),
+            )
+            .await;
+
+        assert!(result.success, "read failed: {:?}", result.error);
+        assert!(result.content.contains("alpha"));
+        assert!(!result.content.contains('\u{feff}'));
+        let data = result.data.expect("file_read metadata");
+        assert_eq!(data["text_format"]["encoding"], "utf-8");
+        assert_eq!(data["text_format"]["bom"], true);
+        assert_eq!(data["text_format"]["line_ending"], "CRLF");
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn file_edit_preserves_utf16le_bom() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_utf16le.txt";
+        let original = encode_text_content(
+            "hello\nworld\n",
+            TextFileEncoding::Utf16Le,
+            true,
+            LineEndingStyle::Lf,
+        );
+        tokio::fs::write(path, original).await.unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "world",
+                    "new_string": "世界"
+                }),
+                ToolContext::new(".", "test-session-edit-utf16le"),
+            )
+            .await;
+
+        assert!(result.success, "edit failed: {:?}", result.error);
+        let data = result.data.expect("file_edit metadata");
+        assert_eq!(data["text_format"]["encoding"], "utf-16le");
+        assert_eq!(data["text_format"]["bom"], true);
+        let bytes = tokio::fs::read(path).await.unwrap();
+        assert!(bytes.starts_with(&[0xff, 0xfe]));
+        let decoded = decode_text_file(Path::new(path), "test", bytes).unwrap();
+        assert_eq!(decoded.content, "hello\n世界\n");
 
         let _ = tokio::fs::remove_file(path).await;
     }
