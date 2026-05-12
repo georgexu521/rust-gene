@@ -37,7 +37,7 @@ use action_checkpoint::FocusedRepairActionRequest;
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use closeout_controller::FinalCloseoutContext;
 use context_budget_controller::ContextBudgetController;
-use patch_recovery::PatchSynthesisAction;
+use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
 use repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
 };
@@ -2015,17 +2015,35 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         .synthesize_patch_tool_calls(&messages, last_user_preview.as_str())
                         .await
                     {
-                        Ok(synthesized_calls) => {
+                        Ok(synthesis_outcome) => {
+                            let synthesis_source = synthesis_outcome.source;
+                            let synthesis_source_label = synthesis_source.label();
+                            let synthesis_reason = synthesis_outcome
+                                .fallback_reason
+                                .as_deref()
+                                .unwrap_or(&repair_proposal.fallback_reason)
+                                .to_string();
+                            let synthesized_calls = synthesis_outcome.tool_calls;
                             trace.record(TraceEvent::WorkflowFallback {
                                 error: format!(
-                                    "patch synthesis owner={} reason={} produced {} file_edit action(s)",
+                                    "patch synthesis owner={} reason={} source={} produced {} file_edit action(s)",
                                     repair_proposal.fallback_owner,
-                                    repair_proposal.fallback_reason,
+                                    synthesis_reason,
+                                    synthesis_source_label,
                                     synthesized_calls.len()
                                 ),
                             });
+                            let synthesis_message = match synthesis_source {
+                                PatchSynthesisSource::DeterministicFallback => {
+                                    "Applying deterministic patch fallback from prior evidence."
+                                }
+                                PatchSynthesisSource::ModelJson
+                                | PatchSynthesisSource::ModelToolFallback => {
+                                    "Applying synthesized patch from prior evidence."
+                                }
+                            };
                             messages.push(Message::assistant_with_tools(
-                                "Applying synthesized patch from prior evidence.",
+                                synthesis_message,
                                 synthesized_calls.clone(),
                             ));
                             let exposed_synth_tools =
@@ -4342,6 +4360,50 @@ PY
             calls[0].arguments["new_string"],
             "if let Some(ref mem_mutex) = self.memory_manager {"
         );
+    }
+
+    #[test]
+    fn test_deterministic_patch_fallback_records_source_and_reason() {
+        let mut guard = EnvVarGuard::acquire_blocking();
+        guard.remove("PRIORITY_AGENT_DETERMINISTIC_PATCH_SYNTHESIS");
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
+            .expect("create module dir");
+        std::fs::write(
+            tmp.path().join("src/engine/conversation_loop/mod.rs"),
+            "if let Some(ref mut mem_mutex) = self.memory_manager {\n    let mut mem = mem_mutex.lock().await;\n}\n",
+        )
+        .expect("write module file");
+
+        let outcome = loop_instance
+            .deterministic_patch_fallback(
+                "error[E0596]: cannot borrow `self.memory_manager.0` as mutable, as it is behind a `&` reference",
+                tmp.path(),
+                "model patch synthesis failed: invalid JSON",
+            )
+            .expect("deterministic fallback should produce a repair");
+
+        assert_eq!(
+            outcome.source,
+            super::patch_recovery::PatchSynthesisSource::DeterministicFallback
+        );
+        assert_eq!(
+            outcome.fallback_reason.as_deref(),
+            Some("model patch synthesis failed: invalid JSON")
+        );
+        assert_eq!(outcome.tool_calls.len(), 1);
+        assert_eq!(outcome.tool_calls[0].name, "file_edit");
     }
 
     #[test]

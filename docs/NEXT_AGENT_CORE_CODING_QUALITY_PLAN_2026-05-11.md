@@ -263,6 +263,17 @@
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`,
   `bash scripts/workflow-production-gates.sh`, and full `cargo test -q` all
   passed (`1243 passed; 0 failed`).
+- 2026-05-12: Phase 1 Batch 1.8 second slice tightened the patch repair
+  boundary. `synthesize_patch_tool_calls` now returns a structured outcome with
+  `source=model_json|model_tool_fallback|deterministic_fallback`; deterministic
+  patch synthesis no longer runs before model synthesis when usable evidence
+  exists, and trace output records the source plus fallback reason.
+- Validation after the explicit patch-synthesis fallback slice:
+  `cargo fmt --check`, `git diff --check`, targeted `patch_synthesis`,
+  `focused_repair`, and `action_checkpoint` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`,
+  `bash scripts/workflow-production-gates.sh`, and full `cargo test -q` all
+  passed (`1244 passed; 0 failed`).
 
 ## 当前判断
 

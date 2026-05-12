@@ -30,12 +30,62 @@ pub(super) struct PatchSynthesisAction {
     pub(super) expected_replacements: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PatchSynthesisSource {
+    ModelJson,
+    ModelToolFallback,
+    DeterministicFallback,
+}
+
+impl PatchSynthesisSource {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            PatchSynthesisSource::ModelJson => "model_json",
+            PatchSynthesisSource::ModelToolFallback => "model_tool_fallback",
+            PatchSynthesisSource::DeterministicFallback => "deterministic_fallback",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct PatchSynthesisOutcome {
+    pub(super) tool_calls: Vec<ToolCall>,
+    pub(super) source: PatchSynthesisSource,
+    pub(super) fallback_reason: Option<String>,
+}
+
+impl PatchSynthesisOutcome {
+    fn model_json(tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            tool_calls,
+            source: PatchSynthesisSource::ModelJson,
+            fallback_reason: None,
+        }
+    }
+
+    fn model_tool_fallback(tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            tool_calls,
+            source: PatchSynthesisSource::ModelToolFallback,
+            fallback_reason: None,
+        }
+    }
+
+    fn deterministic_fallback(tool_calls: Vec<ToolCall>, reason: impl Into<String>) -> Self {
+        Self {
+            tool_calls,
+            source: PatchSynthesisSource::DeterministicFallback,
+            fallback_reason: Some(reason.into()),
+        }
+    }
+}
+
 impl ConversationLoop {
     pub(super) async fn synthesize_patch_tool_calls(
         &self,
         messages: &[Message],
         task_preview: &str,
-    ) -> Result<Vec<ToolCall>> {
+    ) -> Result<PatchSynthesisOutcome> {
         let evidence = Self::patch_synthesis_evidence(messages);
         let deterministic_seed = if task_preview.trim().is_empty() {
             evidence.clone()
@@ -50,16 +100,14 @@ impl ConversationLoop {
         }
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        if Self::patch_synthesis_enabled() && Self::deterministic_patch_synthesis_enabled() {
-            let deterministic_calls =
-                self.deterministic_patch_tool_calls(&deterministic_seed, &cwd);
-            if !deterministic_calls.is_empty() {
-                return Ok(deterministic_calls);
-            }
-        }
-
         if evidence.trim().is_empty() {
-            return Err(anyhow::anyhow!("no usable evidence for patch synthesis"));
+            let reason = "model patch synthesis skipped: no usable evidence";
+            if let Some(outcome) =
+                self.deterministic_patch_fallback(&deterministic_seed, &cwd, reason)
+            {
+                return Ok(outcome);
+            }
+            return Err(anyhow::anyhow!(reason));
         }
 
         let system = r#"You are a controlled patch synthesis engine for a coding agent.
@@ -145,7 +193,7 @@ Rules:
                     }
                 }
                 if !calls.is_empty() {
-                    return Ok(calls);
+                    return Ok(PatchSynthesisOutcome::model_json(calls));
                 }
                 last_validation_errors = validation_errors;
                 if last_validation_errors.is_empty() {
@@ -214,13 +262,23 @@ Do not answer in prose unless no safe patch exists."#;
             }
         }
         if calls.is_empty() {
+            let failure_reason = format!(
+                "model patch synthesis failed: validation_errors=[{}]; text began with: {}",
+                validation_errors.join("; "),
+                safe_prefix_by_bytes(&fallback_content, 800)
+            );
+            if let Some(outcome) =
+                self.deterministic_patch_fallback(&deterministic_seed, &cwd, failure_reason.clone())
+            {
+                return Ok(outcome);
+            }
             return Err(anyhow::anyhow!(
                 "patch synthesis did not return valid JSON or file_edit calls; validation_errors=[{}]; text began with: {}",
                 validation_errors.join("; "),
                 safe_prefix_by_bytes(&fallback_content, 800)
             ));
         }
-        Ok(calls)
+        Ok(PatchSynthesisOutcome::model_tool_fallback(calls))
     }
 
     pub(super) fn deterministic_patch_tool_calls(
@@ -229,6 +287,25 @@ Do not answer in prose unless no safe patch exists."#;
         cwd: &std::path::Path,
     ) -> Vec<ToolCall> {
         patch_repair_rules::deterministic_patch_tool_calls(self, evidence, cwd)
+    }
+
+    pub(super) fn deterministic_patch_fallback(
+        &self,
+        evidence: &str,
+        cwd: &std::path::Path,
+        reason: impl Into<String>,
+    ) -> Option<PatchSynthesisOutcome> {
+        if !Self::deterministic_patch_synthesis_enabled() {
+            return None;
+        }
+        let tool_calls = self.deterministic_patch_tool_calls(evidence, cwd);
+        if tool_calls.is_empty() {
+            None
+        } else {
+            Some(PatchSynthesisOutcome::deterministic_fallback(
+                tool_calls, reason,
+            ))
+        }
     }
 
     pub(super) fn patch_synthesis_enabled() -> bool {

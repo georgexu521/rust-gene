@@ -48,12 +48,12 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-12
-focused-repair proposal boundary, provider-protocol matrix,
-permission-controller, context-budget, tool-result-budget, schema-gate, and
-tool-result normalizer work:
+explicit patch-synthesis fallback boundary, focused-repair proposal boundary,
+provider-protocol matrix, permission-controller, context-budget,
+tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1243 passed; 0 failed
+1244 passed; 0 failed
 ```
 
 Validated locally with:
@@ -414,7 +414,7 @@ Latest maintenance note:
   fixtures were refreshed for the extracted repair controller and learning
   slash-handler modules, and skill-promotion evidence detection was widened so
   `skill-promotion-gate` is counted as a skill-specific task.
-- `conversation_loop/mod.rs` is down to 6744 lines after moving patch synthesis,
+- `conversation_loop/mod.rs` is down to 6013 lines after moving patch synthesis,
   deterministic patch recovery, synthesized patch validation, required
   validation commands, validation command classification, verification source
   context, guided validation debugging, acceptance repair review, and final
@@ -471,10 +471,11 @@ Latest maintenance note:
   required next-patch constraints, forbidden fixes, and validation commands.
   This gives the model a structured repair target without writing the product
   patch for it.
-- Initial no-diff action checkpoints now immediately attempt deterministic
-  patch fallback when a safe hand-written rule matches the gathered evidence.
-  Generic LLM patch synthesis remains opt-in, but known repair cases no longer
-  need an extra model turn before the fallback can apply.
+- Action-checkpoint patch repair now records patch synthesis `source` plus
+  owner/reason in traces. When usable evidence exists, model JSON/tool-call
+  synthesis runs before deterministic repair; deterministic patch synthesis is
+  reserved for no-evidence cases, model synthesis failures, or explicit
+  patch-synthesis opt-out.
 - Code-change workflow strictness is now adaptive instead of medium-risk by
   default: required validation, first code change, failed verification,
   acceptance rejection, and repeated no-edit progress activate the heavier
