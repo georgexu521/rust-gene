@@ -119,6 +119,11 @@ impl ToolRunView {
                 "Stopping background shell",
                 "Stopped background shell",
             ),
+            "bash_tasks" => terminal_summary(
+                self,
+                "Listing background shells",
+                "Listed background shells",
+            ),
             "powershell" => {
                 summarize_command_tool("Running PowerShell", "Ran PowerShell", args, self)
             }

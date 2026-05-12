@@ -61,7 +61,7 @@ pub mod worktree_tool;
 mod examples;
 
 pub use agent_tool::AgentTool;
-pub use bash_tool::{BashCancelTool, BashOutputTool, BashTool};
+pub use bash_tool::{BashCancelTool, BashOutputTool, BashTasksTool, BashTool};
 pub use brief_tool::BriefTool;
 pub use browser_tool::BrowserTool;
 pub use calculate_tool::CalculateTool;
@@ -896,6 +896,7 @@ impl ToolRegistry {
         registry.register(BashTool);
         registry.register(BashOutputTool);
         registry.register(BashCancelTool);
+        registry.register(BashTasksTool);
 
         // 注册高级工具
         let task_manager = crate::task_manager::GLOBAL_TASK_MANAGER.clone();
@@ -1173,6 +1174,7 @@ mod tests {
             "bash",
             "bash_output",
             "bash_cancel",
+            "bash_tasks",
             "task_create",
             "task_get",
             "task_list",

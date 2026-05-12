@@ -8,7 +8,7 @@ pub mod command_classifier;
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use background::{background_shell_result_data, background_started_content};
-pub use background::{BashCancelTool, BashOutputTool};
+pub use background::{BashCancelTool, BashOutputTool, BashTasksTool};
 use command_classifier::classify_command;
 use serde_json::json;
 use std::process::Stdio;

@@ -264,7 +264,12 @@ impl IntentRouter {
 
         if has_terminal_operation_signal {
             let recommended_tools = if is_background_shell_followup(&lower, zh) {
-                vec!["bash".into(), "bash_output".into(), "bash_cancel".into()]
+                vec![
+                    "bash".into(),
+                    "bash_output".into(),
+                    "bash_cancel".into(),
+                    "bash_tasks".into(),
+                ]
             } else {
                 vec!["bash".into()]
             };
@@ -735,6 +740,9 @@ fn is_terminal_operation_request(lower: &str, zh: &str) -> bool {
             "start",
             "launch",
             "check",
+            "list",
+            "show",
+            "status",
             "version",
             "which ",
             "where ",
@@ -756,6 +764,8 @@ fn is_terminal_operation_request(lower: &str, zh: &str) -> bool {
             "检查",
             "查看",
             "看看",
+            "有哪些",
+            "状态",
             "有没有安装",
             "怎么运行",
             "跑一下",
@@ -778,6 +788,7 @@ fn is_background_shell_followup(lower: &str, zh: &str) -> bool {
             "process",
             "bash_output",
             "bash_cancel",
+            "bash_tasks",
         ],
     ) || contains_any(zh, &["后台", "句柄", "进程"])
 }
@@ -903,6 +914,7 @@ mod tests {
         assert!(route.recommended_tools.contains(&"bash".to_string()));
         assert!(route.recommended_tools.contains(&"bash_output".to_string()));
         assert!(route.recommended_tools.contains(&"bash_cancel".to_string()));
+        assert!(route.recommended_tools.contains(&"bash_tasks".to_string()));
     }
 
     #[test]

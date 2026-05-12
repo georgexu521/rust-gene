@@ -197,6 +197,23 @@ impl BackgroundShellManager {
         Some(snapshot_from_state(handle, &state))
     }
 
+    async fn list(&self) -> Vec<BackgroundShellSnapshot> {
+        let records = self
+            .processes
+            .read()
+            .await
+            .iter()
+            .map(|(handle, record)| (handle.clone(), record.clone()))
+            .collect::<Vec<_>>();
+        let mut snapshots = Vec::with_capacity(records.len());
+        for (handle, record) in records {
+            let state = record.state.lock().await;
+            snapshots.push(snapshot_from_state(&handle, &state));
+        }
+        snapshots.sort_by(|a, b| a.handle.cmp(&b.handle));
+        snapshots
+    }
+
     async fn cancel(&self, handle: &str) -> Result<BackgroundShellSnapshot, String> {
         let record = self
             .get(handle)
@@ -311,6 +328,10 @@ async fn read_background_shell(handle: &str) -> Result<BackgroundShellSnapshot, 
 
 async fn cancel_background_shell(handle: &str) -> Result<BackgroundShellSnapshot, String> {
     BACKGROUND_SHELLS.cancel(handle).await
+}
+
+async fn list_background_shells() -> Vec<BackgroundShellSnapshot> {
+    BACKGROUND_SHELLS.list().await
 }
 
 async fn supervise_child(
@@ -592,6 +613,67 @@ impl Tool for BashCancelTool {
     }
 }
 
+pub struct BashTasksTool;
+
+#[async_trait]
+impl Tool for BashTasksTool {
+    fn name(&self) -> &str {
+        "bash_tasks"
+    }
+
+    fn description(&self) -> &str {
+        "List background bash handles and current status."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    async fn execute(&self, _params: serde_json::Value, _context: ToolContext) -> ToolResult {
+        let snapshots = list_background_shells().await;
+        if snapshots.is_empty() {
+            return ToolResult::success_with_data(
+                "No background shell tasks.".to_string(),
+                json!({ "shell_background_tasks": [] }),
+            );
+        }
+
+        let lines = snapshots
+            .iter()
+            .map(|snapshot| {
+                let exit = snapshot
+                    .exit_code
+                    .map(|code| format!(" exit={code}"))
+                    .unwrap_or_default();
+                format!(
+                    "{} {}{} · {}",
+                    snapshot.handle,
+                    snapshot.status.as_str(),
+                    exit,
+                    snapshot.command
+                )
+            })
+            .collect::<Vec<_>>();
+        let tasks = snapshots
+            .iter()
+            .map(|snapshot| {
+                snapshot.data(DEFAULT_READ_PREVIEW_CHARS, None)["shell_background"].clone()
+            })
+            .collect::<Vec<_>>();
+        ToolResult::success_with_data(
+            format!(
+                "Background shell tasks ({}):\n{}",
+                lines.len(),
+                lines.join("\n")
+            ),
+            json!({ "shell_background_tasks": tasks }),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,5 +781,37 @@ mod tests {
             .expect("long background output should be stored");
         assert!(output_path.starts_with(".priority-agent/tool-results/"));
         assert!(dir.path().join(output_path).exists());
+    }
+
+    #[tokio::test]
+    async fn bash_tasks_tool_lists_background_shells() {
+        let dir = tempdir().expect("temp dir");
+        let snapshot = start_background_shell(
+            "printf listed; sleep 5",
+            "printf listed; sleep 5",
+            dir.path(),
+            BashExecutionBackend::Local,
+            30,
+        )
+        .await
+        .expect("start background shell");
+
+        let result = BashTasksTool
+            .execute(
+                json!({}),
+                ToolContext::new(dir.path(), "test-background-list"),
+            )
+            .await;
+
+        assert!(result.success, "tasks tool failed: {:?}", result.error);
+        assert!(result.content.contains(&snapshot.handle));
+        let tasks = result.data.as_ref().unwrap()["shell_background_tasks"]
+            .as_array()
+            .expect("tasks array");
+        assert!(tasks
+            .iter()
+            .any(|task| task["handle"].as_str() == Some(snapshot.handle.as_str())));
+
+        let _ = cancel_background_shell(&snapshot.handle).await;
     }
 }
