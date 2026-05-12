@@ -4,7 +4,7 @@ use super::tool_metadata::{
     attach_tool_execution_metadata, persist_tool_outcome_learning_event,
     tool_execution_start_progress,
 };
-use super::tool_result_controller::ToolResultNormalizer;
+use super::tool_result_controller::{invalid_tool_params_result, ToolResultNormalizer};
 use super::turn_recording::{
     record_goal_drift_if_needed, record_hook_traces, record_mcp_resource_trace,
     record_web_retrieval_trace,
@@ -152,6 +152,7 @@ enum ToolExecutionGateOutcome {
 }
 
 struct ToolExecutionGate<'a> {
+    tool_registry: &'a ToolRegistry,
     active_goal: Option<&'a crate::engine::session_goal::SessionGoal>,
     allowed_tools: &'a Option<HashSet<String>>,
     resource_policy: &'a ResourcePolicy,
@@ -179,6 +180,13 @@ impl<'a> ToolExecutionGate<'a> {
                 )
             };
             return self.deny_with_trace(tool_call, ToolResult::error(error));
+        }
+
+        if let Some(tool) = self.tool_registry.get(&tool_call.name) {
+            if let Some(error) = tool.validate_params(&tool_call.arguments) {
+                return self
+                    .deny_with_trace(tool_call, invalid_tool_params_result(tool_call, error));
+            }
         }
 
         if scheduled_count >= self.resource_policy.max_tool_calls {
@@ -738,6 +746,7 @@ impl ToolExecutionController {
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
         lifecycle.pending_batch(tool_calls);
         let gate = ToolExecutionGate {
+            tool_registry: execution.tool_registry.as_ref(),
             active_goal: execution.active_goal.as_ref(),
             allowed_tools: &execution.allowed_tools,
             resource_policy,

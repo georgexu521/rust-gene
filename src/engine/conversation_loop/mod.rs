@@ -5311,6 +5311,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_tool_params_are_rejected_before_execution() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(BashTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let route = crate::engine::intent_router::IntentRouter::new().route("run a command");
+        let policy = crate::engine::resource_policy::ResourcePolicy::from_route(&route);
+        let destructive_scope =
+            crate::engine::destructive_scope::DestructiveScopeContract::from_user_request(
+                "run a command",
+                &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            );
+        let tool_calls = vec![ToolCall {
+            id: "bash_missing_command".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({}),
+        }];
+        let exposed_tool_names = HashSet::from(["bash".to_string()]);
+        let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
+
+        let batch =
+            ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
+                .execute_tools_parallel(ToolExecutionRequest {
+                    tool_calls: &tool_calls,
+                    tx: None,
+                    pre_executed: Default::default(),
+                    trace: None,
+                    resource_policy: &policy,
+                    exposed_tool_names: &exposed_tool_names,
+                    action_checkpoint_active: false,
+                    action_checkpoint_lookup_count: 0,
+                    has_changes_before_tools: false,
+                    destructive_scope: &destructive_scope,
+                    lifecycle: &mut lifecycle,
+                })
+                .await;
+        let results = batch.results();
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].1.success);
+        assert_eq!(
+            results[0].1.error_code,
+            Some(crate::tools::ToolErrorCode::InvalidParams)
+        );
+        assert!(results[0]
+            .1
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Missing required parameter: command"));
+        assert_eq!(
+            results[0].1.data.as_ref().unwrap()["schema_validation"]["valid"],
+            false
+        );
+    }
+
+    #[tokio::test]
     async fn destructive_scope_blocks_parent_delete_before_bash_execution() {
         let provider = Arc::new(MockLlmProvider {
             responses: StdMutex::new(VecDeque::new()),

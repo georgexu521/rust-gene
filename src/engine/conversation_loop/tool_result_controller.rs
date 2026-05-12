@@ -1,8 +1,10 @@
 use super::tool_execution::truncate_tool_result;
-use super::tool_metadata::{build_tool_execution_summary, provider_tool_result_content};
+use super::tool_metadata::{
+    build_tool_execution_summary, provider_tool_result_content, tool_error_code_label,
+};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::services::api::{Message, ToolCall};
-use crate::tools::ToolResult;
+use crate::tools::{ToolErrorCode, ToolResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum NormalizedEvidenceFact {
@@ -76,6 +78,25 @@ pub(super) async fn append_provider_tool_result(
     ));
 }
 
+pub(super) fn invalid_tool_params_result(
+    tool_call: &ToolCall,
+    error: impl Into<String>,
+) -> ToolResult {
+    let error = error.into();
+    let mut result = ToolResult::error(format!(
+        "Invalid params for '{}': {}",
+        tool_call.name, error
+    ));
+    result.error_code = Some(ToolErrorCode::InvalidParams);
+    result.data = Some(serde_json::json!({
+        "schema_validation": {
+            "valid": false,
+            "error": error,
+        }
+    }));
+    result
+}
+
 fn structured_metadata(tool_call: &ToolCall, result: &ToolResult) -> serde_json::Value {
     let tool_summary = result
         .data
@@ -89,6 +110,7 @@ fn structured_metadata(tool_call: &ToolCall, result: &ToolResult) -> serde_json:
         "success": result.success,
         "duration_ms": result.duration_ms,
         "error": result.error.clone(),
+        "error_code": tool_error_code_label(result),
         "tool_summary": tool_summary,
         "tool_result_data": result.data.clone().unwrap_or(serde_json::Value::Null),
     })
@@ -206,7 +228,25 @@ mod tests {
         assert_eq!(normalized.structured_metadata["tool"], "bash");
         assert_eq!(normalized.structured_metadata["call_id"], "call_1");
         assert_eq!(normalized.structured_metadata["success"], true);
+        assert_eq!(normalized.structured_metadata["error_code"], "success");
         assert!(normalized.structured_metadata.get("tool_summary").is_some());
+    }
+
+    #[test]
+    fn invalid_params_result_carries_schema_validation_metadata() {
+        let result =
+            invalid_tool_params_result(&tool_call("bash"), "Missing required parameter: command");
+        let normalized = ToolResultNormalizer::normalize(&tool_call("bash"), &result);
+
+        assert!(!result.success);
+        assert_eq!(
+            normalized.structured_metadata["error_code"],
+            "invalid_params"
+        );
+        assert_eq!(
+            normalized.structured_metadata["tool_result_data"]["schema_validation"]["valid"],
+            false
+        );
     }
 
     #[test]

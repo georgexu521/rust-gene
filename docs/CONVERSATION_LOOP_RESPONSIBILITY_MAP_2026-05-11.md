@@ -50,13 +50,13 @@ This replaces the old anonymous tuple and gives the future `SessionProcessor`
 state machine an explicit return boundary.
 
 `ToolResultNormalizer` now owns the first provider-facing normalization hook,
-large-output preparation, and the explicit split between `model_content`,
-`ui_content`, `structured_metadata`, and `evidence_facts`. The current
-model/UI strings still preserve the old provider content, but truncation,
-evidence recording, and streaming completion output now go through this
-boundary. Future tool result changes should extend this normalizer instead of
-adding raw stdout/stderr parsing or provider-specific formatting back into
-`run_inner`.
+large-output preparation, standardized invalid-params results, and the explicit
+split between `model_content`, `ui_content`, `structured_metadata`, and
+`evidence_facts`. The current model/UI strings still preserve the old provider
+content, but truncation, schema-failure metadata, evidence recording, and
+streaming completion output now go through this boundary. Future tool result
+changes should extend this normalizer instead of adding raw stdout/stderr
+parsing or provider-specific formatting back into `run_inner`.
 
 `ToolCallLifecycle` now records the state of tool calls during execution:
 pending, running, completed, failed, denied, and provider-executed. The current
