@@ -306,6 +306,15 @@
   targeted `permissions` and `command_classifier` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1247 passed; 0 failed`).
+- 2026-05-12: Phase 2 Batch 2.2 continued. The TUI bash tool summary now uses
+  the shared shell classifier instead of its own string-prefix checks, so
+  package installs, dev servers, search, listing, validation, git mutation, and
+  file mutation use the same semantics in UI, evidence, permissions, and
+  closeout metadata.
+- Validation after the TUI shell-summary slice: `cargo fmt --check`, targeted
+  `tool_view` and `command_classifier` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1248 passed; 0 failed`).
 
 ## 当前判断
 

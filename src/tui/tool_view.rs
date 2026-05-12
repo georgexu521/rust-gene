@@ -351,25 +351,65 @@ fn summarize_bash(args: Option<&Value>, run: &ToolRunView) -> String {
         return terminal_summary(run, "Running shell command", "Ran shell command");
     };
     let command = command.trim();
-    if command.starts_with("ls ") || command == "ls" {
-        if run.status == ToolRunStatus::Completed {
-            if let Some(count) = run.result_body.as_deref().map(count_ls_entries) {
-                return format!("Listed {} items", count);
-            }
+    let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
+    let listed_count = (classification.category
+        == crate::tools::bash_tool::command_classifier::ShellCommandCategory::List
+        && run.status == ToolRunStatus::Completed)
+        .then(|| run.result_body.as_deref().map(count_ls_entries))
+        .flatten();
+    if let Some(count) = listed_count {
+        return format!("Listed {} items", count);
+    }
+    match classification.validation_family {
+        Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoTest)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NpmTest)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PnpmTest)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::YarnTest)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::Pytest)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PythonUnittest)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::GoTest) => {
+            terminal_summary(run, "Running tests", "Ran tests")
         }
-        terminal_summary(run, "Listing directory", "Listed directory")
-    } else if command.starts_with("rg ") || command.starts_with("grep ") {
-        summarize_search_terminal(run, "Searching files", "Searched files")
-    } else if command.starts_with("git ") {
-        terminal_summary(run, "Running git command", "Ran git command")
-    } else if command.starts_with("cat ") || command.starts_with("sed ") {
-        summarize_search_terminal(run, "Reading file", "Read file")
-    } else if command.starts_with("cargo test") {
-        terminal_summary(run, "Running tests", "Ran tests")
-    } else if command.starts_with("cargo ") {
-        terminal_summary(run, "Running cargo", "Ran cargo")
-    } else {
-        terminal_summary(run, "Running shell command", "Ran shell command")
+        Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoCheck)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoClippy) => {
+            terminal_summary(run, "Running cargo", "Ran cargo")
+        }
+        Some(crate::tools::bash_tool::command_classifier::ValidationFamily::RgAssertion) => {
+            summarize_search_terminal(run, "Running search assertion", "Ran search assertion")
+        }
+        Some(crate::tools::bash_tool::command_classifier::ValidationFamily::BashSyntax)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PythonCompile)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::ProjectScript)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NodeScript) => {
+            terminal_summary(run, "Running validation", "Ran validation")
+        }
+        None => match classification.category {
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::List => {
+                terminal_summary(run, "Listing directory", "Listed directory")
+            }
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::Search => {
+                summarize_search_terminal(run, "Searching files", "Searched files")
+            }
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::Read => {
+                summarize_search_terminal(run, "Reading file", "Read file")
+            }
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::PackageInstall => {
+                terminal_summary(run, "Installing package", "Installed package")
+            }
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::DevServer => {
+                terminal_summary(run, "Starting dev server", "Started dev server")
+            }
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::GitMutation => {
+                terminal_summary(run, "Running git command", "Ran git command")
+            }
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::FileMutation => {
+                terminal_summary(run, "Running shell mutation", "Ran shell mutation")
+            }
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::Destructive => {
+                terminal_summary(run, "Reviewing shell command", "Ran shell command")
+            }
+            _ => terminal_summary(run, "Running shell command", "Ran shell command"),
+        },
     }
 }
 
@@ -714,6 +754,21 @@ mod tests {
             run.result_stats().as_deref(),
             Some("output: 5 lines, 74 chars")
         );
+    }
+
+    #[test]
+    fn bash_summary_uses_shared_shell_categories() {
+        let mut install = ToolRunView::new("tool_install".to_string(), "bash".to_string());
+        install.arguments = Some(json!({ "command": "pip3 install pygame" }));
+        assert_eq!(install.summary(), "Installing package");
+
+        let mut dev = ToolRunView::new("tool_dev".to_string(), "bash".to_string());
+        dev.arguments = Some(json!({ "command": "npm run dev" }));
+        assert_eq!(dev.summary(), "Starting dev server");
+
+        let mut search = ToolRunView::new("tool_search".to_string(), "bash".to_string());
+        search.arguments = Some(json!({ "command": "rg TODO src" }));
+        assert_eq!(search.summary(), "Searching files");
     }
 
     #[test]
