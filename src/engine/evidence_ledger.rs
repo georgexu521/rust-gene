@@ -400,11 +400,20 @@ impl EvidenceLedger {
             .and_then(|value| value.as_str())
             .or(result.error.as_deref())
             .unwrap_or("permission request recorded");
+        let summary = if let Some(recovery) = permission_request
+            .get("recovery_feedback")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+        {
+            format!("{summary} Recovery: {recovery}")
+        } else {
+            summary.to_string()
+        };
         self.permission_facts.push(PermissionEvidence {
             tool: tool_call.name.clone(),
             kind,
             approved: result.success,
-            summary: preview(summary),
+            summary: preview(&summary),
         });
     }
 }
@@ -493,7 +502,8 @@ mod tests {
         result.data = Some(serde_json::json!({
             "permission_request": {
                 "kind": "runtime_rule",
-                "rejection_feedback": "Permission denied: 'git' requires user confirmation."
+                "rejection_feedback": "Permission denied: 'git' requires user confirmation.",
+                "recovery_feedback": "Ask the user to approve git push before retrying."
             }
         }));
         ledger.record_tool_result(
@@ -509,6 +519,9 @@ mod tests {
             ledger.permission_facts()[0].kind.as_deref(),
             Some("runtime_rule")
         );
+        assert!(ledger.permission_facts()[0]
+            .summary
+            .contains("Recovery: Ask the user"));
     }
 
     #[test]

@@ -223,6 +223,18 @@
   `test_tool_specific_confirmation_blocks_git_push_without_approval` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1226 passed; 0 failed`).
+- 2026-05-12: Phase 1 Batch 1.6 continued. Added explicit
+  `recovery_feedback` to permission request records and permission-denied tool
+  results. Denied tools now tell the model not to claim execution succeeded and
+  how to recover: ask for approval, choose a lower-risk/read-only alternative,
+  narrow the path/scope, continue locally, or confirm goal scope depending on
+  the permission family.
+- Validation after permission recovery feedback: `cargo fmt --check`,
+  `git diff --check`, targeted `permission_controller`, `permissions`,
+  `tool_result`, `evidence_ledger`, `tool_exposure`, `bash_tool`, and
+  `test_tool_specific_confirmation_blocks_git_push_without_approval` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1226 passed; 0 failed`).
 
 ## 当前判断
 

@@ -57,6 +57,7 @@ pub(super) struct PermissionRequestRecord {
     pub(super) metadata: serde_json::Value,
     pub(super) allowed_always_rules: Vec<String>,
     pub(super) rejection_feedback: String,
+    pub(super) recovery_feedback: String,
 }
 
 impl PermissionRequestRecord {
@@ -69,6 +70,7 @@ impl PermissionRequestRecord {
             "metadata": self.metadata,
             "allowed_always_rules": self.allowed_always_rules,
             "rejection_feedback": self.rejection_feedback,
+            "recovery_feedback": self.recovery_feedback,
         })
     }
 }
@@ -144,6 +146,7 @@ impl PermissionController {
             "Permission denied: '{}' requires user confirmation.",
             tool_name
         );
+        let recovery_feedback = recovery_feedback(kind, family, tool_name);
         let record = PermissionRequestRecord {
             id: tool_call.id.clone(),
             session_id: session_id.to_string(),
@@ -166,6 +169,7 @@ impl PermissionController {
             }),
             allowed_always_rules,
             rejection_feedback,
+            recovery_feedback,
         };
 
         ToolPermissionEvaluation {
@@ -233,10 +237,10 @@ impl PermissionController {
         record: Option<&PermissionRequestRecord>,
     ) -> ToolResult {
         let message = record
-            .map(|record| record.rejection_feedback.clone())
+            .map(permission_denied_message)
             .unwrap_or_else(|| {
                 format!(
-                    "Permission denied: '{}' requires user confirmation.",
+                    "Permission denied: '{}' requires user confirmation.\nRecovery: Ask the user for approval before retrying this tool, or choose a lower-risk alternative. Do not claim the tool ran.",
                     tool_name
                 )
             });
@@ -265,6 +269,17 @@ impl PermissionController {
     }
 }
 
+fn permission_denied_message(record: &PermissionRequestRecord) -> String {
+    if record.recovery_feedback.trim().is_empty() {
+        record.rejection_feedback.clone()
+    } else {
+        format!(
+            "{}\nRecovery: {}",
+            record.rejection_feedback, record.recovery_feedback
+        )
+    }
+}
+
 fn permission_tool_family(
     tool_name: &str,
     permission_explanation: &crate::permissions::ExplainableDecision,
@@ -283,6 +298,37 @@ fn permission_tool_family(
         "task_create" | "task_update" | "task_stop" | "task_output" => PermissionToolFamily::Task,
         "agent" | "send_message" => PermissionToolFamily::Subagent,
         _ => PermissionToolFamily::Other,
+    }
+}
+
+fn recovery_feedback(
+    kind: PermissionRequestKind,
+    family: PermissionToolFamily,
+    tool_name: &str,
+) -> String {
+    if kind == PermissionRequestKind::GoalDrift {
+        return "Confirm the current goal or destructive scope with the user before retrying. Do not treat the blocked tool as executed.".to_string();
+    }
+
+    match family {
+        PermissionToolFamily::Shell => {
+            "Ask the user to approve the exact command, or use a read-only inspection command if that answers the task. Do not run a different risky command.".to_string()
+        }
+        PermissionToolFamily::ExternalDirectory => {
+            "Ask the user to approve this external path/scope, or choose a path inside the trusted workspace. Do not claim files outside the workspace were changed.".to_string()
+        }
+        PermissionToolFamily::File => {
+            "Ask the user to approve the file operation, narrow the edit scope, or use a read-only file inspection tool first. Do not claim the file changed.".to_string()
+        }
+        PermissionToolFamily::Task => {
+            "Ask the user to approve task mutation, or continue with local reasoning without changing task state. Do not claim the task was updated.".to_string()
+        }
+        PermissionToolFamily::Subagent => {
+            "Ask the user to approve delegation, or continue locally with the available context. Do not claim a sub-agent was started.".to_string()
+        }
+        PermissionToolFamily::Other => {
+            format!("Ask the user to approve '{}', or choose a lower-risk alternative. Do not claim the tool ran.", tool_name)
+        }
     }
 }
 
@@ -436,11 +482,17 @@ mod tests {
             metadata: json!({"tool_name": "git"}),
             allowed_always_rules: Vec::new(),
             rejection_feedback: "Permission denied: 'git' requires user confirmation.".to_string(),
+            recovery_feedback: "Ask the user to approve 'git' before retrying.".to_string(),
         };
 
         let result = PermissionController::denied_result("git", Some(&record));
 
         assert!(PermissionController::is_permission_denied(&result));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Recovery: Ask the user"));
         assert_eq!(
             result.data.as_ref().unwrap()["permission_request"]["kind"],
             "tool_confirmation"
@@ -480,6 +532,12 @@ mod tests {
         assert!(evaluation.requires_approval);
         assert_eq!(metadata["permission_family"], "external_directory");
         assert_eq!(metadata["permission_requires"], true);
+        assert!(evaluation
+            .record
+            .as_ref()
+            .unwrap()
+            .recovery_feedback
+            .contains("external path/scope"));
     }
 
     #[test]
@@ -509,6 +567,12 @@ mod tests {
         assert!(evaluation.requires_approval);
         assert_eq!(metadata["permission_family"], "task");
         assert_eq!(metadata["permission_requires"], true);
+        assert!(evaluation
+            .record
+            .as_ref()
+            .unwrap()
+            .recovery_feedback
+            .contains("task mutation"));
     }
 
     #[test]
@@ -537,5 +601,11 @@ mod tests {
         assert!(evaluation.requires_approval);
         assert_eq!(metadata["permission_family"], "subagent");
         assert_eq!(metadata["permission_requires"], true);
+        assert!(evaluation
+            .record
+            .as_ref()
+            .unwrap()
+            .recovery_feedback
+            .contains("delegation"));
     }
 }
