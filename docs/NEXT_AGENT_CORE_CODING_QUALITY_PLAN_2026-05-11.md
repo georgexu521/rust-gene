@@ -151,6 +151,16 @@
   targeted `workflow_prompt_policy` and `route_scoped_tools` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1303 passed; 0 failed`).
+- 2026-05-13: Phase A tool exposure planning extraction started. Added
+  `src/engine/conversation_loop/tool_exposure_plan.rs` so each request turn
+  now builds a small `ToolExposurePlan` from base tools, action-checkpoint
+  state, targeted lookup budget, and validation-after-change eligibility.
+  `run_inner` no longer directly assembles focused-repair tool lists,
+  exposed-tool names, and focused-repair prompt injection inline.
+- Validation after the `ToolExposurePlan` slice: `cargo fmt --check`,
+  targeted `tool_exposure_plan` and `route_scoped_tools` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1306 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

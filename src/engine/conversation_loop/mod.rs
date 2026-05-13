@@ -28,6 +28,7 @@ mod text_sanitizer;
 mod tool_call_lifecycle;
 mod tool_execution;
 mod tool_execution_controller;
+mod tool_exposure_plan;
 mod tool_metadata;
 mod tool_orchestrator;
 mod tool_result_controller;
@@ -63,6 +64,7 @@ pub(crate) use tool_execution::{safe_prefix_by_bytes, safe_suffix_by_bytes, READ
 use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
+use tool_exposure_plan::{ToolExposurePlan, ToolExposureRequest};
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
@@ -1217,35 +1219,19 @@ impl ConversationLoop {
             let has_changes_before_request =
                 crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
                     && WorkflowChangeTracker::has_changes_since(&baseline_git_status_files);
-            let validation_allowed_before_request =
-                has_changes_before_request && !action_checkpoint_requires_patch_before_validation;
-            let tools = if action_checkpoint_active {
-                let action_tools = Self::code_action_tools(
-                    &base_tools,
-                    validation_allowed_before_request,
-                    action_checkpoint_lookup_count < Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET,
-                );
-                if action_tools.is_empty() {
-                    base_tools.clone()
-                } else {
-                    action_tools
-                }
-            } else {
-                base_tools.clone()
-            };
-            let exposed_tool_names = tools
-                .iter()
-                .map(|tool| tool.name.clone())
-                .collect::<HashSet<_>>();
+            let exposure_plan = ToolExposurePlan::build(ToolExposureRequest {
+                base_tools: &base_tools,
+                has_changes_before_request,
+                action_checkpoint_active,
+                action_checkpoint_lookup_count,
+                action_checkpoint_requires_patch_before_validation,
+            });
+            let tools = exposure_plan.tools;
+            let exposed_tool_names = exposure_plan.exposed_tool_names;
 
             let mut request_messages = messages.clone();
-            if action_checkpoint_active {
-                let mut exposed_names = exposed_tool_names.iter().cloned().collect::<Vec<_>>();
-                exposed_names.sort();
-                request_messages.push(Message::system(Self::focused_repair_mode_prompt(
-                    &exposed_names,
-                    action_checkpoint_lookup_count,
-                )));
+            if let Some(prompt) = exposure_plan.focused_repair_prompt {
+                request_messages.push(prompt);
             }
             let memory_already_in_turn_context = turn_retrieval_context
                 .as_ref()
