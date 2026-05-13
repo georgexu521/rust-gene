@@ -2,12 +2,14 @@ use crate::engine::lsp::{language_id_from_path, path_to_uri, LspDiagnostic, LspM
 use crate::tools::ToolContext;
 use serde_json::{json, Value};
 use std::path::Path;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 const MAX_FILE_EDIT_DIAGNOSTIC_ITEMS: usize = 20;
 const FILE_EDIT_DIAGNOSTICS_MAX_WAIT_MS: u64 = 400;
 const FILE_EDIT_DIAGNOSTICS_NOTIFY_TIMEOUT_MS: u64 = 200;
 const FILE_EDIT_DIAGNOSTICS_POLL_MS: u64 = 50;
+static FILE_EDIT_LSP_VERSION: AtomicI32 = AtomicI32::new(2);
 
 pub(super) async fn collect_file_edit_diagnostics(
     context: &ToolContext,
@@ -36,21 +38,29 @@ pub(super) async fn collect_file_edit_diagnostics(
     }
 
     let mut collection_errors = Vec::new();
+    let mut sync_actions = Vec::new();
     for (server, client) in &initialized_servers {
+        let version = next_file_edit_lsp_version();
         match tokio::time::timeout(
             Duration::from_millis(FILE_EDIT_DIAGNOSTICS_NOTIFY_TIMEOUT_MS),
-            client.text_document_did_open(&uri, language_id, content),
+            client.text_document_sync_for_diagnostics(&uri, language_id, version, content),
         )
         .await
         {
-            Ok(Ok(())) => {}
+            Ok(Ok(action)) => sync_actions.push(json!({
+                "server": server,
+                "action": action,
+                "version": version,
+            })),
             Ok(Err(err)) => collection_errors.push(json!({
                 "server": server,
                 "error": err.to_string(),
+                "version": version,
             })),
             Err(_) => collection_errors.push(json!({
                 "server": server,
                 "error": "diagnostic notification timed out",
+                "version": version,
             })),
         }
     }
@@ -71,7 +81,12 @@ pub(super) async fn collect_file_edit_diagnostics(
         initialized_servers.len(),
         diagnostics,
         collection_errors,
+        sync_actions,
     )
+}
+
+fn next_file_edit_lsp_version() -> i32 {
+    FILE_EDIT_LSP_VERSION.fetch_add(1, Ordering::SeqCst)
 }
 
 async fn collect_cached_lsp_diagnostics(
@@ -110,6 +125,7 @@ fn file_edit_diagnostics_unavailable(status: &str) -> Value {
         "unknown_count": 0,
         "truncated": false,
         "items": [],
+        "sync_actions": [],
         "collection_errors": [],
     })
 }
@@ -119,6 +135,7 @@ fn file_edit_diagnostics_summary_json(
     initialized_server_count: usize,
     diagnostics: Vec<(String, LspDiagnostic)>,
     collection_errors: Vec<Value>,
+    sync_actions: Vec<Value>,
 ) -> Value {
     let diagnostic_count = diagnostics.len();
     let mut error_count = 0usize;
@@ -169,6 +186,7 @@ fn file_edit_diagnostics_summary_json(
             .take(MAX_FILE_EDIT_DIAGNOSTIC_ITEMS)
             .map(|(server, diagnostic)| file_edit_diagnostic_item_json(&server, &diagnostic))
             .collect::<Vec<_>>(),
+        "sync_actions": sync_actions,
         "collection_errors": collection_errors,
     })
 }
@@ -241,4 +259,17 @@ pub(super) fn file_edit_diagnostics_content_line(diagnostics: &Value) -> Option<
     Some(format!(
         "LSP diagnostics: {errors} error(s), {warnings} warning(s), {total} total.{first}"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_edit_lsp_versions_are_monotonic() {
+        let first = next_file_edit_lsp_version();
+        let second = next_file_edit_lsp_version();
+
+        assert!(second > first);
+    }
 }

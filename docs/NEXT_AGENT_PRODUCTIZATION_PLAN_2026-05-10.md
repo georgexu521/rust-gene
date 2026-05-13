@@ -1277,6 +1277,20 @@ Seventeenth slice:
   evidence instead of relying on model prose.
 - The deterministic local baseline after this slice is `1271 passed; 0 failed`.
 
+Eighteenth slice:
+
+- Tightened the LSP diagnostics integration from the previous slice. The LSP
+  client now tracks which document URIs have been opened; `file_edit`
+  diagnostics use `didOpen` only for the first sync and use `didChange` plus
+  `didSave` with monotonic versions for later edits. This keeps the diagnostics
+  evidence closer to mature editor-agent behavior without adding model-facing
+  rules.
+- While rerunning the full suite, the PTY smoke exposed a stable timeout in
+  `bash mode=pty`: the PTY path used `bash -lc`, so user login-shell startup
+  could block short commands. PTY execution now uses non-login `bash -c`, aligned
+  with foreground bash.
+- The deterministic local baseline after this slice is `1273 passed; 0 failed`.
+
 验证：
 
 ```bash
@@ -1284,7 +1298,10 @@ cargo fmt --check
 cargo test -q file_tool -- --test-threads=1
 cargo test -q evidence_ledger -- --test-threads=1
 cargo test -q lsp -- --test-threads=1
+cargo test -q diagnostics -- --test-threads=1
 cargo test -q tool_result -- --test-threads=1
+cargo test -q test_bash_tool_pty_mode_runs_with_tty_stdout -- --test-threads=1
+cargo test -q bash_tool -- --test-threads=1
 cargo check -q
 cargo test -q
 cargo clippy --all-features -- -D warnings

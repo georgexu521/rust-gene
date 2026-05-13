@@ -41,7 +41,9 @@ fn run_pty_shell_blocking(
         .map_err(|err| format!("Failed to open PTY: {err}"))?;
 
     let mut command = CommandBuilder::new("bash");
-    command.args(["-lc", actual_command.as_str()]);
+    // Match the foreground bash path: avoid login-shell startup files in PTY
+    // mode, because user shell initialization can block short command tests.
+    command.args(["-c", actual_command.as_str()]);
     command.cwd(working_dir.as_os_str());
     command.env("TERM", "xterm-256color");
     command.env("PRIORITY_AGENT_TERMINAL", "pty");

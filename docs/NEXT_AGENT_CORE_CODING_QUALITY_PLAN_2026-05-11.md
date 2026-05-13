@@ -446,6 +446,21 @@
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`,
   `cargo check --features experimental-api-server -q`, and full `cargo test -q`
   all passed (`1269 passed; 0 failed`).
+- 2026-05-13: Phase 3 Batch 3.4 continued. `file_edit` diagnostics now return
+  a compact LSP summary in the edit result and EvidenceLedger file facts. The
+  LSP sync path tracks opened document URIs: first sync uses
+  `textDocument/didOpen`, follow-up edits use `textDocument/didChange` plus
+  `textDocument/didSave` with monotonic versions. Diagnostics remain
+  non-blocking and do not start language servers on the edit path.
+- During validation, the PTY smoke exposed a stable hang from PTY `bash -lc`.
+  PTY execution now matches foreground bash with non-login `bash -c`, avoiding
+  user login-shell startup files for short commands.
+- Validation after the LSP document-sync and PTY runner slice:
+  `cargo fmt --check`, `git diff --check`, targeted `lsp`, `diagnostics`,
+  `file_tool`, `test_bash_tool_pty_mode_runs_with_tty_stdout`, and `bash_tool`
+  tests, `cargo check -q`, `cargo clippy --all-features -- -D warnings`,
+  `cargo check --features experimental-api-server -q`, and full
+  `cargo test -q` all passed (`1273 passed; 0 failed`).
 
 ## 当前判断
 

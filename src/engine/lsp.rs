@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -116,6 +116,8 @@ pub struct LspClient {
     initialized: Arc<RwLock<bool>>,
     /// 诊断缓存: uri -> diagnostics
     diagnostics: Arc<RwLock<HashMap<String, Vec<LspDiagnostic>>>>,
+    /// 已通过 textDocument/didOpen 通知过的文档 URI
+    opened_documents: Arc<RwLock<HashSet<String>>>,
 }
 
 impl LspClient {
@@ -127,6 +129,7 @@ impl LspClient {
             connection: Arc::new(Mutex::new(None)),
             initialized: Arc::new(RwLock::new(false)),
             diagnostics: Arc::new(RwLock::new(HashMap::new())),
+            opened_documents: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -142,6 +145,11 @@ impl LspClient {
     /// 可能等待语言服务器响应的初始化请求。
     pub async fn is_initialized(&self) -> bool {
         *self.initialized.read().await
+    }
+
+    /// 返回文档是否已经通过 didOpen 同步给该客户端。
+    pub async fn is_document_open(&self, uri: &str) -> bool {
+        self.opened_documents.read().await.contains(uri)
     }
 
     /// 确保已连接到 LSP 服务器（stdio 长连接）
@@ -320,6 +328,7 @@ impl LspClient {
         }
 
         *self.initialized.write().await = false;
+        self.opened_documents.write().await.clear();
         Ok(())
     }
 
@@ -467,7 +476,66 @@ impl LspClient {
                 }
             }),
         )
+        .await?;
+        self.opened_documents.write().await.insert(uri.to_string());
+        Ok(())
+    }
+
+    /// 更新已打开文档内容（全文同步）。
+    pub async fn text_document_did_change(
+        &self,
+        uri: &str,
+        version: i32,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        self.initialize().await?;
+        self.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": {
+                    "uri": uri,
+                    "version": version
+                },
+                "contentChanges": [{
+                    "text": text
+                }]
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 保存文档通知，便于依赖 didSave 的语言服务器刷新诊断。
+    pub async fn text_document_did_save(&self, uri: &str, text: &str) -> anyhow::Result<()> {
+        self.initialize().await?;
+        self.notify(
+            "textDocument/didSave",
+            json!({
+                "textDocument": {
+                    "uri": uri
+                },
+                "text": text
+            }),
+        )
         .await
+    }
+
+    /// 为诊断采样同步文档：已打开走 didChange + didSave，未打开走 didOpen。
+    pub async fn text_document_sync_for_diagnostics(
+        &self,
+        uri: &str,
+        language_id: &str,
+        version: i32,
+        text: &str,
+    ) -> anyhow::Result<&'static str> {
+        if self.is_document_open(uri).await {
+            self.text_document_did_change(uri, version, text).await?;
+            self.text_document_did_save(uri, text).await?;
+            Ok("did_change_save")
+        } else {
+            self.text_document_did_open(uri, language_id, text).await?;
+            Ok("did_open")
+        }
     }
 
     /// 获取文档诊断
@@ -875,6 +943,19 @@ mod tests {
     fn test_lsp_manager_creation() {
         let manager = LspManager::new();
         assert!(manager.server_names().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_lsp_client_starts_uninitialized_without_open_documents() {
+        let client = LspClient::new(LspServerConfig {
+            name: "test-server".to_string(),
+            command: "does-not-start".to_string(),
+            args: vec![],
+            root_uri: "file:///project".to_string(),
+        });
+
+        assert!(!client.is_initialized().await);
+        assert!(!client.is_document_open("file:///project/src/main.rs").await);
     }
 
     #[test]

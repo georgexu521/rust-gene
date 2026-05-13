@@ -48,7 +48,7 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-13
-file-edit LSP diagnostics summary, file-edit diff metadata, file-mutation lock, file text codec, file-state tracker, partial-read edit state,
+file-edit LSP document sync/diagnostics summary, file-edit diff metadata, file-mutation lock, file text codec, file-state tracker, partial-read edit state,
 file-read/search evidence metadata, foreground PTY smoke,
 interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
 duration/schema/artifacts, shell-command UI summary, shell-command category
@@ -59,7 +59,7 @@ provider-protocol matrix, permission-controller, context-budget,
 tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1271 passed; 0 failed
+1273 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -74,7 +74,9 @@ recover or inspect active tasks. Obvious interactive commands such as bare
 requiring PTY support; non-PTY bash returns a structured `mode=pty` recovery
 diagnostic instead of starting a command it cannot control. `bash mode=pty` now
 runs foreground commands through a `portable-pty` backend and records
-`terminal_requirement.pty_used=true` in the tool result.
+`terminal_requirement.pty_used=true` in the tool result. PTY execution now uses
+the same non-login `bash -c` command shape as foreground bash, avoiding hangs
+from user login-shell startup files during short PTY commands.
 
 Current file-quality slice: `file_read` and `grep` now preserve a clearer
 raw/display boundary in structured tool data. File reads record path, resolved
@@ -101,7 +103,9 @@ preview so later closeout and diagnostics paths can cite actual edit evidence.
 `file_edit` also returns a non-blocking `diagnostics` summary. It samples cached
 LSP diagnostics only from already-initialized clients, avoids triggering slow
 language-server startup on the edit path, and records compact LSP status/counts
-in EvidenceLedger file facts.
+in EvidenceLedger file facts. The LSP sync path now tracks documents already
+sent through `textDocument/didOpen`; follow-up edits use `didChange` plus
+`didSave` with monotonic document versions instead of repeating `didOpen`.
 
 Validated locally with:
 
@@ -111,6 +115,8 @@ cargo test -q file_tool -- --test-threads=1
 cargo test -q evidence_ledger -- --test-threads=1
 cargo test -q lsp -- --test-threads=1
 cargo test -q tool_result -- --test-threads=1
+cargo test -q test_bash_tool_pty_mode_runs_with_tty_stdout -- --test-threads=1
+cargo test -q bash_tool -- --test-threads=1
 cargo check -q
 cargo test -q
 cargo clippy --all-features -- -D warnings
