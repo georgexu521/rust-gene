@@ -5260,6 +5260,7 @@ mod tests {
 - `! rg 'bad_pattern' src/lib.rs`
 - `! rg '&format!\("retry: \{\}", verification_command\)' src/engine/conversation_loop/mod.rs`
 - `rg 'good_pattern' src/lib.rs`
+- `rg '^cleanup = skipped by user request$' fixtures/core_quality/permission_rejection/manifest.txt`
 - `rm -rf /tmp/nope`
 - `(none)`
 "#;
@@ -5275,7 +5276,9 @@ mod tests {
                 "python3 -m unittest fixtures/live_backend/todo_api/test_todo_api.py".to_string(),
                 "python3 -c \"p='src/lib.rs'; assert True\"".to_string(),
                 "! rg 'bad_pattern' src/lib.rs".to_string(),
-                "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs".to_string()
+                "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs".to_string(),
+                "rg 'good_pattern' src/lib.rs".to_string(),
+                "rg '^cleanup = skipped by user request$' fixtures/core_quality/permission_rejection/manifest.txt".to_string(),
             ]
         );
     }

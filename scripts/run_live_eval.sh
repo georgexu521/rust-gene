@@ -1556,15 +1556,12 @@ def infer_failure_owner():
         return "agent_flow"
     if (
         "required_commands_not_passing" in failures
-        and verification_passed
-        and stage_validation_passed
-        and closeout_status == "passed"
-    ):
-        return "eval_harness"
-    if (
-        "required_commands_not_passing" in failures
-        and closeout_status == "passed"
-        and accepted is True
+        and (
+            verification_passed
+            or stage_validation_passed
+            or closeout_status == "passed"
+            or accepted is True
+        )
     ):
         return "agent_flow"
     if "verification_failed" in failures or "stage_validation_failed" in failures:

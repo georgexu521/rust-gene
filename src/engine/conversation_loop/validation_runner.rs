@@ -203,6 +203,13 @@ impl ConversationLoop {
         crate::tools::bash_tool::command_classifier::classify_command(command).is_safe_validation()
     }
 
+    fn is_safe_required_validation_command(command: &str) -> bool {
+        Self::is_safe_validation_command(command)
+            || command.starts_with("python3 -c ")
+            || command.starts_with("python -c ")
+            || is_safe_required_search_assertion(command)
+    }
+
     pub(super) fn extract_required_validation_commands(prompt: &str) -> Vec<String> {
         let mut commands = Vec::new();
         for line in prompt.lines() {
@@ -218,9 +225,7 @@ impl ConversationLoop {
             if command.is_empty() || command == "(none)" {
                 continue;
             }
-            if (Self::is_safe_validation_command(command)
-                || command.starts_with("python3 -c ")
-                || command.starts_with("python -c "))
+            if Self::is_safe_required_validation_command(command)
                 && !commands.iter().any(|existing| existing == command)
             {
                 commands.push(command.to_string());
@@ -296,4 +301,37 @@ impl ConversationLoop {
         }
         results
     }
+}
+
+fn is_safe_required_search_assertion(command: &str) -> bool {
+    let normalized =
+        crate::tools::bash_tool::command_classifier::normalize_command_for_match(command);
+    if normalized.is_empty()
+        || normalized.contains('\n')
+        || normalized.contains(';')
+        || normalized.contains('|')
+        || normalized.contains("&&")
+        || normalized.contains("||")
+        || normalized.ends_with('&')
+        || normalized.contains(" & ")
+        || normalized.contains('`')
+        || normalized.contains("$(")
+        || normalized.contains('>')
+        || normalized.contains('<')
+    {
+        return false;
+    }
+
+    let mut tokens = normalized.split_whitespace();
+    let Some(tool) = tokens.next() else {
+        return false;
+    };
+    if tool != "rg" && tool != "grep" {
+        return false;
+    }
+
+    let positional = tokens
+        .filter(|token| !token.starts_with('-'))
+        .collect::<Vec<_>>();
+    positional.len() >= 2
 }
