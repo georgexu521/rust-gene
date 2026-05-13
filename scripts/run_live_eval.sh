@@ -1284,6 +1284,30 @@ first_write_tool_index = next(
     ),
     None,
 )
+forbidden_tools = {str(tool).strip() for tool in (sample.get("forbidden_tools") or []) if str(tool).strip()}
+forbidden_tool_uses = [
+    str(event.get("name"))
+    for event in tool_starts
+    if str(event.get("name")) in forbidden_tools
+]
+diff_files = []
+for line in diff.splitlines():
+    if not line.startswith("diff --git "):
+        continue
+    parts = line.split()
+    if len(parts) < 4:
+        continue
+    path = parts[3]
+    if path.startswith("b/"):
+        path = path[2:]
+    if path not in diff_files:
+        diff_files.append(path)
+diff_constraints = (sample.get("acceptance") or {}).get("diff_constraints") or {}
+max_files_changed = diff_constraints.get("max_files_changed")
+try:
+    max_files_changed = None if max_files_changed in (None, "", "unspecified") else int(max_files_changed)
+except (TypeError, ValueError):
+    max_files_changed = None
 tool_errors = sum(
     1
     for event in events
@@ -1313,8 +1337,10 @@ closeout_status = str(latest_closeout.get("status", "missing")).lower()
 accepted = latest_acceptance.get("accepted")
 print(f"output_chars: {len(output)}")
 print(f"diff_chars: {len(diff)}")
+print(f"diff_files_changed: {len(diff_files)}")
 print(f"tool_executions: {tool_done}")
 print(f"first_write_tool_index: {first_write_tool_index if first_write_tool_index is not None else 'none'}")
+print(f"forbidden_tool_uses: {','.join(forbidden_tool_uses) if forbidden_tool_uses else 'none'}")
 print(f"tool_errors: {tool_errors}")
 print(f"tool_failures: {tool_failures}")
 print(f"has_closeout: {str('Closeout:' in output).lower()}")
@@ -1408,6 +1434,12 @@ if patch_synthesis_no_change:
 if legacy_workflow_hijack:
     print("warning: legacy_workflow_hijack")
     failures.append("legacy_workflow_hijack")
+if forbidden_tool_uses:
+    print("warning: forbidden_tool_used")
+    failures.append("forbidden_tool_used")
+if max_files_changed is not None and len(diff_files) > max_files_changed:
+    print("warning: max_files_changed_exceeded")
+    failures.append("max_files_changed_exceeded")
 if verification_events and any(event.get("passed") is not True for event in verification_events[:-1]):
     print("warning: earlier_verification_failed_before_repair")
     warnings.append("earlier_verification_failed_before_repair")

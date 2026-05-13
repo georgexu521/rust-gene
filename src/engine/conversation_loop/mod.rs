@@ -536,6 +536,7 @@ impl ConversationLoop {
             Self::extract_required_validation_commands(&last_user_preview);
         let no_diff_audit_closeout_allowed =
             Self::allows_no_diff_audit_closeout(&last_user_preview);
+        let code_write_tools_forbidden = Self::prompt_forbids_code_write_tools(&last_user_preview);
         let turn_index = self
             .trace_store
             .as_ref()
@@ -1058,6 +1059,7 @@ impl ConversationLoop {
         let mut patch_synthesis_recovery_used = false;
         let mut action_checkpoint_reopen_used = false;
         let mut no_diff_audit_validation_checkpoint_sent = false;
+        let mut code_write_forbidden_checkpoint_sent = false;
         let mut file_edit_failure_retry_used = false;
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
@@ -1721,7 +1723,8 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             no_diff_audit_validation_checkpoint_sent = true;
                             no_code_progress_rounds = 0;
                         }
-                    } else if has_worktree_changes
+                    } else if !code_write_tools_forbidden
+                        && has_worktree_changes
                         && successful_validation_commands.is_empty()
                         && no_code_progress_rounds >= 2
                         && !action_checkpoint_active
@@ -1762,7 +1765,10 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             "existing diff still needs repair after repeated read-only rounds",
                         );
                         activated_checkpoint_this_round = true;
-                    } else if no_code_progress_rounds == 2 && !action_checkpoint_active {
+                    } else if !code_write_tools_forbidden
+                        && no_code_progress_rounds == 2
+                        && !action_checkpoint_active
+                    {
                         let lookup_rule = Self::targeted_lookup_budget_rule(0);
                         let checkpoint = format!(
                             "Workflow progress checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. Keep investigation focused: on the next response either make the smallest safe file_edit/file_write/file_patch change, or use the focused lookup budget if a required symbol, test, or call site is still missing. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates.",
@@ -1775,7 +1781,10 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         messages.push(Message::system(checkpoint.clone()));
                         tool_results_text.push('\n');
                         tool_results_text.push_str(&checkpoint);
-                    } else if no_code_progress_rounds >= 3 && !action_checkpoint_active {
+                    } else if !code_write_tools_forbidden
+                        && no_code_progress_rounds >= 3
+                        && !action_checkpoint_active
+                    {
                         if code_workflow.activate_trigger(
                             crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
                         ) {
@@ -1809,6 +1818,21 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         force_patch_synthesis_after_no_change = false;
                         force_patch_synthesis_reason = None;
                         activated_checkpoint_this_round = true;
+                    } else if code_write_tools_forbidden
+                        && no_code_progress_rounds >= 2
+                        && !code_write_forbidden_checkpoint_sent
+                    {
+                        let checkpoint = "Tool-scope checkpoint: this request forbids code-write tools. Do not synthesize or call file_edit, file_write, or file_patch. Use the exposed read/terminal tools to gather direct evidence, run required validation when present, then close out with changed files as none unless a concrete blocker prevents validation."
+                            .to_string();
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error: "code-write tools are forbidden; validation/closeout should replace patch synthesis"
+                                .to_string(),
+                        });
+                        messages.push(Message::system(checkpoint.clone()));
+                        tool_results_text.push('\n');
+                        tool_results_text.push_str(&checkpoint);
+                        code_write_forbidden_checkpoint_sent = true;
+                        no_code_progress_rounds = 0;
                     } else if action_checkpoint_active && used_action_checkpoint_lookup {
                         action_checkpoint_lookup_count = (action_checkpoint_lookup_count + 1)
                             .min(Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET);
@@ -1866,6 +1890,23 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     trace.record(TraceEvent::WorkflowFallback {
                         error: repair_proposal.trace_error.clone(),
                     });
+                    if code_write_tools_forbidden {
+                        let recovery = "Patch synthesis skipped because this request forbids code-write tools. Continue with the exposed tools only: run required validation if available, report direct evidence, and close out without arbitrary file edits."
+                            .to_string();
+                        trace.record(TraceEvent::WorkflowFallback {
+                            error: "patch synthesis blocked by prompt-forbidden code-write tools"
+                                .to_string(),
+                        });
+                        messages.push(Message::system(recovery.clone()));
+                        tool_results_text.push('\n');
+                        tool_results_text.push_str(&recovery);
+                        action_checkpoint_active = false;
+                        action_checkpoint_lookup_count = 0;
+                        action_checkpoint_no_change_rounds = 0;
+                        no_code_progress_rounds = 0;
+                        code_write_forbidden_checkpoint_sent = true;
+                        continue;
+                    }
                     if !Self::patch_synthesis_enabled() {
                         let deterministic_calls = if Self::deterministic_patch_synthesis_enabled() {
                             let evidence = Self::patch_synthesis_evidence(&messages);
@@ -2805,9 +2846,41 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         let mut changed: Vec<_> = Self::git_status_files()
             .into_iter()
             .filter(|path| !baseline.contains(path))
+            .filter(|path| Self::is_workflow_relevant_changed_path(path))
             .collect();
         changed.sort();
         changed
+    }
+
+    fn is_workflow_relevant_changed_path(path: &std::path::Path) -> bool {
+        !Self::is_generated_runtime_artifact(path)
+    }
+
+    fn is_generated_runtime_artifact(path: &std::path::Path) -> bool {
+        let mut components = path.components().filter_map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .map(|part| part.to_ascii_lowercase())
+        });
+
+        components.any(|part| {
+            matches!(
+                part.as_str(),
+                ".venv"
+                    | "venv"
+                    | "env"
+                    | "node_modules"
+                    | "target"
+                    | "__pycache__"
+                    | ".pytest_cache"
+                    | ".mypy_cache"
+                    | ".ruff_cache"
+                    | ".ds_store"
+            ) || part.ends_with(".egg-info")
+                || part.ends_with(".dist-info")
+                || part.ends_with(".pyc")
+        })
     }
 
     fn parse_git_status_path(line: &str) -> Option<std::path::PathBuf> {
@@ -2827,6 +2900,34 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             || lower.contains("eval intent: stale_or_already_satisfied")
             || lower.contains("if the requested behavior is already present")
             || lower.contains("do not force an arbitrary edit")
+    }
+
+    fn prompt_forbids_code_write_tools(prompt: &str) -> bool {
+        let mut in_forbidden_tools = false;
+        for line in prompt.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("## ") {
+                in_forbidden_tools = trimmed.eq_ignore_ascii_case("## Forbidden tools")
+                    || trimmed.eq_ignore_ascii_case("## Disallowed tools");
+                continue;
+            }
+            if !in_forbidden_tools || !trimmed.starts_with("- ") {
+                continue;
+            }
+            let tool = trimmed
+                .trim_start_matches("- ")
+                .trim()
+                .trim_matches('`')
+                .to_ascii_lowercase();
+            if matches!(tool.as_str(), "file_edit" | "file_write" | "file_patch") {
+                return true;
+            }
+        }
+
+        let lower = prompt.to_ascii_lowercase();
+        lower.contains("do not edit files")
+            || lower.contains("do not change files")
+            || lower.contains("no file edits")
     }
 }
 
@@ -2906,6 +3007,37 @@ mod tests {
         ));
         assert!(!ConversationLoop::allows_no_diff_audit_closeout(
             "- Eval intent: `seeded_code_change`\n- This is a real code-change evaluation."
+        ));
+    }
+
+    #[test]
+    fn test_prompt_forbids_code_write_tools_from_live_eval_block() {
+        let prompt = r#"
+## Forbidden tools
+- file_edit
+- file_write
+- git_push
+"#;
+
+        assert!(ConversationLoop::prompt_forbids_code_write_tools(prompt));
+        assert!(!ConversationLoop::prompt_forbids_code_write_tools(
+            "## Forbidden tools\n- git_push\n"
+        ));
+    }
+
+    #[test]
+    fn test_generated_runtime_artifacts_do_not_count_as_workflow_changes() {
+        assert!(!ConversationLoop::is_workflow_relevant_changed_path(
+            std::path::Path::new(".venv/lib/python3.12/site-packages/pkg.py")
+        ));
+        assert!(!ConversationLoop::is_workflow_relevant_changed_path(
+            std::path::Path::new("fixtures/demo/core_terminal_demo.egg-info/PKG-INFO")
+        ));
+        assert!(!ConversationLoop::is_workflow_relevant_changed_path(
+            std::path::Path::new("src/__pycache__/main.cpython-312.pyc")
+        ));
+        assert!(ConversationLoop::is_workflow_relevant_changed_path(
+            std::path::Path::new("src/main.rs")
         ));
     }
 
