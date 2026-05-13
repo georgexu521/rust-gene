@@ -74,7 +74,7 @@ evidence run, and 2026-05-11 provider-reconnect reruns:
 | Latest multi-file smoke | `core-quality-multifile-fix2-20260513-152308` passed `core-multi-file-edit` after fixing YAML command quoting and counting `file_patch` as a write signal: read-before-patch, `first_write=4`, code and docs changed together, three required commands passed, `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest long-output smoke | `core-quality-long-output-20260513-152851` passed `core-long-output-artifact`: the full 800-line command output was persisted to `fixtures/core_quality/long_output/output.log`, the `ERROR_ANCHOR` line was verified from that artifact, agent output stayed concise at 699 bytes, three required commands passed, `acceptance_accepted=True`, `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest provider roundtrip smoke | `core-quality-provider-fix-20260513-154942` passed `core-provider-roundtrip` after live-eval reporting learned to treat final closeout plus runtime validation evidence as verification/acceptance when separate trace events are absent: no diff expected, no forbidden tools, `cargo test -q provider_health -- --test-threads=1` passed, agent also ran `provider_protocol`, offline-vs-online provider evidence was stated honestly, `verification_passed=true`, `acceptance_accepted=True`, `closeout_status=passed`, and `failure_owner=none`. |
-| Latest permission rejection smoke | `required-validation-outcome-20260513-184649` passed `core-permission-rejection-recovery` after moving required-command matching, pending calculation, and pass/fail summarization into `RequiredValidationController`: protected `keep.txt` remained, manifest changed both requested lines, three required commands passed, `runtime_diet.validation=passed:6/6 recovered_failed:1`, `closeout_status=passed`, and `failure_owner=none`. The earlier `core-quality-permission-runtime-fix-20260513-162318` run remains the proof that positive `rg`/`grep` assertions are captured by required validation. |
+| Latest permission rejection smoke | `required-validation-application-20260513-190445` passed `core-permission-rejection-recovery` after adding `RequiredValidationApplication`: protected `keep.txt` remained, manifest changed both requested lines, three required commands passed, `runtime_diet.validation=passed:5/5`, `closeout_status=passed`, and `failure_owner=none`. The earlier `core-quality-permission-runtime-fix-20260513-162318` run remains the proof that positive `rg`/`grep` assertions are captured by required validation. |
 | Latest rollback product-path smoke | `core-quality-rollback-20260513-163404` passed `core-rollback-product-path`: no diff was created, `rollback` and `checkpoint` tests passed (`5 + 13` tests), the agent distinguished file-history rollback (`last-file` / `fc_*`) from git fallback targets, `runtime_diet.validation=passed:4/4`, `closeout_status=passed`, and `failure_owner=none`. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
@@ -295,6 +295,12 @@ Current evidence:
   before repair, then recovered cleanly with the same two-line manifest diff,
   three required commands passing, `runtime_diet.validation=passed:6/6
   recovered_failed:1`, `closeout_status=passed`, and `failure_owner=none`.
+- `required-validation-application-20260513-190445` passed
+  `core-permission-rejection-recovery` after adding
+  `RequiredValidationApplication`. The manifest still changed only the requested
+  two lines, all three required commands passed, MiniMax recovered after one
+  transient reconnect, `runtime_diet.validation=passed:5/5`,
+  `closeout_status=passed`, and `failure_owner=none`.
 - `core-quality-rollback-20260513-163404` passed
   `core-rollback-product-path` with no diff, required rollback/checkpoint
   tests ok, clear evidence that `/rollback last-file` and `fc_*` use file

@@ -195,6 +195,23 @@ pub(super) struct RequiredValidationResultItem {
     pub(super) dialog_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RequiredValidationApplication {
+    pub(super) passed: bool,
+    pub(super) ledger_records: Vec<RequiredValidationLedgerRecord>,
+    pub(super) acceptance_evidence: Vec<String>,
+    pub(super) post_edit_evidence: Vec<String>,
+    pub(super) successful_commands: Vec<String>,
+    pub(super) failed_commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RequiredValidationLedgerRecord {
+    pub(super) command: String,
+    pub(super) success: bool,
+    pub(super) dialog_text: String,
+}
+
 impl RequiredValidationController {
     pub(super) fn should_run_default_auto_tests(required_validation_commands: &[String]) -> bool {
         required_validation_commands.is_empty()
@@ -327,6 +344,38 @@ impl RequiredValidationController {
             .collect();
 
         RequiredValidationRun { passed, items }
+    }
+
+    pub(super) fn application_for_run(run: RequiredValidationRun) -> RequiredValidationApplication {
+        let mut application = RequiredValidationApplication {
+            passed: run.passed,
+            ledger_records: Vec::with_capacity(run.items.len()),
+            acceptance_evidence: Vec::with_capacity(run.items.len()),
+            post_edit_evidence: Vec::new(),
+            successful_commands: Vec::new(),
+            failed_commands: Vec::new(),
+        };
+
+        for item in run.items {
+            application
+                .acceptance_evidence
+                .push(item.dialog_text.clone());
+            application
+                .ledger_records
+                .push(RequiredValidationLedgerRecord {
+                    command: item.command.clone(),
+                    success: item.success,
+                    dialog_text: item.dialog_text.clone(),
+                });
+            if item.success {
+                application.successful_commands.push(item.command);
+            } else {
+                application.failed_commands.push(item.command);
+                application.post_edit_evidence.push(item.dialog_text);
+            }
+        }
+
+        application
     }
 
     pub(super) async fn run_commands(

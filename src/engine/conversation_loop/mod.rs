@@ -2480,25 +2480,30 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         &successful_required_validation_commands,
                     )
                     .await;
-                    required_validation_passed = required_run.passed;
-                    for item in required_run.items {
-                        acceptance_evidence.push(item.dialog_text.clone());
+                    let required_application =
+                        RequiredValidationController::application_for_run(required_run);
+                    required_validation_passed = required_application.passed;
+                    acceptance_evidence.extend(required_application.acceptance_evidence);
+                    post_edit_evidence.extend(required_application.post_edit_evidence.clone());
+                    failed_commands.extend(required_application.failed_commands);
+                    for command in required_application.successful_commands {
+                        successful_required_validation_commands.insert(command);
+                    }
+                    for record in required_application.ledger_records {
                         turn_state.evidence_ledger.record_validation_result(
                             "required_validation",
-                            Some(&item.command),
-                            item.success,
-                            &item.dialog_text,
+                            Some(&record.command),
+                            record.success,
+                            &record.dialog_text,
                         );
-                        if item.success {
-                            successful_required_validation_commands.insert(item.command.clone());
-                            debug!("{}", item.dialog_text);
-                        } else {
-                            failed_commands.push(item.command.clone());
-                            post_edit_evidence.push(item.dialog_text.clone());
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&item.dialog_text);
-                            messages.push(Message::system(item.dialog_text));
+                        if record.success {
+                            debug!("{}", record.dialog_text);
                         }
+                    }
+                    for text in required_application.post_edit_evidence {
+                        tool_results_text.push('\n');
+                        tool_results_text.push_str(&text);
+                        messages.push(Message::system(text));
                     }
                 }
                 let required_validation_covers_tests =
@@ -5327,6 +5332,21 @@ mod tests {
         assert!(outcome.items[0].success);
         assert!(!outcome.items[1].success);
         assert!(outcome.items[1].dialog_text.contains("not found"));
+
+        let application = RequiredValidationController::application_for_run(outcome);
+        assert!(!application.passed);
+        assert_eq!(application.acceptance_evidence.len(), 2);
+        assert_eq!(
+            application.successful_commands,
+            vec!["test -f keep.txt".to_string()]
+        );
+        assert_eq!(
+            application.failed_commands,
+            vec!["rg '^status = corrected$' manifest.txt".to_string()]
+        );
+        assert_eq!(application.post_edit_evidence.len(), 1);
+        assert_eq!(application.ledger_records.len(), 2);
+        assert!(!application.ledger_records[1].success);
     }
 
     #[test]

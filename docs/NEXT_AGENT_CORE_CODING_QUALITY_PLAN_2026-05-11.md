@@ -47,6 +47,14 @@
   passed `core-permission-rejection-recovery` with a recovered failed
   validation (`runtime_diet.validation=passed:6/6 recovered_failed:1`) and
   `failure_owner=none`.
+- 2026-05-13: Phase A extraction continued again. Added
+  `RequiredValidationApplication` so the controller turns each required
+  validation run into ledger records, acceptance evidence, post-edit evidence,
+  successful commands, and failed commands. `run_inner` now only merges those
+  outputs into existing turn state. Focused tests passed and live guard
+  `required-validation-application-20260513-190445` passed
+  `core-permission-rejection-recovery` with `runtime_diet.validation=passed:5/5`
+  and `failure_owner=none`.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
@@ -1395,6 +1403,7 @@ scripts/run_live_eval.sh --case core-coding-quality --mode agent-run --run-tests
 - 已重跑 `core-permission-rejection-recovery`：`core-quality-permission-runtime-fix-20260513-162318` 通过。第一轮暴露的是 required validation contract 不完整：prompt 里有三条 required commands，但 runtime extractor 只收进 `test -f ...`，正向 `rg` 断言没有进入自动验证，导致模型漏改 `cleanup` 时内部 closeout 仍能误判 passed。当前修复是把 live-eval acceptance checks 中安全的正向 `rg`/`grep` search assertions 也纳入 runtime required validation，并把“harness required command 失败但 agent closeout passed”的归因从 `eval_harness` 改为 `agent_flow`。重建 release binary 后重跑，trace 记录 `required_validation commands=3`，manifest 两行都改对，受保护 `keep.txt` 仍存在，harness required commands ok，`runtime_diet.validation=passed:6/6`、`closeout_status=passed`、`failure_owner=none`。
 - 已在 `RequiredValidationController` 第一轮抽取后重跑 `core-permission-rejection-recovery`：`required-validation-controller-20260513-173831` 通过。manifest 只改两行，三条 required commands 通过，MiniMax 一次 transient reconnect 后恢复，`runtime_diet.validation=passed:5/5`、`closeout_status=passed`、`failure_owner=none`。
 - 已在 required validation outcome 继续抽取后重跑 `core-permission-rejection-recovery`：`required-validation-outcome-20260513-184649` 通过。该 run 先出现一次 verification/acceptance 失败，再经修复闭环恢复，manifest 仍只改两行，三条 required commands 通过，MiniMax provider health 中出现两次 transient reconnect 后恢复，`runtime_diet.validation=passed:6/6 recovered_failed:1`、`closeout_status=passed`、`failure_owner=none`。
+- 已在 `RequiredValidationApplication` 抽取后重跑 `core-permission-rejection-recovery`：`required-validation-application-20260513-190445` 通过。manifest 仍只改两行，三条 required commands 通过，MiniMax 一次 transient reconnect 后恢复，`runtime_diet.validation=passed:5/5`、`closeout_status=passed`、`failure_owner=none`。
 - 已重跑 `core-rollback-product-path`：`core-quality-rollback-20260513-163404` 通过。这个 case 验证 rollback 是正常产品路径而不是 debug/git fallback。agent 没制造 diff，检查了 checkpoint、file tool history、`/rollback` slash handler 和 `file_write` / `file_edit` / `file_patch` 接线；required `cargo test -q rollback -- --test-threads=1` 和 `cargo test -q checkpoint -- --test-threads=1` 通过，共 18 个相关测试。最终明确区分 `/rollback last-file` / `fc_*` 走 `CheckpointManager.restore_latest_file_change()` / `restore_file_change()`，其他 target 才走 git `reset --hard` fallback；`runtime_diet.validation=passed:4/4`、`closeout_status=passed`、`failure_owner=none`。
 
 任务：
