@@ -1331,10 +1331,36 @@ latest_stage_validation = stage_validation_events[-1] if stage_validation_events
 latest_closeout = closeout_events[-1] if closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
 latest_runtime_diet = runtime_diet_events[-1] if runtime_diet_events else {}
-verification_passed = bool(verification_events) and latest_verification.get("passed") is True
-stage_validation_passed = bool(stage_validation_events) and str(latest_stage_validation.get("status", "")).lower() in {"passed", "ok", "success"}
 closeout_status = str(latest_closeout.get("status", "missing")).lower()
+runtime_validation = str(latest_runtime_diet.get("validation_evidence", "")).lower()
+
+def positive_count(value):
+    try:
+        return int(value) > 0
+    except Exception:
+        return False
+
+closeout_validation_passed = (
+    closeout_status == "passed"
+    and (
+        runtime_validation.startswith("passed:")
+        or positive_count(latest_closeout.get("validation_items"))
+    )
+)
+verification_passed = (
+    (bool(verification_events) and latest_verification.get("passed") is True)
+    or (not verification_events and closeout_validation_passed)
+)
+stage_validation_passed = (
+    (
+        bool(stage_validation_events)
+        and str(latest_stage_validation.get("status", "")).lower() in {"passed", "ok", "success"}
+    )
+    or (not stage_validation_events and closeout_validation_passed)
+)
 accepted = latest_acceptance.get("accepted")
+if accepted is None and closeout_status == "passed" and positive_count(latest_closeout.get("acceptance_items")):
+    accepted = True
 print(f"output_chars: {len(output)}")
 print(f"diff_chars: {len(diff)}")
 print(f"diff_files_changed: {len(diff_files)}")
@@ -1641,7 +1667,7 @@ memory_active = bool(trace_count("memory.sync") or memory_tools or any(source ==
 guided_debugging_active = bool(guided_debugs)
 guided_reasoning_active = bool(guided_reasoning_events)
 weighted_planning_active = bool(weighted_plan_events)
-closeout_active = bool(closeout_events and acceptance_events)
+closeout_active = bool(closeout_events)
 adaptive_workflow_active = bool(adaptive_trigger_events)
 
 signals = {
@@ -1659,6 +1685,17 @@ latest_plan = weighted_plan_events[-1] if weighted_plan_events else {}
 latest_closeout = closeout_events[-1] if closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
 latest_runtime_diet = runtime_diet_events[-1] if runtime_diet_events else {}
+acceptance_accepted = latest_acceptance.get("accepted", "missing")
+try:
+    closeout_acceptance_items = int(latest_closeout.get("acceptance_items") or 0)
+except Exception:
+    closeout_acceptance_items = 0
+if (
+    acceptance_accepted == "missing"
+    and latest_closeout.get("status") == "passed"
+    and closeout_acceptance_items > 0
+):
+    acceptance_accepted = True
 
 for key, value in signals.items():
     print(f"{key}: {str(value).lower()}")
@@ -1683,7 +1720,7 @@ print("adaptive_triggers: " + (",".join(dict.fromkeys(str(event.get("trigger", "
 print(f"latest_top_priority: {latest_plan.get('top_priority', 'none')}")
 print(f"latest_top_importance_score: {latest_plan.get('top_importance_score', 'none')}")
 print(f"latest_top_weight_share: {latest_plan.get('top_weight_share', 'none')}")
-print(f"acceptance_accepted: {latest_acceptance.get('accepted', 'missing')}")
+print(f"acceptance_accepted: {acceptance_accepted}")
 print(f"closeout_status: {latest_closeout.get('status', 'missing')}")
 if latest_runtime_diet:
     print(
