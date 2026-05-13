@@ -136,6 +136,14 @@ impl LspClient {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// 返回客户端是否已经完成初始化。
+    ///
+    /// 轻量运行时路径可以用这个状态避免为了采集辅助诊断而触发一次
+    /// 可能等待语言服务器响应的初始化请求。
+    pub async fn is_initialized(&self) -> bool {
+        *self.initialized.read().await
+    }
+
     /// 确保已连接到 LSP 服务器（stdio 长连接）
     async fn ensure_connected(&self) -> anyhow::Result<()> {
         let mut conn_guard = self.connection.lock().await;

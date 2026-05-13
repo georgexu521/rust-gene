@@ -12,8 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
+mod diagnostics;
 mod text_codec;
 
+use diagnostics::{collect_file_edit_diagnostics, file_edit_diagnostics_content_line};
 use text_codec::{
     detect_line_ending, normalize_text_line_endings, read_text_file, split_leading_text_bom,
     text_format_json, text_write_format_json, write_text_file, TextFileEncoding,
@@ -1426,7 +1428,7 @@ impl Tool for FileEditTool {
         info!("Editing file: {:?}", path);
         let identity = file_path_identity(path_str, &path, &context.working_dir);
         let state_key = identity.state_key.clone();
-        let _file_guard = acquire_file_mutation_lock(&state_key).await;
+        let file_guard = acquire_file_mutation_lock(&state_key).await;
 
         // 读取文件内容
         if let Err(msg) = check_file_size_limit(&path, "edit") {
@@ -1584,6 +1586,10 @@ impl Tool for FileEditTool {
                             new_mtime,
                         );
                         info!("Successfully edited file: {:?}", path);
+                        drop(file_guard);
+                        let diagnostics =
+                            collect_file_edit_diagnostics(&context, &path, &new_content).await;
+                        let diagnostics_line = file_edit_diagnostics_content_line(&diagnostics);
                         let data = json!({
                             "path": path_str,
                             "resolved_path": identity.resolved_path,
@@ -1596,14 +1602,17 @@ impl Tool for FileEditTool {
                                 snapshot.line_ending
                             ),
                             "diff": edit_diff_summary_json(&diff_summary),
+                            "diagnostics": diagnostics,
                         });
-                        ToolResult::success_with_data(
-                            format!(
-                                "File edited successfully: {} ({} replacement(s))",
-                                path_str, replacements
-                            ),
-                            data,
-                        )
+                        let mut content = format!(
+                            "File edited successfully: {} ({} replacement(s))",
+                            path_str, replacements
+                        );
+                        if let Some(line) = diagnostics_line {
+                            content.push('\n');
+                            content.push_str(&line);
+                        }
+                        ToolResult::success_with_data(content, data)
                     }
                     Err(e) => ToolResult::error(e),
                 }
@@ -2395,9 +2404,41 @@ mod tests {
         let unified_diff = data["diff"]["unified_diff"].as_str().unwrap_or("");
         assert!(unified_diff.contains("-foo bar"));
         assert!(unified_diff.contains("+baz qux"));
+        assert_eq!(data["diagnostics"]["status"], "lsp_unavailable");
+        assert_eq!(data["diagnostics"]["checked"], false);
+        assert_eq!(data["diagnostics"]["diagnostic_count"], 0);
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert!(content.contains("baz qux"));
         assert!(!content.contains("foo bar"));
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn file_edit_reports_no_lsp_clients_when_manager_has_none() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_no_lsp_clients.txt";
+        tokio::fs::write(path, "one\ntwo\n").await.unwrap();
+
+        let context = ToolContext::new(".", "test-session-edit-no-lsp-clients")
+            .with_lsp_manager(std::sync::Arc::new(crate::engine::lsp::LspManager::new()));
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "two",
+                    "new_string": "three"
+                }),
+                context,
+            )
+            .await;
+
+        assert!(result.success, "edit failed: {:?}", result.error);
+        let data = result.data.expect("file_edit metadata");
+        assert_eq!(data["diagnostics"]["available"], true);
+        assert_eq!(data["diagnostics"]["checked"], false);
+        assert_eq!(data["diagnostics"]["status"], "no_lsp_clients");
+        assert_eq!(data["diagnostics"]["diagnostic_count"], 0);
 
         let _ = tokio::fs::remove_file(path).await;
     }

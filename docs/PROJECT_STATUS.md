@@ -48,7 +48,7 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-13
-file-edit diff metadata, file-mutation lock, file text codec, file-state tracker, partial-read edit state,
+file-edit LSP diagnostics summary, file-edit diff metadata, file-mutation lock, file text codec, file-state tracker, partial-read edit state,
 file-read/search evidence metadata, foreground PTY smoke,
 interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
 duration/schema/artifacts, shell-command UI summary, shell-command category
@@ -59,7 +59,7 @@ provider-protocol matrix, permission-controller, context-budget,
 tool-result-budget, schema-gate, and tool-result normalizer work:
 
 ```text
-1269 passed; 0 failed
+1271 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -98,11 +98,20 @@ a temporary sibling file plus rename so same-file edits are serialized and
 write failures do not leave partial file contents. `file_edit` success results
 now include additions, deletions, changed line range, and a bounded unified diff
 preview so later closeout and diagnostics paths can cite actual edit evidence.
+`file_edit` also returns a non-blocking `diagnostics` summary. It samples cached
+LSP diagnostics only from already-initialized clients, avoids triggering slow
+language-server startup on the edit path, and records compact LSP status/counts
+in EvidenceLedger file facts.
 
 Validated locally with:
 
 ```bash
 cargo fmt --check
+cargo test -q file_tool -- --test-threads=1
+cargo test -q evidence_ledger -- --test-threads=1
+cargo test -q lsp -- --test-threads=1
+cargo test -q tool_result -- --test-threads=1
+cargo check -q
 cargo test -q
 cargo clippy --all-features -- -D warnings
 bash scripts/workflow-production-gates.sh

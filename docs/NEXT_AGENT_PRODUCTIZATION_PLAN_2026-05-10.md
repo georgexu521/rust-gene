@@ -1261,9 +1261,34 @@ Sixteenth slice:
   `tool_errors=0`, `runtime_diet.validation=passed:2/2`,
   `closeout_status=passed`, and `failure_owner=none`.
 
+Seventeenth slice:
+
+- Continued the file-edit productization path. `file_edit` success results now
+  include a compact `diagnostics` object with LSP availability, checked status,
+  server counts, diagnostic counts by severity, bounded diagnostic items, and
+  collection errors.
+- To avoid reintroducing over-control or slow edit paths, diagnostics are
+  sampled only from already-initialized LSP clients. `file_edit` does not start
+  a language server just to collect diagnostics; when no initialized LSP client
+  is available it returns an explicit status such as `lsp_unavailable`,
+  `no_lsp_clients`, or `no_initialized_lsp_clients`.
+- EvidenceLedger now folds the LSP diagnostic status/counts into file fact
+  summaries, so closeout and debugging paths can cite the runtime-owned
+  evidence instead of relying on model prose.
+- The deterministic local baseline after this slice is `1271 passed; 0 failed`.
+
 验证：
 
 ```bash
+cargo fmt --check
+cargo test -q file_tool -- --test-threads=1
+cargo test -q evidence_ledger -- --test-threads=1
+cargo test -q lsp -- --test-threads=1
+cargo test -q tool_result -- --test-threads=1
+cargo check -q
+cargo test -q
+cargo clippy --all-features -- -D warnings
+cargo check --features experimental-api-server -q
 bash -n scripts/run_live_eval.sh
 scripts/run_live_eval.sh --case recommended --list
 python3 -m py_compile scripts/live_eval_report_parser.py

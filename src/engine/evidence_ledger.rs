@@ -475,10 +475,40 @@ fn file_result_summary(result: &ToolResult) -> String {
             .unwrap_or_else(|| value.to_string());
         metadata.push(format!("{key}={rendered}"));
     }
+    if let Some(rendered) = diagnostics_metadata_summary(data.get("diagnostics")) {
+        metadata.push(rendered);
+    }
     if metadata.is_empty() {
         return summary;
     }
     preview(&format!("[metadata: {}] {}", metadata.join(" "), summary))
+}
+
+fn diagnostics_metadata_summary(value: Option<&serde_json::Value>) -> Option<String> {
+    let diagnostics = value?;
+    let status = diagnostics
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let total = diagnostics
+        .get("diagnostic_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let errors = diagnostics
+        .get("error_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let warnings = diagnostics
+        .get("warning_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let checked = diagnostics
+        .get("checked")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    Some(format!(
+        "lsp_diagnostics=status:{status} checked:{checked} total:{total} errors:{errors} warnings:{warnings}"
+    ))
 }
 
 fn result_data_string(result: &ToolResult, key: &str) -> Option<String> {
@@ -586,6 +616,37 @@ mod tests {
         assert_eq!(fact.truncated, Some(true));
         assert_eq!(fact.content_hash.as_deref(), Some("abc123"));
         assert!(fact.summary.contains("line_numbered_content"));
+    }
+
+    #[test]
+    fn records_file_edit_diagnostics_metadata_from_tool_result_data() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "File edited successfully: src/lib.rs (1 replacement(s))",
+            serde_json::json!({
+                "path": "src/lib.rs",
+                "replacements": 1,
+                "diagnostics": {
+                    "checked": true,
+                    "status": "diagnostics_found",
+                    "diagnostic_count": 2,
+                    "error_count": 1,
+                    "warning_count": 1
+                }
+            }),
+        );
+
+        ledger.record_tool_result(
+            &tool_call("file_edit", serde_json::json!({"path": "src/lib.rs"})),
+            &result,
+        );
+
+        let fact = &ledger.file_facts[0];
+        assert!(fact
+            .summary
+            .contains("lsp_diagnostics=status:diagnostics_found"));
+        assert!(fact.summary.contains("errors:1"));
+        assert!(fact.summary.contains("warnings:1"));
     }
 
     #[test]
