@@ -153,8 +153,9 @@ pub async fn verify_file_changes(
 ) -> Vec<VerificationResult> {
     let mut results = Vec::new();
 
-    // Rust 项目检测
-    if working_dir.join("Cargo.toml").exists() {
+    // Rust 项目检测。只有 Rust 相关文件变更才跑 cargo，避免 Python/Docs
+    // fixture 的小改动在 Rust workspace 根目录触发全量 check。
+    if working_dir.join("Cargo.toml").exists() && has_rust_relevant_changes(changed_files) {
         if let Some(result) = verify_rust(working_dir, changed_files).await {
             results.push(result);
         }
@@ -215,7 +216,7 @@ pub async fn run_tests(
 
     let mut results = Vec::new();
 
-    if working_dir.join("Cargo.toml").exists() {
+    if working_dir.join("Cargo.toml").exists() && has_rust_relevant_changes(changed_files) {
         if let Some(result) = run_rust_tests(working_dir, changed_files).await {
             results.push(result);
         }
@@ -304,8 +305,9 @@ fn resolve_workspace_targets(working_dir: &Path, changed_files: &[PathBuf]) -> V
     }
 
     // 检查是否有修改发生在根目录（不属于任何 member）
-    let has_root_changes = changed_files.iter().any(|f| {
-        let parent = f.parent().unwrap_or(Path::new(""));
+    let has_root_changes = changed_files.iter().any(|file| {
+        let absolute = absolute_changed_path(working_dir, file);
+        let parent = absolute.parent().unwrap_or(working_dir);
         // 如果文件在 working_dir 根下（不在任何 member 子目录中）
         !member_dirs.iter().any(|m| parent.starts_with(m))
     });
@@ -317,7 +319,8 @@ fn resolve_workspace_targets(working_dir: &Path, changed_files: &[PathBuf]) -> V
     // 收集涉及的 member
     let mut targets = std::collections::HashSet::new();
     for file in changed_files {
-        if let Some(parent) = file.parent() {
+        let absolute = absolute_changed_path(working_dir, file);
+        if let Some(parent) = absolute.parent() {
             for member in &member_dirs {
                 if parent.starts_with(member) {
                     targets.insert(member.join("Cargo.toml"));
@@ -328,6 +331,25 @@ fn resolve_workspace_targets(working_dir: &Path, changed_files: &[PathBuf]) -> V
     }
 
     targets.into_iter().collect()
+}
+
+fn absolute_changed_path(working_dir: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        working_dir.join(path)
+    }
+}
+
+fn has_rust_relevant_changes(changed_files: &[PathBuf]) -> bool {
+    changed_files.iter().any(|path| {
+        let file_name = path.file_name().and_then(|name| name.to_str());
+        matches!(file_name, Some("Cargo.toml" | "Cargo.lock" | "build.rs"))
+            || path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+            || path
+                .components()
+                .any(|component| component.as_os_str() == ".cargo")
+    })
 }
 
 // ────────────────────────────────────────────────
@@ -1627,6 +1649,40 @@ warning: unused variable: `foo`
         std::fs::write(&script, "print('ok')\n").unwrap();
         let files = changed_python_files(&root, &[script.clone(), root.join("README.md")]);
         assert_eq!(files, vec![script]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_rust_relevance_skips_python_fixture_changes() {
+        assert!(!has_rust_relevant_changes(&[PathBuf::from(
+            "fixtures/core_quality/simple_edit/settings.py"
+        )]));
+        assert!(!has_rust_relevant_changes(&[PathBuf::from("README.md")]));
+        assert!(has_rust_relevant_changes(&[PathBuf::from("src/main.rs")]));
+        assert!(has_rust_relevant_changes(&[PathBuf::from("Cargo.toml")]));
+        assert!(has_rust_relevant_changes(&[PathBuf::from(
+            ".cargo/config.toml"
+        )]));
+    }
+
+    #[test]
+    fn test_resolve_workspace_targets_handles_relative_member_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-workspace-targets-{}",
+            std::process::id()
+        ));
+        let member = root.join("crates/demo");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n",
+        )
+        .unwrap();
+        std::fs::write(member.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+
+        let targets = resolve_workspace_targets(&root, &[PathBuf::from("crates/demo/src/lib.rs")]);
+
+        assert_eq!(targets, vec![member.join("Cargo.toml")]);
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -70,6 +70,7 @@ evidence run, and 2026-05-11 provider-reconnect reruns:
 | Latest CLI scrollback rerun | `batch6-evidencefix2-20260511-173535` passed after evidence-label and live-eval env alignment: default scrollback CLI evidence was verified with no diff, agent-visible shell/TUI commands and harness full suite passed, `tool_errors=0`, `runtime_diet.validation=passed:2/2`, `closeout_status=passed`, and `failure_owner=none`. The failed precursor `batch6-evidencefix-20260511-171653` showed that empty Moonshot/OpenAI env vars could make agent-run validation diverge from harness validation. |
 | Latest core coding quality smoke | `core-quality-smoke-20260513-133437` passed `core-inspection-grounding` after shell assertion evidence was recorded from bash result metadata: no diff expected, required commands ok, `runtime_diet.validation=passed:4/4`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest terminal install/run smoke | `core-quality-terminal-fix-20260513-141842` passed `core-terminal-install-run` after generated runtime artifacts stopped counting as code changes and prompt-forbidden write tools were kept out of patch synthesis: required commands ok, `first_write_tool_index=none`, `forbidden_tool_uses=none`, empty diff, `runtime_diet.validation=passed:2/2`, `closeout_status=passed`, and `failure_owner=none`. |
+| Latest stale-edit smoke | `core-quality-stale-fix-20260513-150307` passed `core-simple-stale-edit` after non-Rust fixture edits stopped triggering full Rust auto-verify: first write was tool call 3 after two file reads, one-line diff, required commands ok, `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and `failure_owner=none`. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 | Latest skill-promotion rerun | `batch6-smoke-20260510-154614` passed after the earlier provider-blocked rerun, with real diff, `skill_active=true`, `promotion=true`, required commands ok, full `1178 passed; 0 failed`, and `failure_owner=none`. |
@@ -249,6 +250,10 @@ Current evidence:
   `first_write_tool_index=none`, `forbidden_tool_uses=none`, empty diff,
   `runtime_diet.validation=passed:2/2`, `closeout_status=passed`, and
   `failure_owner=none`.
+- `core-quality-stale-fix-20260513-150307` passed
+  `core-simple-stale-edit` with first write after two file reads, one-line
+  diff, required commands ok, `runtime_diet.validation=passed:3/3`,
+  `closeout_status=passed`, and `failure_owner=none`.
 
 ```bash
 scripts/run_live_eval.sh --list --case core-coding-quality
