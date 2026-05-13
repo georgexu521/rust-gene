@@ -2,6 +2,7 @@
 
 use super::utils::*;
 
+use crate::engine::checkpoint::RestoreResult;
 use crate::tools::Tool;
 use crate::tui::app::TuiApp;
 
@@ -148,11 +149,23 @@ pub async fn handle_rollback(app: &mut TuiApp, args: &str) -> String {
             .to_string();
     }
 
+    let file_rollback = is_file_change_rollback_target(&parsed.target);
+
     if !parsed.confirmed {
+        if file_rollback {
+            return format!(
+                "File rollback will restore the pre-change checkpoint for '{}'.\nUsage: /rollback last-file --yes or /rollback <file_change_id> --yes",
+                parsed.target
+            );
+        }
         return format!(
-            "Rollback is destructive and will discard uncommitted changes.\nUsage: /rollback [target] --yes\nExample: /rollback {} --yes",
+            "Git rollback is destructive and will discard uncommitted changes.\nUsage: /rollback [target] --yes\nExample: /rollback {} --yes",
             parsed.target
         );
+    }
+
+    if file_rollback {
+        return handle_file_change_rollback(app, &parsed.target).await;
     }
 
     let tool = crate::tools::BashTool;
@@ -171,6 +184,74 @@ pub async fn handle_rollback(app: &mut TuiApp, args: &str) -> String {
     } else {
         result.error.unwrap_or_default()
     }
+}
+
+fn is_file_change_rollback_target(target: &str) -> bool {
+    matches!(target, "last-file" | "latest-file") || target.starts_with("fc_")
+}
+
+async fn handle_file_change_rollback(app: &TuiApp, target: &str) -> String {
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => format!("session-{}", id),
+        None => return "No active session.".to_string(),
+    };
+
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+    let cp = mgr.lock().await;
+    let result = if matches!(target, "last-file" | "latest-file") {
+        cp.restore_latest_file_change().await
+    } else {
+        cp.restore_file_change(target).await
+    };
+
+    match result {
+        Ok(result) => format_file_change_rollback_result(result),
+        Err(err) => format!(
+            "Failed to rollback file change: {}\nUse /checkpoints to list recent file changes.",
+            err
+        ),
+    }
+}
+
+fn format_file_change_rollback_result(result: RestoreResult) -> String {
+    let mut lines = vec![format!(
+        "Restored file change using checkpoint: {}",
+        result.checkpoint_id
+    )];
+    if !result.restored_files.is_empty() {
+        lines.push(format!("Restored {} file(s):", result.restored_files.len()));
+        lines.extend(
+            result
+                .restored_files
+                .iter()
+                .map(|path| format!("  {}", path)),
+        );
+    }
+    if !result.removed_files.is_empty() {
+        lines.push(format!(
+            "Removed {} file(s) that did not exist before the change:",
+            result.removed_files.len()
+        ));
+        lines.extend(
+            result
+                .removed_files
+                .iter()
+                .map(|path| format!("  {}", path)),
+        );
+    }
+    if !result.failed_files.is_empty() {
+        lines.push(format!(
+            "Failed to restore {} file(s):",
+            result.failed_files.len()
+        ));
+        lines.extend(
+            result
+                .failed_files
+                .iter()
+                .map(|(path, err)| format!("  {}: {}", path, err)),
+        );
+    }
+    lines.join("\n")
 }
 
 /// /project - Project management

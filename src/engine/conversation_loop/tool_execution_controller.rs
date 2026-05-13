@@ -297,9 +297,11 @@ impl ToolExecutionController {
     ) -> impl Future<Output = (ToolCall, ToolResult)> + 'static {
         let execution = &self.context;
         let registry = execution.tool_registry.clone();
-        let context = execution.tool_context(trace);
         let tc_clone = tool_call.clone();
         let tool_name = tool_call.name.clone();
+        let context = execution
+            .tool_context(trace)
+            .with_tool_call_metadata(tool_name.clone(), tc_clone.id.clone());
         let cost_tracker = execution.cost_tracker.clone();
         let hook_manager = execution.hook_manager.clone();
         let trace = trace.clone();
@@ -459,7 +461,9 @@ impl ToolExecutionController {
 
             let (result, hook_context) = if let Some(tool) = execution.tool_registry.get(&tool_name)
             {
-                let mut context = execution.tool_context(trace);
+                let mut context = execution
+                    .tool_context(trace)
+                    .with_tool_call_metadata(tool_name.clone(), tool_id.clone());
                 let drift_check = execution
                     .active_goal
                     .as_ref()

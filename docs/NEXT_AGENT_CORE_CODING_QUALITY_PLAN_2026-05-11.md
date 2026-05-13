@@ -1278,6 +1278,13 @@ cargo check -q
 
 - 用户可以信任 agent 写代码，因为每次修改都有可解释、可恢复路径。
 
+当前进展（2026-05-13）：
+
+- `file_write` / `file_edit` 已在成功写入后记录 `FileChangeRecord`，包含 before/after hash、bounded diff、tool call id、session id、timestamp、bytes written 和关联 checkpoint。
+- `/checkpoints` 已展示最近 file changes；`/rollback last-file --yes` 和 `/rollback <file_change_id> --yes` 已接入文件级恢复，原有 git rollback 语义保留。
+- 已通过 `cargo test -q checkpoint -- --test-threads=1`、`cargo test -q rollback -- --test-threads=1`、`cargo check -q`。
+- 剩余产品化细节放到后续：独立 diff viewer、多文件 patch 与单文件 edit 的统一 history/rollback 语义。
+
 ### Batch 3.6：多文件 patch / apply-patch 边界
 
 参考：

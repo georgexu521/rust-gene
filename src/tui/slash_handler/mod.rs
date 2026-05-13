@@ -133,6 +133,8 @@ mod tests {
         assert!(is_valid_rollback_target("HEAD~1"));
         assert!(is_valid_rollback_target("main"));
         assert!(is_valid_rollback_target("HEAD@{1}"));
+        assert!(is_valid_rollback_target("last-file"));
+        assert!(is_valid_rollback_target("fc_12_abcdef"));
 
         assert!(!is_valid_rollback_target("-hard"));
         assert!(!is_valid_rollback_target("HEAD;rm"));

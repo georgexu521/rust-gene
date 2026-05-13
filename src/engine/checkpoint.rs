@@ -7,7 +7,7 @@
 //! - 支持恢复到任意历史状态
 //! - 存储在 ~/.priority-agent/checkpoints/<session_id>/
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local};
@@ -56,8 +56,54 @@ pub struct Checkpoint {
 pub struct CheckpointStats {
     pub total_checkpoints: usize,
     pub total_files_tracked: usize,
+    pub total_file_changes: usize,
     pub oldest_checkpoint_time: Option<DateTime<Local>>,
     pub newest_checkpoint_time: Option<DateTime<Local>>,
+}
+
+/// Durable record for one successful file mutation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChangeRecord {
+    /// File change ID, stable enough for slash commands and debug output.
+    pub id: String,
+    /// Pre-change checkpoint used to restore this modification.
+    pub checkpoint_id: String,
+    /// Checkpoint sequence for concise ordering in the UI.
+    pub checkpoint_sequence: u64,
+    /// Session that produced this change.
+    pub session_id: String,
+    /// Producing tool name, e.g. file_write or file_edit.
+    pub tool_name: String,
+    /// Provider/model tool call ID when available.
+    pub tool_call_id: Option<String>,
+    /// Mutation time.
+    pub timestamp: DateTime<Local>,
+    /// Mutated file path.
+    pub path: String,
+    /// Whether the file existed before this mutation.
+    pub existed_before: bool,
+    /// Text-content hash before the mutation, if available.
+    pub before_hash: Option<String>,
+    /// Text-content hash after the mutation, if available.
+    pub after_hash: Option<String>,
+    /// Bounded unified diff or summary diff for the mutation.
+    pub diff: Option<String>,
+    /// Number of bytes written by the mutation.
+    pub bytes_written: u64,
+}
+
+/// Input for recording a successful file mutation after the write has landed.
+#[derive(Debug, Clone)]
+pub struct FileChangeInput {
+    pub checkpoint_id: String,
+    pub tool_name: String,
+    pub tool_call_id: Option<String>,
+    pub path: String,
+    pub existed_before: bool,
+    pub before_hash: Option<String>,
+    pub after_hash: Option<String>,
+    pub diff: Option<String>,
+    pub bytes_written: u64,
 }
 
 /// Checkpoint 管理器
@@ -68,9 +114,11 @@ pub struct CheckpointManager {
     /// 内存中的 checkpoint 列表（按时间排序，最新的在后面）
     checkpoints: Vec<Checkpoint>,
     /// 已追踪的文件集合
-    tracked_files: std::collections::HashSet<String>,
+    tracked_files: HashSet<String>,
     /// 单调递增序列号
     sequence_counter: u64,
+    /// Durable records of successful file mutations.
+    file_changes: Vec<FileChangeRecord>,
 }
 
 impl CheckpointManager {
@@ -83,8 +131,9 @@ impl CheckpointManager {
             session_id,
             checkpoints_dir,
             checkpoints: Vec::new(),
-            tracked_files: std::collections::HashSet::new(),
+            tracked_files: HashSet::new(),
             sequence_counter: 0,
+            file_changes: Vec::new(),
         };
 
         // 尝试从磁盘加载已有的 checkpoints
@@ -111,30 +160,54 @@ impl CheckpointManager {
     /// 从磁盘加载 checkpoints
     async fn load_from_disk(&mut self) -> Result<(), String> {
         let index_path = self.checkpoints_dir.join("index.json");
-        if !index_path.exists() {
+        if index_path.exists() {
+            let content = fs::read_to_string(&index_path)
+                .await
+                .map_err(|e| format!("Failed to read checkpoint index: {}", e))?;
+
+            let checkpoints: Vec<Checkpoint> = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse checkpoint index: {}", e))?;
+
+            self.sequence_counter = checkpoints.last().map(|c| c.sequence).unwrap_or(0);
+            self.tracked_files = checkpoints
+                .iter()
+                .flat_map(|c| c.file_backups.iter().map(|f| f.original_path.clone()))
+                .collect();
+            self.checkpoints = checkpoints;
+
+            info!(
+                "Loaded {} checkpoints for session {}",
+                self.checkpoints.len(),
+                self.session_id
+            );
+        } else {
             debug!("No checkpoint index found at {:?}", index_path);
+        }
+
+        self.load_file_history().await?;
+        Ok(())
+    }
+
+    fn file_history_path(&self) -> PathBuf {
+        self.checkpoints_dir.join("file_history.json")
+    }
+
+    async fn load_file_history(&mut self) -> Result<(), String> {
+        let history_path = self.file_history_path();
+        if !history_path.exists() {
             return Ok(());
         }
 
-        let content = fs::read_to_string(&index_path)
+        let content = fs::read_to_string(&history_path)
             .await
-            .map_err(|e| format!("Failed to read checkpoint index: {}", e))?;
+            .map_err(|e| format!("Failed to read file history: {}", e))?;
+        let mut file_changes: Vec<FileChangeRecord> = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse file history: {}", e))?;
 
-        let checkpoints: Vec<Checkpoint> = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse checkpoint index: {}", e))?;
-
-        self.sequence_counter = checkpoints.last().map(|c| c.sequence).unwrap_or(0);
-        self.tracked_files = checkpoints
-            .iter()
-            .flat_map(|c| c.file_backups.iter().map(|f| f.original_path.clone()))
-            .collect();
-        self.checkpoints = checkpoints;
-
-        info!(
-            "Loaded {} checkpoints for session {}",
-            self.checkpoints.len(),
-            self.session_id
-        );
+        let active_checkpoints: HashSet<&str> =
+            self.checkpoints.iter().map(|c| c.id.as_str()).collect();
+        file_changes.retain(|record| active_checkpoints.contains(record.checkpoint_id.as_str()));
+        self.file_changes = file_changes;
         Ok(())
     }
 
@@ -158,6 +231,21 @@ impl CheckpointManager {
             .map_err(|e| format!("Failed to write checkpoint index: {}", e))?;
 
         debug!("Saved checkpoint index to {:?}", index_path);
+        Ok(())
+    }
+
+    async fn save_file_history(&self) -> Result<(), String> {
+        fs::create_dir_all(&self.checkpoints_dir)
+            .await
+            .map_err(|e| format!("Failed to create session checkpoints dir: {}", e))?;
+
+        let history_path = self.file_history_path();
+        let content = serde_json::to_string_pretty(&self.file_changes)
+            .map_err(|e| format!("Failed to serialize file history: {}", e))?;
+
+        fs::write(&history_path, content)
+            .await
+            .map_err(|e| format!("Failed to write file history: {}", e))?;
         Ok(())
     }
 
@@ -279,6 +367,39 @@ impl CheckpointManager {
         Ok(checkpoint)
     }
 
+    /// Record one successful file mutation and link it to its pre-change checkpoint.
+    pub async fn record_file_change(
+        &mut self,
+        input: FileChangeInput,
+    ) -> Result<FileChangeRecord, String> {
+        let checkpoint_sequence = self
+            .checkpoints
+            .iter()
+            .find(|checkpoint| checkpoint.id == input.checkpoint_id)
+            .map(|checkpoint| checkpoint.sequence)
+            .ok_or_else(|| format!("Checkpoint {} not found", input.checkpoint_id))?;
+
+        let record = FileChangeRecord {
+            id: format!("fc_{}_{}", checkpoint_sequence, Uuid::new_v4().simple()),
+            checkpoint_id: input.checkpoint_id,
+            checkpoint_sequence,
+            session_id: self.session_id.clone(),
+            tool_name: input.tool_name,
+            tool_call_id: input.tool_call_id,
+            timestamp: Local::now(),
+            path: input.path,
+            existed_before: input.existed_before,
+            before_hash: input.before_hash,
+            after_hash: input.after_hash,
+            diff: input.diff,
+            bytes_written: input.bytes_written,
+        };
+
+        self.file_changes.push(record.clone());
+        self.save_file_history().await?;
+        Ok(record)
+    }
+
     /// 如果超过最大数量，清理最早的 checkpoints
     async fn prune_if_needed(&mut self) -> Result<(), String> {
         if self.checkpoints.len() <= MAX_CHECKPOINTS {
@@ -306,6 +427,11 @@ impl CheckpointManager {
                 self.tracked_files.insert(fb.original_path.clone());
             }
         }
+
+        let active_checkpoints: HashSet<&str> =
+            self.checkpoints.iter().map(|cp| cp.id.as_str()).collect();
+        self.file_changes
+            .retain(|record| active_checkpoints.contains(record.checkpoint_id.as_str()));
 
         info!(
             "Pruned {} old checkpoints, {} remaining",
@@ -401,6 +527,33 @@ impl CheckpointManager {
         })
     }
 
+    /// Restore the pre-change state for a recorded file mutation.
+    pub async fn restore_file_change(
+        &self,
+        change_id: impl AsRef<str>,
+    ) -> Result<RestoreResult, String> {
+        let change_id = change_id.as_ref();
+        let checkpoint_id = self
+            .file_changes
+            .iter()
+            .find(|record| record.id == change_id)
+            .map(|record| record.checkpoint_id.clone())
+            .ok_or_else(|| format!("File change {} not found", change_id))?;
+
+        self.restore_checkpoint(checkpoint_id).await
+    }
+
+    /// Restore the newest recorded file mutation.
+    pub async fn restore_latest_file_change(&self) -> Result<RestoreResult, String> {
+        let checkpoint_id = self
+            .file_changes
+            .last()
+            .map(|record| record.checkpoint_id.clone())
+            .ok_or_else(|| "No file changes recorded for this session".to_string())?;
+
+        self.restore_checkpoint(checkpoint_id).await
+    }
+
     /// 查找更早的 backup（用于当前 checkpoint 的 backup 文件缺失时回退）
     async fn find_earlier_backup(
         &self,
@@ -446,7 +599,7 @@ impl CheckpointManager {
         let mut diffs = Vec::new();
 
         // 收集两个 checkpoint 涉及的所有文件
-        let mut all_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut all_files: HashSet<String> = HashSet::new();
         for cp in [from_cp, to_cp] {
             for backup in &cp.file_backups {
                 all_files.insert(backup.original_path.clone());
@@ -525,11 +678,22 @@ impl CheckpointManager {
         &self.checkpoints
     }
 
+    /// 列出已记录的文件修改事件
+    pub fn list_file_changes(&self) -> &[FileChangeRecord] {
+        &self.file_changes
+    }
+
+    /// 获取最新的文件修改事件
+    pub fn latest_file_change(&self) -> Option<&FileChangeRecord> {
+        self.file_changes.last()
+    }
+
     /// 获取统计信息
     pub fn stats(&self) -> CheckpointStats {
         CheckpointStats {
             total_checkpoints: self.checkpoints.len(),
             total_files_tracked: self.tracked_files.len(),
+            total_file_changes: self.file_changes.len(),
             oldest_checkpoint_time: self.checkpoints.first().map(|c| c.timestamp),
             newest_checkpoint_time: self.checkpoints.last().map(|c| c.timestamp),
         }
@@ -549,6 +713,7 @@ impl CheckpointManager {
         }
         self.checkpoints.clear();
         self.tracked_files.clear();
+        self.file_changes.clear();
         self.sequence_counter = 0;
         info!("Cleared all checkpoints for session {}", self.session_id);
         Ok(())
@@ -708,6 +873,106 @@ mod tests {
         // 恢复应该删除文件
         let result = mgr.restore_checkpoint(&cp.id).await.unwrap();
         assert_eq!(result.removed_files.len(), 1);
+        assert!(!test_file.exists());
+    }
+
+    #[tokio::test]
+    async fn test_file_change_record_restores_latest_change() {
+        let temp = TempDir::new().unwrap();
+        let test_file = temp.path().join("tracked.txt");
+        std::fs::write(&test_file, "before").unwrap();
+
+        let session_id = format!("test_file_change_{}", Uuid::new_v4().simple());
+        let mut mgr = CheckpointManager::new(&session_id).await;
+        mgr.checkpoints_dir = temp.path().join("checkpoints").join(&session_id);
+        mgr.checkpoints.clear();
+        mgr.tracked_files.clear();
+        mgr.file_changes.clear();
+        mgr.sequence_counter = 0;
+
+        let cp = mgr
+            .create_checkpoint(
+                "file_edit",
+                None,
+                Some("call_1".to_string()),
+                &[test_file.clone()],
+            )
+            .await
+            .unwrap();
+
+        std::fs::write(&test_file, "after").unwrap();
+        let record = mgr
+            .record_file_change(FileChangeInput {
+                checkpoint_id: cp.id.clone(),
+                tool_name: "file_edit".to_string(),
+                tool_call_id: Some("call_1".to_string()),
+                path: test_file.to_string_lossy().to_string(),
+                existed_before: true,
+                before_hash: Some("before-hash".to_string()),
+                after_hash: Some("after-hash".to_string()),
+                diff: Some("--- a/tracked.txt\n+++ b/tracked.txt".to_string()),
+                bytes_written: 5,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(mgr.list_file_changes().len(), 1);
+        assert_eq!(mgr.latest_file_change().unwrap().id, record.id);
+        assert_eq!(mgr.stats().total_file_changes, 1);
+
+        let restored = mgr.restore_latest_file_change().await.unwrap();
+        assert_eq!(restored.restored_files.len(), 1);
+        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "before");
+    }
+
+    #[tokio::test]
+    async fn test_file_change_history_persists_and_removes_new_file() {
+        let temp = TempDir::new().unwrap();
+        let test_file = temp.path().join("new_tracked.txt");
+
+        let session_id = format!("test_file_change_new_{}", Uuid::new_v4().simple());
+        let mut mgr = CheckpointManager::new(&session_id).await;
+        mgr.checkpoints_dir = temp.path().join("checkpoints").join(&session_id);
+        mgr.checkpoints.clear();
+        mgr.tracked_files.clear();
+        mgr.file_changes.clear();
+        mgr.sequence_counter = 0;
+
+        let cp = mgr
+            .create_checkpoint("file_write", None, None, &[test_file.clone()])
+            .await
+            .unwrap();
+        std::fs::write(&test_file, "created").unwrap();
+        let record = mgr
+            .record_file_change(FileChangeInput {
+                checkpoint_id: cp.id.clone(),
+                tool_name: "file_write".to_string(),
+                tool_call_id: None,
+                path: test_file.to_string_lossy().to_string(),
+                existed_before: false,
+                before_hash: None,
+                after_hash: Some("created-hash".to_string()),
+                diff: Some("new file".to_string()),
+                bytes_written: 7,
+            })
+            .await
+            .unwrap();
+
+        let mut loaded = CheckpointManager {
+            session_id,
+            checkpoints_dir: mgr.checkpoints_dir.clone(),
+            checkpoints: Vec::new(),
+            tracked_files: HashSet::new(),
+            sequence_counter: 0,
+            file_changes: Vec::new(),
+        };
+        loaded.load_from_disk().await.unwrap();
+
+        assert_eq!(loaded.list_file_changes().len(), 1);
+        assert_eq!(loaded.list_file_changes()[0].id, record.id);
+
+        let restored = loaded.restore_file_change(&record.id).await.unwrap();
+        assert_eq!(restored.removed_files.len(), 1);
         assert!(!test_file.exists());
     }
 

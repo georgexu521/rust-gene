@@ -689,6 +689,18 @@ impl ToolContext {
         self.checkpoint_manager = Some(manager);
         self
     }
+
+    /// Attach the current provider tool-call identifiers to downstream tools.
+    pub fn with_tool_call_metadata(
+        mut self,
+        tool_name: impl Into<String>,
+        tool_call_id: impl Into<String>,
+    ) -> Self {
+        self.metadata.insert("tool_name".into(), tool_name.into());
+        self.metadata
+            .insert("tool_call_id".into(), tool_call_id.into());
+        self
+    }
 }
 
 /// 工具权限设置

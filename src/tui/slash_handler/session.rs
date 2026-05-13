@@ -367,8 +367,8 @@ pub async fn handle_checkpoints(app: &TuiApp) -> String {
 
     let mut lines = vec![
         format!(
-            "Checkpoints for session (total: {}, files tracked: {})",
-            stats.total_checkpoints, stats.total_files_tracked
+            "Checkpoints for session (total: {}, files tracked: {}, file changes: {})",
+            stats.total_checkpoints, stats.total_files_tracked, stats.total_file_changes
         ),
         String::new(),
     ];
@@ -402,7 +402,37 @@ pub async fn handle_checkpoints(app: &TuiApp) -> String {
         ));
     }
 
+    let file_changes = cp.list_file_changes();
+    if !file_changes.is_empty() {
+        lines.push(String::new());
+        lines.push("Recent file changes:".to_string());
+        for change in file_changes.iter().rev().take(10) {
+            let before = change
+                .before_hash
+                .as_deref()
+                .map(short_hash)
+                .unwrap_or("new");
+            let after = change
+                .after_hash
+                .as_deref()
+                .map(short_hash)
+                .unwrap_or("unknown");
+            lines.push(format!(
+                "{} [{}] {} bytes {} -> {} | {}",
+                change.id, change.tool_name, change.bytes_written, before, after, change.path
+            ));
+        }
+        lines.push(
+            "\nUse /rollback last-file --yes to restore the newest file change, or /rollback <file_change_id> --yes."
+                .to_string(),
+        );
+    }
+
     lines.join("\n")
+}
+
+fn short_hash(hash: &str) -> &str {
+    &hash[..hash.len().min(8)]
 }
 
 pub async fn handle_restore(app: &mut TuiApp, args: &str) -> String {

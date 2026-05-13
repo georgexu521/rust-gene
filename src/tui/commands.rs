@@ -1127,8 +1127,8 @@ pub const CMD_ROLLBACK: CommandDef = CommandDef::new(
     "/rollback",
     &[],
     "Git",
-    "/rollback [target]",
-    "Rollback changes via git",
+    "/rollback [target|last-file|file_change_id] --yes",
+    "Rollback git history or restore a recorded file change",
 );
 
 pub const CMD_PROJECT: CommandDef = CommandDef::new(

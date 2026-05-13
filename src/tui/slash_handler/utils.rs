@@ -403,13 +403,13 @@ pub(crate) fn parse_rollback_args(args: &str) -> Result<ParsedRollbackArgs, Stri
         }
         if part.starts_with("--") {
             return Err(format!(
-                "Unknown option: {}.\nUsage: /rollback [target] --yes",
+                "Unknown option: {}.\nUsage: /rollback [target|last-file|file_change_id] --yes",
                 part
             ));
         }
         if target.is_some() {
             return Err(
-                "Too many arguments.\nUsage: /rollback [target] --yes\nExample: /rollback HEAD~1 --yes"
+                "Too many arguments.\nUsage: /rollback [target|last-file|file_change_id] --yes\nExample: /rollback HEAD~1 --yes"
                     .to_string(),
             );
         }

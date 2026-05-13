@@ -13,9 +13,13 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 mod diagnostics;
+mod history;
 mod text_codec;
 
 use diagnostics::{collect_file_edit_diagnostics, file_edit_diagnostics_content_line};
+use history::{
+    checkpoint_metadata_json, create_file_checkpoint, record_file_change, FileChangeRequest,
+};
 use text_codec::{
     detect_line_ending, normalize_text_line_endings, read_text_file, split_leading_text_bom,
     text_format_json, text_write_format_json, write_text_file, TextFileEncoding,
@@ -945,7 +949,7 @@ impl Tool for FileWriteTool {
         };
         info!("Writing file: {:?}", path);
         let identity = file_path_identity(path_str, &path, &context.working_dir);
-        let _file_guard = acquire_file_mutation_lock(&identity.state_key).await;
+        let file_guard = acquire_file_mutation_lock(&identity.state_key).await;
 
         let existed_before = path.exists();
         let existing_snapshot = if existed_before {
@@ -985,17 +989,15 @@ impl Tool for FileWriteTool {
             }
         }
 
-        // 创建 checkpoint（文件修改前自动快照）
-        let cp_mgr = crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await;
-        {
-            let mut cp = cp_mgr.lock().await;
-            if let Err(e) = cp
-                .create_checkpoint("file_write", None, None, std::slice::from_ref(&path))
-                .await
-            {
-                warn!("Failed to create checkpoint for file_write: {}", e);
-            }
-        }
+        let before_content = existing_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.content.as_str());
+        let diff_summary = edit_diff_summary(
+            &identity.display_path,
+            before_content.unwrap_or(""),
+            content_body,
+        );
+        let checkpoint = create_file_checkpoint(&context, "file_write", &path).await;
 
         // 写入文件
         match write_text_file(
@@ -1020,6 +1022,21 @@ impl Tool for FileWriteTool {
                 } else {
                     "written"
                 };
+                drop(file_guard);
+                let file_change = record_file_change(
+                    &context,
+                    FileChangeRequest {
+                        checkpoint: checkpoint.as_ref(),
+                        tool_name: "file_write",
+                        path: &path,
+                        existed_before,
+                        before_content,
+                        after_content: content_body,
+                        diff: &diff_summary,
+                        bytes_written: bytes_written as u64,
+                    },
+                )
+                .await;
                 ToolResult::success_with_data(
                     format!("File {} successfully: {}", action, path_str),
                     json!({
@@ -1028,6 +1045,9 @@ impl Tool for FileWriteTool {
                         "path_identity": path_identity_json(&identity),
                         "bytes_written": bytes_written,
                         "existed_before": existed_before,
+                        "checkpoint": checkpoint_metadata_json(checkpoint.as_ref()),
+                        "file_change": file_change.unwrap_or(serde_json::Value::Null),
+                        "diff": edit_diff_summary_json(&diff_summary),
                         "text_format": text_write_format_json(encoding, has_bom, line_ending),
                         "guidance": if existed_before {
                             "file_write replaced the entire file; use file_edit for targeted existing-file changes"
@@ -1491,17 +1511,7 @@ impl Tool for FileEditTool {
             )
         };
 
-        // 创建 checkpoint（文件修改前自动快照）
-        let cp_mgr = crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await;
-        {
-            let mut cp = cp_mgr.lock().await;
-            if let Err(e) = cp
-                .create_checkpoint("file_edit", None, None, std::slice::from_ref(&path))
-                .await
-            {
-                warn!("Failed to create checkpoint for file_edit: {}", e);
-            }
-        }
+        let checkpoint = create_file_checkpoint(&context, "file_edit", &path).await;
 
         // 确定操作模式
         let using_exact_replace = line_start.is_none()
@@ -1587,6 +1597,20 @@ impl Tool for FileEditTool {
                         );
                         info!("Successfully edited file: {:?}", path);
                         drop(file_guard);
+                        let file_change = record_file_change(
+                            &context,
+                            FileChangeRequest {
+                                checkpoint: checkpoint.as_ref(),
+                                tool_name: "file_edit",
+                                path: &path,
+                                existed_before: true,
+                                before_content: Some(snapshot.content.as_str()),
+                                after_content: &new_content,
+                                diff: &diff_summary,
+                                bytes_written: bytes_written as u64,
+                            },
+                        )
+                        .await;
                         let diagnostics =
                             collect_file_edit_diagnostics(&context, &path, &new_content).await;
                         let diagnostics_line = file_edit_diagnostics_content_line(&diagnostics);
@@ -1601,6 +1625,8 @@ impl Tool for FileEditTool {
                                 snapshot.has_bom,
                                 snapshot.line_ending
                             ),
+                            "checkpoint": checkpoint_metadata_json(checkpoint.as_ref()),
+                            "file_change": file_change.unwrap_or(serde_json::Value::Null),
                             "diff": edit_diff_summary_json(&diff_summary),
                             "diagnostics": diagnostics,
                         });
@@ -2127,6 +2153,10 @@ mod tests {
     async fn test_file_write_existing_file_reports_full_replacement_guidance() {
         let write_tool = FileWriteTool;
         let path = "/tmp/test_priority_agent_file_write_existing.txt";
+        let session_id = "test-session-file-write-existing";
+        let checkpoint_manager =
+            crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+        checkpoint_manager.lock().await.clear_all().await.unwrap();
         tokio::fs::write(path, "old\n").await.unwrap();
 
         let result = write_tool
@@ -2135,7 +2165,7 @@ mod tests {
                     "path": path,
                     "content": "new\n"
                 }),
-                ToolContext::new(".", "test-session-file-write-existing"),
+                ToolContext::new(".", session_id),
             )
             .await;
 
@@ -2147,8 +2177,20 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .contains("file_edit"));
+        assert!(data["checkpoint"]["id"].as_str().is_some());
+        assert!(data["file_change"]["id"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("fc_"));
+        assert!(data["file_change"]["before_hash"].as_str().is_some());
+        assert!(data["file_change"]["after_hash"].as_str().is_some());
+        assert!(data["diff"]["unified_diff"]
+            .as_str()
+            .unwrap_or("")
+            .contains("-old"));
 
         let _ = tokio::fs::remove_file(path).await;
+        checkpoint_manager.lock().await.clear_all().await.unwrap();
     }
 
     #[test]
@@ -3041,16 +3083,28 @@ mod tests {
             "new_string": "modified"
         });
         let session_id = "test-session-checkpoint";
+        let mgr = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+        mgr.lock().await.clear_all().await.unwrap();
         let context = ToolContext::new(".", session_id);
         let result = tool.execute(params, context).await;
 
         assert!(result.success, "edit failed: {:?}", result.error);
+        let data = result.data.as_ref().expect("file_edit metadata");
+        assert!(data["checkpoint"]["id"].as_str().is_some());
+        assert!(data["file_change"]["id"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("fc_"));
+        assert_eq!(data["file_change"]["tool_name"], "file_edit");
 
         // 验证 checkpoint 被创建
-        let mgr = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
         let cp = mgr.lock().await;
         let checkpoints = cp.list_checkpoints();
         assert!(!checkpoints.is_empty(), "checkpoint should be created");
+        assert!(
+            !cp.list_file_changes().is_empty(),
+            "file change should be recorded"
+        );
 
         let latest = checkpoints.last().unwrap();
         assert_eq!(latest.tool_name, "file_edit");
@@ -3064,15 +3118,9 @@ mod tests {
         let restored_content = tokio::fs::read_to_string(path).await.unwrap();
         assert_eq!(restored_content, original);
 
+        drop(cp);
         let _ = tokio::fs::remove_file(path).await;
-        let _ = tokio::fs::remove_dir_all(
-            dirs::home_dir()
-                .unwrap()
-                .join(".priority-agent")
-                .join("checkpoints")
-                .join(format!("session-{}", session_id)),
-        )
-        .await;
+        mgr.lock().await.clear_all().await.unwrap();
     }
 
     #[tokio::test]
