@@ -18,6 +18,14 @@
 
 ## Implementation Progress
 
+- 2026-05-13: Added
+  `docs/CORE_CODING_QUALITY_CONCLUSION_2026-05-13.md` as the current
+  8/8 core-coding-quality baseline and Claude Code / opencode comparison
+  conclusion. The validated claim is now deliberately narrow: Priority Agent
+  has a credible basic coding baseline, but still needs main-loop splitting,
+  parser-backed shell semantics, edit diagnostics, provider/tool-result
+  protocol hardening, and evaluation re-baselining before claiming broader
+  parity.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
