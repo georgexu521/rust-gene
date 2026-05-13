@@ -127,6 +127,20 @@
   `post_edit_repair_controller`, and `closeout` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1301 passed; 0 failed`).
+- 2026-05-13: Phase A action-checkpoint boundary cleanup continued. Moved
+  action-checkpoint focused repair, bash gating, and file-edit guard tests out
+  of `conversation_loop/mod.rs` and into
+  `src/engine/conversation_loop/action_checkpoint.rs`, keeping the checkpoint
+  behavior tests next to the implementation. Added
+  `src/engine/conversation_loop/workflow_change_tracker.rs` so workflow
+  changed-file detection, `git status --short` parsing, generated runtime
+  artifact filtering (`.venv`, `*.egg-info`, `__pycache__`, etc.), and
+  changed-file append/deduplication no longer live directly in `run_inner`.
+- Validation after the action-checkpoint test ownership and
+  `WorkflowChangeTracker` slice: `cargo fmt --check`, targeted
+  `workflow_change_tracker`, `action_checkpoint`, and `route_scoped_tools`
+  tests, `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and
+  full `cargo test -q` all passed (`1302 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

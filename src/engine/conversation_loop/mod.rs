@@ -35,6 +35,7 @@ mod tool_turn_controller;
 mod turn_recording;
 mod turn_runtime_state;
 mod validation_runner;
+mod workflow_change_tracker;
 mod workflow_trace;
 
 use action_checkpoint::{
@@ -72,6 +73,7 @@ use validation_runner::shell_output_with_timeout;
 #[cfg(test)]
 use validation_runner::verification_source_context;
 use validation_runner::RequiredValidationController;
+use workflow_change_tracker::WorkflowChangeTracker;
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
@@ -1175,7 +1177,7 @@ impl ConversationLoop {
 
         // ── 迭代预算 ─────────────────────────────────────
         let max_loop_iterations = self.max_iterations + code_workflow.max_repair_attempts().max(3);
-        let baseline_git_status_files = Self::git_status_files();
+        let baseline_git_status_files = WorkflowChangeTracker::git_status_files();
         let mut action_checkpoint_no_change_rounds = 0usize;
         let mut action_checkpoint_requires_patch_before_validation = false;
 
@@ -1211,7 +1213,7 @@ impl ConversationLoop {
 
             let has_changes_before_request =
                 crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
-                    && !Self::git_status_files_since(&baseline_git_status_files).is_empty();
+                    && WorkflowChangeTracker::has_changes_since(&baseline_git_status_files);
             let validation_allowed_before_request =
                 has_changes_before_request && !action_checkpoint_requires_patch_before_validation;
             let tools = if action_checkpoint_active {
@@ -1513,7 +1515,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 
             let has_changes_before_tools =
                 crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
-                    && !Self::git_status_files_since(&baseline_git_status_files).is_empty();
+                    && WorkflowChangeTracker::has_changes_since(&baseline_git_status_files);
             let mut tool_batch =
                 ToolExecutionController::new(ToolExecutionContext::from_conversation(self))
                     .execute_tools_parallel(ToolExecutionRequest {
@@ -1663,11 +1665,10 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 }
             }
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-                for path in Self::git_status_files_since(&baseline_git_status_files) {
-                    if !changed_files.iter().any(|existing| existing == &path) {
-                        changed_files.push(path);
-                    }
-                }
+                WorkflowChangeTracker::append_changed_files_since(
+                    &mut changed_files,
+                    &baseline_git_status_files,
+                );
             }
             let has_worktree_changes = !changed_files.is_empty();
 
@@ -1961,12 +1962,10 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             if crate::engine::code_change_workflow::is_programming_workflow(
                                 route.workflow,
                             ) {
-                                for path in Self::git_status_files_since(&baseline_git_status_files)
-                                {
-                                    if !changed_files.iter().any(|existing| existing == &path) {
-                                        changed_files.push(path);
-                                    }
-                                }
+                                WorkflowChangeTracker::append_changed_files_since(
+                                    &mut changed_files,
+                                    &baseline_git_status_files,
+                                );
                             }
                             if !changed_files.is_empty() {
                                 action_checkpoint_active = false;
@@ -2113,12 +2112,10 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             if crate::engine::code_change_workflow::is_programming_workflow(
                                 route.workflow,
                             ) {
-                                for path in Self::git_status_files_since(&baseline_git_status_files)
-                                {
-                                    if !changed_files.iter().any(|existing| existing == &path) {
-                                        changed_files.push(path);
-                                    }
-                                }
+                                WorkflowChangeTracker::append_changed_files_since(
+                                    &mut changed_files,
+                                    &baseline_git_status_files,
+                                );
                             }
                             if !changed_files.is_empty() {
                                 action_checkpoint_active = false;
@@ -2482,73 +2479,6 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         })
     }
 
-    /// 非流式 API 调用
-    fn git_status_files() -> HashSet<std::path::PathBuf> {
-        let output = std::process::Command::new("git")
-            .args(["status", "--short", "--untracked-files=all"])
-            .output();
-        let Ok(output) = output else {
-            return HashSet::new();
-        };
-        if !output.status.success() {
-            return HashSet::new();
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        text.lines()
-            .filter_map(Self::parse_git_status_path)
-            .collect()
-    }
-
-    fn git_status_files_since(baseline: &HashSet<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
-        let mut changed: Vec<_> = Self::git_status_files()
-            .into_iter()
-            .filter(|path| !baseline.contains(path))
-            .filter(|path| Self::is_workflow_relevant_changed_path(path))
-            .collect();
-        changed.sort();
-        changed
-    }
-
-    fn is_workflow_relevant_changed_path(path: &std::path::Path) -> bool {
-        !Self::is_generated_runtime_artifact(path)
-    }
-
-    fn is_generated_runtime_artifact(path: &std::path::Path) -> bool {
-        let mut components = path.components().filter_map(|component| {
-            component
-                .as_os_str()
-                .to_str()
-                .map(|part| part.to_ascii_lowercase())
-        });
-
-        components.any(|part| {
-            matches!(
-                part.as_str(),
-                ".venv"
-                    | "venv"
-                    | "env"
-                    | "node_modules"
-                    | "target"
-                    | "__pycache__"
-                    | ".pytest_cache"
-                    | ".mypy_cache"
-                    | ".ruff_cache"
-                    | ".ds_store"
-            ) || part.ends_with(".egg-info")
-                || part.ends_with(".dist-info")
-                || part.ends_with(".pyc")
-        })
-    }
-
-    fn parse_git_status_path(line: &str) -> Option<std::path::PathBuf> {
-        let path = line.get(3..)?.trim();
-        if path.is_empty() {
-            return None;
-        }
-        let path = path.rsplit_once(" -> ").map(|(_, new)| new).unwrap_or(path);
-        Some(std::path::PathBuf::from(path.trim_matches('"')))
-    }
-
     fn allows_no_diff_audit_closeout(prompt: &str) -> bool {
         let lower = prompt.to_ascii_lowercase();
         lower.contains("eval intent: `audit_or_regression_check`")
@@ -2679,22 +2609,6 @@ mod tests {
         assert!(ConversationLoop::prompt_forbids_code_write_tools(prompt));
         assert!(!ConversationLoop::prompt_forbids_code_write_tools(
             "## Forbidden tools\n- git_push\n"
-        ));
-    }
-
-    #[test]
-    fn test_generated_runtime_artifacts_do_not_count_as_workflow_changes() {
-        assert!(!ConversationLoop::is_workflow_relevant_changed_path(
-            std::path::Path::new(".venv/lib/python3.12/site-packages/pkg.py")
-        ));
-        assert!(!ConversationLoop::is_workflow_relevant_changed_path(
-            std::path::Path::new("fixtures/demo/core_terminal_demo.egg-info/PKG-INFO")
-        ));
-        assert!(!ConversationLoop::is_workflow_relevant_changed_path(
-            std::path::Path::new("src/__pycache__/main.cpython-312.pyc")
-        ));
-        assert!(ConversationLoop::is_workflow_relevant_changed_path(
-            std::path::Path::new("src/main.rs")
         ));
     }
 
@@ -3426,66 +3340,6 @@ mod tests {
     }
 
     #[test]
-    fn test_action_checkpoint_blocks_patch_bash_and_allows_validation_after_changes() {
-        assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "python3 - <<'PY'\nfrom pathlib import Path\nPath('x').write_text('y')\nPY"}),
-            false,
-        ));
-        assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH"}),
-            false,
-        ));
-        assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "cat > src/main.rs <<'EOF'\nfn main() {}\nEOF"}),
-            false,
-        ));
-        assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "sed -n '1,20p' src/main.rs"}),
-            false,
-        ));
-        assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "cargo test -q"}),
-            false,
-        ));
-        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "cargo test -q"}),
-            true,
-        ));
-        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "scripts/run_live_eval.sh --mode summary --run-id live-summary-smoke"}),
-            true,
-        ));
-        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "bash -n scripts/run_live_eval.sh"}),
-            true,
-        ));
-    }
-
-    #[test]
-    fn patch_recovery_focused_repair_blocks_bash_patch_bypass() {
-        for command in [
-            "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH",
-            "python3 - <<'PY'\nopen('x', 'w').write('y')\nPY",
-            "sed -i '' 's/a/b/' src/main.rs",
-            "cat > src/main.rs <<'EOF'\nfn main() {}\nEOF",
-            "tee src/main.rs <<'EOF'\nfn main() {}\nEOF",
-        ] {
-            assert!(
-                !ConversationLoop::bash_allowed_at_action_checkpoint(
-                    &serde_json::json!({ "command": command }),
-                    true,
-                ),
-                "mutating bash command should not bypass file tools: {command}"
-            );
-        }
-
-        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
-            &serde_json::json!({"command": "cargo test -q"}),
-            true,
-        ));
-    }
-
-    #[test]
     fn test_code_action_tools_expose_bash_only_after_changes() {
         let tools = vec![
             crate::services::api::Tool {
@@ -3540,158 +3394,6 @@ mod tests {
         assert!(!after_lookup.contains("bash"));
         assert!(!after_lookup.contains("file_read"));
         assert!(!after_lookup.contains("grep"));
-    }
-
-    #[test]
-    fn focused_repair_prompt_allows_one_targeted_read_without_broad_tools() {
-        let exposed = vec![
-            "file_edit".to_string(),
-            "file_read".to_string(),
-            "grep".to_string(),
-        ];
-
-        let prompt = ConversationLoop::focused_repair_mode_prompt(&exposed, 0);
-
-        assert!(prompt.contains("Up to 2 targeted file_read/grep lookups remain"));
-        assert!(prompt.contains("Do not call glob/project_list"));
-        assert!(prompt.contains("using file_edit/file_write/file_patch so permission"));
-        assert!(prompt.contains("Do not use bash for patching"));
-        assert!(!prompt.contains("Do not call grep/glob/file_read/project_list"));
-
-        let prompt_after_one_lookup = ConversationLoop::focused_repair_mode_prompt(&exposed, 1);
-        assert!(prompt_after_one_lookup.contains("One targeted file_read/grep lookup remains"));
-
-        let prompt_after_budget = ConversationLoop::focused_repair_mode_prompt(&exposed, 2);
-        assert!(prompt_after_budget.contains("targeted lookup budget has already been used"));
-        assert!(prompt_after_budget.contains("do not call file_read/grep again"));
-    }
-
-    #[test]
-    fn file_edit_failure_correction_prefers_line_range_retry() {
-        let correction = ConversationLoop::file_edit_failure_repair_correction(&[r#"
-file_edit call_1 failed:
-Expected 1 occurrence(s) of old_string, but found 1487.
-  ... showing first 12 of 1487 matches. The old_string is too broad.
-"#
-        .to_string()])
-        .expect("ambiguous file_edit should produce a correction");
-
-        assert!(correction.contains("line_start, line_end"));
-        assert!(correction.contains("Do not retry the same broad old_string"));
-        assert!(correction.contains("not close out"));
-    }
-
-    #[test]
-    fn file_edit_failure_correction_gets_one_model_retry_before_synthesis() {
-        assert!(
-            ConversationLoop::should_retry_after_file_edit_failure_correction(
-                true, true, false, false,
-            )
-        );
-        assert!(
-            !ConversationLoop::should_retry_after_file_edit_failure_correction(
-                true, true, true, false,
-            )
-        );
-        assert!(
-            !ConversationLoop::should_retry_after_file_edit_failure_correction(
-                true, true, false, true,
-            )
-        );
-        assert!(
-            !ConversationLoop::should_retry_after_file_edit_failure_correction(
-                false, true, false, false,
-            )
-        );
-    }
-
-    #[test]
-    fn action_checkpoint_unexposed_tool_message_lists_allowed_tools() {
-        let exposed = HashSet::from([
-            "file_edit".to_string(),
-            "file_read".to_string(),
-            "grep".to_string(),
-        ]);
-
-        let message =
-            ConversationLoop::action_checkpoint_unexposed_tool_message("project_list", &exposed, 0);
-
-        assert!(message.contains("project_list"));
-        assert!(message.contains("Exposed tools: file_edit, file_read, grep"));
-        assert!(message.contains("Use file_edit/file_write/file_patch for patches"));
-        assert!(message.contains("lookup budget still has room"));
-        assert!(message.contains("Up to 2 targeted file_read/grep lookups remain"));
-
-        let exhausted =
-            ConversationLoop::action_checkpoint_unexposed_tool_message("file_read", &exposed, 2);
-        assert!(exhausted.contains("targeted lookup budget has already been used"));
-    }
-
-    #[test]
-    fn focused_repair_action_proposal_records_budget_and_fallback_reason() {
-        let exposed = HashSet::from([
-            "grep".to_string(),
-            "file_edit".to_string(),
-            "file_read".to_string(),
-        ]);
-
-        let proposal =
-            ConversationLoop::focused_repair_action_proposal(FocusedRepairActionRequest {
-                action_checkpoint_active: true,
-                any_tool_success: false,
-                batch_has_unsuccessful_tools: true,
-                failed_tool_evidence_present: true,
-                force_patch_synthesis_after_no_change: false,
-                force_patch_synthesis_reason: None,
-                action_checkpoint_no_change_rounds: 0,
-                action_checkpoint_lookup_count: 1,
-                exposed_tool_names: &exposed,
-            })
-            .expect("focused repair failure should propose a recovery action");
-
-        assert!(!proposal.enter_patch_synthesis);
-        assert_eq!(proposal.next_no_change_rounds, 1);
-        assert_eq!(proposal.fallback_owner, "action_checkpoint");
-        assert_eq!(
-            proposal.fallback_reason,
-            "repeated invalid tools in focused repair"
-        );
-        assert!(proposal.reminder.contains("file_edit, file_read, grep"));
-        assert!(proposal
-            .reminder
-            .contains("One targeted file_read/grep lookup remains"));
-    }
-
-    #[test]
-    fn focused_repair_action_proposal_enters_patch_synthesis_after_budget() {
-        let exposed = HashSet::from(["file_edit".to_string()]);
-
-        let proposal =
-            ConversationLoop::focused_repair_action_proposal(FocusedRepairActionRequest {
-                action_checkpoint_active: true,
-                any_tool_success: true,
-                batch_has_unsuccessful_tools: false,
-                failed_tool_evidence_present: false,
-                force_patch_synthesis_after_no_change: true,
-                force_patch_synthesis_reason: Some("focused repair lookup budget exhausted"),
-                action_checkpoint_no_change_rounds: 1,
-                action_checkpoint_lookup_count: 2,
-                exposed_tool_names: &exposed,
-            })
-            .expect("forced no-change repair should propose patch synthesis");
-
-        assert!(proposal.enter_patch_synthesis);
-        assert_eq!(proposal.next_no_change_rounds, 2);
-        assert_eq!(
-            proposal.fallback_reason,
-            "focused repair lookup budget exhausted"
-        );
-        assert!(proposal
-            .trace_error
-            .contains("focused repair lookup budget exhausted"));
-        assert!(proposal
-            .reminder
-            .contains("targeted lookup budget has already been used"));
     }
 
     #[test]
@@ -5538,103 +5240,6 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("Destructive scope blocked"));
-    }
-
-    #[test]
-    fn test_action_checkpoint_rejects_multi_replacement_file_edit() {
-        let tmp = tempdir().expect("create temp dir");
-        let src = tmp.path().join("src");
-        std::fs::create_dir_all(&src).expect("create src");
-        std::fs::write(
-            src.join("lib.rs"),
-            "let status = true;\nlet status = false;\n",
-        )
-        .expect("write file");
-
-        let rejection = ConversationLoop::action_checkpoint_file_edit_rejection(
-            &serde_json::json!({
-                "path": "src/lib.rs",
-                "old_string": "let status",
-                "new_string": "let checked_status",
-                "expected_replacements": 2
-            }),
-            tmp.path(),
-        )
-        .expect("multi replacement edit should be rejected");
-
-        assert!(rejection.contains("only permits one replacement"));
-    }
-
-    #[test]
-    fn test_action_checkpoint_rejects_non_unique_anchor() {
-        let tmp = tempdir().expect("create temp dir");
-        let src = tmp.path().join("src");
-        std::fs::create_dir_all(&src).expect("create src");
-        std::fs::write(
-            src.join("lib.rs"),
-            "let status = true;\nlet status = false;\n",
-        )
-        .expect("write file");
-
-        let rejection = ConversationLoop::action_checkpoint_file_edit_rejection(
-            &serde_json::json!({
-                "path": "src/lib.rs",
-                "old_string": "let status",
-                "new_string": "let checked_status"
-            }),
-            tmp.path(),
-        )
-        .expect("non-unique anchor should be rejected");
-
-        assert!(rejection.contains("unique edit anchor"));
-    }
-
-    #[test]
-    fn test_action_checkpoint_rejects_multi_line_range_edit() {
-        let tmp = tempdir().expect("create temp dir");
-        let src = tmp.path().join("src");
-        std::fs::create_dir_all(&src).expect("create src");
-        std::fs::write(
-            src.join("lib.rs"),
-            "let write_decision = score();\nlet score = write_decision.score;\nlet status = write_decision.status;\n",
-        )
-        .expect("write file");
-
-        let rejection = ConversationLoop::action_checkpoint_file_edit_rejection(
-            &serde_json::json!({
-                "path": "src/lib.rs",
-                "line_start": 1,
-                "line_end": 3,
-                "new_string": "let status = write_decision.status;"
-            }),
-            tmp.path(),
-        )
-        .expect("multi-line action checkpoint edit should be rejected");
-
-        assert!(rejection.contains("exactly one line"));
-    }
-
-    #[test]
-    fn test_action_checkpoint_accepts_unique_anchor() {
-        let tmp = tempdir().expect("create temp dir");
-        let src = tmp.path().join("src");
-        std::fs::create_dir_all(&src).expect("create src");
-        std::fs::write(
-            src.join("lib.rs"),
-            "let status = true;\nlet other = false;\n",
-        )
-        .expect("write file");
-
-        let rejection = ConversationLoop::action_checkpoint_file_edit_rejection(
-            &serde_json::json!({
-                "path": "src/lib.rs",
-                "old_string": "let status = true;",
-                "new_string": "let status = false;"
-            }),
-            tmp.path(),
-        );
-
-        assert!(rejection.is_none(), "{rejection:?}");
     }
 
     struct MockLlmProvider {
