@@ -1320,10 +1320,11 @@ cargo check -q
 
 当前进展（2026-05-13）：
 
-- Focused repair / action checkpoint 已收紧边界：patch 只能走 `file_edit` / `file_write`，bash 不再允许用 `python`、`sed -i`、`cat >`、`tee`、`apply_patch` 等方式修改文件。
+- Focused repair / action checkpoint 已收紧边界：patch 只能走 `file_edit` / `file_write` / `file_patch`，bash 不再允许用 `python`、`sed -i`、`cat >`、`tee`、`apply_patch` 等方式修改文件。
 - action checkpoint 下的 bash 只在已有文件变更后用于验证命令，避免多文件 patch 通过 shell 绕过 permission、stale-read、diff 和 rollback 记录。
 - 已补 `patch_recovery_focused_repair_blocks_bash_patch_bypass` 回归测试，确保 `cargo test -q patch_recovery -- --test-threads=1` 不再空跑。
-- 剩余产品化细节：新增专门的多文件 patch tool/path，让多文件修改也能在一次操作中做逐文件检查、统一 diff 和可恢复记录。
+- 已新增 `file_patch` 多文件 patch tool/path：预检全部 operation、要求既有文件先被 `file_read`、检查 stale-read、统一生成 diff，并复用 checkpoint / file history / rollback 记录。
+- 剩余产品化细节：继续补强 partial failure 恢复证据、更多 LSP/diagnostics 汇总、以及 live-eval 的 multi-file edit 回归 case。
 
 ### Phase 3 完成标准
 

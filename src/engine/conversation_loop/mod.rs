@@ -1741,7 +1741,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             });
                         }
                         let checkpoint = format!(
-                            "Workflow acceptance repair checkpoint: this {:?} task already has code changes, but {} consecutive successful tool rounds made no additional edit. Use the evidence already gathered to synthesize the smallest remaining file_edit/file_write patch now. If multiple independent acceptance-critical bypasses are visible, fix them together; otherwise stop with a Closeout status of not_verified and name the blocker.",
+                            "Workflow acceptance repair checkpoint: this {:?} task already has code changes, but {} consecutive successful tool rounds made no additional edit. Use the evidence already gathered to synthesize the smallest remaining file_edit/file_write/file_patch change now. If multiple independent acceptance-critical bypasses are visible, fix them together; otherwise stop with a Closeout status of not_verified and name the blocker.",
                             route.workflow, no_code_progress_rounds
                         );
                         trace.record(TraceEvent::WorkflowFallback {
@@ -1765,7 +1765,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     } else if no_code_progress_rounds == 2 && !action_checkpoint_active {
                         let lookup_rule = Self::targeted_lookup_budget_rule(0);
                         let checkpoint = format!(
-                            "Workflow progress checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. Keep investigation focused: on the next response either make the smallest safe file_edit/file_write patch, or use the focused lookup budget if a required symbol, test, or call site is still missing. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates.",
+                            "Workflow progress checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. Keep investigation focused: on the next response either make the smallest safe file_edit/file_write/file_patch change, or use the focused lookup budget if a required symbol, test, or call site is still missing. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates.",
                             route.workflow, no_code_progress_rounds, lookup_rule
                         );
                         trace.record(TraceEvent::WorkflowFallback {
@@ -1969,7 +1969,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             let lookup_rule =
                                 Self::targeted_lookup_budget_rule(action_checkpoint_lookup_count);
                             let recovery = format!(
-                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe patch from the evidence already gathered. Prefer file_edit/file_write so permission, stale-read, diff, and rollback checks stay active. If file_read or grep is still exposed, use the remaining focused lookup budget before patching; otherwise patch from the evidence already gathered. {} Do not call tools that are not exposed.",
+                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe patch from the evidence already gathered. Prefer file_edit/file_write/file_patch so permission, stale-read, diff, and rollback checks stay active. If file_read or grep is still exposed, use the remaining focused lookup budget before patching; otherwise patch from the evidence already gathered. {} Do not call tools that are not exposed.",
                                 exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", "),
                                 lookup_rule
                             );
@@ -1988,7 +1988,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 error: "focused repair did not produce a patch; reopening normal code-change tools once"
                                     .to_string(),
                             });
-                            let recovery = "Focused repair did not produce a file change. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write patch before running validation. Do not close out until a file change succeeds or a concrete blocker is proven."
+                            let recovery = "Focused repair did not produce a file change. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write/file_patch change before running validation. Do not close out until a file change succeeds or a concrete blocker is proven."
                                 .to_string();
                             messages.push(Message::system(recovery.clone()));
                             tool_results_text.push('\n');
@@ -2170,7 +2170,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                             .to_string(),
                                 });
                                 let recovery = format!(
-                                    "Patch synthesis could not produce an executable edit: {}. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write patch before validation.",
+                                    "Patch synthesis could not produce an executable edit: {}. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write/file_patch change before validation.",
                                     safe_prefix_by_bytes(&err_text, 500)
                                 );
                                 messages.push(Message::system(recovery.clone()));
@@ -3111,6 +3111,7 @@ mod tests {
             "file_read",
             "file_write",
             "file_edit",
+            "file_patch",
             "bash",
             "bash_output",
             "bash_cancel",
@@ -3126,6 +3127,7 @@ mod tests {
         assert!(exposed.contains("file_read"));
         assert!(exposed.contains("file_write"));
         assert!(exposed.contains("file_edit"));
+        assert!(exposed.contains("file_patch"));
         assert!(exposed.contains("bash"));
         assert!(exposed.contains("bash_output"));
         assert!(exposed.contains("bash_cancel"));
@@ -3149,6 +3151,7 @@ mod tests {
             "file_read",
             "file_write",
             "file_edit",
+            "file_patch",
             "bash",
             "lsp",
             "symbol_query",
@@ -3161,6 +3164,7 @@ mod tests {
         assert!(exposed.contains("file_read"));
         assert!(exposed.contains("file_write"));
         assert!(exposed.contains("file_edit"));
+        assert!(exposed.contains("file_patch"));
         assert!(exposed.contains("bash"));
         assert!(exposed.contains("lsp"));
         assert!(exposed.contains("symbol_query"));
@@ -3701,6 +3705,11 @@ mod tests {
                 parameters: serde_json::json!({}),
             },
             crate::services::api::Tool {
+                name: "file_patch".to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            },
+            crate::services::api::Tool {
                 name: "file_read".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
@@ -3722,6 +3731,7 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
         assert!(before_change.contains("file_edit"));
+        assert!(before_change.contains("file_patch"));
         assert!(before_change.contains("file_read"));
         assert!(before_change.contains("grep"));
         assert!(!before_change.contains("bash"));
@@ -3737,6 +3747,7 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
         assert!(after_lookup.contains("file_edit"));
+        assert!(after_lookup.contains("file_patch"));
         assert!(!after_lookup.contains("bash"));
         assert!(!after_lookup.contains("file_read"));
         assert!(!after_lookup.contains("grep"));
@@ -3754,7 +3765,7 @@ mod tests {
 
         assert!(prompt.contains("Up to 2 targeted file_read/grep lookups remain"));
         assert!(prompt.contains("Do not call glob/project_list"));
-        assert!(prompt.contains("using file_edit/file_write so permission"));
+        assert!(prompt.contains("using file_edit/file_write/file_patch so permission"));
         assert!(prompt.contains("Do not use bash for patching"));
         assert!(!prompt.contains("Do not call grep/glob/file_read/project_list"));
 
@@ -3818,7 +3829,7 @@ Expected 1 occurrence(s) of old_string, but found 1487.
 
         assert!(message.contains("project_list"));
         assert!(message.contains("Exposed tools: file_edit, file_read, grep"));
-        assert!(message.contains("Use file_edit/file_write for patches"));
+        assert!(message.contains("Use file_edit/file_write/file_patch for patches"));
         assert!(message.contains("lookup budget still has room"));
         assert!(message.contains("Up to 2 targeted file_read/grep lookups remain"));
 

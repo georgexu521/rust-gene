@@ -1,0 +1,598 @@
+use super::history::{
+    checkpoint_metadata_json, create_files_checkpoint, record_file_change, FileChangeRequest,
+};
+use super::text_codec::{
+    detect_line_ending, read_text_file, split_leading_text_bom, text_write_format_json,
+    write_text_file, TextFileEncoding,
+};
+use super::{
+    acquire_file_mutation_lock, check_file_size_limit, edit_diff_summary, edit_diff_summary_json,
+    file_path_identity, file_read_state_guidance, is_file_modified_since_read,
+    is_unc_or_network_path, mark_file_read_with_state, path_identity_json, read_before_edit_status,
+    resolve_path, FileEditTool, FilePathIdentity, ReadBeforeEditStatus,
+    MAX_EDITABLE_FILE_SIZE_BYTES,
+};
+use crate::tools::{Tool, ToolContext, ToolPermissionLevel, ToolResult};
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::path::PathBuf;
+use tokio::sync::OwnedMutexGuard;
+
+const MAX_FILE_PATCH_OPERATIONS: usize = 20;
+
+pub struct FilePatchTool;
+
+#[derive(Clone, Debug)]
+struct PatchSpec {
+    path_arg: String,
+    path: PathBuf,
+    identity: FilePathIdentity,
+    params: Value,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedPatch {
+    path_arg: String,
+    path: PathBuf,
+    identity: FilePathIdentity,
+    existed_before: bool,
+    before_content: Option<String>,
+    after_content: String,
+    encoding: TextFileEncoding,
+    has_bom: bool,
+    line_ending: super::text_codec::LineEndingStyle,
+    diff: super::EditDiffSummary,
+    replacements: usize,
+}
+
+#[async_trait]
+impl Tool for FilePatchTool {
+    fn name(&self) -> &str {
+        "file_patch"
+    }
+
+    fn description(&self) -> &str {
+        "Apply a multi-file patch atomically. Use this for coordinated changes across files. \
+         Each operation must be a targeted replace, line_range replace, insertion, or new-file/full-file write. \
+         Existing-file operations require prior file_read evidence and stale-read validation; use file_edit for a single-file edit."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "operations": {
+                    "type": "array",
+                    "description": "Patch operations to apply atomically. Each item requires path plus one of: old_string/new_string, line_start/line_end/new_string, insert_after/new_string, insert_before/new_string, or content for write mode.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["replace", "line_range", "insert_after", "insert_before", "write"],
+                                "description": "Optional. Inferred from fields when omitted."
+                            },
+                            "old_string": { "type": "string" },
+                            "new_string": { "type": "string" },
+                            "insert_after": { "type": "string" },
+                            "insert_before": { "type": "string" },
+                            "line_start": { "type": "integer", "minimum": 1 },
+                            "line_end": { "type": "integer", "minimum": 1 },
+                            "content": { "type": "string" },
+                            "expected_replacements": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Defaults to 1 for replace and insert operations."
+                            },
+                            "normalize_whitespace": { "type": "boolean", "default": false }
+                        },
+                        "required": ["path"]
+                    }
+                }
+            },
+            "required": ["operations"]
+        })
+    }
+
+    fn to_classifier_input(&self, params: &Value) -> String {
+        let count = params["operations"]
+            .as_array()
+            .map(|operations| operations.len())
+            .unwrap_or(0);
+        format!("file_patch: {count} operation(s)")
+    }
+
+    async fn execute(&self, params: Value, context: ToolContext) -> ToolResult {
+        if context.permissions.read_only {
+            return ToolResult::error("Cannot patch files in read-only mode");
+        }
+
+        let operations = match params["operations"].as_array() {
+            Some(operations) if !operations.is_empty() => operations,
+            _ => return ToolResult::error("operations must be a non-empty array"),
+        };
+        if operations.len() > MAX_FILE_PATCH_OPERATIONS {
+            return ToolResult::error(format!(
+                "Refusing file_patch with {} operation(s): max is {}",
+                operations.len(),
+                MAX_FILE_PATCH_OPERATIONS
+            ));
+        }
+
+        let specs = match prepare_specs(operations, &context) {
+            Ok(specs) => specs,
+            Err(err) => return ToolResult::error(err),
+        };
+
+        let _guards = acquire_patch_locks(&specs).await;
+        let prepared = match preflight_operations(&specs, &context).await {
+            Ok(prepared) => prepared,
+            Err(err) => return ToolResult::error(err),
+        };
+
+        let checkpoint_paths = prepared
+            .iter()
+            .map(|patch| patch.path.clone())
+            .collect::<Vec<_>>();
+        let checkpoint = match create_files_checkpoint(&context, "file_patch", &checkpoint_paths)
+            .await
+        {
+            Some(checkpoint) => checkpoint,
+            None => {
+                return ToolResult::error(
+                    "file_patch could not create a checkpoint; refusing atomic patch without rollback",
+                );
+            }
+        };
+
+        let mut written_paths = Vec::new();
+        for patch in &prepared {
+            if let Some(parent) = patch.path.parent() {
+                if !parent.exists() {
+                    if let Err(err) = tokio::fs::create_dir_all(parent).await {
+                        return ToolResult::error(format!(
+                            "file_patch failed to create parent directory {}: {}",
+                            parent.display(),
+                            err
+                        ));
+                    }
+                }
+            }
+            if let Err(err) = write_text_file(
+                &patch.path,
+                &patch.after_content,
+                patch.encoding,
+                patch.has_bom,
+                patch.line_ending,
+                MAX_EDITABLE_FILE_SIZE_BYTES,
+            )
+            .await
+            {
+                let manager =
+                    crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await;
+                let restore = manager
+                    .lock()
+                    .await
+                    .restore_checkpoint(&checkpoint.id)
+                    .await
+                    .err();
+                return ToolResult::error_with_content(
+                    format!(
+                        "file_patch failed while writing {}: {}",
+                        patch.path.display(),
+                        err
+                    ),
+                    json!({
+                        "partial_failure": true,
+                        "written_paths": written_paths,
+                        "rollback_error": restore,
+                    })
+                    .to_string(),
+                );
+            }
+            written_paths.push(patch.path.to_string_lossy().to_string());
+            if let Some(ref cache) = context.file_cache {
+                cache.invalidate_content(&patch.path);
+                cache.invalidate_metadata(&patch.path);
+            }
+            let new_mtime = std::fs::metadata(&patch.path)
+                .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            mark_file_read_with_state(
+                &context.session_id,
+                &patch.identity.state_key,
+                &patch.after_content,
+                new_mtime,
+            );
+        }
+
+        let mut file_changes = Vec::new();
+        for patch in &prepared {
+            if let Some(change) = record_file_change(
+                &context,
+                FileChangeRequest {
+                    checkpoint: Some(&checkpoint),
+                    tool_name: "file_patch",
+                    path: &patch.path,
+                    existed_before: patch.existed_before,
+                    before_content: patch.before_content.as_deref(),
+                    after_content: &patch.after_content,
+                    diff: &patch.diff,
+                    bytes_written: patch.after_content.len() as u64,
+                },
+            )
+            .await
+            {
+                file_changes.push(change);
+            }
+        }
+
+        let files = prepared
+            .iter()
+            .map(|patch| {
+                json!({
+                    "path": patch.path_arg,
+                    "resolved_path": patch.identity.resolved_path,
+                    "path_identity": path_identity_json(&patch.identity),
+                    "existed_before": patch.existed_before,
+                    "replacements": patch.replacements,
+                    "text_format": text_write_format_json(
+                        patch.encoding,
+                        patch.has_bom,
+                        patch.line_ending
+                    ),
+                    "diff": edit_diff_summary_json(&patch.diff),
+                })
+            })
+            .collect::<Vec<_>>();
+        let combined_diff = prepared
+            .iter()
+            .map(|patch| patch.diff.unified_diff.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        ToolResult::success_with_data(
+            format!(
+                "Applied file_patch successfully: {} operation(s), {} file(s)",
+                prepared.len(),
+                prepared.len()
+            ),
+            json!({
+                "operation_count": prepared.len(),
+                "files": files,
+                "checkpoint": checkpoint_metadata_json(Some(&checkpoint)),
+                "file_changes": file_changes,
+                "diff": {
+                    "unified_diff": combined_diff,
+                    "file_count": prepared.len(),
+                }
+            }),
+        )
+    }
+
+    fn requires_confirmation(&self, _params: &Value) -> bool {
+        true
+    }
+
+    fn confirmation_prompt(&self, _params: &Value) -> Option<String> {
+        Some("This will patch one or more files. Continue?".to_string())
+    }
+
+    fn permission_level(&self) -> ToolPermissionLevel {
+        ToolPermissionLevel::MediumRisk
+    }
+}
+
+fn prepare_specs(operations: &[Value], context: &ToolContext) -> Result<Vec<PatchSpec>, String> {
+    let mut seen = HashSet::new();
+    let mut specs = Vec::with_capacity(operations.len());
+    for operation in operations {
+        let path_arg = operation["path"]
+            .as_str()
+            .ok_or_else(|| "file_patch operation missing path".to_string())?;
+        if path_arg.trim().is_empty() {
+            return Err("file_patch operation path cannot be empty".to_string());
+        }
+        if is_unc_or_network_path(path_arg) {
+            return Err(format!(
+                "Refusing to patch UNC/network path '{}'. Use a local path instead.",
+                path_arg
+            ));
+        }
+        let path = resolve_path(path_arg, &context.working_dir)?;
+        let identity = file_path_identity(path_arg, &path, &context.working_dir);
+        if !seen.insert(identity.state_key.clone()) {
+            return Err(format!(
+                "file_patch has multiple operations for the same file: {}",
+                path_arg
+            ));
+        }
+        specs.push(PatchSpec {
+            path_arg: path_arg.to_string(),
+            path,
+            identity,
+            params: operation.clone(),
+        });
+    }
+    Ok(specs)
+}
+
+async fn acquire_patch_locks(specs: &[PatchSpec]) -> Vec<OwnedMutexGuard<()>> {
+    let mut keys = specs
+        .iter()
+        .map(|spec| spec.identity.state_key.clone())
+        .collect::<Vec<_>>();
+    keys.sort();
+    let mut guards = Vec::with_capacity(keys.len());
+    for key in keys {
+        guards.push(acquire_file_mutation_lock(&key).await);
+    }
+    guards
+}
+
+async fn preflight_operations(
+    specs: &[PatchSpec],
+    context: &ToolContext,
+) -> Result<Vec<PreparedPatch>, String> {
+    let mut prepared = Vec::with_capacity(specs.len());
+    for spec in specs {
+        prepared.push(preflight_operation(spec, context).await?);
+    }
+    Ok(prepared)
+}
+
+async fn preflight_operation(
+    spec: &PatchSpec,
+    context: &ToolContext,
+) -> Result<PreparedPatch, String> {
+    let params = &spec.params;
+    let mode = infer_mode(params)?;
+    let existed_before = spec.path.exists();
+    let before_snapshot = if existed_before {
+        if !spec.path.is_file() {
+            return Err(format!(
+                "file_patch target is not a file: {}",
+                spec.path_arg
+            ));
+        }
+        check_file_size_limit(&spec.path, "patch")?;
+        Some(read_text_file(&spec.path, "patch").await?)
+    } else {
+        None
+    };
+
+    let (before_content, after_content, encoding, has_bom, line_ending, replacements) = match (
+        mode,
+        before_snapshot.as_ref(),
+    ) {
+        (PatchMode::Write, snapshot) => {
+            let content = params["content"]
+                .as_str()
+                .ok_or_else(|| "file_patch write operation requires content".to_string())?;
+            let (content_has_bom, content_body) = split_leading_text_bom(content);
+            let encoding = snapshot
+                .map(|snapshot| snapshot.encoding)
+                .unwrap_or(TextFileEncoding::Utf8);
+            let has_bom =
+                snapshot.map(|snapshot| snapshot.has_bom).unwrap_or(false) || content_has_bom;
+            let line_ending = snapshot
+                .map(|snapshot| snapshot.line_ending)
+                .unwrap_or_else(|| detect_line_ending(content_body));
+            (
+                snapshot.map(|snapshot| snapshot.content.clone()),
+                content_body.to_string(),
+                encoding,
+                has_bom,
+                line_ending,
+                1,
+            )
+        }
+        (_, None) => {
+            return Err(format!(
+                "file_patch {} operation requires an existing file: {}",
+                mode.as_str(),
+                spec.path_arg
+            ));
+        }
+        (mode, Some(snapshot)) => {
+            ensure_read_state(spec, context, mode)?;
+            let current_mtime = std::fs::metadata(&spec.path)
+                .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if is_file_modified_since_read(
+                &context.session_id,
+                &spec.identity.state_key,
+                &snapshot.content,
+                current_mtime,
+            ) {
+                return Err(format!(
+                        "Refusing file_patch for '{}': file changed since this session last read it. Re-read the file and retry.",
+                        spec.path_arg
+                    ));
+            }
+            let (new_content, replacements) =
+                apply_existing_file_operation(mode, params, snapshot.content.clone())?;
+            (
+                Some(snapshot.content.clone()),
+                new_content,
+                snapshot.encoding,
+                snapshot.has_bom,
+                snapshot.line_ending,
+                replacements,
+            )
+        }
+    };
+
+    if after_content.len() as u64 > MAX_EDITABLE_FILE_SIZE_BYTES {
+        return Err(format!(
+            "Refusing file_patch content larger than {} bytes for {}",
+            MAX_EDITABLE_FILE_SIZE_BYTES, spec.path_arg
+        ));
+    }
+
+    let diff = edit_diff_summary(
+        &spec.identity.display_path,
+        before_content.as_deref().unwrap_or(""),
+        &after_content,
+    );
+
+    Ok(PreparedPatch {
+        path_arg: spec.path_arg.clone(),
+        path: spec.path.clone(),
+        identity: spec.identity.clone(),
+        existed_before,
+        before_content,
+        after_content,
+        encoding,
+        has_bom,
+        line_ending,
+        diff,
+        replacements,
+    })
+}
+
+fn ensure_read_state(
+    spec: &PatchSpec,
+    context: &ToolContext,
+    mode: PatchMode,
+) -> Result<(), String> {
+    let (line_start, line_end) = if mode == PatchMode::LineRange {
+        (
+            spec.params["line_start"]
+                .as_u64()
+                .map(|value| value as usize),
+            spec.params["line_end"].as_u64().map(|value| value as usize),
+        )
+    } else {
+        (None, None)
+    };
+    let status = read_before_edit_status(
+        &context.session_id,
+        &spec.identity.state_key,
+        line_start,
+        line_end,
+    );
+    if status == ReadBeforeEditStatus::Allowed {
+        Ok(())
+    } else {
+        Err(file_read_state_guidance(&spec.path_arg, status))
+    }
+}
+
+fn apply_existing_file_operation(
+    mode: PatchMode,
+    params: &Value,
+    content: String,
+) -> Result<(String, usize), String> {
+    let new_string = params["new_string"].as_str().unwrap_or("");
+    let expected = params["expected_replacements"]
+        .as_u64()
+        .map(|value| value as usize)
+        .or(Some(1));
+    match mode {
+        PatchMode::Replace => FileEditTool::do_replace(
+            content,
+            params["old_string"].as_str().unwrap_or(""),
+            new_string,
+            expected,
+            params["normalize_whitespace"].as_bool().unwrap_or(false),
+        ),
+        PatchMode::LineRange => {
+            let line_start = params["line_start"]
+                .as_u64()
+                .ok_or_else(|| "line_range operation requires line_start".to_string())?
+                as usize;
+            let line_end = params["line_end"]
+                .as_u64()
+                .ok_or_else(|| "line_range operation requires line_end".to_string())?
+                as usize;
+            FileEditTool::do_replace_lines(content, line_start, line_end, new_string)
+        }
+        PatchMode::InsertAfter => {
+            let anchor = params["insert_after"]
+                .as_str()
+                .ok_or_else(|| "insert_after operation requires insert_after".to_string())?;
+            let (updated, count) =
+                FileEditTool::do_insert(content, anchor, new_string, super::InsertMode::After)?;
+            ensure_expected_insert_count(count, expected)?;
+            Ok((updated, count))
+        }
+        PatchMode::InsertBefore => {
+            let anchor = params["insert_before"]
+                .as_str()
+                .ok_or_else(|| "insert_before operation requires insert_before".to_string())?;
+            let (updated, count) =
+                FileEditTool::do_insert(content, anchor, new_string, super::InsertMode::Before)?;
+            ensure_expected_insert_count(count, expected)?;
+            Ok((updated, count))
+        }
+        PatchMode::Write => unreachable!("write mode is handled before existing-file operations"),
+    }
+}
+
+fn ensure_expected_insert_count(count: usize, expected: Option<usize>) -> Result<(), String> {
+    let expected = expected.unwrap_or(1);
+    if count == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "Expected {} insertion anchor occurrence(s), but found {}.",
+            expected, count
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchMode {
+    Replace,
+    LineRange,
+    InsertAfter,
+    InsertBefore,
+    Write,
+}
+
+impl PatchMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            PatchMode::Replace => "replace",
+            PatchMode::LineRange => "line_range",
+            PatchMode::InsertAfter => "insert_after",
+            PatchMode::InsertBefore => "insert_before",
+            PatchMode::Write => "write",
+        }
+    }
+}
+
+fn infer_mode(params: &Value) -> Result<PatchMode, String> {
+    if let Some(mode) = params["mode"].as_str() {
+        return match mode {
+            "replace" => Ok(PatchMode::Replace),
+            "line_range" => Ok(PatchMode::LineRange),
+            "insert_after" => Ok(PatchMode::InsertAfter),
+            "insert_before" => Ok(PatchMode::InsertBefore),
+            "write" => Ok(PatchMode::Write),
+            other => Err(format!("Unsupported file_patch mode: {}", other)),
+        };
+    }
+    if params.get("content").and_then(Value::as_str).is_some() {
+        return Ok(PatchMode::Write);
+    }
+    if params.get("line_start").and_then(Value::as_u64).is_some()
+        || params.get("line_end").and_then(Value::as_u64).is_some()
+    {
+        return Ok(PatchMode::LineRange);
+    }
+    if params.get("insert_after").and_then(Value::as_str).is_some() {
+        return Ok(PatchMode::InsertAfter);
+    }
+    if params
+        .get("insert_before")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        return Ok(PatchMode::InsertBefore);
+    }
+    Ok(PatchMode::Replace)
+}

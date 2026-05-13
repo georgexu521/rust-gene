@@ -236,7 +236,7 @@ impl<'a> ToolExecutionGate<'a> {
             )
         {
             let result = ToolResult::error(
-                "Bash is restricted during the action checkpoint: use file_edit/file_write for patches so permission, stale-read, diff, and rollback checks stay active. Bash is allowed only for validation after files have changed."
+                "Bash is restricted during the action checkpoint: use file_edit/file_write/file_patch for patches so permission, stale-read, diff, and rollback checks stay active. Bash is allowed only for validation after files have changed."
                     .to_string(),
             );
             return self.deny_with_trace(tool_call, result);

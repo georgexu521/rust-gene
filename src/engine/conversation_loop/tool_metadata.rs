@@ -110,6 +110,14 @@ pub(super) fn build_tool_execution_summary(
                 );
             }
         }
+        "file_patch" => {
+            if let Some(operations) = tool_call.arguments["operations"].as_array() {
+                object.insert(
+                    "operations".to_string(),
+                    serde_json::Value::Number((operations.len() as u64).into()),
+                );
+            }
+        }
         "grep" => {
             if let Some(pattern) = tool_call.arguments["pattern"].as_str() {
                 object.insert(

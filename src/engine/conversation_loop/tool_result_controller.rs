@@ -122,7 +122,7 @@ fn evidence_facts(tool_call: &ToolCall, result: &ToolResult) -> Vec<NormalizedEv
     let mut facts = match tool_call.name.as_str() {
         "bash" => bash_evidence_facts(tool_call),
         "file_read" | "glob" | "grep" => vec![NormalizedEvidenceFact::File],
-        "file_write" | "file_edit" => {
+        "file_write" | "file_edit" | "file_patch" => {
             let mut facts = vec![NormalizedEvidenceFact::File];
             if result.success {
                 facts.push(NormalizedEvidenceFact::ChangedFile);

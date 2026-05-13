@@ -132,6 +132,7 @@ impl ConversationLoop {
                     "file_read",
                     "file_write",
                     "file_edit",
+                    "file_patch",
                     "bash",
                     "bash_output",
                     "bash_cancel",
@@ -148,6 +149,7 @@ impl ConversationLoop {
                     "file_read",
                     "file_write",
                     "file_edit",
+                    "file_patch",
                     "bash",
                     "bash_output",
                     "bash_cancel",
@@ -216,6 +218,6 @@ impl ConversationLoop {
     }
 
     pub(super) fn is_code_write_tool_name(name: &str) -> bool {
-        matches!(name, "file_edit" | "file_write")
+        matches!(name, "file_edit" | "file_write" | "file_patch")
     }
 }

@@ -294,7 +294,9 @@ fn permission_tool_family(
 
     match tool_name {
         "bash" | "powershell" => PermissionToolFamily::Shell,
-        "file_read" | "file_write" | "file_edit" | "glob" | "grep" => PermissionToolFamily::File,
+        "file_read" | "file_write" | "file_edit" | "file_patch" | "glob" | "grep" => {
+            PermissionToolFamily::File
+        }
         "task_create" | "task_update" | "task_stop" | "task_output" => PermissionToolFamily::Task,
         "agent" | "send_message" => PermissionToolFamily::Subagent,
         _ => PermissionToolFamily::Other,

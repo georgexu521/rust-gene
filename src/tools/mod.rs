@@ -75,7 +75,7 @@ pub use datetime_tool::DatetimeTool;
 pub use desktop_tool::DesktopTool;
 pub use diff_tool::DiffTool;
 pub use encode_tool::EncodeTool;
-pub use file_tool::{FileEditTool, FileReadTool, FileWriteTool};
+pub use file_tool::{FileEditTool, FilePatchTool, FileReadTool, FileWriteTool};
 pub use format_tool::FormatTool;
 pub use git_tool::GitTool;
 pub use github_tool::GitHubTool;
@@ -899,6 +899,7 @@ impl ToolRegistry {
         registry.register(FileReadTool);
         registry.register(FileWriteTool);
         registry.register(FileEditTool);
+        registry.register(FilePatchTool);
 
         // 注册搜索工具
         registry.register(GlobTool);

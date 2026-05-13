@@ -14,12 +14,14 @@ use tracing::{debug, error, info, warn};
 
 mod diagnostics;
 mod history;
+mod patch;
 mod text_codec;
 
 use diagnostics::{collect_file_edit_diagnostics, file_edit_diagnostics_content_line};
 use history::{
     checkpoint_metadata_json, create_file_checkpoint, record_file_change, FileChangeRequest,
 };
+pub use patch::FilePatchTool;
 use text_codec::{
     detect_line_ending, normalize_text_line_endings, read_text_file, split_leading_text_bom,
     text_format_json, text_write_format_json, write_text_file, TextFileEncoding,
@@ -2191,6 +2193,170 @@ mod tests {
 
         let _ = tokio::fs::remove_file(path).await;
         checkpoint_manager.lock().await.clear_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_patch_applies_multiple_files_and_records_history() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), "alpha\nold-a\n")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("b.txt"), "beta\nold-b\n")
+            .await
+            .unwrap();
+        let session_id = format!("test-session-file-patch-{}", uuid::Uuid::new_v4().simple());
+        let checkpoint_manager =
+            crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+        checkpoint_manager.lock().await.clear_all().await.unwrap();
+
+        let context = ToolContext::new(dir.path(), &session_id);
+        let read_tool = FileReadTool;
+        assert!(
+            read_tool
+                .execute(json!({ "path": "a.txt" }), context.clone())
+                .await
+                .success
+        );
+        assert!(
+            read_tool
+                .execute(json!({ "path": "b.txt" }), context.clone())
+                .await
+                .success
+        );
+
+        let patch_tool = FilePatchTool;
+        let result = patch_tool
+            .execute(
+                json!({
+                    "operations": [
+                        {
+                            "path": "a.txt",
+                            "old_string": "old-a",
+                            "new_string": "new-a"
+                        },
+                        {
+                            "path": "b.txt",
+                            "old_string": "old-b",
+                            "new_string": "new-b"
+                        }
+                    ]
+                }),
+                context,
+            )
+            .await;
+
+        assert!(result.success, "file_patch failed: {:?}", result.error);
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("a.txt"))
+                .await
+                .unwrap(),
+            "alpha\nnew-a\n"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("b.txt"))
+                .await
+                .unwrap(),
+            "beta\nnew-b\n"
+        );
+        let data = result.data.expect("file_patch metadata");
+        assert_eq!(data["operation_count"], 2);
+        assert!(data["checkpoint"]["id"].as_str().is_some());
+        assert_eq!(data["file_changes"].as_array().unwrap().len(), 2);
+        assert!(data["diff"]["unified_diff"]
+            .as_str()
+            .unwrap_or("")
+            .contains("new-a"));
+
+        checkpoint_manager.lock().await.clear_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_patch_preflight_failure_does_not_partially_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), "alpha\nold-a\n")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("b.txt"), "beta\nold-b\n")
+            .await
+            .unwrap();
+        let session_id = format!(
+            "test-session-file-patch-atomic-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let context = ToolContext::new(dir.path(), &session_id);
+        let read_tool = FileReadTool;
+        let _ = read_tool
+            .execute(json!({ "path": "a.txt" }), context.clone())
+            .await;
+        let _ = read_tool
+            .execute(json!({ "path": "b.txt" }), context.clone())
+            .await;
+
+        let patch_tool = FilePatchTool;
+        let result = patch_tool
+            .execute(
+                json!({
+                    "operations": [
+                        {
+                            "path": "a.txt",
+                            "old_string": "old-a",
+                            "new_string": "new-a"
+                        },
+                        {
+                            "path": "b.txt",
+                            "old_string": "missing-b",
+                            "new_string": "new-b"
+                        }
+                    ]
+                }),
+                context,
+            )
+            .await;
+
+        assert!(!result.success);
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("a.txt"))
+                .await
+                .unwrap(),
+            "alpha\nold-a\n"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("b.txt"))
+                .await
+                .unwrap(),
+            "beta\nold-b\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_patch_rejects_unread_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), "alpha\nold-a\n")
+            .await
+            .unwrap();
+        let session_id = format!(
+            "test-session-file-patch-unread-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let patch_tool = FilePatchTool;
+        let result = patch_tool
+            .execute(
+                json!({
+                    "operations": [
+                        {
+                            "path": "a.txt",
+                            "old_string": "old-a",
+                            "new_string": "new-a"
+                        }
+                    ]
+                }),
+                ToolContext::new(dir.path(), session_id),
+            )
+            .await;
+
+        assert!(!result.success);
+        let error = result.error.unwrap_or_default();
+        assert!(error.contains("has not been read"), "{error}");
     }
 
     #[test]

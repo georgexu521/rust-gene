@@ -2,7 +2,7 @@ use super::EditDiffSummary;
 use crate::engine::checkpoint::{Checkpoint, FileChangeInput, FileChangeRecord};
 use crate::tools::ToolContext;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
 pub(super) struct FileChangeRequest<'a> {
@@ -21,19 +21,26 @@ pub(super) async fn create_file_checkpoint(
     tool_name: &str,
     path: &Path,
 ) -> Option<Checkpoint> {
+    create_files_checkpoint(context, tool_name, &[path.to_path_buf()]).await
+}
+
+pub(super) async fn create_files_checkpoint(
+    context: &ToolContext,
+    tool_name: &str,
+    paths: &[PathBuf],
+) -> Option<Checkpoint> {
     let manager = match &context.checkpoint_manager {
         Some(manager) => manager.clone(),
         None => crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await,
     };
 
-    let path_buf = path.to_path_buf();
     let mut checkpoint_manager = manager.lock().await;
     match checkpoint_manager
         .create_checkpoint(
             tool_name,
             None,
             context.metadata.get("tool_call_id").cloned(),
-            std::slice::from_ref(&path_buf),
+            paths,
         )
         .await
     {
