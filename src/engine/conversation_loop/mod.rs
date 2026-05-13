@@ -15,6 +15,7 @@ mod context_budget_controller;
 mod patch_recovery;
 mod patch_repair_rules;
 mod permission_controller;
+mod post_edit_verification_controller;
 mod pseudo_tool_text;
 mod repair_controller;
 mod runtime_diet;
@@ -39,6 +40,9 @@ pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
 use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
+use post_edit_verification_controller::{
+    PostEditVerificationContext, PostEditVerificationController,
+};
 use repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
 };
@@ -61,12 +65,13 @@ use turn_recording::record_recovery_plan;
 use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
-use validation_runner::{verification_source_context, RequiredValidationController};
+#[cfg(test)]
+use validation_runner::verification_source_context;
+use validation_runner::RequiredValidationController;
 use workflow_trace::{
     apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger, trace_stage_validation,
 };
 
-use crate::engine::evidence_ledger::changed_files_diff_evidence;
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
@@ -2383,243 +2388,29 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 }
                 let working_dir =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let mut post_edit_evidence = Vec::new();
-                let mut acceptance_evidence = Vec::new();
-                let mut failed_commands = Vec::new();
-                let verify_results =
-                    super::auto_verify::verify_file_changes(&working_dir, &changed_files).await;
-                let check_passed = verify_results.iter().all(|r| r.success);
-                if !check_passed {
-                    if let Some(source_context) =
-                        verification_source_context(&working_dir, &verify_results)
-                    {
-                        post_edit_evidence.push(source_context.clone());
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&source_context);
-                        messages.push(Message::system(source_context));
-                    }
-                }
-                for result in verify_results {
-                    let verify_text = result.to_dialog_text();
-                    acceptance_evidence.push(verify_text.clone());
-                    turn_state.evidence_ledger.record_validation_result(
-                        "auto_verify",
-                        Some(&result.command),
-                        result.success,
-                        &verify_text,
-                    );
-                    if !result.success {
-                        failed_commands.push(result.command.clone());
-                        post_edit_evidence.push(verify_text.clone());
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&verify_text);
-                        messages.push(Message::system(verify_text));
-                    } else {
-                        debug!("{}", verify_text);
-                    }
-                }
-
-                // ── LSP 诊断补充 ───────────────────────────
-                if let Some(ref lsp_mgr) = self.lsp_manager {
-                    let mut lsp_issues = Vec::new();
-                    for path in &changed_files {
-                        let uri = super::lsp::path_to_uri(path);
-                        for name in lsp_mgr.server_names() {
-                            if let Some(client) = lsp_mgr.get_client(&name) {
-                                let diagnostics = client.get_diagnostics(&uri).await;
-                                for d in diagnostics {
-                                    let sev = match d.severity {
-                                        Some(1) => "error",
-                                        Some(2) => "warning",
-                                        Some(3) => "info",
-                                        Some(4) => "hint",
-                                        _ => "diagnostic",
-                                    };
-                                    lsp_issues.push(format!(
-                                        "  [{}] {}:{}: {}",
-                                        sev,
-                                        path.display(),
-                                        d.range.start.line + 1,
-                                        d.message.replace('\n', " ")
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    if !lsp_issues.is_empty() {
-                        let lsp_text = format!(
-                            "[LSP diagnostics for modified files]:\n{}",
-                            lsp_issues.join("\n")
-                        );
-                        post_edit_evidence.push(lsp_text.clone());
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&lsp_text);
-                        messages.push(Message::system(lsp_text));
-                    }
-                }
-
-                // ── Required validation first ───────────────────
-                //
-                // Live tasks can define domain-specific required commands. Run
-                // those before generic auto-test discovery so a cold full
-                // `cargo test` probe cannot spend the turn budget before the
-                // deterministic closeout path sees the required evidence.
-                let mut required_validation_passed = true;
-                if !required_validation_commands.is_empty() {
-                    let required_run = RequiredValidationController::run_pending_commands(
-                        &working_dir,
-                        &required_validation_commands,
-                        &successful_validation_commands,
-                        &successful_required_validation_commands,
-                    )
+                let verification =
+                    PostEditVerificationController::run(PostEditVerificationContext {
+                        working_dir: &working_dir,
+                        changed_files: &changed_files,
+                        lsp_manager: self.lsp_manager.as_deref(),
+                        required_validation_commands: &required_validation_commands,
+                        successful_validation_commands: &successful_validation_commands,
+                        successful_required_validation_commands:
+                            &mut successful_required_validation_commands,
+                        evidence_ledger: &mut turn_state.evidence_ledger,
+                        tool_results_text: &mut tool_results_text,
+                        messages: &mut messages,
+                    })
                     .await;
-                    let required_application =
-                        RequiredValidationController::application_for_run(required_run);
-                    required_validation_passed = required_application.passed;
-                    acceptance_evidence.extend(required_application.acceptance_evidence);
-                    post_edit_evidence.extend(required_application.post_edit_evidence.clone());
-                    failed_commands.extend(required_application.failed_commands);
-                    for command in required_application.successful_commands {
-                        successful_required_validation_commands.insert(command);
-                    }
-                    for record in required_application.ledger_records {
-                        turn_state.evidence_ledger.record_validation_result(
-                            "required_validation",
-                            Some(&record.command),
-                            record.success,
-                            &record.dialog_text,
-                        );
-                        if record.success {
-                            debug!("{}", record.dialog_text);
-                        }
-                    }
-                    for text in required_application.post_edit_evidence {
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&text);
-                        messages.push(Message::system(text));
-                    }
-                }
-                let required_validation_covers_tests =
-                    !required_validation_commands.is_empty() && required_validation_passed;
-
-                // ── 自动测试闭环 ──────────────────────────────
-                let manual_validation_after_changes = !successful_validation_commands.is_empty();
-                let test_results = if RequiredValidationController::should_run_default_auto_tests(
-                    &required_validation_commands,
-                ) {
-                    super::auto_verify::run_tests(&working_dir, &changed_files, check_passed).await
-                } else {
-                    Vec::new()
-                };
-                let tests_passed = required_validation_covers_tests
-                    || test_results.iter().all(|r| r.success)
-                    || (manual_validation_after_changes && check_passed);
-                if !tests_passed {
-                    if let Some(source_context) =
-                        verification_source_context(&working_dir, &test_results)
-                    {
-                        post_edit_evidence.push(source_context.clone());
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&source_context);
-                        messages.push(Message::system(source_context));
-                    }
-                }
-                for result in test_results {
-                    let test_text = result.to_dialog_text();
-                    acceptance_evidence.push(test_text.clone());
-                    turn_state.evidence_ledger.record_validation_result(
-                        "auto_test",
-                        Some(&result.command),
-                        result.success,
-                        &test_text,
-                    );
-                    if !result.success {
-                        if manual_validation_after_changes || required_validation_covers_tests {
-                            debug!(
-                                "Ignoring stale automatic test failure after successful required/manual validation command: {}",
-                                result.command
-                            );
-                        } else {
-                            failed_commands.push(result.command.clone());
-                            post_edit_evidence.push(test_text.clone());
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&test_text);
-                            messages.push(Message::system(test_text));
-                        }
-                    } else {
-                        debug!("{}", test_text);
-                    }
-                }
-                if manual_validation_after_changes {
-                    let manual_text = format!(
-                        "[Manual validation passed after code changes]\n{}",
-                        successful_validation_commands
-                            .iter()
-                            .map(|cmd| format!("  $ {}", cmd))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    );
-                    acceptance_evidence.push(manual_text.clone());
-                    post_edit_evidence.push(manual_text.clone());
-                    for command in &successful_validation_commands {
-                        turn_state.evidence_ledger.record_validation_result(
-                            "manual_validation",
-                            Some(command),
-                            true,
-                            &manual_text,
-                        );
-                    }
-                    debug!("{}", manual_text);
-                }
-
-                if let Some(diff_text) =
-                    changed_files_diff_evidence(&working_dir, &changed_files).await
-                {
-                    acceptance_evidence.push(diff_text.clone());
-                    post_edit_evidence.push(diff_text.clone());
-                    turn_state
-                        .evidence_ledger
-                        .record_validation_result("diff", None, true, &diff_text);
-                    debug!("{}", diff_text);
-                }
-
-                // ── 代码自审查 ────────────────────────────────
-                let review_result =
-                    super::code_review::review_changed_files(&working_dir, &changed_files);
-                let review_dialog = review_result.to_dialog_text();
-                turn_state.evidence_ledger.record_validation_result(
-                    "code_review",
-                    None,
-                    review_result.success,
-                    &review_dialog,
-                );
-                acceptance_evidence.push(review_dialog);
-                if !review_result.success {
-                    let review_text = review_result.to_dialog_text();
-                    post_edit_evidence.push(review_text.clone());
-                    tool_results_text.push('\n');
-                    tool_results_text.push_str(&review_text);
-                    messages.push(Message::system(review_text));
-                }
-
-                // ── 编程质量可观测性 ───────────────────────
-                // When all required commands pass, they are stronger evidence
-                // than the repository's default auto-test for that changed
-                // area.
-                let effective_check_passed = check_passed || required_validation_covers_tests;
-                let effective_tests_passed = tests_passed || required_validation_covers_tests;
-                let verify_passed = effective_check_passed
-                    && effective_tests_passed
-                    && required_validation_passed
-                    && review_result.success;
+                let verify_passed = verification.verify_passed;
                 should_closeout_after_verified_change = verify_passed;
                 trace.record(TraceEvent::VerificationCompleted {
                     changed_files: changed_files.len(),
                     passed: verify_passed,
-                    check_passed: effective_check_passed,
-                    tests_passed: effective_tests_passed,
-                    review_passed: review_result.success,
-                    failed_commands: failed_commands.clone(),
+                    check_passed: verification.effective_check_passed,
+                    tests_passed: verification.effective_tests_passed,
+                    review_passed: verification.review_success,
+                    failed_commands: verification.failed_commands.clone(),
                 });
                 let post_edit_reflection =
                     Self::record_verification_repair_context(VerificationRepairContext {
@@ -2628,8 +2419,8 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         task_id: task_bundle.task_id.clone(),
                         changed_files: &changed_files,
                         verify_passed,
-                        post_edit_evidence: &post_edit_evidence,
-                        failed_commands: &failed_commands,
+                        post_edit_evidence: &verification.post_edit_evidence,
+                        failed_commands: &verification.failed_commands,
                         acceptance_repair_attempts: turn_state.acceptance_repair_attempts,
                         tool_results_text: &mut tool_results_text,
                         messages: &mut messages,
@@ -2645,7 +2436,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     &task_bundle,
                     &changed_files,
                     verify_passed,
-                    &acceptance_evidence,
+                    &verification.acceptance_evidence,
                 );
                 trace_stage_validation(&trace, &stage_record);
                 if let Some(feedback) = stage_record.feedback.clone() {
@@ -2656,7 +2447,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         trace: &trace,
                         last_user_preview: last_user_preview.as_str(),
                         task_bundle: &task_bundle,
-                        post_edit_evidence: &post_edit_evidence,
+                        post_edit_evidence: &verification.post_edit_evidence,
                         tool_results_text: &mut tool_results_text,
                         messages: &mut messages,
                     })
@@ -2670,13 +2461,13 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         task_bundle: &mut task_bundle,
                         changed_files: &changed_files,
                         verify_passed,
-                        review_success: review_result.success,
+                        review_success: verification.review_success,
                         required_validation_commands: &required_validation_commands,
-                        failed_commands: &failed_commands,
-                        post_edit_evidence: &post_edit_evidence,
-                        acceptance_evidence: &acceptance_evidence,
-                        required_validation_passed,
-                        check_passed,
+                        failed_commands: &verification.failed_commands,
+                        post_edit_evidence: &verification.post_edit_evidence,
+                        acceptance_evidence: &verification.acceptance_evidence,
+                        required_validation_passed: verification.required_validation_passed,
+                        check_passed: verification.check_passed,
                         acceptance_repair_attempts: &mut turn_state.acceptance_repair_attempts,
                         reserved_repair_rounds: &mut turn_state.reserved_repair_rounds,
                         action_checkpoint_no_change_rounds: &mut action_checkpoint_no_change_rounds,

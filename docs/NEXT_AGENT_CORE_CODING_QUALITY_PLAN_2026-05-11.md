@@ -77,6 +77,19 @@
   targeted `closeout` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1292 passed; 0 failed`).
+- 2026-05-13: Phase A post-edit verification extraction started. Added
+  `src/engine/conversation_loop/post_edit_verification_controller.rs` to own
+  post-edit auto verify, LSP diagnostics, required validation application,
+  auto-test evidence, manual-validation evidence, diff evidence, code-review
+  evidence, and the final verification pass/fail summary. `run_inner` now keeps
+  only the high-level sequencing into reflection, stage validation, guided
+  debugging, and acceptance repair.
+- Validation after the `PostEditVerificationController` first slice:
+  `cargo fmt --check`, targeted `post_edit_verification_controller`,
+  `required_validation`, `closeout`, `route_scoped_tools`, and
+  `verification_source_context` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1293 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
