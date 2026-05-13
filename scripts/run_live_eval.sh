@@ -1280,7 +1280,7 @@ first_write_tool_index = next(
     (
         idx
         for idx, event in enumerate(tool_starts, start=1)
-        if event.get("name") in {"file_edit", "file_write"}
+        if event.get("name") in {"file_edit", "file_write", "file_patch"}
     ),
     None,
 )

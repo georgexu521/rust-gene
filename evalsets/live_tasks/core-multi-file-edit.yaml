@@ -81,7 +81,7 @@ acceptance:
   required_commands:
     - python3 fixtures/core_quality/multifile/test_cart.py
     - rg 'TAX_RATE = 0.0825' fixtures/core_quality/multifile/cart.py
-    - rg 'tax rate: 0.0825' fixtures/core_quality/multifile/pricing.md
+    - "rg 'tax rate: 0.0825' fixtures/core_quality/multifile/pricing.md"
   diff_constraints:
     max_files_changed: 4
     forbidden_paths:
