@@ -120,7 +120,7 @@ fn structured_metadata(tool_call: &ToolCall, result: &ToolResult) -> serde_json:
 
 fn evidence_facts(tool_call: &ToolCall, result: &ToolResult) -> Vec<NormalizedEvidenceFact> {
     let mut facts = match tool_call.name.as_str() {
-        "bash" => bash_evidence_facts(tool_call),
+        "bash" => bash_evidence_facts(tool_call, result),
         "file_read" | "glob" | "grep" => vec![NormalizedEvidenceFact::File],
         "file_write" | "file_edit" | "file_patch" => {
             let mut facts = vec![NormalizedEvidenceFact::File];
@@ -142,8 +142,11 @@ fn evidence_facts(tool_call: &ToolCall, result: &ToolResult) -> Vec<NormalizedEv
     facts
 }
 
-fn bash_evidence_facts(tool_call: &ToolCall) -> Vec<NormalizedEvidenceFact> {
-    let Some(command) = tool_call.arguments["command"].as_str() else {
+fn bash_evidence_facts(tool_call: &ToolCall, result: &ToolResult) -> Vec<NormalizedEvidenceFact> {
+    let Some(command) = tool_call.arguments["command"]
+        .as_str()
+        .or_else(|| bash_result_command(result))
+    else {
         return Vec::new();
     };
     let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
@@ -152,6 +155,15 @@ fn bash_evidence_facts(tool_call: &ToolCall) -> Vec<NormalizedEvidenceFact> {
         facts.push(NormalizedEvidenceFact::Validation);
     }
     facts
+}
+
+fn bash_result_command(result: &ToolResult) -> Option<&str> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("shell_result"))
+        .and_then(|shell| shell.get("command"))
+        .and_then(serde_json::Value::as_str)
 }
 
 #[cfg(test)]
@@ -241,6 +253,34 @@ mod tests {
         assert_eq!(normalized.structured_metadata["success"], true);
         assert_eq!(normalized.structured_metadata["error_code"], "success");
         assert!(normalized.structured_metadata.get("tool_summary").is_some());
+    }
+
+    #[test]
+    fn normalizes_bash_validation_from_result_metadata_when_arguments_are_missing() {
+        let result = ToolResult::success_with_data(
+            "PASS: directory exists",
+            serde_json::json!({
+                "shell_result": {
+                    "command": "if test -d fixtures/core_quality/inspection_target/gex; then echo PASS; else echo FAIL; fi"
+                }
+            }),
+        );
+        let normalized = ToolResultNormalizer::normalize(
+            &ToolCall {
+                id: "call_from_result".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            &result,
+        );
+
+        assert_eq!(
+            normalized.evidence_facts,
+            vec![
+                NormalizedEvidenceFact::Command,
+                NormalizedEvidenceFact::Validation
+            ]
+        );
     }
 
     #[test]

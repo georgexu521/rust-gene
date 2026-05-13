@@ -413,6 +413,9 @@ fn summarize_bash(args: Option<&Value>, run: &ToolRunView) -> String {
         Some(crate::tools::bash_tool::command_classifier::ValidationFamily::RgAssertion) => {
             summarize_search_terminal(run, "Running search assertion", "Ran search assertion")
         }
+        Some(crate::tools::bash_tool::command_classifier::ValidationFamily::ShellAssertion) => {
+            terminal_summary(run, "Running shell assertion", "Ran shell assertion")
+        }
         Some(crate::tools::bash_tool::command_classifier::ValidationFamily::BashSyntax)
         | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PythonCompile)
         | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::ProjectScript)

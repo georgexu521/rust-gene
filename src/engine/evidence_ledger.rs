@@ -346,7 +346,10 @@ impl EvidenceLedger {
     }
 
     fn record_bash_tool_result(&mut self, tool_call: &ToolCall, result: &ToolResult) {
-        let Some(command) = tool_call.arguments["command"].as_str() else {
+        let Some(command) = tool_call.arguments["command"]
+            .as_str()
+            .or_else(|| bash_result_command(result))
+        else {
             return;
         };
         let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
@@ -435,6 +438,15 @@ impl EvidenceLedger {
             summary: preview(&summary),
         });
     }
+}
+
+fn bash_result_command(result: &ToolResult) -> Option<&str> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("shell_result"))
+        .and_then(|shell| shell.get("command"))
+        .and_then(serde_json::Value::as_str)
 }
 
 fn result_summary(result: &ToolResult) -> String {
@@ -661,6 +673,59 @@ mod tests {
         assert_eq!(snapshot.command_facts, 1);
         assert_eq!(snapshot.validation_facts, 1);
         assert_eq!(snapshot.passed_validation_facts, 1);
+        assert_eq!(
+            ledger.runtime_validation_label().as_deref(),
+            Some("passed:1/1")
+        );
+    }
+
+    #[test]
+    fn records_shell_assertion_as_runtime_validation() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call(
+                "bash",
+                serde_json::json!({
+                    "command": "test -d fixtures/core_quality/inspection_target/gex && echo PASS"
+                }),
+            ),
+            &ToolResult::success("PASS: directory exists"),
+        );
+
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.command_facts, 1);
+        assert_eq!(snapshot.validation_facts, 1);
+        assert_eq!(snapshot.passed_validation_facts, 1);
+        assert_eq!(
+            ledger.runtime_validation_label().as_deref(),
+            Some("passed:1/1")
+        );
+    }
+
+    #[test]
+    fn records_bash_validation_from_result_metadata_when_call_arguments_are_missing() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "PASS: directory exists",
+            serde_json::json!({
+                "shell_result": {
+                    "command": "if test -d fixtures/core_quality/inspection_target/gex; then echo PASS; else echo FAIL; fi"
+                }
+            }),
+        );
+
+        ledger.record_tool_result(
+            &ToolCall {
+                id: "call_1".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            &result,
+        );
+
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.command_facts, 1);
+        assert_eq!(snapshot.validation_facts, 1);
         assert_eq!(
             ledger.runtime_validation_label().as_deref(),
             Some("passed:1/1")

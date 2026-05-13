@@ -44,6 +44,7 @@ pub enum ValidationFamily {
     NodeScript,
     ProjectScript,
     RgAssertion,
+    ShellAssertion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +197,9 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
     if is_safe_rg_assertion(command) {
         return Some(ValidationFamily::RgAssertion);
     }
+    if is_safe_shell_assertion(command) {
+        return Some(ValidationFamily::ShellAssertion);
+    }
     if lower.starts_with("bash -n ") || lower.starts_with("sh -n ") {
         Some(ValidationFamily::BashSyntax)
     } else if is_project_validation_script(command) {
@@ -313,6 +317,141 @@ fn is_safe_rg_assertion(command: &str) -> bool {
         && !command.contains("$(")
         && !command.contains('>')
         && !command.contains('<')
+}
+
+fn is_safe_shell_assertion(command: &str) -> bool {
+    let command = command.trim();
+    if is_safe_if_shell_assertion(command) {
+        return true;
+    }
+    if is_safe_and_or_shell_assertion(command) {
+        return true;
+    }
+    if command.is_empty()
+        || command.contains('\n')
+        || command.contains(';')
+        || command.contains('|')
+        || command.contains("||")
+        || command.ends_with('&')
+        || command.contains(" & ")
+        || command.contains('`')
+        || command.contains("$(")
+        || command.contains('>')
+        || command.contains('<')
+    {
+        return false;
+    }
+
+    let (assertion, tail) = command
+        .split_once("&&")
+        .map(|(assertion, tail)| (assertion.trim(), Some(tail.trim())))
+        .unwrap_or((command, None));
+    if let Some(tail) = tail {
+        if !tail.starts_with("echo ") {
+            return false;
+        }
+    }
+
+    let tokens = assertion.split_whitespace().collect::<Vec<_>>();
+    is_safe_test_assertion_tokens(&tokens)
+}
+
+fn is_safe_and_or_shell_assertion(command: &str) -> bool {
+    if command.is_empty()
+        || command.contains('\n')
+        || command.contains(';')
+        || command.contains('|') && !command.contains("||")
+        || command.ends_with('&')
+        || command.contains(" & ")
+        || command.contains('`')
+        || command.contains("$(")
+        || command.contains('>')
+        || command.contains('<')
+    {
+        return false;
+    }
+
+    let Some((assertion, after_then)) = command.split_once("&&") else {
+        return false;
+    };
+    let assertion_tokens = assertion.split_whitespace().collect::<Vec<_>>();
+    if !is_safe_test_assertion_tokens(&assertion_tokens) {
+        return false;
+    }
+    if let Some((then_part, else_part)) = after_then.split_once("||") {
+        is_safe_echo(then_part) && is_safe_echo(else_part)
+    } else {
+        is_safe_echo(after_then)
+    }
+}
+
+fn is_safe_if_shell_assertion(command: &str) -> bool {
+    if command.is_empty()
+        || command.contains('\n')
+        || command.contains('|')
+        || command.contains("&&")
+        || command.contains("||")
+        || command.ends_with('&')
+        || command.contains(" & ")
+        || command.contains('`')
+        || command.contains("$(")
+        || command.contains('>')
+        || command.contains('<')
+    {
+        return false;
+    }
+
+    let Some(rest) = command.strip_prefix("if ") else {
+        return false;
+    };
+    let Some((assertion, after_assertion)) = rest.split_once("; then ") else {
+        return false;
+    };
+    let assertion_tokens = assertion.split_whitespace().collect::<Vec<_>>();
+    if !is_safe_test_assertion_tokens(&assertion_tokens) {
+        return false;
+    }
+
+    if let Some((then_part, after_else)) = after_assertion.split_once("; else ") {
+        let Some((else_part, tail)) = after_else.rsplit_once("; fi") else {
+            return false;
+        };
+        tail.trim().is_empty() && is_safe_echo(then_part) && is_safe_echo(else_part)
+    } else {
+        let Some((then_part, tail)) = after_assertion.rsplit_once("; fi") else {
+            return false;
+        };
+        tail.trim().is_empty() && is_safe_echo(then_part)
+    }
+}
+
+fn is_safe_test_assertion_tokens(tokens: &[&str]) -> bool {
+    match tokens {
+        ["test", flag, path] => is_safe_test_flag(flag) && is_safe_assertion_path(path),
+        ["[", flag, path, "]"] => is_safe_test_flag(flag) && is_safe_assertion_path(path),
+        ["[[", flag, path, "]]"] => is_safe_test_flag(flag) && is_safe_assertion_path(path),
+        _ => false,
+    }
+}
+
+fn is_safe_echo(command: &str) -> bool {
+    let command = command.trim();
+    command.starts_with("echo ") && !command.contains(';')
+}
+
+fn is_safe_test_flag(flag: &str) -> bool {
+    matches!(flag, "-d" | "-e" | "-f" | "-s" | "-x" | "-r" | "-w")
+}
+
+fn is_safe_assertion_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('-')
+        && !path.contains('*')
+        && !path.contains('?')
+        && !path.contains('[')
+        && !path.contains(']')
+        && !path.contains('{')
+        && !path.contains('}')
 }
 
 fn shell_command_category(command: &str) -> ShellCommandCategory {
@@ -615,6 +754,60 @@ mod tests {
         assert_eq!(class.validation_family, Some(ValidationFamily::RgAssertion));
         assert_eq!(class.path_patterns, vec!["src/lib.rs"]);
         assert!(class.safe_for_closeout);
+    }
+
+    #[test]
+    fn classifies_safe_shell_assertions_as_validation() {
+        let class = classify_command("test -d fixtures/core_quality/gex && echo PASS");
+        assert_eq!(class.command_kind, CommandKind::Validation);
+        assert_eq!(class.category, ShellCommandCategory::Validation);
+        assert_eq!(
+            class.validation_family,
+            Some(ValidationFamily::ShellAssertion)
+        );
+        assert!(class
+            .path_patterns
+            .contains(&"fixtures/core_quality/gex".to_string()));
+        assert!(class.safe_for_closeout);
+
+        let bracket = classify_command("[ -f fixtures/core_quality/gex/a.txt ]");
+        assert_eq!(
+            bracket.validation_family,
+            Some(ValidationFamily::ShellAssertion)
+        );
+        assert!(bracket.safe_for_closeout);
+
+        let double_bracket = classify_command("[[ -d fixtures/core_quality/gex ]] && echo PASS");
+        assert_eq!(
+            double_bracket.validation_family,
+            Some(ValidationFamily::ShellAssertion)
+        );
+        assert!(double_bracket.safe_for_closeout);
+
+        let and_or = classify_command(
+            "test -d fixtures/core_quality/gex && echo 'PASS: directory' || echo 'FAIL: directory'",
+        );
+        assert_eq!(
+            and_or.validation_family,
+            Some(ValidationFamily::ShellAssertion)
+        );
+        assert!(and_or.safe_for_closeout);
+
+        let wrapped = classify_command(
+            "if test -f fixtures/core_quality/gex/a.txt; then echo PASS; else echo FAIL; fi",
+        );
+        assert_eq!(
+            wrapped.validation_family,
+            Some(ValidationFamily::ShellAssertion)
+        );
+        assert!(wrapped.safe_for_closeout);
+
+        let unsafe_tail = classify_command("test -f src/lib.rs && rm src/lib.rs");
+        assert_ne!(
+            unsafe_tail.validation_family,
+            Some(ValidationFamily::ShellAssertion)
+        );
+        assert!(!unsafe_tail.safe_for_closeout);
     }
 
     #[test]

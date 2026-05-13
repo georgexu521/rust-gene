@@ -1356,6 +1356,9 @@ cargo check -q
 scripts/run_live_eval.sh --case core-coding-quality --mode agent-run --run-tests --label core-quality
 ```
 
+- 已跑首个 live smoke：`core-quality-smoke-20260513-133437` 的 `core-inspection-grounding` 通过；无 diff、required commands ok、`runtime_diet.validation=passed:4/4`、`closeout_status=passed`、`failure_owner=none`。
+- 该 smoke 先暴露出一个真实 runtime 问题：audit/no-diff 任务已经用 bash 断言验证通过，但 closeout 因没有 file-change validation 仍标成 `not_verified`。已把安全 shell assertions（`test` / `[ ]` / `[[ ]]` / `if test ...` / `&& echo ... || echo ...`）纳入 bash validation family，并让 evidence ledger 在 tool call 参数缺失时从 bash result metadata 取回命令。
+
 任务：
 
 - 建立 `core-coding-quality` eval group，至少包含：

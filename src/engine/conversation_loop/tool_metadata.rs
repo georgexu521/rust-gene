@@ -261,6 +261,9 @@ pub(super) fn tool_execution_start_progress(
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::RgAssertion) => {
                 "Running search assertion"
             }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::ShellAssertion) => {
+                "Running shell assertion"
+            }
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NodeScript) => {
                 "Running Node validation"
             }

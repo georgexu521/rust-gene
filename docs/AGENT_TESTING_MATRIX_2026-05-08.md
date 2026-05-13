@@ -68,6 +68,7 @@ evidence run, and 2026-05-11 provider-reconnect reruns:
 | Latest Batch 6 reconnect reruns | `batch6-reconnect-20260511-132912`, `batch6-reconnect-20260511-133851`, and `batch6-reconnect-20260511-135823`: recommended cases 8, 9, and 10 passed as audit/no-diff checks with required commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. All three runs exercised MiniMax reconnect retry logs. |
 | Latest resume-session rerun | `batch6-harnesssplit-20260511-155208` passed after splitting agent-visible focused commands from harness-only full-suite validation: real `/resume` diff, agent required commands ok, harness full `911 passed; 0 failed`, `acceptance_accepted=True`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest CLI scrollback rerun | `batch6-evidencefix2-20260511-173535` passed after evidence-label and live-eval env alignment: default scrollback CLI evidence was verified with no diff, agent-visible shell/TUI commands and harness full suite passed, `tool_errors=0`, `runtime_diet.validation=passed:2/2`, `closeout_status=passed`, and `failure_owner=none`. The failed precursor `batch6-evidencefix-20260511-171653` showed that empty Moonshot/OpenAI env vars could make agent-run validation diverge from harness validation. |
+| Latest core coding quality smoke | `core-quality-smoke-20260513-133437` passed `core-inspection-grounding` after shell assertion evidence was recorded from bash result metadata: no diff expected, required commands ok, `runtime_diet.validation=passed:4/4`, `closeout_status=passed`, and `failure_owner=none`. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 | Latest skill-promotion rerun | `batch6-smoke-20260510-154614` passed after the earlier provider-blocked rerun, with real diff, `skill_active=true`, `promotion=true`, required commands ok, full `1178 passed; 0 failed`, and `failure_owner=none`. |
@@ -236,6 +237,11 @@ file editing, provider protocol, or rollback behavior. It is intentionally
 smaller and more basic than the 12-case productization suite: the goal is to
 catch failures that make the agent feel worse than Claude Code or opencode on
 ordinary programming tasks.
+
+Current evidence: `core-quality-smoke-20260513-133437` passed
+`core-inspection-grounding` with no diff, required commands ok,
+`runtime_diet.validation=passed:4/4`, `closeout_status=passed`, and
+`failure_owner=none`.
 
 ```bash
 scripts/run_live_eval.sh --list --case core-coding-quality
