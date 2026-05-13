@@ -72,6 +72,7 @@ evidence run, and 2026-05-11 provider-reconnect reruns:
 | Latest terminal install/run smoke | `core-quality-terminal-fix-20260513-141842` passed `core-terminal-install-run` after generated runtime artifacts stopped counting as code changes and prompt-forbidden write tools were kept out of patch synthesis: required commands ok, `first_write_tool_index=none`, `forbidden_tool_uses=none`, empty diff, `runtime_diet.validation=passed:2/2`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest stale-edit smoke | `core-quality-stale-fix-20260513-150307` passed `core-simple-stale-edit` after non-Rust fixture edits stopped triggering full Rust auto-verify: first write was tool call 3 after two file reads, one-line diff, required commands ok, `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest multi-file smoke | `core-quality-multifile-fix2-20260513-152308` passed `core-multi-file-edit` after fixing YAML command quoting and counting `file_patch` as a write signal: read-before-patch, `first_write=4`, code and docs changed together, three required commands passed, `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and `failure_owner=none`. |
+| Latest long-output smoke | `core-quality-long-output-20260513-152851` passed `core-long-output-artifact`: the full 800-line command output was persisted to `fixtures/core_quality/long_output/output.log`, the `ERROR_ANCHOR` line was verified from that artifact, agent output stayed concise at 699 bytes, three required commands passed, `acceptance_accepted=True`, `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and `failure_owner=none`. |
 | Terminal/filesystem grounding | `d025d6a` adds bash exposure diagnostics; `2b1852e` guards false bash-unavailable claims and no-tool local filesystem facts |
 | Grep patch evidence | `3344363` keeps visible grep output as raw source lines, so patch anchors are not polluted by `**...**` display highlighting |
 | Latest skill-promotion rerun | `batch6-smoke-20260510-154614` passed after the earlier provider-blocked rerun, with real diff, `skill_active=true`, `promotion=true`, required commands ok, full `1178 passed; 0 failed`, and `failure_owner=none`. |
@@ -258,6 +259,12 @@ Current evidence:
 - `core-quality-multifile-fix2-20260513-152308` passed
   `core-multi-file-edit` with two files read before a single `file_patch`,
   `first_write=4`, two-file diff, required commands ok,
+  `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and
+  `failure_owner=none`.
+- `core-quality-long-output-20260513-152851` passed
+  `core-long-output-artifact` with full output written to
+  `fixtures/core_quality/long_output/output.log`, the `ERROR_ANCHOR` line
+  verified from the artifact, concise final output, required commands ok,
   `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and
   `failure_owner=none`.
 
