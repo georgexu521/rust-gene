@@ -36,6 +36,7 @@ mod turn_recording;
 mod turn_runtime_state;
 mod validation_runner;
 mod workflow_change_tracker;
+mod workflow_prompt_policy;
 mod workflow_trace;
 
 use action_checkpoint::{
@@ -74,6 +75,7 @@ use validation_runner::shell_output_with_timeout;
 use validation_runner::verification_source_context;
 use validation_runner::RequiredValidationController;
 use workflow_change_tracker::WorkflowChangeTracker;
+use workflow_prompt_policy::WorkflowPromptPolicy;
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
@@ -545,8 +547,9 @@ impl ConversationLoop {
         let required_validation_commands =
             RequiredValidationController::extract_commands(&last_user_preview);
         let no_diff_audit_closeout_allowed =
-            Self::allows_no_diff_audit_closeout(&last_user_preview);
-        let code_write_tools_forbidden = Self::prompt_forbids_code_write_tools(&last_user_preview);
+            WorkflowPromptPolicy::allows_no_diff_audit_closeout(&last_user_preview);
+        let code_write_tools_forbidden =
+            WorkflowPromptPolicy::forbids_code_write_tools(&last_user_preview);
         let turn_index = self
             .trace_store
             .as_ref()
@@ -2478,44 +2481,6 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             pre_executed_results: std::collections::HashMap::new(),
         })
     }
-
-    fn allows_no_diff_audit_closeout(prompt: &str) -> bool {
-        let lower = prompt.to_ascii_lowercase();
-        lower.contains("eval intent: `audit_or_regression_check`")
-            || lower.contains("eval intent: audit_or_regression_check")
-            || lower.contains("eval intent: `stale_or_already_satisfied`")
-            || lower.contains("eval intent: stale_or_already_satisfied")
-            || lower.contains("if the requested behavior is already present")
-            || lower.contains("do not force an arbitrary edit")
-    }
-
-    fn prompt_forbids_code_write_tools(prompt: &str) -> bool {
-        let mut in_forbidden_tools = false;
-        for line in prompt.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("## ") {
-                in_forbidden_tools = trimmed.eq_ignore_ascii_case("## Forbidden tools")
-                    || trimmed.eq_ignore_ascii_case("## Disallowed tools");
-                continue;
-            }
-            if !in_forbidden_tools || !trimmed.starts_with("- ") {
-                continue;
-            }
-            let tool = trimmed
-                .trim_start_matches("- ")
-                .trim()
-                .trim_matches('`')
-                .to_ascii_lowercase();
-            if matches!(tool.as_str(), "file_edit" | "file_write" | "file_patch") {
-                return true;
-            }
-        }
-
-        let lower = prompt.to_ascii_lowercase();
-        lower.contains("do not edit files")
-            || lower.contains("do not change files")
-            || lower.contains("no file edits")
-    }
 }
 
 #[cfg(test)]
@@ -2578,38 +2543,6 @@ mod tests {
                 "cargo test -q -- --test-threads=1",
             ]
         );
-    }
-
-    #[test]
-    fn test_audit_eval_allows_no_diff_closeout() {
-        let audit_prompt = r#"
-# Live coding regression task: memory recall should demote only relevant conflicts
-- Eval intent: `audit_or_regression_check`
-## Closeout requirements
-- This is an audit/regression evaluation. If the requested behavior is already present, prove it with direct evidence and required commands instead of forcing an arbitrary edit.
-"#;
-
-        assert!(ConversationLoop::allows_no_diff_audit_closeout(
-            audit_prompt
-        ));
-        assert!(!ConversationLoop::allows_no_diff_audit_closeout(
-            "- Eval intent: `seeded_code_change`\n- This is a real code-change evaluation."
-        ));
-    }
-
-    #[test]
-    fn test_prompt_forbids_code_write_tools_from_live_eval_block() {
-        let prompt = r#"
-## Forbidden tools
-- file_edit
-- file_write
-- git_push
-"#;
-
-        assert!(ConversationLoop::prompt_forbids_code_write_tools(prompt));
-        assert!(!ConversationLoop::prompt_forbids_code_write_tools(
-            "## Forbidden tools\n- git_push\n"
-        ));
     }
 
     #[test]

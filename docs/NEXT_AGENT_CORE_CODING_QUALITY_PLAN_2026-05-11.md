@@ -141,6 +141,16 @@
   `workflow_change_tracker`, `action_checkpoint`, and `route_scoped_tools`
   tests, `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and
   full `cargo test -q` all passed (`1302 passed; 0 failed`).
+- 2026-05-13: Phase A prompt-policy extraction continued. Added
+  `src/engine/conversation_loop/workflow_prompt_policy.rs` so no-diff
+  audit/regression closeout detection and prompt-level code-write forbiddance
+  are owned by a small tested policy module instead of inline
+  `ConversationLoop` helpers. `run_inner` now reads those policy decisions at
+  turn setup and passes booleans into the existing action-checkpoint path.
+- Validation after the `WorkflowPromptPolicy` slice: `cargo fmt --check`,
+  targeted `workflow_prompt_policy` and `route_scoped_tools` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1303 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
