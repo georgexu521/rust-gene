@@ -1,0 +1,66 @@
+id: core-rollback-product-path
+title: verify file history rollback is a product path
+type: audit
+eval_intent: audit_or_regression_check
+complexity: medium
+risk: medium
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  setup:
+    - cargo test -q rollback -- --test-threads=1
+    - cargo test -q checkpoint -- --test-threads=1
+
+prompt: |
+  验证当前文件修改历史和 `/rollback` 产品路径是否可用。
+
+  要求：
+  - 查看 file change history、checkpoint、rollback handler 相关代码和测试。
+  - 运行 rollback/checkpoint 相关测试。
+  - 如果已有覆盖足够，不要为了制造 diff 改代码；如果发现缺口，再做最小测试或实现补齐。
+  - 最终说明 rollback 覆盖的是普通文件修改路径，还是只覆盖 git/debug fallback。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - file_write
+  - file_patch
+  - git_push
+
+expected_behavior:
+  - Existing rollback coverage is inspected before edits.
+  - No arbitrary diff is created when tests already prove the product path.
+  - Final answer states the evidence and remaining gap clearly.
+
+core_quality:
+  group: core-coding-quality
+  failure_owner_hints:
+    - file_state
+    - tool_contract
+  reference_points:
+    claude_opencode: "Rollback is a first-class recovery path, not a hidden debug fallback."
+    priority_agent_acceptance: "File history rollback should be visible through tests and slash-command behavior."
+
+acceptance:
+  required_commands:
+    - cargo test -q rollback -- --test-threads=1
+    - cargo test -q checkpoint -- --test-threads=1
+  diff_constraints:
+    max_files_changed: 4
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the agent prove existing coverage before deciding whether to edit?
+    - Did the final answer clearly separate file-history rollback from git fallback?
+
+scoring:
+  success: 0.35
+  rollback_coverage: 0.30
+  test_pass: 0.20
+  closeout_quality: 0.15

@@ -1337,6 +1337,25 @@ cargo check -q
 
 目标：用少量稳定场景证明“基本编程质量”是否真的接近 Claude Code / opencode，而不是只看单次 live eval。
 
+当前进展（2026-05-13）：
+
+- `scripts/run_live_eval.sh` 已支持 `--case core-coding-quality` 分组和 `--list --case core-coding-quality`。
+- 已新增 8 个 live task：
+  - `core-inspection-grounding`
+  - `core-simple-stale-edit`
+  - `core-multi-file-edit`
+  - `core-terminal-install-run`
+  - `core-long-output-artifact`
+  - `core-provider-roundtrip`
+  - `core-permission-rejection-recovery`
+  - `core-rollback-product-path`
+- 每个 case 都标注了 `core_quality.failure_owner_hints`、Claude/opencode 借鉴点和 Priority Agent 验收事实。
+- 测试矩阵入口已补到 `docs/AGENT_TESTING_MATRIX_2026-05-08.md`，后续运行统一用：
+
+```bash
+scripts/run_live_eval.sh --case core-coding-quality --mode agent-run --run-tests --label core-quality
+```
+
 任务：
 
 - 建立 `core-coding-quality` eval group，至少包含：
@@ -1349,7 +1368,7 @@ cargo check -q
   - permission rejection：用户拒绝/修正后，模型按反馈恢复。
   - rollback：编辑后回滚并验证文件恢复。
 - 每个 case 标注 failure_owner：
-  - model_reasoning
+  - llm_reasoning
   - tool_contract
   - permission
   - provider_protocol

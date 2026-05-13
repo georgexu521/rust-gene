@@ -1,6 +1,6 @@
 # Agent Testing Matrix
 
-Last updated: 2026-05-11
+Last updated: 2026-05-13
 
 This is the current entry point for testing Priority Agent as a coding agent.
 It organizes the existing local tests, workflow gates, evalsets, live evals, and
@@ -12,6 +12,7 @@ Related documents:
 - `QUALITY_GATES.md`: release and phase gate definitions.
 - `docs/CODING_WORKFLOW_TEST_OPTIMIZATION_PLAN_2026-05-03.md`: historical rationale for the layered workflow gates.
 - `docs/REAL_CODING_CAPABILITY_EVAL_PLAN_2026-05-03.md`: historical rationale for real coding capability evals.
+- `docs/NEXT_AGENT_CORE_CODING_QUALITY_PLAN_2026-05-11.md`: current plan for matching mature coding-agent basics.
 - `docs/benchmarks/live-eval-shortfall-summary.md`: aggregate live-eval shortfall report.
 
 ## Position
@@ -178,6 +179,7 @@ Current live task groups:
 
 | Group | Cases | What they pressure |
 | --- | --- | --- |
+| Core coding quality | `core-inspection-grounding`, `core-simple-stale-edit`, `core-multi-file-edit`, `core-terminal-install-run`, `core-long-output-artifact`, `core-provider-roundtrip`, `core-permission-rejection-recovery`, `core-rollback-product-path` | Basic coding-agent behavior: grounded inspection, read-before-edit, multi-file consistency, terminal install/run, long-output artifacts, provider protocol honesty, user correction after destructive intent, and rollback evidence. |
 | Productive baseline | `backend-todo-api-crud`, `frontend-book-notes-localstorage` | Real small backend/frontend implementation, tests, diff discipline. |
 | Repair and validation | `code-change-verification-repair-loop` | Failed validation must block success closeout and trigger bounded repair. |
 | Eval infrastructure | `live-eval-dashboard-summary` | Shell/script editing, summary evidence, real diff vs plan-only classification. |
@@ -226,6 +228,37 @@ the continuation step is a protocol check and does not require the model to
 repeat an exact Closeout phrase. If it fails, the run is recorded as an
 environment/provider stop instead of spending the full eval timeout. Use
 `--skip-provider-health` only when testing the gate itself.
+
+## Core Coding Quality Suite
+
+Use this suite after changes to the main loop, tool exposure, terminal runtime,
+file editing, provider protocol, or rollback behavior. It is intentionally
+smaller and more basic than the 12-case productization suite: the goal is to
+catch failures that make the agent feel worse than Claude Code or opencode on
+ordinary programming tasks.
+
+```bash
+scripts/run_live_eval.sh --list --case core-coding-quality
+scripts/run_live_eval.sh --case core-coding-quality --mode agent-run --run-tests --label core-quality
+scripts/run_live_eval.sh --mode summary --run-id <run-id>
+```
+
+The cases are split by expected failure owner rather than feature area alone:
+
+| Case | Primary pressure | Expected failure owner when broken |
+| --- | --- | --- |
+| `core-inspection-grounding` | Filesystem facts must come from tool output, not guessed metadata. | `llm_reasoning` / `tool_contract` |
+| `core-simple-stale-edit` | Read before focused single-file edit; stale state must be caught. | `file_state` / `llm_reasoning` |
+| `core-multi-file-edit` | Code and docs change together through tracked file tools. | `file_state` / `tool_contract` |
+| `core-terminal-install-run` | Bash should inspect, install a local package, and run it. | `terminal_runtime` / `llm_reasoning` |
+| `core-long-output-artifact` | Long output should be persisted and summarized from an artifact. | `terminal_runtime` / `tool_contract` |
+| `core-provider-roundtrip` | Provider chat/tool-call/tool-result evidence must not be fabricated. | `provider_protocol` / `harness` |
+| `core-permission-rejection-recovery` | User rejection of a destructive cleanup must be honored. | `permission` / `llm_reasoning` |
+| `core-rollback-product-path` | File-history rollback is verified as product behavior. | `file_state` / `tool_contract` |
+
+Do not use this suite as a replacement for the 12-case recommended suite. Use it
+as a fast regression layer for the basic programming behaviors the user will
+notice immediately.
 
 | Case | Current evidence | Next action |
 | --- | --- | --- |

@@ -34,11 +34,22 @@ RECOMMENDED_CASES=(
   cli-scrollback-polish
 )
 
+CORE_CODING_QUALITY_CASES=(
+  core-inspection-grounding
+  core-simple-stale-edit
+  core-multi-file-edit
+  core-terminal-install-run
+  core-long-output-artifact
+  core-provider-roundtrip
+  core-permission-rejection-recovery
+  core-rollback-product-path
+)
+
 usage() {
   cat <<'EOF'
 Usage:
   scripts/run_live_eval.sh --list
-  scripts/run_live_eval.sh --case <id|recommended|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
+  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
   scripts/run_live_eval.sh --mode summary --run-id <id>
 
 Modes:
@@ -51,8 +62,8 @@ Modes:
   summary   Generate docs/benchmarks/live-<run-id>/summary.md.
 
 Options:
-  --case ID          Live task id, "recommended", or "all".
-                     With --list, "recommended" lists only the recommended suite.
+  --case ID          Live task id, "recommended", "core-coding-quality", or "all".
+                     With --list, a suite name lists only that suite.
   --mode MODE        list, prepare, api-plan, agent-run, collect, or full.
   --workdir DIR      Existing task worktree for collect mode.
   --label LABEL      Report/run label (default: live-eval).
@@ -356,6 +367,34 @@ recommended_task_files() {
   return "$missing"
 }
 
+core_coding_quality_task_files() {
+  local id file missing=0
+  for id in "${CORE_CODING_QUALITY_CASES[@]}"; do
+    if file="$(find_task_file "$id")"; then
+      echo "$file"
+    else
+      echo "Core coding quality live task missing: $id" >&2
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
+task_group_files() {
+  local group="$1"
+  case "$group" in
+    recommended)
+      recommended_task_files
+      ;;
+    core-coding-quality)
+      core_coding_quality_task_files
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 print_task_table_header() {
   printf '%-36s %-12s %-26s %-10s %s\n' \
     id type eval_intent risk title
@@ -375,7 +414,19 @@ print_task_table_row() {
 
 list_recommended_tasks() {
   local files file
-  if ! files="$(recommended_task_files)"; then
+  if ! files="$(task_group_files recommended)"; then
+    return 1
+  fi
+  print_task_table_header
+  for file in $files; do
+    print_task_table_row "$file"
+  done
+}
+
+list_task_group() {
+  local group="$1"
+  local files file
+  if ! files="$(task_group_files "$group")"; then
     return 1
   fi
   print_task_table_header
@@ -1863,9 +1914,9 @@ run_one() {
 
 main() {
   if [[ "$MODE" == "list" ]]; then
-    if [[ "$CASE_ID" == "recommended" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" ]]; then
       need_yaml
-      list_recommended_tasks
+      list_task_group "$CASE_ID"
     else
       list_tasks
     fi
@@ -1888,10 +1939,10 @@ main() {
 
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
 
-  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" ]]; then
+  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" ]]; then
     local file files failures=0
-    if [[ "$CASE_ID" == "recommended" ]]; then
-      if ! files="$(recommended_task_files)"; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" ]]; then
+      if ! files="$(task_group_files "$CASE_ID")"; then
         exit 1
       fi
     else
