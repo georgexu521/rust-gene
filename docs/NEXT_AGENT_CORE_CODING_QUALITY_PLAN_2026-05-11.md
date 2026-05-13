@@ -55,6 +55,18 @@
   `required-validation-application-20260513-190445` passed
   `core-permission-rejection-recovery` with `runtime_diet.validation=passed:5/5`
   and `failure_owner=none`.
+- 2026-05-13: Phase A `ToolTurnController` extraction started. Added
+  `src/engine/conversation_loop/tool_turn_controller.rs` to own the common
+  completed-tool append path: provider tool-result normalization, evidence
+  recording, message append, transcript append, and tool-result runtime-diet
+  accounting. `run_inner` still owns per-result behavior such as companion
+  context notes, failed-tool recovery, changed-file tracking, and required
+  validation matching.
+- Validation after the `ToolTurnController` first slice: `cargo fmt --check`,
+  targeted `tool_turn_controller`, `tool_result`, `context_budget`, and
+  `closeout` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1291 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

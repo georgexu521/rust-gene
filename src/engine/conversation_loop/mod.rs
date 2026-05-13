@@ -28,6 +28,7 @@ mod tool_execution_controller;
 mod tool_metadata;
 mod tool_orchestrator;
 mod tool_result_controller;
+mod tool_turn_controller;
 mod turn_recording;
 mod turn_runtime_state;
 mod validation_runner;
@@ -55,7 +56,7 @@ use tool_execution_controller::{
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
-use tool_result_controller::append_provider_tool_result;
+use tool_turn_controller::{ToolTurnAppendContext, ToolTurnController};
 use turn_recording::record_recovery_plan;
 use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
@@ -1556,19 +1557,17 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 successful_required_validation_commands.clear();
             }
             for (tc, result) in tool_batch.results_mut().iter_mut() {
-                let normalized = append_provider_tool_result(
+                ToolTurnController::append_tool_result(
                     tc,
                     result,
-                    &mut turn_state.evidence_ledger,
-                    &mut tool_results_text,
-                    &mut messages,
+                    ToolTurnAppendContext {
+                        evidence_ledger: &mut turn_state.evidence_ledger,
+                        runtime_diet: &mut turn_state.runtime_diet,
+                        tool_results_text: &mut tool_results_text,
+                        messages: &mut messages,
+                    },
                 )
                 .await;
-                let result_budget = ContextBudgetController::observe_tool_result(&normalized);
-                ContextBudgetController::record_tool_result_runtime_diet(
-                    &mut turn_state.runtime_diet,
-                    &result_budget,
-                );
 
                 if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                     if let Some(note) = companion_context::companion_context_note(
@@ -1957,20 +1956,17 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             })
                             .await;
                             for (tc, result) in synthesized_batch.results_mut().iter_mut() {
-                                let normalized = append_provider_tool_result(
+                                ToolTurnController::append_tool_result(
                                     tc,
                                     result,
-                                    &mut turn_state.evidence_ledger,
-                                    &mut tool_results_text,
-                                    &mut messages,
+                                    ToolTurnAppendContext {
+                                        evidence_ledger: &mut turn_state.evidence_ledger,
+                                        runtime_diet: &mut turn_state.runtime_diet,
+                                        tool_results_text: &mut tool_results_text,
+                                        messages: &mut messages,
+                                    },
                                 )
                                 .await;
-                                let result_budget =
-                                    ContextBudgetController::observe_tool_result(&normalized);
-                                ContextBudgetController::record_tool_result_runtime_diet(
-                                    &mut turn_state.runtime_diet,
-                                    &result_budget,
-                                );
                                 if result.success && Self::is_code_write_tool_name(&tc.name) {
                                     action_checkpoint_requires_patch_before_validation = false;
                                     if let Some(path) = tc.arguments["path"].as_str() {
@@ -2110,20 +2106,17 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             })
                             .await;
                             for (tc, result) in synthesized_batch.results_mut().iter_mut() {
-                                let normalized = append_provider_tool_result(
+                                ToolTurnController::append_tool_result(
                                     tc,
                                     result,
-                                    &mut turn_state.evidence_ledger,
-                                    &mut tool_results_text,
-                                    &mut messages,
+                                    ToolTurnAppendContext {
+                                        evidence_ledger: &mut turn_state.evidence_ledger,
+                                        runtime_diet: &mut turn_state.runtime_diet,
+                                        tool_results_text: &mut tool_results_text,
+                                        messages: &mut messages,
+                                    },
                                 )
                                 .await;
-                                let result_budget =
-                                    ContextBudgetController::observe_tool_result(&normalized);
-                                ContextBudgetController::record_tool_result_runtime_diet(
-                                    &mut turn_state.runtime_diet,
-                                    &result_budget,
-                                );
                                 if result.success {
                                     any_tool_success = true;
                                 }
