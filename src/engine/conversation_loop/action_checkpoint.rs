@@ -1,6 +1,45 @@
 use super::ConversationLoop;
 use std::collections::HashSet;
 
+pub(super) struct ProgressCheckpointRequest {
+    pub(super) no_diff_audit_closeout_allowed: bool,
+    pub(super) has_worktree_changes: bool,
+    pub(super) has_successful_validation_commands: bool,
+    pub(super) no_code_progress_rounds: usize,
+    pub(super) action_checkpoint_active: bool,
+    pub(super) action_checkpoint_lookup_count: usize,
+    pub(super) action_checkpoint_no_change_rounds: usize,
+    pub(super) no_diff_audit_validation_checkpoint_sent: bool,
+    pub(super) code_write_tools_forbidden: bool,
+    pub(super) code_write_forbidden_checkpoint_sent: bool,
+    pub(super) used_action_checkpoint_lookup: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProgressCheckpointAction {
+    None,
+    AuditNoDiffValidation,
+    ExistingDiffNeedsRepair { no_code_progress_rounds: usize },
+    ProgressReminder { no_code_progress_rounds: usize },
+    EnterActionCheckpoint { no_code_progress_rounds: usize },
+    CodeWriteForbidden,
+    FocusedLookupNotice { exhausted: bool },
+    FocusedRepairStalled,
+}
+
+pub(super) struct ProgressCheckpointDecision {
+    pub(super) action: ProgressCheckpointAction,
+    pub(super) no_code_progress_rounds: usize,
+    pub(super) action_checkpoint_active: bool,
+    pub(super) action_checkpoint_lookup_count: usize,
+    pub(super) action_checkpoint_no_change_rounds: usize,
+    pub(super) no_diff_audit_validation_checkpoint_sent: bool,
+    pub(super) code_write_forbidden_checkpoint_sent: bool,
+    pub(super) reset_file_edit_failure_retry: bool,
+    pub(super) force_patch_synthesis_after_no_change: bool,
+    pub(super) force_patch_synthesis_reason: Option<&'static str>,
+}
+
 pub(super) struct FocusedRepairActionRequest<'a> {
     pub(super) action_checkpoint_active: bool,
     pub(super) any_tool_success: bool,
@@ -20,6 +59,131 @@ pub(super) struct FocusedRepairActionProposal {
     pub(super) trace_error: String,
     pub(super) fallback_owner: &'static str,
     pub(super) fallback_reason: String,
+}
+
+pub(super) struct ProgressCheckpointController;
+
+impl ProgressCheckpointController {
+    pub(super) fn evaluate_read_only_success(
+        request: ProgressCheckpointRequest,
+    ) -> ProgressCheckpointDecision {
+        let mut no_code_progress_rounds = request.no_code_progress_rounds;
+        let mut action_checkpoint_active = request.action_checkpoint_active;
+        let mut action_checkpoint_lookup_count = request.action_checkpoint_lookup_count;
+        let mut action_checkpoint_no_change_rounds = request.action_checkpoint_no_change_rounds;
+        let mut no_diff_audit_validation_checkpoint_sent =
+            request.no_diff_audit_validation_checkpoint_sent;
+        let mut code_write_forbidden_checkpoint_sent = request.code_write_forbidden_checkpoint_sent;
+        let mut reset_file_edit_failure_retry = false;
+        let mut force_patch_synthesis_after_no_change = false;
+        let mut force_patch_synthesis_reason = None;
+        let mut activated_checkpoint_this_round = false;
+        let mut action = ProgressCheckpointAction::None;
+
+        if (request.no_diff_audit_closeout_allowed || request.has_worktree_changes)
+            && request.has_successful_validation_commands
+        {
+            no_code_progress_rounds = 0;
+            action_checkpoint_active = false;
+            action_checkpoint_no_change_rounds = 0;
+            action_checkpoint_lookup_count = 0;
+        } else {
+            no_code_progress_rounds += 1;
+        }
+
+        if request.no_diff_audit_closeout_allowed && !request.has_worktree_changes {
+            if no_code_progress_rounds >= 2
+                && !action_checkpoint_active
+                && !no_diff_audit_validation_checkpoint_sent
+            {
+                action = ProgressCheckpointAction::AuditNoDiffValidation;
+                no_diff_audit_validation_checkpoint_sent = true;
+                no_code_progress_rounds = 0;
+            }
+        } else if !request.code_write_tools_forbidden
+            && request.has_worktree_changes
+            && !request.has_successful_validation_commands
+            && no_code_progress_rounds >= 2
+            && !action_checkpoint_active
+        {
+            action = ProgressCheckpointAction::ExistingDiffNeedsRepair {
+                no_code_progress_rounds,
+            };
+            action_checkpoint_active = true;
+            action_checkpoint_lookup_count =
+                ConversationLoop::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET;
+            reset_file_edit_failure_retry = true;
+            action_checkpoint_no_change_rounds = 2;
+            force_patch_synthesis_after_no_change = true;
+            force_patch_synthesis_reason =
+                Some("existing diff still needs repair after repeated read-only rounds");
+            activated_checkpoint_this_round = true;
+        } else if !request.code_write_tools_forbidden
+            && no_code_progress_rounds == 2
+            && !action_checkpoint_active
+        {
+            action = ProgressCheckpointAction::ProgressReminder {
+                no_code_progress_rounds,
+            };
+        } else if !request.code_write_tools_forbidden
+            && no_code_progress_rounds >= 3
+            && !action_checkpoint_active
+        {
+            action = ProgressCheckpointAction::EnterActionCheckpoint {
+                no_code_progress_rounds,
+            };
+            action_checkpoint_active = true;
+            action_checkpoint_lookup_count = 0;
+            reset_file_edit_failure_retry = true;
+            action_checkpoint_no_change_rounds = 2;
+            force_patch_synthesis_after_no_change = false;
+            force_patch_synthesis_reason = None;
+            activated_checkpoint_this_round = true;
+        } else if request.code_write_tools_forbidden
+            && no_code_progress_rounds >= 2
+            && !code_write_forbidden_checkpoint_sent
+        {
+            action = ProgressCheckpointAction::CodeWriteForbidden;
+            code_write_forbidden_checkpoint_sent = true;
+            no_code_progress_rounds = 0;
+        } else if action_checkpoint_active && request.used_action_checkpoint_lookup {
+            action_checkpoint_lookup_count = (action_checkpoint_lookup_count + 1)
+                .min(ConversationLoop::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET);
+            action_checkpoint_no_change_rounds = 0;
+            activated_checkpoint_this_round = true;
+            let exhausted = action_checkpoint_lookup_count
+                >= ConversationLoop::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET;
+            action = ProgressCheckpointAction::FocusedLookupNotice { exhausted };
+            if exhausted {
+                action_checkpoint_no_change_rounds = 1;
+                force_patch_synthesis_after_no_change = true;
+                force_patch_synthesis_reason = Some("focused repair lookup budget exhausted");
+            }
+        }
+
+        if action_checkpoint_active && !activated_checkpoint_this_round {
+            action_checkpoint_no_change_rounds += 1;
+            if action_checkpoint_no_change_rounds >= 3 {
+                action = ProgressCheckpointAction::FocusedRepairStalled;
+                force_patch_synthesis_after_no_change = true;
+                force_patch_synthesis_reason =
+                    Some("focused repair lookup did not produce a patch");
+            }
+        }
+
+        ProgressCheckpointDecision {
+            action,
+            no_code_progress_rounds,
+            action_checkpoint_active,
+            action_checkpoint_lookup_count,
+            action_checkpoint_no_change_rounds,
+            no_diff_audit_validation_checkpoint_sent,
+            code_write_forbidden_checkpoint_sent,
+            reset_file_edit_failure_retry,
+            force_patch_synthesis_after_no_change,
+            force_patch_synthesis_reason,
+        }
+    }
 }
 
 impl ConversationLoop {
@@ -297,5 +461,120 @@ impl ConversationLoop {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn progress_request() -> ProgressCheckpointRequest {
+        ProgressCheckpointRequest {
+            no_diff_audit_closeout_allowed: false,
+            has_worktree_changes: false,
+            has_successful_validation_commands: false,
+            no_code_progress_rounds: 0,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_no_change_rounds: 0,
+            no_diff_audit_validation_checkpoint_sent: false,
+            code_write_tools_forbidden: false,
+            code_write_forbidden_checkpoint_sent: false,
+            used_action_checkpoint_lookup: false,
+        }
+    }
+
+    #[test]
+    fn audit_no_diff_validation_resets_rounds_and_marks_sent() {
+        let decision =
+            ProgressCheckpointController::evaluate_read_only_success(ProgressCheckpointRequest {
+                no_diff_audit_closeout_allowed: true,
+                no_code_progress_rounds: 1,
+                ..progress_request()
+            });
+
+        assert_eq!(
+            decision.action,
+            ProgressCheckpointAction::AuditNoDiffValidation
+        );
+        assert_eq!(decision.no_code_progress_rounds, 0);
+        assert!(decision.no_diff_audit_validation_checkpoint_sent);
+        assert!(!decision.force_patch_synthesis_after_no_change);
+    }
+
+    #[test]
+    fn existing_diff_repair_enters_patch_synthesis() {
+        let decision =
+            ProgressCheckpointController::evaluate_read_only_success(ProgressCheckpointRequest {
+                has_worktree_changes: true,
+                no_code_progress_rounds: 1,
+                ..progress_request()
+            });
+
+        assert_eq!(
+            decision.action,
+            ProgressCheckpointAction::ExistingDiffNeedsRepair {
+                no_code_progress_rounds: 2
+            }
+        );
+        assert!(decision.action_checkpoint_active);
+        assert_eq!(
+            decision.action_checkpoint_lookup_count,
+            ConversationLoop::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET
+        );
+        assert_eq!(decision.action_checkpoint_no_change_rounds, 2);
+        assert!(decision.reset_file_edit_failure_retry);
+        assert!(decision.force_patch_synthesis_after_no_change);
+        assert_eq!(
+            decision.force_patch_synthesis_reason,
+            Some("existing diff still needs repair after repeated read-only rounds")
+        );
+    }
+
+    #[test]
+    fn focused_lookup_exhaustion_forces_patch_synthesis() {
+        let decision =
+            ProgressCheckpointController::evaluate_read_only_success(ProgressCheckpointRequest {
+                action_checkpoint_active: true,
+                action_checkpoint_lookup_count: 1,
+                used_action_checkpoint_lookup: true,
+                ..progress_request()
+            });
+
+        assert_eq!(
+            decision.action,
+            ProgressCheckpointAction::FocusedLookupNotice { exhausted: true }
+        );
+        assert_eq!(
+            decision.action_checkpoint_lookup_count,
+            ConversationLoop::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET
+        );
+        assert_eq!(decision.action_checkpoint_no_change_rounds, 1);
+        assert!(decision.force_patch_synthesis_after_no_change);
+        assert_eq!(
+            decision.force_patch_synthesis_reason,
+            Some("focused repair lookup budget exhausted")
+        );
+    }
+
+    #[test]
+    fn focused_repair_stalled_forces_patch_synthesis() {
+        let decision =
+            ProgressCheckpointController::evaluate_read_only_success(ProgressCheckpointRequest {
+                action_checkpoint_active: true,
+                action_checkpoint_no_change_rounds: 2,
+                ..progress_request()
+            });
+
+        assert_eq!(
+            decision.action,
+            ProgressCheckpointAction::FocusedRepairStalled
+        );
+        assert_eq!(decision.action_checkpoint_no_change_rounds, 3);
+        assert!(decision.force_patch_synthesis_after_no_change);
+        assert_eq!(
+            decision.force_patch_synthesis_reason,
+            Some("focused repair lookup did not produce a patch")
+        );
     }
 }

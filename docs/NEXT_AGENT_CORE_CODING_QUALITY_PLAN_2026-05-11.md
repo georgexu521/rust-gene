@@ -113,6 +113,20 @@
   `closeout`, and `post_edit_repair_controller` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1297 passed; 0 failed`).
+- 2026-05-13: Phase A action-checkpoint progress extraction started. Added
+  `ProgressCheckpointController` in
+  `src/engine/conversation_loop/action_checkpoint.rs` to own the read-only
+  no-progress state transition after a successful tool round: no-diff audit
+  validation checkpoint, existing-diff repair escalation, progress reminder,
+  action checkpoint entry, code-write-forbidden checkpoint, focused lookup
+  budget exhaustion, and focused repair stall detection. `run_inner` now maps
+  the controller decision to existing trace/system-message side effects instead
+  of mutating checkpoint counters inline.
+- Validation after the `ProgressCheckpointController` first slice:
+  `cargo fmt --check`, targeted `action_checkpoint`, `route_scoped_tools`,
+  `post_edit_repair_controller`, and `closeout` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1301 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

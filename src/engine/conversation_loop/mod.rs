@@ -37,7 +37,10 @@ mod turn_runtime_state;
 mod validation_runner;
 mod workflow_trace;
 
-use action_checkpoint::FocusedRepairActionRequest;
+use action_checkpoint::{
+    FocusedRepairActionRequest, ProgressCheckpointAction, ProgressCheckpointController,
+    ProgressCheckpointRequest,
+};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
@@ -1686,7 +1689,6 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             let mut force_patch_synthesis_after_no_change = false;
             let mut force_patch_synthesis_reason: Option<&'static str> = None;
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-                let mut activated_checkpoint_this_round = false;
                 if successful_write_tool {
                     no_code_progress_rounds = 0;
                     action_checkpoint_no_change_rounds = 0;
@@ -1696,21 +1698,42 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 } else if used_write_tool {
                     action_checkpoint_requires_patch_before_validation = true;
                 } else if any_tool_success && !used_write_tool {
-                    if (no_diff_audit_closeout_allowed || has_worktree_changes)
-                        && !successful_validation_commands.is_empty()
-                    {
-                        no_code_progress_rounds = 0;
-                        action_checkpoint_active = false;
-                        action_checkpoint_no_change_rounds = 0;
-                        action_checkpoint_lookup_count = 0;
-                    } else {
-                        no_code_progress_rounds += 1;
+                    let decision = ProgressCheckpointController::evaluate_read_only_success(
+                        ProgressCheckpointRequest {
+                            no_diff_audit_closeout_allowed,
+                            has_worktree_changes,
+                            has_successful_validation_commands: !successful_validation_commands
+                                .is_empty(),
+                            no_code_progress_rounds,
+                            action_checkpoint_active,
+                            action_checkpoint_lookup_count,
+                            action_checkpoint_no_change_rounds,
+                            no_diff_audit_validation_checkpoint_sent,
+                            code_write_tools_forbidden,
+                            code_write_forbidden_checkpoint_sent,
+                            used_action_checkpoint_lookup,
+                        },
+                    );
+
+                    no_code_progress_rounds = decision.no_code_progress_rounds;
+                    action_checkpoint_active = decision.action_checkpoint_active;
+                    action_checkpoint_lookup_count = decision.action_checkpoint_lookup_count;
+                    action_checkpoint_no_change_rounds =
+                        decision.action_checkpoint_no_change_rounds;
+                    no_diff_audit_validation_checkpoint_sent =
+                        decision.no_diff_audit_validation_checkpoint_sent;
+                    code_write_forbidden_checkpoint_sent =
+                        decision.code_write_forbidden_checkpoint_sent;
+                    if decision.reset_file_edit_failure_retry {
+                        file_edit_failure_retry_used = false;
                     }
-                    if no_diff_audit_closeout_allowed && !has_worktree_changes {
-                        if no_code_progress_rounds >= 2
-                            && !action_checkpoint_active
-                            && !no_diff_audit_validation_checkpoint_sent
-                        {
+                    force_patch_synthesis_after_no_change =
+                        decision.force_patch_synthesis_after_no_change;
+                    force_patch_synthesis_reason = decision.force_patch_synthesis_reason;
+
+                    match decision.action {
+                        ProgressCheckpointAction::None => {}
+                        ProgressCheckpointAction::AuditNoDiffValidation => {
                             let checkpoint = "Audit/regression checkpoint: this task allows a no-diff closeout when the requested behavior is already present. Do not force an arbitrary edit. Run the required validation commands now; if they pass, provide a Closeout with direct evidence and changed files as none. If a concrete missing behavior is proven, then make the smallest focused edit."
                                 .to_string();
                             trace.record(TraceEvent::WorkflowFallback {
@@ -1720,153 +1743,109 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             messages.push(Message::system(checkpoint.clone()));
                             tool_results_text.push('\n');
                             tool_results_text.push_str(&checkpoint);
-                            no_diff_audit_validation_checkpoint_sent = true;
-                            no_code_progress_rounds = 0;
                         }
-                    } else if !code_write_tools_forbidden
-                        && has_worktree_changes
-                        && successful_validation_commands.is_empty()
-                        && no_code_progress_rounds >= 2
-                        && !action_checkpoint_active
-                    {
-                        if code_workflow.activate_trigger(
-                            crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
-                        ) {
-                            trace_adaptive_workflow_trigger(
-                                &trace,
+                        ProgressCheckpointAction::ExistingDiffNeedsRepair {
+                            no_code_progress_rounds: rounds,
+                        } => {
+                            if code_workflow.activate_trigger(
                                 crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
-                                &code_workflow,
+                            ) {
+                                trace_adaptive_workflow_trigger(
+                                    &trace,
+                                    crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
+                                    &code_workflow,
+                                );
+                                trace.record(TraceEvent::WorkflowFallback {
+                                    error:
+                                        "adaptive workflow trigger activated: repeated_no_code_progress"
+                                            .to_string(),
+                                });
+                            }
+                            let checkpoint = format!(
+                                "Workflow acceptance repair checkpoint: this {:?} task already has code changes, but {} consecutive successful tool rounds made no additional edit. Use the evidence already gathered to synthesize the smallest remaining file_edit/file_write/file_patch change now. If multiple independent acceptance-critical bypasses are visible, fix them together; otherwise stop with a Closeout status of not_verified and name the blocker.",
+                                route.workflow, rounds
                             );
                             trace.record(TraceEvent::WorkflowFallback {
                                 error:
-                                    "adaptive workflow trigger activated: repeated_no_code_progress"
+                                    "existing diff still needs repair; entering patch synthesis after repeated read-only rounds"
                                         .to_string(),
                             });
+                            messages.push(Message::system(checkpoint.clone()));
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&checkpoint);
                         }
-                        let checkpoint = format!(
-                            "Workflow acceptance repair checkpoint: this {:?} task already has code changes, but {} consecutive successful tool rounds made no additional edit. Use the evidence already gathered to synthesize the smallest remaining file_edit/file_write/file_patch change now. If multiple independent acceptance-critical bypasses are visible, fix them together; otherwise stop with a Closeout status of not_verified and name the blocker.",
-                            route.workflow, no_code_progress_rounds
-                        );
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error:
-                                "existing diff still needs repair; entering patch synthesis after repeated read-only rounds"
+                        ProgressCheckpointAction::ProgressReminder {
+                            no_code_progress_rounds: rounds,
+                        } => {
+                            let lookup_rule = Self::targeted_lookup_budget_rule(0);
+                            let checkpoint = format!(
+                                "Workflow progress checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. Keep investigation focused: on the next response either make the smallest safe file_edit/file_write/file_patch change, or use the focused lookup budget if a required symbol, test, or call site is still missing. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates.",
+                                route.workflow, rounds, lookup_rule
+                            );
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error: "code-change task needs an edit after repeated inspection"
                                     .to_string(),
-                        });
-                        messages.push(Message::system(checkpoint.clone()));
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&checkpoint);
-                        action_checkpoint_active = true;
-                        action_checkpoint_lookup_count =
-                            Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET;
-                        file_edit_failure_retry_used = false;
-                        action_checkpoint_no_change_rounds = 2;
-                        force_patch_synthesis_after_no_change = true;
-                        force_patch_synthesis_reason = Some(
-                            "existing diff still needs repair after repeated read-only rounds",
-                        );
-                        activated_checkpoint_this_round = true;
-                    } else if !code_write_tools_forbidden
-                        && no_code_progress_rounds == 2
-                        && !action_checkpoint_active
-                    {
-                        let lookup_rule = Self::targeted_lookup_budget_rule(0);
-                        let checkpoint = format!(
-                            "Workflow progress checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. Keep investigation focused: on the next response either make the smallest safe file_edit/file_write/file_patch change, or use the focused lookup budget if a required symbol, test, or call site is still missing. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates.",
-                            route.workflow, no_code_progress_rounds, lookup_rule
-                        );
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "code-change task needs an edit after repeated inspection"
-                                .to_string(),
-                        });
-                        messages.push(Message::system(checkpoint.clone()));
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&checkpoint);
-                    } else if !code_write_tools_forbidden
-                        && no_code_progress_rounds >= 3
-                        && !action_checkpoint_active
-                    {
-                        if code_workflow.activate_trigger(
-                            crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
-                        ) {
-                            trace_adaptive_workflow_trigger(
-                                &trace,
+                            });
+                            messages.push(Message::system(checkpoint.clone()));
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&checkpoint);
+                        }
+                        ProgressCheckpointAction::EnterActionCheckpoint {
+                            no_code_progress_rounds: rounds,
+                        } => {
+                            if code_workflow.activate_trigger(
                                 crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
-                                &code_workflow,
+                            ) {
+                                trace_adaptive_workflow_trigger(
+                                    &trace,
+                                    crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
+                                    &code_workflow,
+                                );
+                                trace.record(TraceEvent::WorkflowFallback {
+                                    error:
+                                        "adaptive workflow trigger activated: repeated_no_code_progress"
+                                            .to_string(),
+                                });
+                            }
+                            let lookup_rule = Self::targeted_lookup_budget_rule(0);
+                            let checkpoint = format!(
+                                "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not call glob/project_list or repeat broad inspection. If a specific symbol, test, or call site is still missing, use the focused lookup budget, then patch. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
+                                route.workflow, rounds, lookup_rule
                             );
                             trace.record(TraceEvent::WorkflowFallback {
-                                error:
-                                    "adaptive workflow trigger activated: repeated_no_code_progress"
-                                        .to_string(),
+                                error: "code-change task made no edit after repeated inspection"
+                                    .to_string(),
+                            });
+                            messages.push(Message::system(checkpoint.clone()));
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&checkpoint);
+                        }
+                        ProgressCheckpointAction::CodeWriteForbidden => {
+                            let checkpoint = "Tool-scope checkpoint: this request forbids code-write tools. Do not synthesize or call file_edit, file_write, or file_patch. Use the exposed read/terminal tools to gather direct evidence, run required validation when present, then close out with changed files as none unless a concrete blocker prevents validation."
+                                .to_string();
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error: "code-write tools are forbidden; validation/closeout should replace patch synthesis"
+                                    .to_string(),
+                            });
+                            messages.push(Message::system(checkpoint.clone()));
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&checkpoint);
+                        }
+                        ProgressCheckpointAction::FocusedLookupNotice { exhausted } => {
+                            let lookup_notice = if exhausted {
+                                "focused repair targeted lookup budget used; next checkpoint request will expose patch tools only"
+                            } else {
+                                "focused repair targeted lookup used; one targeted lookup remains before patch-only mode"
+                            };
+                            trace.record(TraceEvent::WorkflowFallback {
+                                error: lookup_notice.to_string(),
                             });
                         }
-                        let lookup_rule = Self::targeted_lookup_budget_rule(0);
-                        let checkpoint = format!(
-                            "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not call glob/project_list or repeat broad inspection. If a specific symbol, test, or call site is still missing, use the focused lookup budget, then patch. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
-                            route.workflow, no_code_progress_rounds, lookup_rule
-                        );
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "code-change task made no edit after repeated inspection"
-                                .to_string(),
-                        });
-                        messages.push(Message::system(checkpoint.clone()));
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&checkpoint);
-                        action_checkpoint_active = true;
-                        action_checkpoint_lookup_count = 0;
-                        file_edit_failure_retry_used = false;
-                        action_checkpoint_no_change_rounds = 2;
-                        force_patch_synthesis_after_no_change = false;
-                        force_patch_synthesis_reason = None;
-                        activated_checkpoint_this_round = true;
-                    } else if code_write_tools_forbidden
-                        && no_code_progress_rounds >= 2
-                        && !code_write_forbidden_checkpoint_sent
-                    {
-                        let checkpoint = "Tool-scope checkpoint: this request forbids code-write tools. Do not synthesize or call file_edit, file_write, or file_patch. Use the exposed read/terminal tools to gather direct evidence, run required validation when present, then close out with changed files as none unless a concrete blocker prevents validation."
-                            .to_string();
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "code-write tools are forbidden; validation/closeout should replace patch synthesis"
-                                .to_string(),
-                        });
-                        messages.push(Message::system(checkpoint.clone()));
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&checkpoint);
-                        code_write_forbidden_checkpoint_sent = true;
-                        no_code_progress_rounds = 0;
-                    } else if action_checkpoint_active && used_action_checkpoint_lookup {
-                        action_checkpoint_lookup_count = (action_checkpoint_lookup_count + 1)
-                            .min(Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET);
-                        action_checkpoint_no_change_rounds = 0;
-                        activated_checkpoint_this_round = true;
-                        let lookup_notice = if action_checkpoint_lookup_count
-                            >= Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET
-                        {
-                            "focused repair targeted lookup budget used; next checkpoint request will expose patch tools only"
-                        } else {
-                            "focused repair targeted lookup used; one targeted lookup remains before patch-only mode"
-                        };
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: lookup_notice.to_string(),
-                        });
-                        if action_checkpoint_lookup_count
-                            >= Self::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET
-                        {
-                            action_checkpoint_no_change_rounds = 1;
-                            force_patch_synthesis_after_no_change = true;
-                            force_patch_synthesis_reason =
-                                Some("focused repair lookup budget exhausted");
-                        }
-                    }
-                    if action_checkpoint_active && !activated_checkpoint_this_round {
-                        action_checkpoint_no_change_rounds += 1;
-                        if action_checkpoint_no_change_rounds >= 3 {
+                        ProgressCheckpointAction::FocusedRepairStalled => {
                             trace.record(TraceEvent::WorkflowFallback {
                                 error: "action checkpoint entered patch synthesis after repeated focused repair reads"
                                     .to_string(),
                             });
-                            force_patch_synthesis_after_no_change = true;
-                            force_patch_synthesis_reason =
-                                Some("focused repair lookup did not produce a patch");
                         }
                     }
                 }
