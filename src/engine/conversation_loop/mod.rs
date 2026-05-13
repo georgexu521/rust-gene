@@ -1614,19 +1614,16 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         changed_files.push(std::path::PathBuf::from(path));
                     }
                 }
-                if result.success && RequiredValidationController::is_validation_tool_call(tc) {
-                    if let Some(command) = tc.arguments["command"].as_str() {
-                        let command = command.trim().to_string();
-                        let normalized_command =
-                            RequiredValidationController::normalize_command_for_match(&command);
-                        if required_validation_commands.iter().any(|required| {
-                            RequiredValidationController::normalize_command_for_match(required)
-                                == normalized_command
-                        }) {
-                            successful_required_validation_commands.insert(command.clone());
-                        }
-                        successful_validation_commands.push(command);
+                if let Some(command) =
+                    RequiredValidationController::successful_validation_command(tc, result.success)
+                {
+                    if RequiredValidationController::command_matches_required(
+                        &required_validation_commands,
+                        &command,
+                    ) {
+                        successful_required_validation_commands.insert(command.clone());
                     }
+                    successful_validation_commands.push(command);
                 }
             }
             if let Some(guard) = destructive_scope
@@ -2476,49 +2473,31 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 // deterministic closeout path sees the required evidence.
                 let mut required_validation_passed = true;
                 if !required_validation_commands.is_empty() {
-                    let already_ran = successful_validation_commands
-                        .iter()
-                        .map(|cmd| RequiredValidationController::normalize_command_for_match(cmd))
-                        .chain(successful_required_validation_commands.iter().map(|cmd| {
-                            RequiredValidationController::normalize_command_for_match(cmd)
-                        }))
-                        .collect::<HashSet<_>>();
-                    let required_to_run = required_validation_commands
-                        .iter()
-                        .filter(|cmd| {
-                            !already_ran.contains(
-                                &RequiredValidationController::normalize_command_for_match(cmd),
-                            )
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    if !required_to_run.is_empty() {
-                        let required_results = RequiredValidationController::run_commands(
-                            &working_dir,
-                            &required_to_run,
-                        )
-                        .await;
-                        for result in required_results {
-                            let text = result.to_dialog_text();
-                            acceptance_evidence.push(text.clone());
-                            turn_state.evidence_ledger.record_validation_result(
-                                "required_validation",
-                                Some(&result.command),
-                                result.success,
-                                &text,
-                            );
-                            if result.success {
-                                successful_required_validation_commands
-                                    .insert(result.command.trim().to_string());
-                                debug!("{}", text);
-                            } else {
-                                required_validation_passed = false;
-                                failed_commands.push(result.command.clone());
-                                post_edit_evidence.push(text.clone());
-                                tool_results_text.push('\n');
-                                tool_results_text.push_str(&text);
-                                messages.push(Message::system(text));
-                            }
+                    let required_run = RequiredValidationController::run_pending_commands(
+                        &working_dir,
+                        &required_validation_commands,
+                        &successful_validation_commands,
+                        &successful_required_validation_commands,
+                    )
+                    .await;
+                    required_validation_passed = required_run.passed;
+                    for item in required_run.items {
+                        acceptance_evidence.push(item.dialog_text.clone());
+                        turn_state.evidence_ledger.record_validation_result(
+                            "required_validation",
+                            Some(&item.command),
+                            item.success,
+                            &item.dialog_text,
+                        );
+                        if item.success {
+                            successful_required_validation_commands.insert(item.command.clone());
+                            debug!("{}", item.dialog_text);
+                        } else {
+                            failed_commands.push(item.command.clone());
+                            post_edit_evidence.push(item.dialog_text.clone());
+                            tool_results_text.push('\n');
+                            tool_results_text.push_str(&item.dialog_text);
+                            messages.push(Message::system(item.dialog_text));
                         }
                     }
                 }
@@ -5261,6 +5240,93 @@ mod tests {
             ),
             "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1"
         );
+    }
+
+    #[test]
+    fn test_required_validation_pending_commands_normalizes_already_run() {
+        let required = vec![
+            "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1"
+                .to_string(),
+            "rg '^cleanup = skipped by user request$' fixtures/core_quality/permission_rejection/manifest.txt"
+                .to_string(),
+        ];
+        let successful_validation = vec![
+            "bash -lc 'env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1'"
+                .to_string(),
+        ];
+        let successful_required = HashSet::new();
+
+        assert_eq!(
+            RequiredValidationController::pending_commands(
+                &required,
+                &successful_validation,
+                &successful_required,
+            ),
+            vec![
+                "rg '^cleanup = skipped by user request$' fixtures/core_quality/permission_rejection/manifest.txt"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_successful_validation_command_matches_required_command() {
+        let required = vec![
+            "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1"
+                .to_string(),
+        ];
+        let tool_call = ToolCall {
+            id: "wrapped_test".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "bash -lc 'env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1'"
+            }),
+        };
+
+        let command = RequiredValidationController::successful_validation_command(&tool_call, true)
+            .expect("successful validation command");
+
+        assert!(RequiredValidationController::command_matches_required(
+            &required, &command
+        ));
+        assert!(
+            RequiredValidationController::successful_validation_command(&tool_call, false)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_required_validation_summary_partitions_failed_results() {
+        let outcome = RequiredValidationController::summarize_results(vec![
+            super::super::auto_verify::VerificationResult {
+                language: "required".to_string(),
+                command: "test -f keep.txt".to_string(),
+                success: true,
+                issues: Vec::new(),
+                raw_output: String::new(),
+                summary: "required command passed: test -f keep.txt".to_string(),
+            },
+            super::super::auto_verify::VerificationResult {
+                language: "required".to_string(),
+                command: "rg '^status = corrected$' manifest.txt".to_string(),
+                success: false,
+                issues: vec![super::super::auto_verify::VerificationIssue {
+                    severity: "error".to_string(),
+                    file: None,
+                    line: None,
+                    message: "not found".to_string(),
+                }],
+                raw_output: String::new(),
+                summary: "required command failed: rg '^status = corrected$' manifest.txt"
+                    .to_string(),
+            },
+        ]);
+
+        assert!(!outcome.passed);
+        assert_eq!(outcome.items.len(), 2);
+        assert!(outcome.items[0].success);
+        assert!(!outcome.items[1].success);
+        assert!(outcome.items[1].dialog_text.contains("not found"));
     }
 
     #[test]

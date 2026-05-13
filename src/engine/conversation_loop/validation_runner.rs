@@ -182,9 +182,68 @@ pub(super) fn verification_source_context(
 
 pub(super) struct RequiredValidationController;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RequiredValidationRun {
+    pub(super) passed: bool,
+    pub(super) items: Vec<RequiredValidationResultItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RequiredValidationResultItem {
+    pub(super) command: String,
+    pub(super) success: bool,
+    pub(super) dialog_text: String,
+}
+
 impl RequiredValidationController {
     pub(super) fn should_run_default_auto_tests(required_validation_commands: &[String]) -> bool {
         required_validation_commands.is_empty()
+    }
+
+    pub(super) fn successful_validation_command(
+        tool_call: &ToolCall,
+        success: bool,
+    ) -> Option<String> {
+        if !success || !Self::is_validation_tool_call(tool_call) {
+            return None;
+        }
+        tool_call.arguments["command"]
+            .as_str()
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+            .map(ToString::to_string)
+    }
+
+    pub(super) fn command_matches_required(
+        required_validation_commands: &[String],
+        command: &str,
+    ) -> bool {
+        let normalized_command = Self::normalize_command_for_match(command);
+        required_validation_commands
+            .iter()
+            .any(|required| Self::normalize_command_for_match(required) == normalized_command)
+    }
+
+    pub(super) fn pending_commands(
+        required_validation_commands: &[String],
+        successful_validation_commands: &[String],
+        successful_required_validation_commands: &HashSet<String>,
+    ) -> Vec<String> {
+        let already_ran = successful_validation_commands
+            .iter()
+            .map(|cmd| Self::normalize_command_for_match(cmd))
+            .chain(
+                successful_required_validation_commands
+                    .iter()
+                    .map(|cmd| Self::normalize_command_for_match(cmd)),
+            )
+            .collect::<HashSet<_>>();
+
+        required_validation_commands
+            .iter()
+            .filter(|cmd| !already_ran.contains(&Self::normalize_command_for_match(cmd)))
+            .cloned()
+            .collect()
     }
 
     pub(super) fn is_validation_tool_call(tool_call: &ToolCall) -> bool {
@@ -234,6 +293,40 @@ impl RequiredValidationController {
             }
         }
         commands
+    }
+
+    pub(super) async fn run_pending_commands(
+        working_dir: &std::path::Path,
+        required_validation_commands: &[String],
+        successful_validation_commands: &[String],
+        successful_required_validation_commands: &HashSet<String>,
+    ) -> RequiredValidationRun {
+        let pending = Self::pending_commands(
+            required_validation_commands,
+            successful_validation_commands,
+            successful_required_validation_commands,
+        );
+        Self::summarize_results(Self::run_commands(working_dir, &pending).await)
+    }
+
+    pub(super) fn summarize_results(results: Vec<VerificationResult>) -> RequiredValidationRun {
+        let mut passed = true;
+        let items = results
+            .into_iter()
+            .map(|result| {
+                let dialog_text = result.to_dialog_text();
+                if !result.success {
+                    passed = false;
+                }
+                RequiredValidationResultItem {
+                    command: result.command,
+                    success: result.success,
+                    dialog_text,
+                }
+            })
+            .collect();
+
+        RequiredValidationRun { passed, items }
     }
 
     pub(super) async fn run_commands(
