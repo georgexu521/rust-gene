@@ -60,7 +60,7 @@ use turn_recording::record_recovery_plan;
 use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
-use validation_runner::{should_run_default_auto_tests, verification_source_context};
+use validation_runner::{verification_source_context, RequiredValidationController};
 use workflow_trace::{
     apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger, trace_stage_validation,
 };
@@ -533,7 +533,7 @@ impl ConversationLoop {
             .unwrap_or("")
             .to_string();
         let required_validation_commands =
-            Self::extract_required_validation_commands(&last_user_preview);
+            RequiredValidationController::extract_commands(&last_user_preview);
         let no_diff_audit_closeout_allowed =
             Self::allows_no_diff_audit_closeout(&last_user_preview);
         let code_write_tools_forbidden = Self::prompt_forbids_code_write_tools(&last_user_preview);
@@ -1614,13 +1614,13 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         changed_files.push(std::path::PathBuf::from(path));
                     }
                 }
-                if result.success && Self::is_validation_tool_call(tc) {
+                if result.success && RequiredValidationController::is_validation_tool_call(tc) {
                     if let Some(command) = tc.arguments["command"].as_str() {
                         let command = command.trim().to_string();
                         let normalized_command =
-                            Self::normalize_validation_command_for_match(&command);
+                            RequiredValidationController::normalize_command_for_match(&command);
                         if required_validation_commands.iter().any(|required| {
-                            Self::normalize_validation_command_for_match(required)
+                            RequiredValidationController::normalize_command_for_match(required)
                                 == normalized_command
                         }) {
                             successful_required_validation_commands.insert(command.clone());
@@ -2478,25 +2478,26 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 if !required_validation_commands.is_empty() {
                     let already_ran = successful_validation_commands
                         .iter()
-                        .map(|cmd| Self::normalize_validation_command_for_match(cmd))
-                        .chain(
-                            successful_required_validation_commands
-                                .iter()
-                                .map(|cmd| Self::normalize_validation_command_for_match(cmd)),
-                        )
+                        .map(|cmd| RequiredValidationController::normalize_command_for_match(cmd))
+                        .chain(successful_required_validation_commands.iter().map(|cmd| {
+                            RequiredValidationController::normalize_command_for_match(cmd)
+                        }))
                         .collect::<HashSet<_>>();
                     let required_to_run = required_validation_commands
                         .iter()
                         .filter(|cmd| {
-                            !already_ran
-                                .contains(&Self::normalize_validation_command_for_match(cmd))
+                            !already_ran.contains(
+                                &RequiredValidationController::normalize_command_for_match(cmd),
+                            )
                         })
                         .cloned()
                         .collect::<Vec<_>>();
                     if !required_to_run.is_empty() {
-                        let required_results =
-                            Self::run_required_validation_commands(&working_dir, &required_to_run)
-                                .await;
+                        let required_results = RequiredValidationController::run_commands(
+                            &working_dir,
+                            &required_to_run,
+                        )
+                        .await;
                         for result in required_results {
                             let text = result.to_dialog_text();
                             acceptance_evidence.push(text.clone());
@@ -2526,7 +2527,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 
                 // ── 自动测试闭环 ──────────────────────────────
                 let manual_validation_after_changes = !successful_validation_commands.is_empty();
-                let test_results = if should_run_default_auto_tests(&required_validation_commands) {
+                let test_results = if RequiredValidationController::should_run_default_auto_tests(
+                    &required_validation_commands,
+                ) {
                     super::auto_verify::run_tests(&working_dir, &changed_files, check_passed).await
                 } else {
                     Vec::new()
@@ -2981,7 +2984,7 @@ mod tests {
 - `cargo test -q -- --test-threads=1`
 "#;
 
-        let commands = ConversationLoop::extract_required_validation_commands(prompt);
+        let commands = RequiredValidationController::extract_commands(prompt);
         assert_eq!(
             commands,
             vec![
@@ -5214,34 +5217,46 @@ mod tests {
             }),
         };
 
-        assert!(ConversationLoop::is_validation_tool_call(&cargo_test));
-        assert!(ConversationLoop::is_validation_tool_call(&python_assertion));
-        assert!(ConversationLoop::is_validation_tool_call(&node_test));
-        assert!(ConversationLoop::is_validation_tool_call(&python_unittest));
-        assert!(ConversationLoop::is_validation_tool_call(&rg_assertion));
-        assert!(ConversationLoop::is_validation_tool_call(
+        assert!(RequiredValidationController::is_validation_tool_call(
+            &cargo_test
+        ));
+        assert!(RequiredValidationController::is_validation_tool_call(
+            &python_assertion
+        ));
+        assert!(RequiredValidationController::is_validation_tool_call(
+            &node_test
+        ));
+        assert!(RequiredValidationController::is_validation_tool_call(
+            &python_unittest
+        ));
+        assert!(RequiredValidationController::is_validation_tool_call(
+            &rg_assertion
+        ));
+        assert!(RequiredValidationController::is_validation_tool_call(
             &rg_assertion_with_ampersand_pattern
         ));
-        assert!(ConversationLoop::is_validation_tool_call(
+        assert!(RequiredValidationController::is_validation_tool_call(
             &env_prefixed_cargo_test
         ));
-        assert!(ConversationLoop::is_validation_tool_call(
+        assert!(RequiredValidationController::is_validation_tool_call(
             &shell_wrapped_cargo_test
         ));
-        assert!(!ConversationLoop::is_validation_tool_call(&ls));
-        assert!(!ConversationLoop::is_validation_tool_call(&file_read));
+        assert!(!RequiredValidationController::is_validation_tool_call(&ls));
+        assert!(!RequiredValidationController::is_validation_tool_call(
+            &file_read
+        ));
     }
 
     #[test]
     fn test_validation_command_match_normalizes_shell_lc_wrappers() {
         assert_eq!(
-            ConversationLoop::normalize_validation_command_for_match(
+            RequiredValidationController::normalize_command_for_match(
                 "bash -lc 'env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1'"
             ),
             "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1"
         );
         assert_eq!(
-            ConversationLoop::normalize_validation_command_for_match(
+            RequiredValidationController::normalize_command_for_match(
                 "  env   PRIORITY_AGENT_WORKFLOW_ENABLED=1   cargo test --quiet -- --test-threads=1  "
             ),
             "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1"
@@ -5265,7 +5280,7 @@ mod tests {
 - `(none)`
 "#;
 
-        let commands = ConversationLoop::extract_required_validation_commands(prompt);
+        let commands = RequiredValidationController::extract_commands(prompt);
 
         assert_eq!(
             commands,
@@ -5285,10 +5300,14 @@ mod tests {
 
     #[test]
     fn test_required_validation_disables_default_auto_tests() {
-        assert!(should_run_default_auto_tests(&[]));
-        assert!(!should_run_default_auto_tests(&[
-            "cargo test -q -- --test-threads=1".to_string()
-        ]));
+        assert!(RequiredValidationController::should_run_default_auto_tests(
+            &[]
+        ));
+        assert!(
+            !RequiredValidationController::should_run_default_auto_tests(&[
+                "cargo test -q -- --test-threads=1".to_string()
+            ])
+        );
     }
 
     #[test]

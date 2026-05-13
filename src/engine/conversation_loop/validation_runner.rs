@@ -1,4 +1,4 @@
-use super::{safe_prefix_by_bytes, ConversationLoop};
+use super::safe_prefix_by_bytes;
 use crate::engine::auto_verify::{VerificationIssue, VerificationResult};
 use crate::services::api::ToolCall;
 use std::collections::HashSet;
@@ -27,10 +27,6 @@ fn sanitize_required_validation_env(cmd: &mut tokio::process::Command) {
     ] {
         cmd.env_remove(key);
     }
-}
-
-pub(super) fn should_run_default_auto_tests(required_validation_commands: &[String]) -> bool {
-    required_validation_commands.is_empty()
 }
 
 pub(super) async fn shell_output_with_timeout(
@@ -184,7 +180,13 @@ pub(super) fn verification_source_context(
     }
 }
 
-impl ConversationLoop {
+pub(super) struct RequiredValidationController;
+
+impl RequiredValidationController {
+    pub(super) fn should_run_default_auto_tests(required_validation_commands: &[String]) -> bool {
+        required_validation_commands.is_empty()
+    }
+
     pub(super) fn is_validation_tool_call(tool_call: &ToolCall) -> bool {
         if tool_call.name != "bash" {
             return false;
@@ -195,7 +197,7 @@ impl ConversationLoop {
         crate::tools::bash_tool::command_classifier::classify_command(command).is_safe_validation()
     }
 
-    pub(super) fn normalize_validation_command_for_match(command: &str) -> String {
+    pub(super) fn normalize_command_for_match(command: &str) -> String {
         crate::tools::bash_tool::command_classifier::normalize_command_for_match(command)
     }
 
@@ -210,7 +212,7 @@ impl ConversationLoop {
             || is_safe_required_search_assertion(command)
     }
 
-    pub(super) fn extract_required_validation_commands(prompt: &str) -> Vec<String> {
+    pub(super) fn extract_commands(prompt: &str) -> Vec<String> {
         let mut commands = Vec::new();
         for line in prompt.lines() {
             let trimmed = line.trim();
@@ -234,7 +236,7 @@ impl ConversationLoop {
         commands
     }
 
-    pub(super) async fn run_required_validation_commands(
+    pub(super) async fn run_commands(
         working_dir: &std::path::Path,
         commands: &[String],
     ) -> Vec<VerificationResult> {
