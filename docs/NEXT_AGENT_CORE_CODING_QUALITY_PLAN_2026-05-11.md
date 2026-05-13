@@ -102,6 +102,17 @@
   `route_scoped_tools` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1294 passed; 0 failed`).
+- 2026-05-13: Phase A memory sync extraction started. Added
+  `src/engine/conversation_loop/memory_sync_controller.rs` to own end-of-turn
+  memory sync: latest user message selection, assistant text assembly,
+  heuristic vs LLM extraction, `MemorySynced` trace events, and memory turn
+  advancement. `run_inner` now delegates memory persistence instead of
+  directly locking the memory manager.
+- Validation after the `MemorySyncController` first slice:
+  `cargo fmt --check`, targeted `memory_sync_controller`, `memory`,
+  `closeout`, and `post_edit_repair_controller` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1297 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

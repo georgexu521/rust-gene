@@ -12,6 +12,7 @@ mod approval;
 mod closeout_controller;
 mod companion_context;
 mod context_budget_controller;
+mod memory_sync_controller;
 mod patch_recovery;
 mod patch_repair_rules;
 mod permission_controller;
@@ -40,6 +41,7 @@ use action_checkpoint::FocusedRepairActionRequest;
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
+use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
 use post_edit_repair_controller::{PostEditRepairContext, PostEditRepairController};
 use post_edit_verification_controller::{
@@ -2444,39 +2446,17 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 }
             }
 
-            // ── 记忆同步 ──────────────────────────────────
-            if let Some(ref mem_mutex) = self.memory_manager {
-                let mut mem = mem_mutex.lock().await;
-                let user_msg = messages
-                    .iter()
-                    .rposition(|m| matches!(m, Message::User { .. }))
-                    .and_then(|i| match &messages[i] {
-                        Message::User { content } => Some(content.as_str()),
-                        _ => None,
-                    })
-                    .unwrap_or("");
-                if !user_msg.is_empty() {
-                    let assistant_text = format!("{} {}", final_content, tool_results_text);
-                    if self.llm_memory_extraction {
-                        if mem.should_extract_with_llm() {
-                            let provider: Option<&dyn LlmProvider> = Some(self.provider.as_ref());
-                            mem.sync_turn_llm(user_msg, &assistant_text, provider, &self.model)
-                                .await;
-                            mem.mark_main_agent_wrote();
-                            trace.record(TraceEvent::MemorySynced {
-                                mode: "llm".to_string(),
-                            });
-                        }
-                    } else {
-                        mem.sync_turn(user_msg, &assistant_text);
-                        mem.mark_main_agent_wrote();
-                        trace.record(TraceEvent::MemorySynced {
-                            mode: "heuristic".to_string(),
-                        });
-                    }
-                }
-                mem.increment_turn();
-            }
+            MemorySyncController::sync_turn(MemorySyncContext {
+                memory_manager: self.memory_manager.as_ref(),
+                llm_memory_extraction: self.llm_memory_extraction,
+                provider: Some(self.provider.as_ref()),
+                model: &self.model,
+                trace: &trace,
+                messages: &messages,
+                final_content: &final_content,
+                tool_results_text: &tool_results_text,
+            })
+            .await;
 
             if should_closeout_after_verified_change {
                 trace.record(TraceEvent::WorkflowFallback {
