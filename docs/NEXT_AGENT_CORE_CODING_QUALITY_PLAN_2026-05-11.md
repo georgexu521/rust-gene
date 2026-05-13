@@ -90,6 +90,18 @@
   `verification_source_context` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1293 passed; 0 failed`).
+- 2026-05-13: Phase A post-edit repair sequencing extraction started. Added
+  `src/engine/conversation_loop/post_edit_repair_controller.rs` to own the
+  post-verification repair sequence: reflection repair context, stage
+  validation recording, guided validation debugging, acceptance repair review,
+  coding-round accounting, and post-edit reflection repair gating. `run_inner`
+  now delegates both verification and repair sequencing after changed files.
+- Validation after the `PostEditRepairController` first slice:
+  `cargo fmt --check`, targeted `post_edit_repair_controller`,
+  `post_edit_verification_controller`, `required_validation`, `closeout`, and
+  `route_scoped_tools` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1294 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

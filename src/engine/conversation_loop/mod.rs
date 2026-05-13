@@ -15,6 +15,7 @@ mod context_budget_controller;
 mod patch_recovery;
 mod patch_repair_rules;
 mod permission_controller;
+mod post_edit_repair_controller;
 mod post_edit_verification_controller;
 mod pseudo_tool_text;
 mod repair_controller;
@@ -40,11 +41,9 @@ pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
 use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
+use post_edit_repair_controller::{PostEditRepairContext, PostEditRepairController};
 use post_edit_verification_controller::{
     PostEditVerificationContext, PostEditVerificationController,
-};
-use repair_controller::{
-    AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
 };
 use runtime_diet::trace_runtime_diet_report;
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
@@ -68,9 +67,7 @@ use validation_runner::shell_output_with_timeout;
 #[cfg(test)]
 use validation_runner::verification_source_context;
 use validation_runner::RequiredValidationController;
-use workflow_trace::{
-    apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger, trace_stage_validation,
-};
+use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
@@ -2412,64 +2409,20 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                     review_passed: verification.review_success,
                     failed_commands: verification.failed_commands.clone(),
                 });
-                let post_edit_reflection =
-                    Self::record_verification_repair_context(VerificationRepairContext {
-                        trace: &trace,
-                        code_workflow: &mut code_workflow,
-                        task_id: task_bundle.task_id.clone(),
-                        changed_files: &changed_files,
-                        verify_passed,
-                        post_edit_evidence: &verification.post_edit_evidence,
-                        failed_commands: &verification.failed_commands,
-                        acceptance_repair_attempts: turn_state.acceptance_repair_attempts,
-                        tool_results_text: &mut tool_results_text,
-                        messages: &mut messages,
-                    });
-                trace.record(TraceEvent::ReflectionPassCompleted {
-                    pass_id: post_edit_reflection.pass_id.clone(),
-                    task_id: post_edit_reflection.task_id.clone(),
-                    status: format!("{:?}", post_edit_reflection.status),
-                    findings: post_edit_reflection.findings.len(),
-                    unresolved: post_edit_reflection.unresolved_count(),
-                });
-                let stage_record = code_workflow.record_stage_validation(
-                    &task_bundle,
-                    &changed_files,
-                    verify_passed,
-                    &verification.acceptance_evidence,
-                );
-                trace_stage_validation(&trace, &stage_record);
-                if let Some(feedback) = stage_record.feedback.clone() {
-                    apply_workflow_feedback_and_trace(&mut task_bundle, &trace, feedback);
-                }
-                if !verify_passed {
-                    self.run_guided_validation_debugging(GuidedValidationDebuggingContext {
-                        trace: &trace,
-                        last_user_preview: last_user_preview.as_str(),
-                        task_bundle: &task_bundle,
-                        post_edit_evidence: &verification.post_edit_evidence,
-                        tool_results_text: &mut tool_results_text,
-                        messages: &mut messages,
-                    })
-                    .await;
-                }
-                let acceptance_repair_outcome = self
-                    .run_acceptance_repair_review(AcceptanceRepairContext {
+                let post_edit_repair_outcome = PostEditRepairController::run(
+                    self,
+                    PostEditRepairContext {
                         trace: &trace,
                         route: &route,
                         code_workflow: &mut code_workflow,
                         task_bundle: &mut task_bundle,
                         changed_files: &changed_files,
-                        verify_passed,
-                        review_success: verification.review_success,
+                        verification: &verification,
                         required_validation_commands: &required_validation_commands,
-                        failed_commands: &verification.failed_commands,
-                        post_edit_evidence: &verification.post_edit_evidence,
-                        acceptance_evidence: &verification.acceptance_evidence,
-                        required_validation_passed: verification.required_validation_passed,
-                        check_passed: verification.check_passed,
                         acceptance_repair_attempts: &mut turn_state.acceptance_repair_attempts,
                         reserved_repair_rounds: &mut turn_state.reserved_repair_rounds,
+                        effective_iterations: turn_state.effective_iterations,
+                        max_iterations: self.max_iterations,
                         action_checkpoint_no_change_rounds: &mut action_checkpoint_no_change_rounds,
                         action_checkpoint_active: &mut action_checkpoint_active,
                         action_checkpoint_lookup_count: &mut action_checkpoint_lookup_count,
@@ -2477,43 +2430,17 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                         action_checkpoint_requires_patch_before_validation:
                             &mut action_checkpoint_requires_patch_before_validation,
                         should_closeout_after_verified_change,
+                        final_content: &mut final_content,
                         tool_results_text: &mut tool_results_text,
                         messages: &mut messages,
-                    })
-                    .await;
+                        last_user_preview: last_user_preview.as_str(),
+                    },
+                )
+                .await;
                 should_closeout_after_verified_change =
-                    acceptance_repair_outcome.should_closeout_after_verified_change;
-                if let Some(content) = acceptance_repair_outcome.final_content {
-                    final_content = content;
-                }
-                if acceptance_repair_outcome.break_loop {
+                    post_edit_repair_outcome.should_closeout_after_verified_change;
+                if post_edit_repair_outcome.break_loop {
                     break;
-                }
-                {
-                    let mut tracker = self.cost_tracker.lock().await;
-                    tracker.record_coding_round(verify_passed);
-                }
-                if post_edit_reflection.status
-                    != crate::engine::reflection_pass::ReflectionStatus::Passed
-                {
-                    should_closeout_after_verified_change = false;
-                    action_checkpoint_requires_patch_before_validation = true;
-                    let repair_instruction = format!(
-                        "{}\nPost-edit reflection found unresolved quality gaps. Fix the changed files before giving a final answer.",
-                        post_edit_reflection.format_for_prompt()
-                    );
-                    tool_results_text.push('\n');
-                    tool_results_text.push_str(&repair_instruction);
-                    messages.push(Message::system(repair_instruction));
-                    if turn_state.effective_iterations >= self.max_iterations {
-                        turn_state.reserved_repair_rounds =
-                            turn_state.reserved_repair_rounds.max(1);
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error:
-                                "reserved repair round granted after post-edit reflection failure"
-                                    .to_string(),
-                        });
-                    }
                 }
             }
 
