@@ -1,5 +1,5 @@
-use super::{runtime_diet::RuntimeDietSnapshot, ConversationLoop};
-use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use super::runtime_diet::RuntimeDietSnapshot;
+use crate::engine::code_change_workflow::{CodeChangeWorkflowRunner, WorkflowCloseout};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::{TraceCollector, TraceEvent};
@@ -19,16 +19,41 @@ pub(super) struct FinalCloseoutContext<'a> {
     pub(super) tx: Option<&'a mpsc::Sender<super::super::streaming::StreamEvent>>,
 }
 
-impl ConversationLoop {
+pub(super) struct CloseoutEvaluation {
+    pub(super) closeout: Option<WorkflowCloseout>,
+    pub(super) runtime_validation_label: Option<String>,
+}
+
+pub(super) struct CloseoutEvaluator;
+
+impl CloseoutEvaluator {
+    pub(super) fn evaluate(
+        code_workflow: &CodeChangeWorkflowRunner,
+        task_bundle: &TaskContextBundle,
+        evidence_ledger: &EvidenceLedger,
+    ) -> CloseoutEvaluation {
+        let runtime_validation_label = evidence_ledger.runtime_validation_label();
+        let closeout = code_workflow.build_closeout_with_runtime_validation(
+            task_bundle,
+            runtime_validation_label.as_deref(),
+        );
+        CloseoutEvaluation {
+            closeout,
+            runtime_validation_label,
+        }
+    }
+}
+
+pub(super) struct FinalCloseoutController;
+
+impl FinalCloseoutController {
     pub(super) async fn apply_final_closeout(context: FinalCloseoutContext<'_>) {
-        let ledger_validation_label = context.evidence_ledger.runtime_validation_label();
-        if let Some(closeout) = context
-            .code_workflow
-            .build_closeout_with_runtime_validation(
-                context.task_bundle,
-                ledger_validation_label.as_deref(),
-            )
-        {
+        let evaluation = CloseoutEvaluator::evaluate(
+            context.code_workflow,
+            context.task_bundle,
+            context.evidence_ledger,
+        );
+        if let Some(closeout) = evaluation.closeout {
             context.trace.record(TraceEvent::FinalCloseoutPrepared {
                 status: closeout.status.label().to_string(),
                 changed_files: closeout.changed_files.len(),
@@ -38,7 +63,8 @@ impl ConversationLoop {
             });
             context.runtime_diet.closeout_visibility =
                 format!("{:?}", closeout.visibility_from_env()).to_ascii_lowercase();
-            context.runtime_diet.validation_evidence = ledger_validation_label
+            context.runtime_diet.validation_evidence = evaluation
+                .runtime_validation_label
                 .clone()
                 .unwrap_or_else(|| closeout.status.label().to_string());
             let closeout_text = closeout.format_for_user_response();
@@ -55,7 +81,7 @@ impl ConversationLoop {
         }
 
         if context.runtime_diet.validation_evidence == "none" {
-            if let Some(label) = ledger_validation_label {
+            if let Some(label) = evaluation.runtime_validation_label {
                 context.runtime_diet.validation_evidence = label;
             }
         }
@@ -77,5 +103,56 @@ impl ConversationLoop {
                 error: "tool iteration budget exhausted before final closeout".to_string(),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::code_change_workflow::StageValidationStatus;
+    use crate::engine::intent_router::{
+        IntentKind, IntentRoute, ReasoningPolicy, RetrievalPolicy, RiskLevel, WorkflowKind,
+    };
+
+    fn audit_route() -> IntentRoute {
+        IntentRoute {
+            intent: IntentKind::CodeChange,
+            confidence: 0.90,
+            workflow: WorkflowKind::CodeChange,
+            retrieval: RetrievalPolicy::Project,
+            reasoning: ReasoningPolicy::Medium,
+            risk: RiskLevel::High,
+            recommended_tools: Vec::new(),
+            reason: "audit/regression eval requires project verification; code diff is optional"
+                .to_string(),
+        }
+    }
+
+    #[test]
+    fn evaluator_uses_ledger_runtime_validation_for_no_diff_audit_closeout() {
+        let mut bundle = TaskContextBundle::new("审查已有实现", ".", audit_route(), None);
+        bundle.add_acceptance_check("required regression checks pass");
+        let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+        let mut evidence_ledger = EvidenceLedger::new();
+        evidence_ledger.record_validation_result(
+            "required_validation",
+            Some("cargo test -q memory"),
+            true,
+            "cargo test -q memory passed",
+        );
+
+        let evaluation = CloseoutEvaluator::evaluate(&code_workflow, &bundle, &evidence_ledger);
+        let closeout = evaluation.closeout.expect("closeout");
+
+        assert_eq!(
+            evaluation.runtime_validation_label.as_deref(),
+            Some("passed:1/1")
+        );
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert!(closeout.changed_files.is_empty());
+        assert!(closeout
+            .validation
+            .iter()
+            .any(|item| item == "required validation: passed (passed:1/1)"));
     }
 }

@@ -67,6 +67,16 @@
   `closeout` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1291 passed; 0 failed`).
+- 2026-05-13: Phase A `CloseoutEvaluator` extraction started. Added a
+  testable evaluator in `src/engine/conversation_loop/closeout_controller.rs`
+  that computes final closeout material from workflow state, task context, and
+  ledger runtime validation. Final response mutation and streaming still live
+  in `FinalCloseoutController`, while `ConversationLoop` only calls that
+  controller.
+- Validation after the `CloseoutEvaluator` first slice: `cargo fmt --check`,
+  targeted `closeout` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1292 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

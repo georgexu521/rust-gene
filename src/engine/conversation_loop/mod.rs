@@ -36,7 +36,7 @@ mod workflow_trace;
 
 use action_checkpoint::FocusedRepairActionRequest;
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
-use closeout_controller::FinalCloseoutContext;
+use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
 use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
 use repair_controller::{
@@ -2770,7 +2770,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             }
         }
 
-        Self::apply_final_closeout(FinalCloseoutContext {
+        FinalCloseoutController::apply_final_closeout(FinalCloseoutContext {
             trace: &trace,
             code_workflow: &code_workflow,
             task_bundle: &task_bundle,
