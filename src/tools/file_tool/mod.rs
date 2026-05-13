@@ -135,6 +135,16 @@ struct FilePathIdentity {
     state_key: String,
 }
 
+#[derive(Clone, Debug)]
+struct EditDiffSummary {
+    additions: usize,
+    deletions: usize,
+    changed_line_start: usize,
+    changed_line_end: usize,
+    unified_diff: String,
+    preview_truncated: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadBeforeEditStatus {
     Allowed,
@@ -437,6 +447,105 @@ fn compute_content_hash(content: &str) -> u64 {
 
 fn content_hash_hex(content: &str) -> String {
     format!("{:016x}", compute_content_hash(content))
+}
+
+fn edit_diff_summary(path: &str, old_content: &str, new_content: &str) -> EditDiffSummary {
+    const CONTEXT_LINES: usize = 3;
+    const MAX_DIFF_LINES: usize = 80;
+
+    let old_lines = old_content.lines().collect::<Vec<_>>();
+    let new_lines = new_content.lines().collect::<Vec<_>>();
+
+    let mut prefix_len = 0usize;
+    while prefix_len < old_lines.len()
+        && prefix_len < new_lines.len()
+        && old_lines[prefix_len] == new_lines[prefix_len]
+    {
+        prefix_len += 1;
+    }
+
+    let mut suffix_len = 0usize;
+    while suffix_len + prefix_len < old_lines.len()
+        && suffix_len + prefix_len < new_lines.len()
+        && old_lines[old_lines.len() - 1 - suffix_len]
+            == new_lines[new_lines.len() - 1 - suffix_len]
+    {
+        suffix_len += 1;
+    }
+
+    let old_changed_end = old_lines.len().saturating_sub(suffix_len);
+    let new_changed_end = new_lines.len().saturating_sub(suffix_len);
+    let old_changed = old_changed_end.saturating_sub(prefix_len);
+    let new_changed = new_changed_end.saturating_sub(prefix_len);
+
+    let changed_line_start = if new_lines.is_empty() {
+        0
+    } else {
+        (prefix_len + 1).min(new_lines.len())
+    };
+    let changed_line_end = if new_changed == 0 {
+        changed_line_start
+    } else {
+        new_changed_end.min(new_lines.len())
+    };
+
+    let context_start = prefix_len.saturating_sub(CONTEXT_LINES);
+    let old_context_end = (old_changed_end + CONTEXT_LINES).min(old_lines.len());
+    let new_context_end = (new_changed_end + CONTEXT_LINES).min(new_lines.len());
+    let old_hunk_count = old_context_end.saturating_sub(context_start);
+    let new_hunk_count = new_context_end.saturating_sub(context_start);
+
+    let mut diff_lines = Vec::new();
+    diff_lines.push(format!("--- a/{path}"));
+    diff_lines.push(format!("+++ b/{path}"));
+    diff_lines.push(format!(
+        "@@ -{},{} +{},{} @@",
+        context_start + 1,
+        old_hunk_count,
+        context_start + 1,
+        new_hunk_count
+    ));
+
+    for line in &old_lines[context_start..prefix_len] {
+        diff_lines.push(format!(" {line}"));
+    }
+    for line in &old_lines[prefix_len..old_changed_end] {
+        diff_lines.push(format!("-{line}"));
+    }
+    for line in &new_lines[prefix_len..new_changed_end] {
+        diff_lines.push(format!("+{line}"));
+    }
+    for line in &new_lines[new_changed_end..new_context_end] {
+        diff_lines.push(format!(" {line}"));
+    }
+
+    let preview_truncated = diff_lines.len() > MAX_DIFF_LINES;
+    if preview_truncated {
+        diff_lines.truncate(MAX_DIFF_LINES);
+        diff_lines.push(format!(
+            "[diff preview truncated: showing first {MAX_DIFF_LINES} lines]"
+        ));
+    }
+
+    EditDiffSummary {
+        additions: new_changed,
+        deletions: old_changed,
+        changed_line_start,
+        changed_line_end,
+        unified_diff: diff_lines.join("\n"),
+        preview_truncated,
+    }
+}
+
+fn edit_diff_summary_json(diff: &EditDiffSummary) -> serde_json::Value {
+    json!({
+        "additions": diff.additions,
+        "deletions": diff.deletions,
+        "changed_line_start": json_line_number(diff.changed_line_start),
+        "changed_line_end": json_line_number(diff.changed_line_end),
+        "unified_diff": diff.unified_diff,
+        "preview_truncated": diff.preview_truncated,
+    })
 }
 
 fn file_state_key(path: &Path) -> String {
@@ -1447,6 +1556,8 @@ impl Tool for FileEditTool {
                         path_str
                     ));
                 }
+                let diff_summary =
+                    edit_diff_summary(&identity.display_path, &snapshot.content, &new_content);
                 match write_text_file(
                     &path,
                     &new_content,
@@ -1484,6 +1595,7 @@ impl Tool for FileEditTool {
                                 snapshot.has_bom,
                                 snapshot.line_ending
                             ),
+                            "diff": edit_diff_summary_json(&diff_summary),
                         });
                         ToolResult::success_with_data(
                             format!(
@@ -2275,6 +2387,14 @@ mod tests {
             data["path_identity"]["state_key"],
             data["path_identity"]["canonical_path"]
         );
+        assert_eq!(data["diff"]["additions"], 1);
+        assert_eq!(data["diff"]["deletions"], 1);
+        assert_eq!(data["diff"]["changed_line_start"], 2);
+        assert_eq!(data["diff"]["changed_line_end"], 2);
+        assert_eq!(data["diff"]["preview_truncated"], false);
+        let unified_diff = data["diff"]["unified_diff"].as_str().unwrap_or("");
+        assert!(unified_diff.contains("-foo bar"));
+        assert!(unified_diff.contains("+baz qux"));
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert!(content.contains("baz qux"));
         assert!(!content.contains("foo bar"));

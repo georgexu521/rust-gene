@@ -47,8 +47,8 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic local test baseline observed during the 2026-05-12
-file-mutation lock, file text codec, file-state tracker, partial-read edit state,
+Latest deterministic local test baseline observed during the 2026-05-13
+file-edit diff metadata, file-mutation lock, file text codec, file-state tracker, partial-read edit state,
 file-read/search evidence metadata, foreground PTY smoke,
 interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
 duration/schema/artifacts, shell-command UI summary, shell-command category
@@ -95,7 +95,9 @@ metadata for encoding, BOM, and line ending; edits and writes preserve UTF-8
 BOM, UTF-16LE BOM, and LF/CRLF style instead of normalizing files by accident.
 File mutations now share a per-canonical-path async lock, and text writes use
 a temporary sibling file plus rename so same-file edits are serialized and
-write failures do not leave partial file contents.
+write failures do not leave partial file contents. `file_edit` success results
+now include additions, deletions, changed line range, and a bounded unified diff
+preview so later closeout and diagnostics paths can cite actual edit evidence.
 
 Validated locally with:
 

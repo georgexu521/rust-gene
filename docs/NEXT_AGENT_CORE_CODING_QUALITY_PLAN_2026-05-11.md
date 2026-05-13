@@ -436,6 +436,16 @@
   `cargo clippy --all-features -- -D warnings`,
   `cargo check --features experimental-api-server -q`, and full `cargo test -q`
   all passed (`1269 passed; 0 failed`).
+- 2026-05-13: Phase 3 Batch 3.4 started. `file_edit` success metadata now
+  includes a structured `diff` payload with additions, deletions, changed line
+  start/end, a bounded unified diff preview, and a truncation flag. This gives
+  closeout and later diagnostics integration real edit evidence without asking
+  the model to infer what changed from prose.
+- Validation after the file-edit diff metadata slice: `cargo fmt --check`,
+  `git diff --check`, targeted `file_tool`, `lsp`, and `closeout` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`,
+  `cargo check --features experimental-api-server -q`, and full `cargo test -q`
+  all passed (`1269 passed; 0 failed`).
 
 ## 当前判断
 
@@ -449,7 +459,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 主循环仍然过重，`src/engine/conversation_loop/mod.rs` 还有 5600+ 行。
 - shell 仍是普通工具，不是完整终端运行时。
-- 文件编辑工具已经有 stale-read 检测、路径身份修复、BOM/编码/换行保真、per-file mutation lock 和 atomic write，但还缺成熟产品里的 diff、LSP、历史恢复等细节。
+- 文件编辑工具已经有 stale-read 检测、路径身份修复、BOM/编码/换行保真、per-file mutation lock、atomic write 和 diff metadata，但还缺成熟产品里的 LSP、历史恢复等细节。
 
 ## 参考结论
 
