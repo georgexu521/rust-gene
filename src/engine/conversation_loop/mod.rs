@@ -1969,7 +1969,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                             let lookup_rule =
                                 Self::targeted_lookup_budget_rule(action_checkpoint_lookup_count);
                             let recovery = format!(
-                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe patch from the evidence already gathered. Prefer file_edit/file_write; bash is allowed only for a mutating patch command here. If file_read or grep is still exposed, use the remaining focused lookup budget before patching; otherwise patch from the evidence already gathered. {} Do not call tools that are not exposed.",
+                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe patch from the evidence already gathered. Prefer file_edit/file_write so permission, stale-read, diff, and rollback checks stay active. If file_read or grep is still exposed, use the remaining focused lookup budget before patching; otherwise patch from the evidence already gathered. {} Do not call tools that are not exposed.",
                                 exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", "),
                                 lookup_rule
                             );
@@ -1988,7 +1988,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                 error: "focused repair did not produce a patch; reopening normal code-change tools once"
                                     .to_string(),
                             });
-                            let recovery = "Focused repair did not produce a file change. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write or mutating bash patch before running validation. Do not close out until a file change succeeds or a concrete blocker is proven."
+                            let recovery = "Focused repair did not produce a file change. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write patch before running validation. Do not close out until a file change succeeds or a concrete blocker is proven."
                                 .to_string();
                             messages.push(Message::system(recovery.clone()));
                             tool_results_text.push('\n');
@@ -2170,7 +2170,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                                             .to_string(),
                                 });
                                 let recovery = format!(
-                                    "Patch synthesis could not produce an executable edit: {}. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write or mutating bash patch before validation.",
+                                    "Patch synthesis could not produce an executable edit: {}. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write patch before validation.",
                                     safe_prefix_by_bytes(&err_text, 500)
                                 );
                                 messages.push(Message::system(recovery.clone()));
@@ -3633,9 +3633,17 @@ mod tests {
     }
 
     #[test]
-    fn test_action_checkpoint_allows_patch_bash_but_blocks_read_only_bash() {
-        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+    fn test_action_checkpoint_blocks_patch_bash_and_allows_validation_after_changes() {
+        assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "python3 - <<'PY'\nfrom pathlib import Path\nPath('x').write_text('y')\nPY"}),
+            false,
+        ));
+        assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
+            &serde_json::json!({"command": "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH"}),
+            false,
+        ));
+        assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
+            &serde_json::json!({"command": "cat > src/main.rs <<'EOF'\nfn main() {}\nEOF"}),
             false,
         ));
         assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
@@ -3661,7 +3669,31 @@ mod tests {
     }
 
     #[test]
-    fn test_code_action_tools_keep_bash_visible_but_guarded() {
+    fn patch_recovery_focused_repair_blocks_bash_patch_bypass() {
+        for command in [
+            "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH",
+            "python3 - <<'PY'\nopen('x', 'w').write('y')\nPY",
+            "sed -i '' 's/a/b/' src/main.rs",
+            "cat > src/main.rs <<'EOF'\nfn main() {}\nEOF",
+            "tee src/main.rs <<'EOF'\nfn main() {}\nEOF",
+        ] {
+            assert!(
+                !ConversationLoop::bash_allowed_at_action_checkpoint(
+                    &serde_json::json!({ "command": command }),
+                    true,
+                ),
+                "mutating bash command should not bypass file tools: {command}"
+            );
+        }
+
+        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+            &serde_json::json!({"command": "cargo test -q"}),
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_code_action_tools_expose_bash_only_after_changes() {
         let tools = vec![
             crate::services::api::Tool {
                 name: "file_edit".to_string(),
@@ -3692,7 +3724,7 @@ mod tests {
         assert!(before_change.contains("file_edit"));
         assert!(before_change.contains("file_read"));
         assert!(before_change.contains("grep"));
-        assert!(before_change.contains("bash"));
+        assert!(!before_change.contains("bash"));
 
         let after_change = ConversationLoop::code_action_tools(&tools, true, true)
             .into_iter()
@@ -3705,7 +3737,7 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
         assert!(after_lookup.contains("file_edit"));
-        assert!(after_lookup.contains("bash"));
+        assert!(!after_lookup.contains("bash"));
         assert!(!after_lookup.contains("file_read"));
         assert!(!after_lookup.contains("grep"));
     }
@@ -3722,7 +3754,8 @@ mod tests {
 
         assert!(prompt.contains("Up to 2 targeted file_read/grep lookups remain"));
         assert!(prompt.contains("Do not call glob/project_list"));
-        assert!(prompt.contains("bash only for a mutating patch command"));
+        assert!(prompt.contains("using file_edit/file_write so permission"));
+        assert!(prompt.contains("Do not use bash for patching"));
         assert!(!prompt.contains("Do not call grep/glob/file_read/project_list"));
 
         let prompt_after_one_lookup = ConversationLoop::focused_repair_mode_prompt(&exposed, 1);
@@ -3785,7 +3818,7 @@ Expected 1 occurrence(s) of old_string, but found 1487.
 
         assert!(message.contains("project_list"));
         assert!(message.contains("Exposed tools: file_edit, file_read, grep"));
-        assert!(message.contains("Use file_edit/file_write or a mutating bash command"));
+        assert!(message.contains("Use file_edit/file_write for patches"));
         assert!(message.contains("lookup budget still has room"));
         assert!(message.contains("Up to 2 targeted file_read/grep lookups remain"));
 

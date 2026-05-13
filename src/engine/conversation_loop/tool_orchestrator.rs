@@ -201,7 +201,7 @@ impl ConversationLoop {
 
     pub(super) fn code_action_tools(
         tools: &[Tool],
-        _has_changes_before_request: bool,
+        has_changes_before_request: bool,
         allow_targeted_lookup: bool,
     ) -> Vec<Tool> {
         tools
@@ -209,7 +209,7 @@ impl ConversationLoop {
             .filter(|tool| {
                 Self::is_code_write_tool_name(&tool.name)
                     || (allow_targeted_lookup && matches!(tool.name.as_str(), "file_read" | "grep"))
-                    || tool.name == "bash"
+                    || (has_changes_before_request && tool.name == "bash")
             })
             .cloned()
             .collect()

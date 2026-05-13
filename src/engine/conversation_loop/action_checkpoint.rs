@@ -43,7 +43,7 @@ impl ConversationLoop {
     ) -> String {
         let lookup_rule = Self::targeted_lookup_budget_rule(targeted_lookups_used);
         format!(
-            "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Patch files as soon as the target line is known, using file_edit/file_write or bash only for a mutating patch command. {} Do not call glob/project_list or any tool that is not in the exposed list. Do not use bash for read-only inspection; after a file changes, bash may run validation. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
+            "Current tool mode: FOCUSED REPAIR. The exposed tools for this request are: {}. Patch files as soon as the target line is known, using file_edit/file_write so permission, stale-read, diff, and rollback checks stay active. {} Do not call glob/project_list or any tool that is not in the exposed list. Do not use bash for patching or read-only inspection; after a file changes, bash may run validation. If previous validation reported compile/type errors, fix those exact errors first using the latest verification source context. If you have line numbers from earlier grep/file_read/verification output, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not invent enum variants, struct fields, functions, or APIs not visible in prior tool output; reuse existing names exactly. If a scorer/decision object already returns a final status, use that status directly; do not wrap it with explicit/score checks that can bypass safety, volatility, or duplication hard stops.",
             exposed_names.join(", "),
             lookup_rule
         )
@@ -96,7 +96,7 @@ impl ConversationLoop {
         let mut exposed = exposed_tool_names.iter().cloned().collect::<Vec<_>>();
         exposed.sort();
         format!(
-            "Tool '{tool_name}' was not exposed in the current focused repair request and cannot be executed. Exposed tools: {}. Use file_edit/file_write or a mutating bash command for the patch. Use file_read or grep only when it is exposed and the focused repair lookup budget still has room. {} Do not call glob/project_list or repeat broad inspection.",
+            "Tool '{tool_name}' was not exposed in the current focused repair request and cannot be executed. Exposed tools: {}. Use file_edit/file_write for patches so permission, stale-read, diff, and rollback checks stay active. Use file_read or grep only when it is exposed and the focused repair lookup budget still has room. Use bash only for validation after a file change. {} Do not call glob/project_list or repeat broad inspection.",
             exposed.join(", "),
             Self::targeted_lookup_budget_rule(targeted_lookups_used)
         )
@@ -160,27 +160,6 @@ impl ConversationLoop {
             .to_ascii_lowercase();
         if command.trim().is_empty() {
             return false;
-        }
-        let mutating_markers = [
-            "apply_patch",
-            "python",
-            "python3",
-            "perl -",
-            "sed -i",
-            "cat >",
-            "cat <<",
-            "tee ",
-            ">>",
-            "> ",
-            "mv ",
-            "cp ",
-            "touch ",
-        ];
-        if mutating_markers
-            .iter()
-            .any(|marker| command.contains(marker))
-        {
-            return true;
         }
         let validation_markers = [
             "bash -n",

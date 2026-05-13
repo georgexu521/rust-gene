@@ -1318,6 +1318,13 @@ cargo check -q
 
 - 多文件修改有明确工具路径，不靠 bash heredoc 或 deterministic patch synthesis 偷偷绕过权限和 stale-read。
 
+当前进展（2026-05-13）：
+
+- Focused repair / action checkpoint 已收紧边界：patch 只能走 `file_edit` / `file_write`，bash 不再允许用 `python`、`sed -i`、`cat >`、`tee`、`apply_patch` 等方式修改文件。
+- action checkpoint 下的 bash 只在已有文件变更后用于验证命令，避免多文件 patch 通过 shell 绕过 permission、stale-read、diff 和 rollback 记录。
+- 已补 `patch_recovery_focused_repair_blocks_bash_patch_bypass` 回归测试，确保 `cargo test -q patch_recovery -- --test-threads=1` 不再空跑。
+- 剩余产品化细节：新增专门的多文件 patch tool/path，让多文件修改也能在一次操作中做逐文件检查、统一 diff 和可恢复记录。
+
 ### Phase 3 完成标准
 
 - file edit 对编码、换行、并发和外部修改安全。
