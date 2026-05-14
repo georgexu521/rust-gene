@@ -35,6 +35,7 @@ mod tool_call_lifecycle;
 mod tool_execution;
 mod tool_execution_controller;
 mod tool_exposure_plan;
+mod tool_failure_stop_controller;
 mod tool_metadata;
 mod tool_orchestrator;
 mod tool_result_controller;
@@ -82,6 +83,7 @@ use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
 use tool_exposure_plan::{ToolExposurePlan, ToolExposureRequest};
+use tool_failure_stop_controller::{ToolFailureStopController, ToolFailureStopRequest};
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
@@ -1412,7 +1414,7 @@ impl ConversationLoop {
             let successful_write_tool = batch_processing.successful_write_tool;
             let used_action_checkpoint_lookup = batch_processing.used_action_checkpoint_lookup;
             let mut any_tool_success = batch_processing.any_tool_success;
-            let mut repeated_failed_tools = batch_processing.repeated_failed_tools;
+            let repeated_failed_tools = batch_processing.repeated_failed_tools;
             let failed_tool_names_this_round = batch_processing.failed_tool_names_this_round;
             let failed_tool_evidence = batch_processing.failed_tool_evidence;
             let file_edit_failure_correction_added =
@@ -1855,56 +1857,18 @@ impl ConversationLoop {
                 }
             }
 
-            if !any_tool_success && !repeated_failed_tools.is_empty() {
-                repeated_failed_tools.sort();
-                repeated_failed_tools.dedup();
-                let stop_msg = format!(
-                    "[Stopped repeated failed tool attempts: {}]",
-                    repeated_failed_tools.join(", ")
-                );
-                debug!("{}", stop_msg);
-                if let Some(tx) = tx {
-                    let _ = tx
-                        .send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg)))
-                        .await;
-                }
-                if final_content.trim().is_empty() {
-                    final_content = stop_msg;
-                } else {
-                    final_content.push('\n');
-                    final_content.push_str(&stop_msg);
-                }
+            if let Some(stop) = ToolFailureStopController::decide(ToolFailureStopRequest {
+                any_tool_success,
+                repeated_failed_tools: &repeated_failed_tools,
+                failed_tool_names: &failed_tool_names,
+            }) {
+                FocusedRepairRecoveryController::stop_with_message(
+                    tx,
+                    &mut final_content,
+                    &stop.message,
+                )
+                .await;
                 break;
-            }
-
-            if !any_tool_success {
-                let mut noisy_by_name = Vec::new();
-                for (name, count) in &failed_tool_names {
-                    if *count >= 2 && !READ_ONLY_TOOLS.contains(&name.as_str()) {
-                        noisy_by_name.push(name.clone());
-                    }
-                }
-                if !noisy_by_name.is_empty() {
-                    noisy_by_name.sort();
-                    noisy_by_name.dedup();
-                    let stop_msg = format!(
-                        "[Stopped noisy retries after repeated failures: {}]",
-                        noisy_by_name.join(", ")
-                    );
-                    debug!("{}", stop_msg);
-                    if let Some(tx) = tx {
-                        let _ = tx
-                            .send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg)))
-                            .await;
-                    }
-                    if final_content.trim().is_empty() {
-                        final_content = stop_msg;
-                    } else {
-                        final_content.push('\n');
-                        final_content.push_str(&stop_msg);
-                    }
-                    break;
-                }
             }
 
             // ── 自动验证闭环 ──────────────────────────────

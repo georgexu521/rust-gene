@@ -248,6 +248,16 @@
   `patch_synthesis_executor`, and `route_scoped_tools` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1322 passed; 0 failed`).
+- 2026-05-14: Phase A tool-failure stop extraction started. Added
+  `src/engine/conversation_loop/tool_failure_stop_controller.rs` so repeated
+  failed-tool fingerprints and noisy non-read-only retry stops are decided
+  outside `run_inner`. The main loop now asks for a stop decision and delegates
+  stop output formatting to the existing recovery output helper.
+- Validation after the `ToolFailureStopController` slice: `cargo fmt`,
+  targeted `tool_failure_stop_controller`, `focused_repair_recovery`,
+  `tool_batch_result_processor`, and `route_scoped_tools` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1325 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
