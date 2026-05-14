@@ -14,6 +14,7 @@ mod assistant_response_retry_controller;
 mod closeout_controller;
 mod companion_context;
 mod context_budget_controller;
+mod first_code_change_controller;
 mod focused_repair_recovery;
 mod memory_sync_controller;
 mod patch_recovery;
@@ -59,6 +60,7 @@ use assistant_response_retry_controller::{
 };
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
+use first_code_change_controller::{FirstCodeChangeContext, FirstCodeChangeController};
 use focused_repair_recovery::{
     DisabledPatchSynthesisRecovery, DisabledPatchSynthesisRecoveryRequest,
     FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
@@ -1818,24 +1820,12 @@ impl ConversationLoop {
 
             // ── 自动验证闭环 ──────────────────────────────
             if !changed_files.is_empty() {
-                turn_state
-                    .evidence_ledger
-                    .record_changed_files(&changed_files);
-                if code_workflow.activate_trigger(
-                    crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::FirstCodeChange,
-                ) {
-                    trace_adaptive_workflow_trigger(
-                        &trace,
-                        crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::FirstCodeChange,
-                        &code_workflow,
-                    );
-                    trace.record(TraceEvent::WorkflowFallback {
-                        error: format!(
-                            "adaptive workflow trigger activated: first_code_change files={}",
-                            changed_files.len()
-                        ),
-                    });
-                }
+                FirstCodeChangeController::record(FirstCodeChangeContext {
+                    trace: &trace,
+                    code_workflow: &mut code_workflow,
+                    evidence_ledger: &mut turn_state.evidence_ledger,
+                    changed_files: &changed_files,
+                });
                 let working_dir =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let verification =

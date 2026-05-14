@@ -269,6 +269,16 @@
   `tool_failure_stop_controller`, `focused_repair_recovery`, and
   `route_scoped_tools` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` all passed.
+- 2026-05-14: Phase A first-code-change trigger extraction started. Added
+  `src/engine/conversation_loop/first_code_change_controller.rs` so changed
+  file evidence recording and the `first_code_change` adaptive workflow
+  trigger are handled behind a small boundary before post-edit verification.
+  `run_inner` now delegates evidence/trigger recording and then continues with
+  verification and repair orchestration.
+- Validation after the `FirstCodeChangeController` slice: `cargo fmt`,
+  targeted `first_code_change_controller`, `post_edit_verification_controller`,
+  and `post_edit_repair_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
