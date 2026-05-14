@@ -184,6 +184,19 @@
   `tool_exposure_plan`, and `route_scoped_tools` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1309 passed; 0 failed`).
+- 2026-05-14: Phase A assistant-response retry extraction started. Added
+  `src/engine/conversation_loop/assistant_response_retry_controller.rs` so
+  unexecuted pseudo-command correction, false bash-unavailable correction,
+  local-filesystem no-tool correction, and unsupported filesystem-metadata
+  grounding correction are evaluated behind a focused controller. `run_inner`
+  now only gathers the current filesystem evidence gaps, applies retry markers,
+  records the fallback trace event, and appends the controller-provided retry
+  messages.
+- Validation after the `AssistantResponseRetryController` slice:
+  `cargo fmt`, targeted `assistant_response_retry_controller`,
+  `route_scoped_tools`, and `api_request_controller` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1313 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

@@ -10,6 +10,7 @@
 mod action_checkpoint;
 mod api_request_controller;
 mod approval;
+mod assistant_response_retry_controller;
 mod closeout_controller;
 mod companion_context;
 mod context_budget_controller;
@@ -48,6 +49,9 @@ use action_checkpoint::{
 };
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
+use assistant_response_retry_controller::{
+    AssistantResponseRetryController, AssistantResponseRetryRequest,
+};
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
@@ -1295,69 +1299,36 @@ impl ConversationLoop {
             }
 
             if tool_calls.is_empty() {
-                let needs_bash_tool_retry = pseudo_tool_text::contains_unexecuted_tool_command(
-                    &content,
-                    &exposed_tool_names,
-                )
-                    || pseudo_tool_text::contains_false_bash_unavailable_claim(
-                        &content,
-                        &exposed_tool_names,
-                    );
-                let needs_filesystem_tool_retry = !tool_calls_made
-                    && is_local_filesystem_inspection_route(&route)
-                    && pseudo_tool_text::contains_local_filesystem_claim_without_tool(
-                        &content,
-                        &exposed_tool_names,
-                    );
-                let filesystem_grounding_gaps = if is_local_filesystem_inspection_route(&route) {
+                let is_local_filesystem_route = is_local_filesystem_inspection_route(&route);
+                let filesystem_grounding_gaps = if is_local_filesystem_route {
                     turn_state
                         .evidence_ledger
                         .unsupported_filesystem_claims(&content)
                 } else {
                     Vec::new()
                 };
-                let needs_filesystem_grounding_retry = !filesystem_grounding_gaps.is_empty();
-                if (!pseudo_tool_retry_used
-                    && (needs_bash_tool_retry || needs_filesystem_tool_retry))
-                    || (!filesystem_grounding_retry_used && needs_filesystem_grounding_retry)
+                if let Some(retry_decision) =
+                    AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
+                        content: &content,
+                        exposed_tool_names: &exposed_tool_names,
+                        tool_calls_made,
+                        is_local_filesystem_inspection_route: is_local_filesystem_route,
+                        unsupported_filesystem_claims: filesystem_grounding_gaps,
+                        pseudo_tool_retry_used,
+                        filesystem_grounding_retry_used,
+                    })
                 {
-                    if needs_filesystem_grounding_retry {
+                    if retry_decision.mark_filesystem_grounding_retry_used {
                         filesystem_grounding_retry_used = true;
-                    } else {
+                    }
+                    if retry_decision.mark_pseudo_tool_retry_used {
                         pseudo_tool_retry_used = true;
                     }
-                    let fallback_error = if needs_filesystem_grounding_retry {
-                        format!(
-                            "assistant included unsupported filesystem claim(s): {}; retrying with evidence-grounded correction",
-                            filesystem_grounding_gaps.join(", ")
-                        )
-                    } else if needs_filesystem_tool_retry {
-                        "assistant answered local filesystem state without a tool; retrying with explicit filesystem tool-use correction"
-                            .to_string()
-                    } else {
-                        "assistant emitted an unexecuted or false-unavailable shell response; retrying with explicit bash tool-use correction"
-                            .to_string()
-                    };
                     trace.record(TraceEvent::WorkflowFallback {
-                        error: fallback_error,
+                        error: retry_decision.fallback_error,
                     });
-                    messages.push(Message::assistant(safe_prefix_by_bytes(&content, 1200)));
-                    let correction = if needs_filesystem_grounding_retry {
-                        "Your previous answer added filesystem metadata that was not explicitly supported by tool output. \
-Re-answer from the evidence already gathered. Do not state size, item count, creation time, or exact contents unless the tool output directly contains that fact. \
-If the user did not ask for those metadata fields, omit them."
-                    } else if needs_filesystem_tool_retry {
-                        "file_read and glob are currently exposed to you as callable tools. \
-The user asked for current local filesystem state, so do not answer from memory or inference. \
-Inspect the requested path with file_read or glob now, then answer only from that tool output. \
-Do not invent size, item count, creation time, or contents that are not present in tool output."
-                    } else {
-                        "Bash is currently exposed to you as a callable tool. \
-The user asked for current local/runtime state, so do not answer from an unexecuted command and do not claim bash is unavailable. \
-If a command appears in a code block or your answer asks the user to run a shell command manually, execute it with the bash tool now. \
-Only report a tool as unavailable when it is not exposed in the current tool list."
-                    };
-                    messages.push(Message::system(correction));
+                    messages.push(retry_decision.assistant_message);
+                    messages.push(retry_decision.correction_message);
                     continue;
                 }
                 if let Some(tx) = tx {
