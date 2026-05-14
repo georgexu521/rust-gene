@@ -33,7 +33,7 @@ pub(super) struct ToolExecutionBatch {
 }
 
 impl ToolExecutionBatch {
-    fn new(
+    pub(super) fn new(
         results: Vec<(ToolCall, ToolResult)>,
         lifecycle: Vec<(String, ToolCallLifecycleRecord)>,
     ) -> Self {

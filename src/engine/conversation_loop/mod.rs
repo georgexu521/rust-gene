@@ -28,6 +28,7 @@ mod runtime_timeouts;
 mod session_processor;
 mod step_executor;
 mod text_sanitizer;
+mod tool_batch_result_processor;
 mod tool_call_lifecycle;
 mod tool_execution;
 mod tool_execution_controller;
@@ -66,6 +67,7 @@ pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExe
 use text_sanitizer::strip_think_blocks;
 #[cfg(test)]
 use text_sanitizer::VisibleTextSanitizer;
+use tool_batch_result_processor::{ToolBatchProcessingContext, ToolBatchResultProcessor};
 #[cfg(test)]
 use tool_execution::truncate_tool_result;
 pub(crate) use tool_execution::{safe_prefix_by_bytes, safe_suffix_by_bytes, READ_ONLY_TOOLS};
@@ -1374,132 +1376,43 @@ impl ConversationLoop {
                 turn_state.effective_iterations += 1;
             }
 
-            let mut tool_results_text = String::new();
-            let mut changed_files = Vec::new();
-            let batch_has_unsuccessful_tools = tool_batch.unsuccessful_count() > 0;
-            let used_write_tool = tool_calls
-                .iter()
-                .any(|tc| Self::is_code_write_tool_name(&tc.name));
-            let mut successful_write_tool = false;
-            let used_action_checkpoint_lookup = action_checkpoint_active
-                && tool_calls
-                    .iter()
-                    .any(|tc| matches!(tc.name.as_str(), "file_read" | "grep"));
-            let mut any_tool_success = tool_batch.any_success();
-            let mut repeated_failed_tools = Vec::new();
-            let mut failed_tool_names_this_round = Vec::new();
-            let mut failed_tool_evidence = Vec::new();
-            let mut file_edit_failure_correction_added = false;
-            let mut successful_validation_commands = Vec::new();
+            let batch_processing = ToolBatchResultProcessor::process(ToolBatchProcessingContext {
+                tool_calls: &tool_calls,
+                tool_batch: &mut tool_batch,
+                turn_state: &mut turn_state,
+                messages: &mut messages,
+                trace: &trace,
+                is_programming_workflow:
+                    crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
+                working_dir: &working_dir,
+                last_user_preview: &last_user_preview,
+                companion_context_keys: &mut companion_context_keys,
+                failed_tool_fingerprints: &mut failed_tool_fingerprints,
+                failed_tool_names: &mut failed_tool_names,
+                required_validation_commands: &required_validation_commands,
+                successful_required_validation_commands:
+                    &mut successful_required_validation_commands,
+                action_checkpoint_active,
+                action_checkpoint_requires_patch_before_validation:
+                    &mut action_checkpoint_requires_patch_before_validation,
+                destructive_scope: &destructive_scope,
+                baseline_git_status_files: &baseline_git_status_files,
+            })
+            .await;
+            let mut tool_results_text = batch_processing.tool_results_text;
+            let mut changed_files = batch_processing.changed_files;
+            let batch_has_unsuccessful_tools = batch_processing.batch_has_unsuccessful_tools;
+            let used_write_tool = batch_processing.used_write_tool;
+            let successful_write_tool = batch_processing.successful_write_tool;
+            let used_action_checkpoint_lookup = batch_processing.used_action_checkpoint_lookup;
+            let mut any_tool_success = batch_processing.any_tool_success;
+            let mut repeated_failed_tools = batch_processing.repeated_failed_tools;
+            let failed_tool_names_this_round = batch_processing.failed_tool_names_this_round;
+            let failed_tool_evidence = batch_processing.failed_tool_evidence;
+            let file_edit_failure_correction_added =
+                batch_processing.file_edit_failure_correction_added;
+            let successful_validation_commands = batch_processing.successful_validation_commands;
             let mut should_closeout_after_verified_change = false;
-            if used_write_tool && !required_validation_commands.is_empty() {
-                successful_required_validation_commands.clear();
-            }
-            for (tc, result) in tool_batch.results_mut().iter_mut() {
-                ToolTurnController::append_tool_result(
-                    tc,
-                    result,
-                    ToolTurnAppendContext {
-                        evidence_ledger: &mut turn_state.evidence_ledger,
-                        runtime_diet: &mut turn_state.runtime_diet,
-                        tool_results_text: &mut tool_results_text,
-                        messages: &mut messages,
-                    },
-                )
-                .await;
-
-                if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-                    if let Some(note) = companion_context::companion_context_note(
-                        &working_dir,
-                        &last_user_preview,
-                        tc,
-                        result,
-                    ) {
-                        if companion_context_keys.insert(note.key) {
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&note.text);
-                            tool_results_text.push('\n');
-                            messages.push(Message::system(note.text));
-                        }
-                    }
-                }
-
-                let fp = tool_call_fingerprint(tc);
-                if result.success {
-                    failed_tool_fingerprints.remove(&fp);
-                    failed_tool_names.remove(&tc.name);
-                } else {
-                    let count = failed_tool_fingerprints.entry(fp).or_insert(0);
-                    *count += 1;
-                    if *count >= 2 {
-                        repeated_failed_tools.push(tc.name.clone());
-                    }
-                    let name_count = failed_tool_names.entry(tc.name.clone()).or_insert(0);
-                    *name_count += 1;
-                    failed_tool_names_this_round.push(tc.name.clone());
-                    failed_tool_evidence.push(format!(
-                        "{} {} failed:\n{}",
-                        tc.name,
-                        tc.id,
-                        tool_result_dialog_content(result)
-                    ));
-                }
-
-                if result.success && (tc.name == "file_edit" || tc.name == "file_write") {
-                    successful_write_tool = true;
-                    action_checkpoint_requires_patch_before_validation = false;
-                    if let Some(path) = tc.arguments["path"].as_str() {
-                        changed_files.push(std::path::PathBuf::from(path));
-                    }
-                }
-                if let Some(command) =
-                    RequiredValidationController::successful_validation_command(tc, result.success)
-                {
-                    if RequiredValidationController::command_matches_required(
-                        &required_validation_commands,
-                        &command,
-                    ) {
-                        successful_required_validation_commands.insert(command.clone());
-                    }
-                    successful_validation_commands.push(command);
-                }
-            }
-            if let Some(guard) = destructive_scope
-                .completion_guard_for_results(tool_batch.result_successes(), &working_dir)
-            {
-                trace.record(TraceEvent::DestructiveScopeChecked {
-                    tool: "assistant_response".to_string(),
-                    call_id: "post_action_guard".to_string(),
-                    operation: "post_action_guard".to_string(),
-                    target: None,
-                    allowed: false,
-                    reason: guard.clone(),
-                });
-                messages.push(Message::system(guard.clone()));
-                tool_results_text.push('\n');
-                tool_results_text.push_str(&guard);
-                tool_results_text.push('\n');
-            }
-            if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-                if let Some(correction) =
-                    Self::file_edit_failure_repair_correction(&failed_tool_evidence)
-                {
-                    trace.record(TraceEvent::WorkflowFallback {
-                        error: "file_edit failure converted to line-range repair correction"
-                            .to_string(),
-                    });
-                    file_edit_failure_correction_added = true;
-                    tool_results_text.push('\n');
-                    tool_results_text.push_str(&correction);
-                    messages.push(Message::system(correction));
-                }
-            }
-            if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-                WorkflowChangeTracker::append_changed_files_since(
-                    &mut changed_files,
-                    &baseline_git_status_files,
-                );
-            }
             let has_worktree_changes = !changed_files.is_empty();
 
             if Self::should_retry_after_file_edit_failure_correction(

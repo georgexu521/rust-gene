@@ -197,6 +197,19 @@
   `route_scoped_tools`, and `api_request_controller` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1313 passed; 0 failed`).
+- 2026-05-14: Phase A tool-batch result processing extraction started.
+  Added `src/engine/conversation_loop/tool_batch_result_processor.rs` so
+  post-execution tool result appending, runtime-diet accounting, companion
+  context notes, repeated-failure tracking, successful write detection,
+  validation-command collection, destructive completion guards, file-edit
+  repair correction, and changed-file discovery now sit behind one batch
+  processor. `run_inner` now receives a compact outcome and continues with the
+  existing action-checkpoint, patch-synthesis, validation, and closeout policy.
+- Validation after the `ToolBatchResultProcessor` slice: `cargo fmt`, targeted
+  `tool_batch_result_processor`, `tool_turn_controller`,
+  `assistant_response_retry_controller`, and `route_scoped_tools` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1315 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
