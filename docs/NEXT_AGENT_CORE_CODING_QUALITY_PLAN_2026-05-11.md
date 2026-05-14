@@ -210,6 +210,19 @@
   `assistant_response_retry_controller`, and `route_scoped_tools` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1315 passed; 0 failed`).
+- 2026-05-14: Phase A synthesized patch execution extraction started. Added
+  `src/engine/conversation_loop/patch_synthesis_executor.rs` so deterministic
+  patch fallback and model patch synthesis share the same synthesized-tool
+  execution path. The executor owns the constrained `file_edit`/`file_write`
+  exposure, patch-synthesis tool execution, tool-result appending, runtime-diet
+  accounting, successful write path collection, and changed-file discovery
+  while preserving the existing branch-specific retry/reset decisions in
+  `run_inner`.
+- Validation after the `PatchSynthesisExecutor` slice: `cargo fmt`, targeted
+  `patch_synthesis_executor`, `tool_batch_result_processor`,
+  `route_scoped_tools`, and `action_checkpoint` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1317 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

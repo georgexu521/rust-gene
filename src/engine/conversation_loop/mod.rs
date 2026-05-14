@@ -17,6 +17,7 @@ mod context_budget_controller;
 mod memory_sync_controller;
 mod patch_recovery;
 mod patch_repair_rules;
+mod patch_synthesis_executor;
 mod permission_controller;
 mod post_edit_repair_controller;
 mod post_edit_verification_controller;
@@ -57,6 +58,7 @@ use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
+use patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExecutor};
 use post_edit_repair_controller::{PostEditRepairContext, PostEditRepairController};
 use post_edit_verification_controller::{
     PostEditVerificationContext, PostEditVerificationController,
@@ -78,7 +80,6 @@ use tool_exposure_plan::{ToolExposurePlan, ToolExposureRequest};
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
-use tool_turn_controller::{ToolTurnAppendContext, ToolTurnController};
 use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
@@ -1663,53 +1664,27 @@ impl ConversationLoop {
                                 "Applying deterministic patch from prior evidence.",
                                 deterministic_calls.clone(),
                             ));
-                            let exposed_synth_tools =
-                                HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
-                            let mut synthesized_batch = ToolExecutionController::new(
-                                ToolExecutionContext::from_conversation(self),
+                            let _ = PatchSynthesisExecutor::execute(
+                                PatchSynthesisExecutionContext {
+                                    conversation: self,
+                                    tool_calls: &deterministic_calls,
+                                    tx,
+                                    trace: &trace,
+                                    resource_policy: &resource_policy,
+                                    destructive_scope: &destructive_scope,
+                                    turn_state: &mut turn_state,
+                                    tool_results_text: &mut tool_results_text,
+                                    messages: &mut messages,
+                                    changed_files: &mut changed_files,
+                                    baseline_git_status_files: &baseline_git_status_files,
+                                    is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
+                                    mark_patch_requirement_on_success: true,
+                                    action_checkpoint_requires_patch_before_validation:
+                                        &mut action_checkpoint_requires_patch_before_validation,
+                                },
                             )
-                            .execute_tools_parallel(ToolExecutionRequest {
-                                tool_calls: &deterministic_calls,
-                                tx,
-                                pre_executed: std::collections::HashMap::new(),
-                                trace: Some(trace.clone()),
-                                resource_policy: &resource_policy,
-                                exposed_tool_names: &exposed_synth_tools,
-                                action_checkpoint_active: false,
-                                action_checkpoint_lookup_count: 0,
-                                has_changes_before_tools: false,
-                                destructive_scope: &destructive_scope,
-                                lifecycle: &mut turn_state.tool_lifecycle,
-                            })
                             .await;
-                            for (tc, result) in synthesized_batch.results_mut().iter_mut() {
-                                ToolTurnController::append_tool_result(
-                                    tc,
-                                    result,
-                                    ToolTurnAppendContext {
-                                        evidence_ledger: &mut turn_state.evidence_ledger,
-                                        runtime_diet: &mut turn_state.runtime_diet,
-                                        tool_results_text: &mut tool_results_text,
-                                        messages: &mut messages,
-                                    },
-                                )
-                                .await;
-                                if result.success && Self::is_code_write_tool_name(&tc.name) {
-                                    action_checkpoint_requires_patch_before_validation = false;
-                                    if let Some(path) = tc.arguments["path"].as_str() {
-                                        changed_files.push(std::path::PathBuf::from(path));
-                                    }
-                                }
-                            }
                             final_tool_calls.extend(deterministic_calls);
-                            if crate::engine::code_change_workflow::is_programming_workflow(
-                                route.workflow,
-                            ) {
-                                WorkflowChangeTracker::append_changed_files_since(
-                                    &mut changed_files,
-                                    &baseline_git_status_files,
-                                );
-                            }
                             if !changed_files.is_empty() {
                                 action_checkpoint_active = false;
                                 action_checkpoint_lookup_count = 0;
@@ -1805,61 +1780,30 @@ impl ConversationLoop {
                                 synthesis_message,
                                 synthesized_calls.clone(),
                             ));
-                            let exposed_synth_tools =
-                                HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
-                            let mut synthesized_batch = ToolExecutionController::new(
-                                ToolExecutionContext::from_conversation(self),
+                            let synthesis_execution = PatchSynthesisExecutor::execute(
+                                PatchSynthesisExecutionContext {
+                                    conversation: self,
+                                    tool_calls: &synthesized_calls,
+                                    tx,
+                                    trace: &trace,
+                                    resource_policy: &resource_policy,
+                                    destructive_scope: &destructive_scope,
+                                    turn_state: &mut turn_state,
+                                    tool_results_text: &mut tool_results_text,
+                                    messages: &mut messages,
+                                    changed_files: &mut changed_files,
+                                    baseline_git_status_files: &baseline_git_status_files,
+                                    is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
+                                    mark_patch_requirement_on_success: false,
+                                    action_checkpoint_requires_patch_before_validation:
+                                        &mut action_checkpoint_requires_patch_before_validation,
+                                },
                             )
-                            .execute_tools_parallel(ToolExecutionRequest {
-                                tool_calls: &synthesized_calls,
-                                tx,
-                                pre_executed: std::collections::HashMap::new(),
-                                trace: Some(trace.clone()),
-                                resource_policy: &resource_policy,
-                                exposed_tool_names: &exposed_synth_tools,
-                                // Synthesized edits have already passed
-                                // validate_patch_synthesis_action(). Avoid
-                                // applying the direct action-checkpoint
-                                // guard again, or safe recovered patches can
-                                // be rejected without giving the model a way
-                                // to inspect and repair the arguments.
-                                action_checkpoint_active: false,
-                                action_checkpoint_lookup_count: 0,
-                                has_changes_before_tools: false,
-                                destructive_scope: &destructive_scope,
-                                lifecycle: &mut turn_state.tool_lifecycle,
-                            })
                             .await;
-                            for (tc, result) in synthesized_batch.results_mut().iter_mut() {
-                                ToolTurnController::append_tool_result(
-                                    tc,
-                                    result,
-                                    ToolTurnAppendContext {
-                                        evidence_ledger: &mut turn_state.evidence_ledger,
-                                        runtime_diet: &mut turn_state.runtime_diet,
-                                        tool_results_text: &mut tool_results_text,
-                                        messages: &mut messages,
-                                    },
-                                )
-                                .await;
-                                if result.success {
-                                    any_tool_success = true;
-                                }
-                                if result.success && Self::is_code_write_tool_name(&tc.name) {
-                                    if let Some(path) = tc.arguments["path"].as_str() {
-                                        changed_files.push(std::path::PathBuf::from(path));
-                                    }
-                                }
+                            if synthesis_execution.any_tool_success {
+                                any_tool_success = true;
                             }
                             final_tool_calls.extend(synthesized_calls);
-                            if crate::engine::code_change_workflow::is_programming_workflow(
-                                route.workflow,
-                            ) {
-                                WorkflowChangeTracker::append_changed_files_since(
-                                    &mut changed_files,
-                                    &baseline_git_status_files,
-                                );
-                            }
                             if !changed_files.is_empty() {
                                 action_checkpoint_active = false;
                                 action_checkpoint_lookup_count = 0;
