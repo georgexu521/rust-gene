@@ -46,8 +46,8 @@ mod workflow_prompt_policy;
 mod workflow_trace;
 
 use action_checkpoint::{
-    FocusedRepairActionRequest, ProgressCheckpointAction, ProgressCheckpointController,
-    ProgressCheckpointRequest,
+    FocusedRepairActionRequest, ProgressCheckpointActionApplier, ProgressCheckpointActionContext,
+    ProgressCheckpointController, ProgressCheckpointRequest,
 };
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
@@ -1476,123 +1476,14 @@ impl ConversationLoop {
                         decision.force_patch_synthesis_after_no_change;
                     force_patch_synthesis_reason = decision.force_patch_synthesis_reason;
 
-                    match decision.action {
-                        ProgressCheckpointAction::None => {}
-                        ProgressCheckpointAction::AuditNoDiffValidation => {
-                            let checkpoint = "Audit/regression checkpoint: this task allows a no-diff closeout when the requested behavior is already present. Do not force an arbitrary edit. Run the required validation commands now; if they pass, provide a Closeout with direct evidence and changed files as none. If a concrete missing behavior is proven, then make the smallest focused edit."
-                                .to_string();
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: "audit/regression task should validate before forcing edits"
-                                    .to_string(),
-                            });
-                            messages.push(Message::system(checkpoint.clone()));
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&checkpoint);
-                        }
-                        ProgressCheckpointAction::ExistingDiffNeedsRepair {
-                            no_code_progress_rounds: rounds,
-                        } => {
-                            if code_workflow.activate_trigger(
-                                crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
-                            ) {
-                                trace_adaptive_workflow_trigger(
-                                    &trace,
-                                    crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
-                                    &code_workflow,
-                                );
-                                trace.record(TraceEvent::WorkflowFallback {
-                                    error:
-                                        "adaptive workflow trigger activated: repeated_no_code_progress"
-                                            .to_string(),
-                                });
-                            }
-                            let checkpoint = format!(
-                                "Workflow acceptance repair checkpoint: this {:?} task already has code changes, but {} consecutive successful tool rounds made no additional edit. Use the evidence already gathered to synthesize the smallest remaining file_edit/file_write/file_patch change now. If multiple independent acceptance-critical bypasses are visible, fix them together; otherwise stop with a Closeout status of not_verified and name the blocker.",
-                                route.workflow, rounds
-                            );
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error:
-                                    "existing diff still needs repair; entering patch synthesis after repeated read-only rounds"
-                                        .to_string(),
-                            });
-                            messages.push(Message::system(checkpoint.clone()));
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&checkpoint);
-                        }
-                        ProgressCheckpointAction::ProgressReminder {
-                            no_code_progress_rounds: rounds,
-                        } => {
-                            let lookup_rule = Self::targeted_lookup_budget_rule(0);
-                            let checkpoint = format!(
-                                "Workflow progress checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. Keep investigation focused: on the next response either make the smallest safe file_edit/file_write/file_patch change, or use the focused lookup budget if a required symbol, test, or call site is still missing. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates.",
-                                route.workflow, rounds, lookup_rule
-                            );
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: "code-change task needs an edit after repeated inspection"
-                                    .to_string(),
-                            });
-                            messages.push(Message::system(checkpoint.clone()));
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&checkpoint);
-                        }
-                        ProgressCheckpointAction::EnterActionCheckpoint {
-                            no_code_progress_rounds: rounds,
-                        } => {
-                            if code_workflow.activate_trigger(
-                                crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
-                            ) {
-                                trace_adaptive_workflow_trigger(
-                                    &trace,
-                                    crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RepeatedNoCodeProgress,
-                                    &code_workflow,
-                                );
-                                trace.record(TraceEvent::WorkflowFallback {
-                                    error:
-                                        "adaptive workflow trigger activated: repeated_no_code_progress"
-                                            .to_string(),
-                                });
-                            }
-                            let lookup_rule = Self::targeted_lookup_budget_rule(0);
-                            let checkpoint = format!(
-                                "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not call glob/project_list or repeat broad inspection. If a specific symbol, test, or call site is still missing, use the focused lookup budget, then patch. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
-                                route.workflow, rounds, lookup_rule
-                            );
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: "code-change task made no edit after repeated inspection"
-                                    .to_string(),
-                            });
-                            messages.push(Message::system(checkpoint.clone()));
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&checkpoint);
-                        }
-                        ProgressCheckpointAction::CodeWriteForbidden => {
-                            let checkpoint = "Tool-scope checkpoint: this request forbids code-write tools. Do not synthesize or call file_edit, file_write, or file_patch. Use the exposed read/terminal tools to gather direct evidence, run required validation when present, then close out with changed files as none unless a concrete blocker prevents validation."
-                                .to_string();
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: "code-write tools are forbidden; validation/closeout should replace patch synthesis"
-                                    .to_string(),
-                            });
-                            messages.push(Message::system(checkpoint.clone()));
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&checkpoint);
-                        }
-                        ProgressCheckpointAction::FocusedLookupNotice { exhausted } => {
-                            let lookup_notice = if exhausted {
-                                "focused repair targeted lookup budget used; next checkpoint request will expose patch tools only"
-                            } else {
-                                "focused repair targeted lookup used; one targeted lookup remains before patch-only mode"
-                            };
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: lookup_notice.to_string(),
-                            });
-                        }
-                        ProgressCheckpointAction::FocusedRepairStalled => {
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: "action checkpoint entered patch synthesis after repeated focused repair reads"
-                                    .to_string(),
-                            });
-                        }
-                    }
+                    ProgressCheckpointActionApplier::apply(ProgressCheckpointActionContext {
+                        action: decision.action,
+                        workflow: route.workflow,
+                        trace: &trace,
+                        code_workflow: &mut code_workflow,
+                        messages: &mut messages,
+                        tool_results_text: &mut tool_results_text,
+                    });
                 }
             }
 

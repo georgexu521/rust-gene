@@ -223,6 +223,19 @@
   `route_scoped_tools`, and `action_checkpoint` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1317 passed; 0 failed`).
+- 2026-05-14: Phase A progress-checkpoint action extraction started. Moved
+  the `ProgressCheckpointAction` application branch into
+  `ProgressCheckpointActionApplier` in
+  `src/engine/conversation_loop/action_checkpoint.rs`. The controller still
+  decides checkpoint state, while the applier now owns the action-to-trace,
+  adaptive-trigger, system-message, and tool-result-text side effects.
+  `run_inner` now synchronizes the decision state and delegates action
+  materialization.
+- Validation after the `ProgressCheckpointActionApplier` slice: `cargo fmt`,
+  targeted `action_checkpoint`, `route_scoped_tools`, and
+  `patch_synthesis_executor` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1319 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
