@@ -14,6 +14,7 @@ mod assistant_response_retry_controller;
 mod closeout_controller;
 mod companion_context;
 mod context_budget_controller;
+mod focused_repair_recovery;
 mod memory_sync_controller;
 mod patch_recovery;
 mod patch_repair_rules;
@@ -56,6 +57,10 @@ use assistant_response_retry_controller::{
 };
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
+use focused_repair_recovery::{
+    DisabledPatchSynthesisRecovery, DisabledPatchSynthesisRecoveryRequest,
+    FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
+};
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
 use patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExecutor};
@@ -1506,15 +1511,15 @@ impl ConversationLoop {
                         error: repair_proposal.trace_error.clone(),
                     });
                     if code_write_tools_forbidden {
-                        let recovery = "Patch synthesis skipped because this request forbids code-write tools. Continue with the exposed tools only: run required validation if available, report direct evidence, and close out without arbitrary file edits."
-                            .to_string();
                         trace.record(TraceEvent::WorkflowFallback {
                             error: "patch synthesis blocked by prompt-forbidden code-write tools"
                                 .to_string(),
                         });
-                        messages.push(Message::system(recovery.clone()));
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&recovery);
+                        FocusedRepairRecoveryController::append_system_prompt(
+                            &mut messages,
+                            &mut tool_results_text,
+                            FocusedRepairRecoveryController::code_write_forbidden_prompt(),
+                        );
                         action_checkpoint_active = false;
                         action_checkpoint_lookup_count = 0;
                         action_checkpoint_no_change_rounds = 0;
@@ -1588,53 +1593,53 @@ impl ConversationLoop {
                             error: "patch synthesis disabled by default; returning control to model-led repair"
                                 .to_string(),
                         });
-                        if !patch_synthesis_recovery_used {
-                            patch_synthesis_recovery_used = true;
-                            action_checkpoint_no_change_rounds = 0;
-                            let lookup_rule =
-                                Self::targeted_lookup_budget_rule(action_checkpoint_lookup_count);
-                            let recovery = format!(
-                                "Patch synthesis is disabled by default. Use only the exposed tools ({}) to make the smallest safe patch from the evidence already gathered. Prefer file_edit/file_write/file_patch so permission, stale-read, diff, and rollback checks stay active. If file_read or grep is still exposed, use the remaining focused lookup budget before patching; otherwise patch from the evidence already gathered. {} Do not call tools that are not exposed.",
-                                exposed_tool_names.iter().cloned().collect::<Vec<_>>().join(", "),
-                                lookup_rule
-                            );
-                            messages.push(Message::system(recovery.clone()));
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&recovery);
-                            continue;
-                        }
-                        if !action_checkpoint_reopen_used {
-                            action_checkpoint_reopen_used = true;
-                            action_checkpoint_active = false;
-                            action_checkpoint_lookup_count = 0;
-                            action_checkpoint_no_change_rounds = 0;
-                            no_code_progress_rounds = 1;
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: "focused repair did not produce a patch; reopening normal code-change tools once"
-                                    .to_string(),
-                            });
-                            let recovery = "Focused repair did not produce a file change. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write/file_patch change before running validation. Do not close out until a file change succeeds or a concrete blocker is proven."
-                                .to_string();
-                            messages.push(Message::system(recovery.clone()));
-                            tool_results_text.push('\n');
-                            tool_results_text.push_str(&recovery);
-                            continue;
-                        }
-                        let stop_msg =
-                            "[Stopped action checkpoint without patch synthesis; no model-led file change was produced]";
-                        debug!("{}", stop_msg);
-                        if let Some(tx) = tx {
-                            let _ = tx
-                                .send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg)))
+                        match FocusedRepairRecoveryController::disabled_patch_synthesis_recovery(
+                            DisabledPatchSynthesisRecoveryRequest {
+                                patch_synthesis_recovery_used,
+                                action_checkpoint_reopen_used,
+                                action_checkpoint_lookup_count,
+                                exposed_tool_names: &exposed_tool_names,
+                            },
+                        ) {
+                            DisabledPatchSynthesisRecovery::ReturnToModel { prompt } => {
+                                patch_synthesis_recovery_used = true;
+                                action_checkpoint_no_change_rounds = 0;
+                                FocusedRepairRecoveryController::append_system_prompt(
+                                    &mut messages,
+                                    &mut tool_results_text,
+                                    prompt,
+                                );
+                                continue;
+                            }
+                            DisabledPatchSynthesisRecovery::ReopenNormalTools {
+                                prompt,
+                                trace_error,
+                            } => {
+                                action_checkpoint_reopen_used = true;
+                                action_checkpoint_active = false;
+                                action_checkpoint_lookup_count = 0;
+                                action_checkpoint_no_change_rounds = 0;
+                                no_code_progress_rounds = 1;
+                                trace.record(TraceEvent::WorkflowFallback {
+                                    error: trace_error.to_string(),
+                                });
+                                FocusedRepairRecoveryController::append_system_prompt(
+                                    &mut messages,
+                                    &mut tool_results_text,
+                                    prompt,
+                                );
+                                continue;
+                            }
+                            DisabledPatchSynthesisRecovery::Stop { message } => {
+                                FocusedRepairRecoveryController::stop_with_message(
+                                    tx,
+                                    &mut final_content,
+                                    message,
+                                )
                                 .await;
+                                break;
+                            }
                         }
-                        if final_content.trim().is_empty() {
-                            final_content = stop_msg.to_string();
-                        } else {
-                            final_content.push('\n');
-                            final_content.push_str(stop_msg);
-                        }
-                        break;
                     }
                     match self
                         .synthesize_patch_tool_calls(&messages, last_user_preview.as_str())
@@ -1701,20 +1706,12 @@ impl ConversationLoop {
                                 action_checkpoint_no_change_rounds = 0;
                                 no_code_progress_rounds = 0;
                             } else {
-                                let stop_msg =
-                                    "[Patch synthesis did not produce a file change; stopped action checkpoint]";
-                                debug!("{}", stop_msg);
-                                if let Some(tx) = tx {
-                                    let _ = tx
-                                        .send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg)))
-                                        .await;
-                                }
-                                if final_content.trim().is_empty() {
-                                    final_content = stop_msg.to_string();
-                                } else {
-                                    final_content.push('\n');
-                                    final_content.push_str(stop_msg);
-                                }
+                                FocusedRepairRecoveryController::stop_with_message(
+                                    tx,
+                                    &mut final_content,
+                                    FocusedRepairRecoveryController::NO_CHANGE_STOP_MESSAGE,
+                                )
+                                .await;
                                 break;
                             }
                         }
@@ -1723,71 +1720,62 @@ impl ConversationLoop {
                                 error: format!("patch synthesis failed: {}", err),
                             });
                             let err_text = err.to_string();
-                            let lower_err = err_text.to_lowercase();
-                            if !patch_synthesis_recovery_used
-                                && (lower_err.contains("declined")
-                                    || lower_err.contains("inspect more")
-                                    || lower_err.contains("need to inspect")
-                                    || lower_err.contains("not enough evidence"))
-                            {
-                                patch_synthesis_recovery_used = true;
-                                action_checkpoint_active = false;
-                                action_checkpoint_lookup_count = 0;
-                                action_checkpoint_no_change_rounds = 0;
-                                no_code_progress_rounds = 1;
-                                file_edit_failure_retry_used = false;
-                                let lookup_rule = Self::targeted_lookup_budget_rule(0);
-                                let recovery = format!(
-                                    "Patch synthesis declined because evidence was insufficient: {}. Use a targeted read/search for the missing symbol, call site, or test, then make the smallest safe edit. {}",
-                                    safe_prefix_by_bytes(&err_text, 500),
-                                    lookup_rule
-                                );
-                                messages.push(Message::system(recovery.clone()));
-                                tool_results_text.push('\n');
-                                tool_results_text.push_str(&recovery);
-                                continue;
-                            }
-                            if !action_checkpoint_reopen_used {
-                                action_checkpoint_reopen_used = true;
-                                action_checkpoint_active = false;
-                                action_checkpoint_lookup_count = 0;
-                                action_checkpoint_no_change_rounds = 0;
-                                no_code_progress_rounds = 1;
-                                trace.record(TraceEvent::WorkflowFallback {
-                                    error:
-                                        "patch synthesis failed; reopening normal code-change tools once"
-                                            .to_string(),
-                                });
-                                let recovery = format!(
-                                    "Patch synthesis could not produce an executable edit: {}. Return to normal coding tools for one final recovery pass: inspect only the exact function or call site needed, then make a real file_edit/file_write/file_patch change before validation.",
-                                    safe_prefix_by_bytes(&err_text, 500)
-                                );
-                                messages.push(Message::system(recovery.clone()));
-                                tool_results_text.push('\n');
-                                tool_results_text.push_str(&recovery);
-                                continue;
-                            }
-                            let stop_msg =
-                                "[Stopped action checkpoint after repeated invalid tool requests]";
-                            debug!("{}", stop_msg);
-                            if let Some(tx) = tx {
-                                let _ = tx
-                                    .send(StreamEvent::TextChunk(format!("\n{}\n", stop_msg)))
+                            match FocusedRepairRecoveryController::patch_synthesis_failure_recovery(
+                                &err_text,
+                                patch_synthesis_recovery_used,
+                                action_checkpoint_reopen_used,
+                            ) {
+                                PatchSynthesisFailureRecovery::InsufficientEvidence { prompt } => {
+                                    patch_synthesis_recovery_used = true;
+                                    action_checkpoint_active = false;
+                                    action_checkpoint_lookup_count = 0;
+                                    action_checkpoint_no_change_rounds = 0;
+                                    no_code_progress_rounds = 1;
+                                    file_edit_failure_retry_used = false;
+                                    FocusedRepairRecoveryController::append_system_prompt(
+                                        &mut messages,
+                                        &mut tool_results_text,
+                                        prompt,
+                                    );
+                                    continue;
+                                }
+                                PatchSynthesisFailureRecovery::ReopenNormalTools {
+                                    prompt,
+                                    trace_error,
+                                } => {
+                                    action_checkpoint_reopen_used = true;
+                                    action_checkpoint_active = false;
+                                    action_checkpoint_lookup_count = 0;
+                                    action_checkpoint_no_change_rounds = 0;
+                                    no_code_progress_rounds = 1;
+                                    trace.record(TraceEvent::WorkflowFallback {
+                                        error: trace_error.to_string(),
+                                    });
+                                    FocusedRepairRecoveryController::append_system_prompt(
+                                        &mut messages,
+                                        &mut tool_results_text,
+                                        prompt,
+                                    );
+                                    continue;
+                                }
+                                PatchSynthesisFailureRecovery::Stop { message } => {
+                                    FocusedRepairRecoveryController::stop_with_message(
+                                        tx,
+                                        &mut final_content,
+                                        message,
+                                    )
                                     .await;
-                            }
-                            if final_content.trim().is_empty() {
-                                final_content = stop_msg.to_string();
-                            } else {
-                                final_content.push('\n');
-                                final_content.push_str(stop_msg);
+                                }
                             }
                             break;
                         }
                     }
                 } else {
-                    messages.push(Message::system(repair_proposal.reminder.clone()));
-                    tool_results_text.push('\n');
-                    tool_results_text.push_str(&repair_proposal.reminder);
+                    FocusedRepairRecoveryController::append_system_prompt(
+                        &mut messages,
+                        &mut tool_results_text,
+                        repair_proposal.reminder,
+                    );
                     continue;
                 }
             }

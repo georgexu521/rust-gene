@@ -236,6 +236,18 @@
   `patch_synthesis_executor` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1319 passed; 0 failed`).
+- 2026-05-14: Phase A focused-repair recovery extraction started. Added
+  `src/engine/conversation_loop/focused_repair_recovery.rs` so code-write
+  forbidden recovery, patch-synthesis-disabled recovery, insufficient-evidence
+  recovery, normal-tool reopen prompts, and action-checkpoint stop messages are
+  centralized outside `run_inner`. The main loop now updates local checkpoint
+  state from the recovery decision and delegates prompt appending / stop output
+  formatting to the recovery controller.
+- Validation after the `FocusedRepairRecoveryController` slice: `cargo fmt`,
+  targeted `focused_repair_recovery`, `action_checkpoint`,
+  `patch_synthesis_executor`, and `route_scoped_tools` tests,
+  `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
+  `cargo test -q` all passed (`1322 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
