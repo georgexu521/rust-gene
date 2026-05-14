@@ -8,6 +8,7 @@
 //! - IterationBudget：迭代预算退还机制（只读工具可退还）
 
 mod action_checkpoint;
+mod api_request_controller;
 mod approval;
 mod closeout_controller;
 mod companion_context;
@@ -45,6 +46,7 @@ use action_checkpoint::{
     FocusedRepairActionRequest, ProgressCheckpointAction, ProgressCheckpointController,
     ProgressCheckpointRequest,
 };
+use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use context_budget_controller::ContextBudgetController;
@@ -71,7 +73,6 @@ use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
 use tool_turn_controller::{ToolTurnAppendContext, ToolTurnController};
-use turn_recording::record_recovery_plan;
 use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
@@ -85,7 +86,7 @@ use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
-use crate::services::api::{ChatRequest, LlmProvider, Message, ToolCall};
+use crate::services::api::{LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -1245,86 +1246,19 @@ impl ConversationLoop {
                     runtime_diet: &mut turn_state.runtime_diet,
                 })
                 .await;
-            let mut request = prepared_request.request;
-
-            // ── 响应式压缩循环 ─────────────────────────────
-            let mut compressed_this_turn = false;
-            let mut api_result = Err(anyhow::anyhow!("initial"));
-            for compress_retry in 0..3 {
-                trace.record(TraceEvent::ApiRequestStarted {
-                    iteration: iteration + 1,
-                    model: self.model.clone(),
-                    tools: tools.len(),
-                });
-                let nonstreaming_tool_request =
-                    tx.is_some() && should_use_nonstreaming_tools(self.provider.as_ref(), &tools);
-                api_result = if let Some(tx) = tx {
-                    if nonstreaming_tool_request {
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "provider stream is incompatible with tool/usage chunks; using non-streaming tool request".to_string(),
-                        });
-                        self.call_api(request.clone()).await
-                    } else {
-                        self.call_api_streaming(request.clone(), tx, &trace, &exposed_tool_names)
-                            .await
-                    }
-                } else {
-                    self.call_api(request.clone()).await
-                };
-
-                match &api_result {
-                    Ok(_) => break,
-                    Err(e) => {
-                        let err_str = e.to_string().to_lowercase();
-                        let needs_compress = err_str.contains("payload too large")
-                            || err_str.contains("413")
-                            || err_str.contains("context")
-                            || err_str.contains("too many tokens")
-                            || err_str.contains("maximum context length");
-                        if needs_compress && compress_retry < 2 {
-                            let classified =
-                                crate::engine::error_classifier::ErrorClassifier::from_anyhow(e);
-                            let plan = crate::engine::recovery_plan::RecoveryPlan::from_classified(
-                                "api_reactive_compress",
-                                &classified,
-                            )
-                            .with_status(crate::engine::recovery_plan::RecoveryStatus::Applied);
-                            record_recovery_plan(&trace, &plan);
-                            warn!(
-                                "API error (attempt {}/3): {}. Compressing context and retrying...",
-                                compress_retry + 1,
-                                e
-                            );
-                            if let Some(ref comp) = self.compressor {
-                                let msgs_for_comp = if compress_retry == 0 {
-                                    messages.clone()
-                                } else {
-                                    let mut comp = comp.lock().await;
-                                    comp.micro_compress(&messages)
-                                };
-                                let compressed =
-                                    comp.lock().await.compress_async(&msgs_for_comp).await;
-                                trace.record(TraceEvent::ContextCompacted {
-                                    before_tokens: estimate_messages_tokens(&msgs_for_comp)
-                                        as usize,
-                                    after_tokens: estimate_messages_tokens(&compressed) as usize,
-                                    strategy: "reactive".to_string(),
-                                });
-                                request = ChatRequest::new(&self.model)
-                                    .with_messages(compressed)
-                                    .with_tools(tools.clone())
-                                    .with_temperature(0.2);
-                                compressed_this_turn = true;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            let session_step = match api_result {
-                Ok(value) => value,
+            let api_outcome = match ApiRequestController::execute(ApiRequestContext {
+                conversation: self,
+                request: prepared_request.request,
+                messages: &messages,
+                tools: &tools,
+                exposed_tool_names: &exposed_tool_names,
+                tx,
+                trace: &trace,
+                iteration: iteration + 1,
+            })
+            .await
+            {
+                Ok(outcome) => outcome,
                 Err(e) => {
                     trace.record(TraceEvent::Error {
                         message: e.to_string(),
@@ -1340,18 +1274,7 @@ impl ConversationLoop {
                     return Err(e);
                 }
             };
-            debug!(
-                "Session step completed: source={:?}, finish_reason={:?}, usage={:?}",
-                session_step.source,
-                session_step.finish_reason,
-                session_step.usage.as_ref().map(|usage| {
-                    (
-                        usage.prompt_tokens,
-                        usage.completion_tokens,
-                        usage.total_tokens,
-                    )
-                })
-            );
+            let session_step = api_outcome.session_step;
             let content = session_step.assistant_text;
             let tool_calls = session_step.tool_calls;
             let pre_executed = session_step.pre_executed_results;
@@ -1361,7 +1284,7 @@ impl ConversationLoop {
                 content_chars: content.chars().count(),
             });
 
-            if compressed_this_turn {
+            if api_outcome.compressed_this_turn {
                 debug!("Context compressed due to size limits");
             }
 
@@ -2419,7 +2342,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::api::{ChatResponse, Tool, ToolCall, Usage};
+    use crate::services::api::{ChatRequest, ChatResponse, Tool, ToolCall, Usage};
     use crate::test_utils::env_guard::EnvVarGuard;
     use crate::tools::{BashTool, FileEditTool, FileReadTool, FileWriteTool, GitTool};
     use async_openai::types::ChatCompletionResponseStream;

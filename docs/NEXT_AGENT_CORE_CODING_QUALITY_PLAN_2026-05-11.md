@@ -173,6 +173,17 @@
   `route_scoped_tools`, and `context_budget` tests, `cargo check -q`,
   `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
   passed (`1308 passed; 0 failed`).
+- 2026-05-14: Phase A API request execution extraction started. Added
+  `src/engine/conversation_loop/api_request_controller.rs` so provider request
+  dispatch, stream/non-stream tool fallback, reactive context compression,
+  recovery-plan tracing, and session-step debug logging are owned by a tested
+  request controller. `run_inner` now delegates model request execution and
+  keeps only the failure closeout path plus post-response workflow handling.
+- Validation after the `ApiRequestController` slice: `cargo fmt --check`,
+  targeted `api_request_controller`, `request_preparation_controller`,
+  `tool_exposure_plan`, and `route_scoped_tools` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1309 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
