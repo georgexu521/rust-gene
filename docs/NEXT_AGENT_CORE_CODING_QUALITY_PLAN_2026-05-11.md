@@ -258,6 +258,17 @@
   `tool_batch_result_processor`, and `route_scoped_tools` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1325 passed; 0 failed`).
+- 2026-05-14: Phase A guided tool-failure debugging extraction started. Added
+  `src/engine/conversation_loop/tool_failure_guided_debugging.rs` so failed
+  tool evidence now flows through a focused controller for workflow-contract
+  debugging analysis, trace recording, learning persistence, prompt injection,
+  and workflow feedback. `run_inner` now delegates this repair hint path
+  instead of constructing the analyzer and feedback event inline.
+- Validation after the `GuidedToolFailureDebuggingController` slice:
+  `cargo fmt`, targeted `guided_tool_failure_debugging`,
+  `tool_failure_stop_controller`, `focused_repair_recovery`, and
+  `route_scoped_tools` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

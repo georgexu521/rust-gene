@@ -35,6 +35,7 @@ mod tool_call_lifecycle;
 mod tool_execution;
 mod tool_execution_controller;
 mod tool_exposure_plan;
+mod tool_failure_guided_debugging;
 mod tool_failure_stop_controller;
 mod tool_metadata;
 mod tool_orchestrator;
@@ -83,6 +84,9 @@ use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
 use tool_exposure_plan::{ToolExposurePlan, ToolExposureRequest};
+use tool_failure_guided_debugging::{
+    GuidedToolFailureDebuggingContext, GuidedToolFailureDebuggingController,
+};
 use tool_failure_stop_controller::{ToolFailureStopController, ToolFailureStopRequest};
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
@@ -1782,80 +1786,21 @@ impl ConversationLoop {
                 }
             }
 
-            if !any_tool_success
-                && !failed_tool_evidence.is_empty()
-                && workflow_contract_enabled(self.provider.as_ref())
-            {
-                let analyzer = crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
-                    self.provider.as_ref(),
-                    self.model.clone(),
-                );
-                let prompt = crate::engine::workflow_contract::GuidedDebuggingPrompt::new(
-                    last_user_preview.as_str(),
-                    task_bundle
-                        .workflow_judgment
-                        .as_ref()
-                        .map(|judgment| judgment.to_turn_context()),
-                    failed_tool_names_this_round.clone(),
-                    failed_tool_evidence.clone(),
-                );
-                match analyzer.analyze_debugging(prompt).await {
-                    Ok(debugging) => {
-                        trace.record(TraceEvent::GuidedDebuggingCompleted {
-                            blocker: debugging.blocker,
-                            next_action: format!("{:?}", debugging.next_action),
-                            causes: debugging.likely_causes.len(),
-                            evidence_items: debugging.evidence_to_collect.len(),
-                            ask_user: debugging.ask_user,
-                        });
-                        persist_workflow_learning_event(
-                            self.session_store.as_ref(),
-                            &self.session_id,
-                            "guided_debugging",
-                            format!(
-                                "Guided debugging selected {:?}: {}",
-                                debugging.next_action, debugging.symptom
-                            ),
-                            if debugging.blocker { 0.85 } else { 0.7 },
-                            serde_json::json!({
-                                "blocker": debugging.blocker,
-                                "symptom": debugging.symptom.clone(),
-                                "likely_causes": debugging.likely_causes.clone(),
-                                "evidence_to_collect": debugging.evidence_to_collect.clone(),
-                                "smallest_safe_action": debugging.smallest_safe_action.clone(),
-                                "ask_user": debugging.ask_user,
-                                "questions": debugging.questions.clone(),
-                                "next_action": format!("{:?}", debugging.next_action),
-                                "failed_tools": failed_tool_names_this_round.clone(),
-                            }),
-                        );
-                        let debugging_text = debugging.format_for_prompt();
-                        tool_results_text.push('\n');
-                        tool_results_text.push_str(&debugging_text);
-                        messages.push(Message::system(debugging_text));
-                        apply_workflow_feedback_and_trace(
-                            &mut task_bundle,
-                            &trace,
-                            crate::engine::workflow_contract::WeightFeedbackEvent {
-                                kind: crate::engine::workflow_contract::WeightFeedbackKind::ToolFailure,
-                                severity: if debugging.blocker {
-                                    crate::engine::workflow_contract::WeightFeedbackSeverity::High
-                                } else {
-                                    crate::engine::workflow_contract::WeightFeedbackSeverity::Medium
-                                },
-                                confidence: 0.85,
-                                reason: Some(debugging.symptom.clone()),
-                            },
-                        );
-                    }
-                    Err(err) => {
-                        warn!("Guided debugging analysis failed: {}", err);
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: format!("guided debugging analysis failed: {}", err),
-                        });
-                    }
-                }
-            }
+            GuidedToolFailureDebuggingController::run(GuidedToolFailureDebuggingContext {
+                provider: self.provider.as_ref(),
+                model: self.model.clone(),
+                session_store: self.session_store.as_ref(),
+                session_id: &self.session_id,
+                trace: &trace,
+                any_tool_success,
+                last_user_preview: last_user_preview.as_str(),
+                task_bundle: &mut task_bundle,
+                failed_tool_names: &failed_tool_names_this_round,
+                failed_tool_evidence: &failed_tool_evidence,
+                tool_results_text: &mut tool_results_text,
+                messages: &mut messages,
+            })
+            .await;
 
             if let Some(stop) = ToolFailureStopController::decide(ToolFailureStopRequest {
                 any_tool_success,
