@@ -20,6 +20,7 @@ mod post_edit_repair_controller;
 mod post_edit_verification_controller;
 mod pseudo_tool_text;
 mod repair_controller;
+mod request_preparation_controller;
 mod runtime_diet;
 mod runtime_timeouts;
 mod session_processor;
@@ -53,6 +54,7 @@ use post_edit_repair_controller::{PostEditRepairContext, PostEditRepairControlle
 use post_edit_verification_controller::{
     PostEditVerificationContext, PostEditVerificationController,
 };
+use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
 use runtime_diet::trace_runtime_diet_report;
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use text_sanitizer::strip_think_blocks;
@@ -1229,76 +1231,21 @@ impl ConversationLoop {
             let tools = exposure_plan.tools;
             let exposed_tool_names = exposure_plan.exposed_tool_names;
 
-            let mut request_messages = messages.clone();
-            if let Some(prompt) = exposure_plan.focused_repair_prompt {
-                request_messages.push(prompt);
-            }
-            let memory_already_in_turn_context = turn_retrieval_context
-                .as_ref()
-                .map(|ctx| {
-                    ctx.item_count_by_source(
-                        crate::engine::retrieval_context::RetrievalSource::Memory,
-                    ) > 0
+            let prepared_request =
+                RequestPreparationController::prepare(RequestPreparationContext {
+                    messages: &messages,
+                    focused_repair_prompt: exposure_plan.focused_repair_prompt,
+                    turn_retrieval_context: turn_retrieval_context.as_ref(),
+                    retrieval_policy: route.retrieval,
+                    memory_manager: self.memory_manager.as_ref(),
+                    provider: Some(self.provider.as_ref()),
+                    model: &self.model,
+                    tools: &tools,
+                    trace: &trace,
+                    runtime_diet: &mut turn_state.runtime_diet,
                 })
-                .unwrap_or(false);
-            if !memory_already_in_turn_context && route.retrieval.allows_memory_context() {
-                if let Some(ref mem_mutex) = self.memory_manager {
-                    let mut mem = mem_mutex.lock().await;
-                    if let Some(last_user_idx) = request_messages
-                        .iter()
-                        .rposition(|m| matches!(m, Message::User { .. }))
-                    {
-                        if let Message::User { content } = &request_messages[last_user_idx] {
-                            let retrieval_context = mem
-                                .prefetch_retrieval_context_with_llm_rerank(
-                                    content,
-                                    self.provider.as_ref(),
-                                    &self.model,
-                                    route.retrieval,
-                                )
-                                .await;
-                            if let Some(ref ctx) = retrieval_context {
-                                turn_state.runtime_diet.observe_retrieval_context(ctx);
-                                trace.record(TraceEvent::MemoryPrefetch {
-                                    chars: ctx
-                                        .items
-                                        .iter()
-                                        .map(|item| item.content_preview.chars().count())
-                                        .sum(),
-                                });
-                                trace.record(TraceEvent::RetrievalContextBuilt {
-                                    policy: format!("{:?}", ctx.policy),
-                                    sources: ctx
-                                        .items
-                                        .iter()
-                                        .map(|item| format!("{:?}", item.source))
-                                        .collect(),
-                                    items: ctx.items.len(),
-                                    estimated_tokens: ctx.token_estimate,
-                                    provenance: ctx.provenance_summaries(),
-                                    conflicts: ctx.conflict_count(),
-                                });
-                                let retrieval_block = ctx.format_for_prompt();
-                                let enhanced = format!("{}\n{}", content, retrieval_block);
-                                request_messages[last_user_idx] = Message::user(&enhanced);
-                                debug!("Prefetched memory context injected into user message");
-                            }
-                        }
-                    }
-                }
-            }
-
-            let request_budget =
-                ContextBudgetController::observe_request(&request_messages, &tools);
-            ContextBudgetController::record_runtime_diet(
-                &mut turn_state.runtime_diet,
-                &request_budget,
-            );
-
-            let mut request = ChatRequest::new(&self.model)
-                .with_messages(request_messages)
-                .with_tools(tools.clone())
-                .with_temperature(0.2);
+                .await;
+            let mut request = prepared_request.request;
 
             // ── 响应式压缩循环 ─────────────────────────────
             let mut compressed_this_turn = false;

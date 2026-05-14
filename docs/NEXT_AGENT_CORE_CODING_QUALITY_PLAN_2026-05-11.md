@@ -161,6 +161,18 @@
   targeted `tool_exposure_plan` and `route_scoped_tools` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`, and full
   `cargo test -q` all passed (`1306 passed; 0 failed`).
+- 2026-05-14: Phase A request preparation extraction started. Added
+  `src/engine/conversation_loop/request_preparation_controller.rs` so
+  focused-repair prompt injection, memory prefetch injection, request budget
+  observation, runtime-diet accounting, and `ChatRequest` construction happen
+  behind a single request-preparation boundary before the session processor.
+  `run_inner` now receives a prepared request instead of mutating request
+  messages inline.
+- Validation after the `RequestPreparationController` slice:
+  `cargo fmt --check`, targeted `request_preparation_controller`,
+  `route_scoped_tools`, and `context_budget` tests, `cargo check -q`,
+  `cargo clippy --all-features -- -D warnings`, and full `cargo test -q` all
+  passed (`1308 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
