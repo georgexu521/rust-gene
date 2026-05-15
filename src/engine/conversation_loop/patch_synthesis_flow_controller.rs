@@ -1,3 +1,4 @@
+use super::action_checkpoint::FocusedRepairActionProposal;
 use super::focused_repair_recovery::{
     DisabledPatchSynthesisRecovery, FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
 };
@@ -65,6 +66,20 @@ pub(super) struct CodeWriteForbiddenRecoveryContext<'a> {
     pub(super) tool_results_text: &'a mut String,
 }
 
+pub(super) struct PatchSynthesisProposalContext<'a> {
+    pub(super) proposal: &'a FocusedRepairActionProposal,
+    pub(super) state: &'a mut FocusedRepairRuntimeState,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) tool_results_text: &'a mut String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PatchSynthesisProposalFlow {
+    Continue,
+    EnterPatchSynthesis,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PatchSynthesisRecoveryFlow {
     Continue,
@@ -93,6 +108,25 @@ impl PatchSynthesisFlowController {
                 "Applying synthesized patch from prior evidence."
             }
         }
+    }
+
+    pub(super) fn apply_repair_proposal(
+        context: PatchSynthesisProposalContext<'_>,
+    ) -> PatchSynthesisProposalFlow {
+        context.state.action_checkpoint_no_change_rounds = context.proposal.next_no_change_rounds;
+        if context.proposal.enter_patch_synthesis {
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error: context.proposal.trace_error.clone(),
+            });
+            return PatchSynthesisProposalFlow::EnterPatchSynthesis;
+        }
+
+        FocusedRepairRecoveryController::append_system_prompt(
+            &mut *context.messages,
+            &mut *context.tool_results_text,
+            context.proposal.reminder.clone(),
+        );
+        PatchSynthesisProposalFlow::Continue
     }
 
     pub(super) async fn execute_calls(
@@ -289,6 +323,68 @@ mod tests {
             ),
             "Applying synthesized patch from prior evidence."
         );
+    }
+
+    fn proposal(enter_patch_synthesis: bool) -> FocusedRepairActionProposal {
+        FocusedRepairActionProposal {
+            reminder: "keep repairing".to_string(),
+            next_no_change_rounds: 2,
+            enter_patch_synthesis,
+            trace_error: "enter patch synthesis".to_string(),
+            fallback_owner: "focused_repair",
+            fallback_reason: "no progress".to_string(),
+        }
+    }
+
+    #[test]
+    fn repair_proposal_reminder_updates_state_and_returns_to_model() {
+        let trace = trace();
+        let proposal = proposal(false);
+        let mut state = FocusedRepairRuntimeState::default();
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+
+        let flow =
+            PatchSynthesisFlowController::apply_repair_proposal(PatchSynthesisProposalContext {
+                proposal: &proposal,
+                state: &mut state,
+                trace: &trace,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+            });
+
+        assert_eq!(flow, PatchSynthesisProposalFlow::Continue);
+        assert_eq!(state.action_checkpoint_no_change_rounds, 2);
+        assert_eq!(messages.len(), 1);
+        assert!(tool_results_text.contains("keep repairing"));
+    }
+
+    #[test]
+    fn repair_proposal_enter_records_trace() {
+        let trace = trace();
+        let proposal = proposal(true);
+        let mut state = FocusedRepairRuntimeState::default();
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+
+        let flow =
+            PatchSynthesisFlowController::apply_repair_proposal(PatchSynthesisProposalContext {
+                proposal: &proposal,
+                state: &mut state,
+                trace: &trace,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+            });
+
+        assert_eq!(flow, PatchSynthesisProposalFlow::EnterPatchSynthesis);
+        assert_eq!(state.action_checkpoint_no_change_rounds, 2);
+        assert!(messages.is_empty());
+        assert!(tool_results_text.is_empty());
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error } if error == "enter patch synthesis"
+        )));
     }
 
     #[test]

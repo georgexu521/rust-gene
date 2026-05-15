@@ -79,7 +79,8 @@ use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
     CodeWriteForbiddenRecoveryContext, DisabledPatchSynthesisRecoveryApplicationContext,
     PatchSynthesisCallExecutionContext, PatchSynthesisFailureRecoveryApplicationContext,
-    PatchSynthesisFlowController, PatchSynthesisRecoveryFlow,
+    PatchSynthesisFlowController, PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
+    PatchSynthesisRecoveryFlow,
 };
 use post_edit_repair_controller::{
     PostEditRepairContext, PostEditRepairController, PostEditRepairRuntimeContext,
@@ -1402,203 +1403,210 @@ impl ConversationLoop {
                     exposed_tool_names: &exposed_tool_names,
                 })
             {
-                turn_state.focused_repair.action_checkpoint_no_change_rounds =
-                    repair_proposal.next_no_change_rounds;
-                if repair_proposal.enter_patch_synthesis {
-                    trace.record(TraceEvent::WorkflowFallback {
-                        error: repair_proposal.trace_error.clone(),
-                    });
-                    if code_write_tools_forbidden {
-                        PatchSynthesisFlowController::apply_code_write_forbidden_recovery(
-                            CodeWriteForbiddenRecoveryContext {
-                                state: &mut turn_state.focused_repair,
-                                trace: &trace,
-                                messages: &mut messages,
-                                tool_results_text: &mut tool_results_text,
-                            },
-                        );
-                        continue;
-                    }
-                    if !Self::patch_synthesis_enabled() {
-                        let deterministic_calls = if Self::deterministic_patch_synthesis_enabled() {
-                            let evidence = Self::patch_synthesis_evidence(&messages);
-                            let deterministic_seed =
-                                PatchSynthesisFlowController::deterministic_seed(
-                                    last_user_preview.as_str(),
-                                    &evidence,
-                                );
-                            let cwd = std::env::current_dir()
-                                .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                            self.deterministic_patch_tool_calls(&deterministic_seed, &cwd)
-                        } else {
-                            Vec::new()
-                        };
-                        if !deterministic_calls.is_empty() {
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: format!(
-                                    "deterministic patch synthesis fallback owner={} reason={} produced {} file_edit action(s)",
-                                    repair_proposal.fallback_owner,
-                                    repair_proposal.fallback_reason,
-                                    deterministic_calls.len()
-                                ),
-                            });
-                            let deterministic_execution =
-                                PatchSynthesisFlowController::execute_calls(
-                                    PatchSynthesisCallExecutionContext {
-                                        conversation: self,
-                                        tool_calls: deterministic_calls,
-                                        assistant_message:
-                                            "Applying deterministic patch from prior evidence.",
-                                        tx,
-                                        trace: &trace,
-                                        resource_policy: &resource_policy,
-                                        destructive_scope: &destructive_scope,
-                                        turn_state: &mut turn_state,
-                                        tool_results_text: &mut tool_results_text,
-                                        messages: &mut messages,
-                                        changed_files: &mut changed_files,
-                                        baseline_git_status_files: &baseline_git_status_files,
-                                        is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
-                                        mark_patch_requirement_on_success: true,
-                                        final_tool_calls: &mut final_tool_calls,
-                                    },
-                                )
-                                .await;
-                            if deterministic_execution.changed_files_available {
-                                continue;
-                            }
-                        }
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "patch synthesis disabled by default; returning control to model-led repair"
-                                .to_string(),
-                        });
-                        let recovery =
-                            FocusedRepairRecoveryController::disabled_patch_synthesis_recovery(
-                                DisabledPatchSynthesisRecoveryRequest {
-                                    patch_synthesis_recovery_used: turn_state
-                                        .focused_repair
-                                        .patch_synthesis_recovery_used,
-                                    action_checkpoint_reopen_used: turn_state
-                                        .focused_repair
-                                        .action_checkpoint_reopen_used,
-                                    action_checkpoint_lookup_count: turn_state
-                                        .focused_repair
-                                        .action_checkpoint_lookup_count,
-                                    exposed_tool_names: &exposed_tool_names,
+                match PatchSynthesisFlowController::apply_repair_proposal(
+                    PatchSynthesisProposalContext {
+                        proposal: &repair_proposal,
+                        state: &mut turn_state.focused_repair,
+                        trace: &trace,
+                        messages: &mut messages,
+                        tool_results_text: &mut tool_results_text,
+                    },
+                ) {
+                    PatchSynthesisProposalFlow::Continue => continue,
+                    PatchSynthesisProposalFlow::EnterPatchSynthesis => {
+                        if code_write_tools_forbidden {
+                            PatchSynthesisFlowController::apply_code_write_forbidden_recovery(
+                                CodeWriteForbiddenRecoveryContext {
+                                    state: &mut turn_state.focused_repair,
+                                    trace: &trace,
+                                    messages: &mut messages,
+                                    tool_results_text: &mut tool_results_text,
                                 },
                             );
-                        match PatchSynthesisFlowController::apply_disabled_recovery(
-                            DisabledPatchSynthesisRecoveryApplicationContext {
-                                recovery,
-                                state: &mut turn_state.focused_repair,
-                                trace: &trace,
-                                messages: &mut messages,
-                                tool_results_text: &mut tool_results_text,
-                                tx,
-                                final_content: &mut final_content,
-                            },
-                        )
-                        .await
-                        {
-                            PatchSynthesisRecoveryFlow::Continue => continue,
-                            PatchSynthesisRecoveryFlow::Stop => break,
+                            continue;
                         }
-                    }
-                    match self
-                        .synthesize_patch_tool_calls(&messages, last_user_preview.as_str())
-                        .await
-                    {
-                        Ok(synthesis_outcome) => {
-                            let synthesis_source = synthesis_outcome.source;
-                            let synthesis_source_label = synthesis_source.label();
-                            let synthesis_reason = synthesis_outcome
-                                .fallback_reason
-                                .as_deref()
-                                .unwrap_or(&repair_proposal.fallback_reason)
-                                .to_string();
-                            let synthesized_calls = synthesis_outcome.tool_calls;
+                        if !Self::patch_synthesis_enabled() {
+                            let deterministic_calls =
+                                if Self::deterministic_patch_synthesis_enabled() {
+                                    let evidence = Self::patch_synthesis_evidence(&messages);
+                                    let deterministic_seed =
+                                        PatchSynthesisFlowController::deterministic_seed(
+                                            last_user_preview.as_str(),
+                                            &evidence,
+                                        );
+                                    let cwd = std::env::current_dir()
+                                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                                    self.deterministic_patch_tool_calls(&deterministic_seed, &cwd)
+                                } else {
+                                    Vec::new()
+                                };
+                            if !deterministic_calls.is_empty() {
+                                trace.record(TraceEvent::WorkflowFallback {
+                                    error: format!(
+                                        "deterministic patch synthesis fallback owner={} reason={} produced {} file_edit action(s)",
+                                        repair_proposal.fallback_owner,
+                                        repair_proposal.fallback_reason,
+                                        deterministic_calls.len()
+                                    ),
+                                });
+                                let deterministic_execution =
+                                    PatchSynthesisFlowController::execute_calls(
+                                        PatchSynthesisCallExecutionContext {
+                                            conversation: self,
+                                            tool_calls: deterministic_calls,
+                                            assistant_message:
+                                                "Applying deterministic patch from prior evidence.",
+                                            tx,
+                                            trace: &trace,
+                                            resource_policy: &resource_policy,
+                                            destructive_scope: &destructive_scope,
+                                            turn_state: &mut turn_state,
+                                            tool_results_text: &mut tool_results_text,
+                                            messages: &mut messages,
+                                            changed_files: &mut changed_files,
+                                            baseline_git_status_files: &baseline_git_status_files,
+                                            is_programming_workflow:
+                                                crate::engine::code_change_workflow::is_programming_workflow(
+                                                    route.workflow,
+                                                ),
+                                            mark_patch_requirement_on_success: true,
+                                            final_tool_calls: &mut final_tool_calls,
+                                        },
+                                    )
+                                    .await;
+                                if deterministic_execution.changed_files_available {
+                                    continue;
+                                }
+                            }
                             trace.record(TraceEvent::WorkflowFallback {
-                                error: format!(
-                                    "patch synthesis owner={} reason={} source={} produced {} file_edit action(s)",
-                                    repair_proposal.fallback_owner,
-                                    synthesis_reason,
-                                    synthesis_source_label,
-                                    synthesized_calls.len()
-                                ),
+                                error: "patch synthesis disabled by default; returning control to model-led repair"
+                                    .to_string(),
                             });
-                            let synthesis_execution = PatchSynthesisFlowController::execute_calls(
-                                PatchSynthesisCallExecutionContext {
-                                    conversation: self,
-                                    tool_calls: synthesized_calls,
-                                    assistant_message:
-                                        PatchSynthesisFlowController::assistant_message_for_source(
-                                            synthesis_source,
-                                        ),
-                                    tx,
+                            let recovery =
+                                FocusedRepairRecoveryController::disabled_patch_synthesis_recovery(
+                                    DisabledPatchSynthesisRecoveryRequest {
+                                        patch_synthesis_recovery_used: turn_state
+                                            .focused_repair
+                                            .patch_synthesis_recovery_used,
+                                        action_checkpoint_reopen_used: turn_state
+                                            .focused_repair
+                                            .action_checkpoint_reopen_used,
+                                        action_checkpoint_lookup_count: turn_state
+                                            .focused_repair
+                                            .action_checkpoint_lookup_count,
+                                        exposed_tool_names: &exposed_tool_names,
+                                    },
+                                );
+                            match PatchSynthesisFlowController::apply_disabled_recovery(
+                                DisabledPatchSynthesisRecoveryApplicationContext {
+                                    recovery,
+                                    state: &mut turn_state.focused_repair,
                                     trace: &trace,
-                                    resource_policy: &resource_policy,
-                                    destructive_scope: &destructive_scope,
-                                    turn_state: &mut turn_state,
-                                    tool_results_text: &mut tool_results_text,
                                     messages: &mut messages,
-                                    changed_files: &mut changed_files,
-                                    baseline_git_status_files: &baseline_git_status_files,
-                                    is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
-                                    mark_patch_requirement_on_success: false,
-                                    final_tool_calls: &mut final_tool_calls,
+                                    tool_results_text: &mut tool_results_text,
+                                    tx,
+                                    final_content: &mut final_content,
                                 },
                             )
-                            .await;
-                            if synthesis_execution.any_tool_success {
-                                any_tool_success = true;
+                            .await
+                            {
+                                PatchSynthesisRecoveryFlow::Continue => continue,
+                                PatchSynthesisRecoveryFlow::Stop => break,
                             }
-                            if !synthesis_execution.changed_files_available {
-                                FocusedRepairRecoveryController::stop_with_message(
-                                    tx,
-                                    &mut final_content,
-                                    FocusedRepairRecoveryController::NO_CHANGE_STOP_MESSAGE,
-                                )
-                                .await;
+                        }
+                        match self
+                            .synthesize_patch_tool_calls(&messages, last_user_preview.as_str())
+                            .await
+                        {
+                            Ok(synthesis_outcome) => {
+                                let synthesis_source = synthesis_outcome.source;
+                                let synthesis_source_label = synthesis_source.label();
+                                let synthesis_reason = synthesis_outcome
+                                    .fallback_reason
+                                    .as_deref()
+                                    .unwrap_or(&repair_proposal.fallback_reason)
+                                    .to_string();
+                                let synthesized_calls = synthesis_outcome.tool_calls;
+                                trace.record(TraceEvent::WorkflowFallback {
+                                    error: format!(
+                                        "patch synthesis owner={} reason={} source={} produced {} file_edit action(s)",
+                                        repair_proposal.fallback_owner,
+                                        synthesis_reason,
+                                        synthesis_source_label,
+                                        synthesized_calls.len()
+                                    ),
+                                });
+                                let synthesis_execution =
+                                    PatchSynthesisFlowController::execute_calls(
+                                        PatchSynthesisCallExecutionContext {
+                                            conversation: self,
+                                            tool_calls: synthesized_calls,
+                                            assistant_message:
+                                                PatchSynthesisFlowController::assistant_message_for_source(
+                                                    synthesis_source,
+                                                ),
+                                            tx,
+                                            trace: &trace,
+                                            resource_policy: &resource_policy,
+                                            destructive_scope: &destructive_scope,
+                                            turn_state: &mut turn_state,
+                                            tool_results_text: &mut tool_results_text,
+                                            messages: &mut messages,
+                                            changed_files: &mut changed_files,
+                                            baseline_git_status_files: &baseline_git_status_files,
+                                            is_programming_workflow:
+                                                crate::engine::code_change_workflow::is_programming_workflow(
+                                                    route.workflow,
+                                                ),
+                                            mark_patch_requirement_on_success: false,
+                                            final_tool_calls: &mut final_tool_calls,
+                                        },
+                                    )
+                                    .await;
+                                if synthesis_execution.any_tool_success {
+                                    any_tool_success = true;
+                                }
+                                if !synthesis_execution.changed_files_available {
+                                    FocusedRepairRecoveryController::stop_with_message(
+                                        tx,
+                                        &mut final_content,
+                                        FocusedRepairRecoveryController::NO_CHANGE_STOP_MESSAGE,
+                                    )
+                                    .await;
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                trace.record(TraceEvent::WorkflowFallback {
+                                    error: format!("patch synthesis failed: {}", err),
+                                });
+                                let err_text = err.to_string();
+                                let recovery =
+                                    FocusedRepairRecoveryController::patch_synthesis_failure_recovery(
+                                        &err_text,
+                                        turn_state.focused_repair.patch_synthesis_recovery_used,
+                                        turn_state.focused_repair.action_checkpoint_reopen_used,
+                                    );
+                                let recovery_flow =
+                                    PatchSynthesisFlowController::apply_failure_recovery(
+                                        PatchSynthesisFailureRecoveryApplicationContext {
+                                            recovery,
+                                            state: &mut turn_state.focused_repair,
+                                            trace: &trace,
+                                            messages: &mut messages,
+                                            tool_results_text: &mut tool_results_text,
+                                            tx,
+                                            final_content: &mut final_content,
+                                        },
+                                    )
+                                    .await;
+                                if recovery_flow == PatchSynthesisRecoveryFlow::Continue {
+                                    continue;
+                                }
                                 break;
                             }
                         }
-                        Err(err) => {
-                            trace.record(TraceEvent::WorkflowFallback {
-                                error: format!("patch synthesis failed: {}", err),
-                            });
-                            let err_text = err.to_string();
-                            let recovery =
-                                FocusedRepairRecoveryController::patch_synthesis_failure_recovery(
-                                    &err_text,
-                                    turn_state.focused_repair.patch_synthesis_recovery_used,
-                                    turn_state.focused_repair.action_checkpoint_reopen_used,
-                                );
-                            let recovery_flow =
-                                PatchSynthesisFlowController::apply_failure_recovery(
-                                    PatchSynthesisFailureRecoveryApplicationContext {
-                                        recovery,
-                                        state: &mut turn_state.focused_repair,
-                                        trace: &trace,
-                                        messages: &mut messages,
-                                        tool_results_text: &mut tool_results_text,
-                                        tx,
-                                        final_content: &mut final_content,
-                                    },
-                                )
-                                .await;
-                            if recovery_flow == PatchSynthesisRecoveryFlow::Continue {
-                                continue;
-                            }
-                            break;
-                        }
                     }
-                } else {
-                    FocusedRepairRecoveryController::append_system_prompt(
-                        &mut messages,
-                        &mut tool_results_text,
-                        repair_proposal.reminder,
-                    );
-                    continue;
                 }
             }
 
