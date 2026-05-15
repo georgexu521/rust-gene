@@ -23,6 +23,7 @@ mod memory_sync_controller;
 mod patch_recovery;
 mod patch_repair_rules;
 mod patch_synthesis_executor;
+mod patch_synthesis_flow_controller;
 mod permission_controller;
 mod post_edit_repair_controller;
 mod post_edit_verification_controller;
@@ -72,8 +73,10 @@ use focused_repair_state_controller::{FocusedRepairStateContext, FocusedRepairSt
 use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetController};
 use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
-use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
-use patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExecutor};
+use patch_recovery::PatchSynthesisAction;
+use patch_synthesis_flow_controller::{
+    PatchSynthesisCallExecutionContext, PatchSynthesisFlowController,
+};
 use post_edit_repair_controller::{PostEditRepairContext, PostEditRepairController};
 use post_edit_verification_controller::{
     PostEditVerificationContext, PostEditVerificationController,
@@ -1475,33 +1478,29 @@ impl ConversationLoop {
                                     deterministic_calls.len()
                                 ),
                             });
-                            messages.push(Message::assistant_with_tools(
-                                "Applying deterministic patch from prior evidence.",
-                                deterministic_calls.clone(),
-                            ));
-                            let _ = PatchSynthesisExecutor::execute(
-                                PatchSynthesisExecutionContext {
-                                    conversation: self,
-                                    tool_calls: &deterministic_calls,
-                                    tx,
-                                    trace: &trace,
-                                    resource_policy: &resource_policy,
-                                    destructive_scope: &destructive_scope,
-                                    turn_state: &mut turn_state,
-                                    tool_results_text: &mut tool_results_text,
-                                    messages: &mut messages,
-                                    changed_files: &mut changed_files,
-                                    baseline_git_status_files: &baseline_git_status_files,
-                                    is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
-                                    mark_patch_requirement_on_success: true,
-                                },
-                            )
-                            .await;
-                            final_tool_calls.extend(deterministic_calls);
-                            if !changed_files.is_empty() {
-                                FocusedRepairStateController::record_patch_synthesis_success(
-                                    &mut turn_state.focused_repair,
-                                );
+                            let deterministic_execution =
+                                PatchSynthesisFlowController::execute_calls(
+                                    PatchSynthesisCallExecutionContext {
+                                        conversation: self,
+                                        tool_calls: deterministic_calls,
+                                        assistant_message:
+                                            "Applying deterministic patch from prior evidence.",
+                                        tx,
+                                        trace: &trace,
+                                        resource_policy: &resource_policy,
+                                        destructive_scope: &destructive_scope,
+                                        turn_state: &mut turn_state,
+                                        tool_results_text: &mut tool_results_text,
+                                        messages: &mut messages,
+                                        changed_files: &mut changed_files,
+                                        baseline_git_status_files: &baseline_git_status_files,
+                                        is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
+                                        mark_patch_requirement_on_success: true,
+                                        final_tool_calls: &mut final_tool_calls,
+                                    },
+                                )
+                                .await;
+                            if deterministic_execution.changed_files_available {
                                 continue;
                             }
                         }
@@ -1584,23 +1583,14 @@ impl ConversationLoop {
                                     synthesized_calls.len()
                                 ),
                             });
-                            let synthesis_message = match synthesis_source {
-                                PatchSynthesisSource::DeterministicFallback => {
-                                    "Applying deterministic patch fallback from prior evidence."
-                                }
-                                PatchSynthesisSource::ModelJson
-                                | PatchSynthesisSource::ModelToolFallback => {
-                                    "Applying synthesized patch from prior evidence."
-                                }
-                            };
-                            messages.push(Message::assistant_with_tools(
-                                synthesis_message,
-                                synthesized_calls.clone(),
-                            ));
-                            let synthesis_execution = PatchSynthesisExecutor::execute(
-                                PatchSynthesisExecutionContext {
+                            let synthesis_execution = PatchSynthesisFlowController::execute_calls(
+                                PatchSynthesisCallExecutionContext {
                                     conversation: self,
-                                    tool_calls: &synthesized_calls,
+                                    tool_calls: synthesized_calls,
+                                    assistant_message:
+                                        PatchSynthesisFlowController::assistant_message_for_source(
+                                            synthesis_source,
+                                        ),
                                     tx,
                                     trace: &trace,
                                     resource_policy: &resource_policy,
@@ -1612,18 +1602,14 @@ impl ConversationLoop {
                                     baseline_git_status_files: &baseline_git_status_files,
                                     is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
                                     mark_patch_requirement_on_success: false,
+                                    final_tool_calls: &mut final_tool_calls,
                                 },
                             )
                             .await;
                             if synthesis_execution.any_tool_success {
                                 any_tool_success = true;
                             }
-                            final_tool_calls.extend(synthesized_calls);
-                            if !changed_files.is_empty() {
-                                FocusedRepairStateController::record_patch_synthesis_success(
-                                    &mut turn_state.focused_repair,
-                                );
-                            } else {
+                            if !synthesis_execution.changed_files_available {
                                 FocusedRepairRecoveryController::stop_with_message(
                                     tx,
                                     &mut final_content,

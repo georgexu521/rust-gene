@@ -353,6 +353,17 @@
   passed.
 - Full validation after the focused-repair state continuation batch:
   `cargo test -q` passed (`1343 passed; 0 failed`).
+- 2026-05-15: Phase A patch-synthesis execution flow extraction continued.
+  Added `src/engine/conversation_loop/patch_synthesis_flow_controller.rs` so
+  deterministic and model-backed patch synthesis share the same execution
+  path: assistant tool-call message insertion, synthesized call execution,
+  final tool-call recording, changed-file detection, and focused-repair success
+  state updates.
+- Validation after the `PatchSynthesisFlowController` slice:
+  `cargo fmt --check`, targeted `patch_synthesis_flow_controller`,
+  `focused_repair_state_controller`, and `patch_synthesis_executor` tests,
+  `cargo check -q`, `git diff --check`, and
+  `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
