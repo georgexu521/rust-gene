@@ -288,6 +288,15 @@
 - Validation after the `IterationBudgetController` slice: `cargo fmt`,
   targeted `iteration_budget_controller` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` all passed.
+- 2026-05-15: Phase A memory snapshot injection extraction started. Added
+  `src/engine/conversation_loop/memory_snapshot_controller.rs` so frozen
+  memory snapshot lookup, duplicate-fence avoidance, runtime-diet accounting,
+  trace recording, and system-message insertion are handled outside
+  `run_inner`. The injection still runs before preflight compression so budget
+  checks count the real request size.
+- Validation after the `MemorySnapshotController` slice: `cargo fmt`,
+  targeted `memory_snapshot_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

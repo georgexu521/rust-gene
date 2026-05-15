@@ -17,6 +17,7 @@ mod context_budget_controller;
 mod first_code_change_controller;
 mod focused_repair_recovery;
 mod iteration_budget_controller;
+mod memory_snapshot_controller;
 mod memory_sync_controller;
 mod patch_recovery;
 mod patch_repair_rules;
@@ -67,6 +68,7 @@ use focused_repair_recovery::{
     FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
 };
 use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetController};
+use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
 use patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExecutor};
@@ -1119,28 +1121,14 @@ impl ConversationLoop {
         }
 
         // ── 记忆围栏注入：先注入，再让 preflight 统计真实请求大小 ──
-        if route.retrieval.allows_memory_context() {
-            if let Some(ref mem_mutex) = self.memory_manager {
-                let mem = mem_mutex.lock().await;
-                let snapshot = mem.get_snapshot();
-                if !snapshot.is_empty()
-                    && !messages.iter().any(|m| {
-                        matches!(m, Message::System { content } if content.contains("<memory-context>"))
-                    })
-                {
-                    turn_state.runtime_diet.observe_memory_snapshot(&snapshot);
-                    trace.record(TraceEvent::MemorySnapshotInjected {
-                        chars: snapshot.chars().count(),
-                    });
-                    let insert_pos = messages
-                        .iter()
-                        .position(|m| !matches!(m, Message::System { .. }))
-                        .unwrap_or(messages.len());
-                    messages.insert(insert_pos, Message::system(&snapshot));
-                    debug!("Injected memory context fence at position {}", insert_pos);
-                }
-            }
-        }
+        MemorySnapshotController::inject(MemorySnapshotInjectionContext {
+            retrieval_policy: route.retrieval,
+            memory_manager: self.memory_manager.as_ref(),
+            messages: &mut messages,
+            runtime_diet: &mut turn_state.runtime_diet,
+            trace: &trace,
+        })
+        .await;
 
         // ── 前置压缩（Preflight）─────────────────────────
         if let Some(ref compressor_mutex) = self.compressor {
