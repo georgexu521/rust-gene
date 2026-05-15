@@ -459,6 +459,14 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the required-validation trigger slice:
   `cargo test -q` passed (`1360 passed; 0 failed`).
+- 2026-05-15: Phase A workflow-contract judgment cleanup started. Added
+  `workflow_contract_controller.rs`; workflow judgment prompting, analysis
+  result application, learning persistence, trace recording, policy refresh,
+  and system context insertion now live outside `run_inner`.
+- Validation after the workflow-contract judgment slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `workflow_contract_controller` and `workflow_contract` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

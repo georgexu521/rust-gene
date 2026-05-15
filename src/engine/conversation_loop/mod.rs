@@ -53,6 +53,7 @@ mod turn_recording;
 mod turn_runtime_state;
 mod validation_runner;
 mod workflow_change_tracker;
+mod workflow_contract_controller;
 mod workflow_prompt_policy;
 mod workflow_trace;
 
@@ -122,6 +123,7 @@ use validation_runner::shell_output_with_timeout;
 use validation_runner::verification_source_context;
 use validation_runner::{RequiredValidationController, RequiredValidationTriggerContext};
 use workflow_change_tracker::WorkflowChangeTracker;
+use workflow_contract_controller::{WorkflowContractController, WorkflowContractJudgmentContext};
 use workflow_prompt_policy::WorkflowPromptPolicy;
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
@@ -733,131 +735,22 @@ impl ConversationLoop {
             code_workflow: &mut code_workflow,
             trace: &trace,
         });
-        let workflow_contract_prompt =
-            crate::engine::workflow_contract::WorkflowContractPrompt::new(
-                last_user_preview.as_str(),
-                route.clone(),
-                working_dir.display().to_string(),
-            );
-        if code_workflow.should_request_workflow_judgment()
-            && workflow_contract_prompt.should_ask_model()
-            && workflow_contract_enabled(self.provider.as_ref())
-        {
-            let analyzer = crate::engine::workflow_contract::WorkflowContractAnalyzer::new(
-                self.provider.as_ref(),
-                self.model.clone(),
-            );
-            match analyzer.analyze(workflow_contract_prompt).await {
-                Ok(mut judgment) => {
-                    let learning_audit =
-                        crate::engine::learning_planning::apply_learning_to_workflow_judgment(
-                            &mut judgment,
-                            &learning_events,
-                            turn_retrieval_context.as_ref(),
-                        );
-                    let context_note = judgment.to_turn_context();
-                    trace.record(TraceEvent::WorkflowJudgmentCompleted {
-                        task_type: judgment.task_type.clone(),
-                        complexity: format!("{:?}", judgment.complexity),
-                        risk: format!("{:?}", judgment.risk),
-                        plan_steps: judgment.plan.len(),
-                        acceptance_checks: judgment.acceptance.criteria.len(),
-                        questions: judgment.questions.len(),
-                        guided_reasoning: judgment.guided_reasoning_required,
-                    });
-                    let top_step = judgment.top_plan_step();
-                    trace.record(TraceEvent::WorkflowPlanProgress {
-                        total_steps: judgment.plan.len(),
-                        completed_steps: 0,
-                        active_step: top_step.as_ref().map(|step| step.description.clone()),
-                        top_priority: top_step.as_ref().map(|step| format!("{:?}", step.priority)),
-                        top_importance_score: top_step
-                            .as_ref()
-                            .map(|step| step.normalized_weight()),
-                        top_weight_share: top_step
-                            .as_ref()
-                            .map(|step| step.computed_weight_share()),
-                        weight_source: top_step
-                            .as_ref()
-                            .and_then(|step| step.weight_source())
-                            .map(|source| format!("{:?}", source)),
-                        reweighted: learning_audit.applied,
-                    });
-                    if learning_audit.applied {
-                        trace.record(TraceEvent::WorkflowLearningAdjusted {
-                            adjustments: learning_audit.adjustments.len(),
-                            before_top_step: learning_audit.before_top_step.clone(),
-                            after_top_step: learning_audit.after_top_step.clone(),
-                            reason: learning_audit.explanation.clone(),
-                        });
-                        persist_workflow_learning_event(
-                            self.session_store.as_ref(),
-                            &self.session_id,
-                            "planning_adjustment",
-                            format!(
-                                "Learning adjusted workflow plan with {} change(s)",
-                                learning_audit.adjustments.len()
-                            ),
-                            0.85,
-                            serde_json::to_value(&learning_audit)
-                                .unwrap_or_else(|_| serde_json::json!({})),
-                        );
-                    }
-                    persist_workflow_learning_event(
-                        self.session_store.as_ref(),
-                        &self.session_id,
-                        "workflow_judgment",
-                        format!(
-                            "Workflow judgment task_type={} risk={:?} questions={} guided={}",
-                            judgment.task_type,
-                            judgment.risk,
-                            judgment.questions.len(),
-                            judgment.guided_reasoning_required
-                        ),
-                        0.8,
-                        serde_json::json!({
-                            "task_type": judgment.task_type.clone(),
-                            "complexity": format!("{:?}", judgment.complexity),
-                            "risk": format!("{:?}", judgment.risk),
-                            "requirement_complete_enough": judgment.requirement_complete_enough,
-                            "needs_user_questions": judgment.needs_user_questions,
-                            "question_reason": judgment.question_reason.clone(),
-                            "questions": judgment.questions.clone(),
-                            "assumptions": judgment.assumptions.clone(),
-                            "guided_reasoning_required": judgment.guided_reasoning_required,
-                            "guided_reasoning_triggers": judgment.guided_reasoning_triggers.iter().map(|trigger| format!("{:?}", trigger)).collect::<Vec<_>>(),
-                            "plan_steps": judgment.plan.len(),
-                            "weighted_plan": judgment.weighted_plan_summary(),
-                            "acceptance_checks": judgment.acceptance.criteria.len(),
-                        }),
-                    );
-                    task_bundle.apply_workflow_judgment(judgment);
-                    code_workflow.refresh_policy(&task_bundle);
-                    let insert_at = messages
-                        .iter()
-                        .take_while(|message| matches!(message, Message::System { .. }))
-                        .count();
-                    messages.insert(insert_at, Message::system(context_note));
-                }
-                Err(err) => {
-                    if crate::engine::workflow_contract::is_recoverable_workflow_judgment_parse_error(&err) {
-                        debug!(
-                            "Workflow judgment skipped after non-JSON model response: {}",
-                            err
-                        );
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "workflow judgment skipped after non-JSON model response"
-                                .to_string(),
-                        });
-                    } else {
-                        warn!("Workflow judgment analysis failed: {}", err);
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: format!("workflow judgment analysis failed: {}", err),
-                        });
-                    }
-                }
-            }
-        }
+        WorkflowContractController::run(WorkflowContractJudgmentContext {
+            provider: self.provider.as_ref(),
+            model: self.model.clone(),
+            session_store: self.session_store.as_ref(),
+            session_id: &self.session_id,
+            last_user_preview: last_user_preview.as_str(),
+            route: &route,
+            working_dir: &working_dir,
+            learning_events: &learning_events,
+            retrieval_context: turn_retrieval_context.as_ref(),
+            task_bundle: &mut task_bundle,
+            code_workflow: &mut code_workflow,
+            messages: &mut messages,
+            trace: &trace,
+        })
+        .await;
         trace.record(TraceEvent::TaskContextBuilt {
             task_id: task_bundle.task_id.clone(),
             workflow: format!("{:?}", task_bundle.route.workflow),
