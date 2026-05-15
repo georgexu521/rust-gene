@@ -63,7 +63,9 @@ pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use assistant_response_retry_controller::{
     AssistantResponseRetryController, AssistantResponseRetryRequest,
 };
-use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
+use closeout_controller::{
+    FinalCloseoutContext, FinalCloseoutController, VerifiedChangeCloseoutController,
+};
 use first_code_change_controller::{FirstCodeChangeContext, FirstCodeChangeController};
 use focused_repair_recovery::{
     DisabledPatchSynthesisRecoveryRequest, FocusedRepairRecoveryController,
@@ -1735,12 +1737,10 @@ impl ConversationLoop {
             })
             .await;
 
-            if should_closeout_after_verified_change {
-                trace.record(TraceEvent::WorkflowFallback {
-                    error:
-                        "verified code change passed validation; preparing deterministic closeout"
-                            .to_string(),
-                });
+            if VerifiedChangeCloseoutController::should_break_for_verified_change(
+                &trace,
+                should_closeout_after_verified_change,
+            ) {
                 break;
             }
         }

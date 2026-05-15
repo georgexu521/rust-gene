@@ -44,6 +44,27 @@ impl CloseoutEvaluator {
     }
 }
 
+pub(super) struct VerifiedChangeCloseoutController;
+
+impl VerifiedChangeCloseoutController {
+    const VERIFIED_CHANGE_CLOSEOUT_TRACE: &'static str =
+        "verified code change passed validation; preparing deterministic closeout";
+
+    pub(super) fn should_break_for_verified_change(
+        trace: &TraceCollector,
+        should_closeout_after_verified_change: bool,
+    ) -> bool {
+        if !should_closeout_after_verified_change {
+            return false;
+        }
+
+        trace.record(TraceEvent::WorkflowFallback {
+            error: Self::VERIFIED_CHANGE_CLOSEOUT_TRACE.to_string(),
+        });
+        true
+    }
+}
+
 pub(super) struct FinalCloseoutController;
 
 impl FinalCloseoutController {
@@ -154,5 +175,30 @@ mod tests {
             .validation
             .iter()
             .any(|item| item == "required validation: passed (passed:1/1)"));
+    }
+
+    #[test]
+    fn verified_change_closeout_records_trace_only_when_ready() {
+        let trace =
+            TraceCollector::new(crate::engine::trace::TurnTrace::new("session", 1, "change"));
+
+        assert!(
+            !VerifiedChangeCloseoutController::should_break_for_verified_change(&trace, false,)
+        );
+        assert!(VerifiedChangeCloseoutController::should_break_for_verified_change(&trace, true,));
+
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        let matching_events = finished
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    TraceEvent::WorkflowFallback { error }
+                        if error == VerifiedChangeCloseoutController::VERIFIED_CHANGE_CLOSEOUT_TRACE
+                )
+            })
+            .count();
+        assert_eq!(matching_events, 1);
     }
 }

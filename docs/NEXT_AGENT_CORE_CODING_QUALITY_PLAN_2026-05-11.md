@@ -387,6 +387,13 @@
   `cargo fmt --check`, `git diff --check`, targeted
   `post_edit_repair_controller` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` passed.
+- 2026-05-15: Phase A verified-change closeout break cleanup continued.
+  Added `VerifiedChangeCloseoutController` so the final post-edit loop exit
+  decision records the deterministic-closeout trace outside `run_inner`.
+- Validation after the verified-change closeout slice: `cargo fmt --check`,
+  `git diff --check`, targeted `closeout_controller` and
+  `post_edit_verification_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
