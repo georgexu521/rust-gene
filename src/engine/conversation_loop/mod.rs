@@ -29,6 +29,7 @@ mod preflight_compression_controller;
 mod pseudo_tool_text;
 mod repair_controller;
 mod request_preparation_controller;
+mod retrieval_prompt_controller;
 mod runtime_diet;
 mod runtime_timeouts;
 mod session_processor;
@@ -80,6 +81,7 @@ use preflight_compression_controller::{
     PreflightCompressionContext, PreflightCompressionController,
 };
 use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
+use retrieval_prompt_controller::{RetrievalPromptContext, RetrievalPromptController};
 use runtime_diet::trace_runtime_diet_report;
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use text_sanitizer::strip_think_blocks;
@@ -1147,16 +1149,10 @@ impl ConversationLoop {
             let _ = tx.send(StreamEvent::Start).await;
         }
 
-        if let Some(ref ctx) = turn_retrieval_context {
-            let block = ctx.format_for_prompt();
-            if !block.is_empty()
-                && !messages.iter().any(|m| {
-                    matches!(m, Message::System { content } if content.contains("project.index:"))
-                })
-            {
-                messages.push(Message::system(block));
-            }
-        }
+        RetrievalPromptController::inject(RetrievalPromptContext {
+            retrieval_context: turn_retrieval_context.as_ref(),
+            messages: &mut messages,
+        });
 
         // ── 迭代预算 ─────────────────────────────────────
         let max_loop_iterations = self.max_iterations + code_workflow.max_repair_attempts().max(3);

@@ -305,6 +305,13 @@
 - Validation after the `PreflightCompressionController` slice: `cargo fmt`,
   targeted `preflight_compression_controller` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` all passed.
+- 2026-05-15: Phase A retrieval prompt injection extraction started. Added
+  `src/engine/conversation_loop/retrieval_prompt_controller.rs` so formatted
+  retrieval context prompt insertion and duplicate `project.index:` guard are
+  handled outside `run_inner`.
+- Validation after the `RetrievalPromptController` slice: `cargo fmt`,
+  targeted `retrieval_prompt_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
