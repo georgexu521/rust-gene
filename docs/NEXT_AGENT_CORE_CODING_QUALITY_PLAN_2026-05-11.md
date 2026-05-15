@@ -467,6 +467,8 @@
   `cargo fmt --check`, `git diff --check`, targeted
   `workflow_contract_controller` and `workflow_contract` tests,
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the workflow-contract judgment slice:
+  `cargo test -q` passed (`1362 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
