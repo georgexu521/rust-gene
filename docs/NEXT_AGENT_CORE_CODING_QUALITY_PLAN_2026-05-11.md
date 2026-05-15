@@ -279,6 +279,15 @@
   targeted `first_code_change_controller`, `post_edit_verification_controller`,
   and `post_edit_repair_controller` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` all passed.
+- 2026-05-15: Phase A iteration-budget extraction started. Added
+  `src/engine/conversation_loop/iteration_budget_controller.rs` so effective
+  iteration charging, read-only tool budget refunds, and reserved repair-round
+  consumption are decided outside `run_inner`. The main loop now checks the
+  controller before each request and records the tool-round budget outcome
+  after execution.
+- Validation after the `IterationBudgetController` slice: `cargo fmt`,
+  targeted `iteration_budget_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

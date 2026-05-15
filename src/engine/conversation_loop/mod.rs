@@ -16,6 +16,7 @@ mod companion_context;
 mod context_budget_controller;
 mod first_code_change_controller;
 mod focused_repair_recovery;
+mod iteration_budget_controller;
 mod memory_sync_controller;
 mod patch_recovery;
 mod patch_repair_rules;
@@ -65,6 +66,7 @@ use focused_repair_recovery::{
     DisabledPatchSynthesisRecovery, DisabledPatchSynthesisRecoveryRequest,
     FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
 };
+use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetController};
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::{PatchSynthesisAction, PatchSynthesisSource};
 use patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExecutor};
@@ -1221,19 +1223,19 @@ impl ConversationLoop {
                 mem.reset_turn();
             }
 
-            if turn_state.effective_iterations >= self.max_iterations {
-                if turn_state.reserved_repair_rounds > 0 {
-                    turn_state.reserved_repair_rounds -= 1;
-                    trace.record(TraceEvent::WorkflowFallback {
-                        error: format!(
-                            "using reserved repair round after validation failure (remaining={})",
-                            turn_state.reserved_repair_rounds
-                        ),
-                    });
-                } else {
+            match IterationBudgetController::check_before_request(
+                &mut turn_state,
+                self.max_iterations,
+                &trace,
+            ) {
+                IterationBudgetCheck::Continue => {}
+                IterationBudgetCheck::Stop {
+                    effective_iterations,
+                    max_iterations,
+                } => {
                     warn!(
                         "Effective iteration budget exhausted ({}/{})",
-                        turn_state.effective_iterations, self.max_iterations
+                        effective_iterations, max_iterations
                     );
                     break;
                 }
@@ -1379,15 +1381,10 @@ impl ConversationLoop {
                     })
                     .await;
 
-            // ── 迭代预算退还 ──────────────────────────────
-            let all_read_only = tool_calls
-                .iter()
-                .all(|tc| READ_ONLY_TOOLS.iter().any(|&name| tc.name == name));
-
-            if all_read_only {
+            let tool_budget =
+                IterationBudgetController::record_tool_round(&mut turn_state, &tool_calls);
+            if tool_budget.refunded {
                 debug!("All tools read-only, refunding iteration budget");
-            } else {
-                turn_state.effective_iterations += 1;
             }
 
             let batch_processing = ToolBatchResultProcessor::process(ToolBatchProcessingContext {
