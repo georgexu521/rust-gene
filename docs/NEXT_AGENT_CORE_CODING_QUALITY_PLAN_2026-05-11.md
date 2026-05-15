@@ -469,6 +469,14 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the workflow-contract judgment slice:
   `cargo test -q` passed (`1362 passed; 0 failed`).
+- 2026-05-15: Phase A reflection gate cleanup started. Added
+  `reflection_gate_controller.rs`; task-bundle reflection pass creation,
+  reflection trace recording, human-review approval request handling, and
+  pre-execution stop content are now outside `run_inner`.
+- Validation after the reflection gate slice: `cargo fmt --check`,
+  `git diff --check`, targeted `reflection_gate_controller` and `reflection`
+  tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

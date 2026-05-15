@@ -29,6 +29,7 @@ mod post_edit_repair_controller;
 mod post_edit_verification_controller;
 mod preflight_compression_controller;
 mod pseudo_tool_text;
+mod reflection_gate_controller;
 mod repair_controller;
 mod request_preparation_controller;
 mod retrieval_prompt_controller;
@@ -92,6 +93,9 @@ use post_edit_verification_controller::{
 };
 use preflight_compression_controller::{
     PreflightCompressionContext, PreflightCompressionController,
+};
+use reflection_gate_controller::{
+    ReflectionGateContext, ReflectionGateController, ReflectionGateFlow,
 };
 use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
 use retrieval_prompt_controller::{RetrievalPromptContext, RetrievalPromptController};
@@ -769,84 +773,18 @@ impl ConversationLoop {
                 reason: "code-change workflow must identify target scope and validation before first edit".to_string(),
             });
         }
-        let reflection_pass =
-            crate::engine::reflection_pass::ReflectionPass::from_task_bundle(&task_bundle);
-        trace.record(TraceEvent::ReflectionPassCompleted {
-            pass_id: reflection_pass.pass_id.clone(),
-            task_id: reflection_pass.task_id.clone(),
-            status: format!("{:?}", reflection_pass.status),
-            findings: reflection_pass.findings.len(),
-            unresolved: reflection_pass.unresolved_count(),
-        });
-        if reflection_pass.status == crate::engine::reflection_pass::ReflectionStatus::NeedsWork
-            && code_workflow.should_block_on_reflection()
+        match ReflectionGateController::run(ReflectionGateContext {
+            task_bundle: &task_bundle,
+            route: &route,
+            code_workflow: &code_workflow,
+            approval_channel: self.approval_channel.as_ref(),
+            tx,
+            trace: &trace,
+        })
+        .await
         {
-            let review_prompt = format!(
-                "Reflection pass '{}' found {} unresolved issue(s) before executing a {:?} workflow. Allow the turn to continue?",
-                reflection_pass.pass_id,
-                reflection_pass.unresolved_count(),
-                route.workflow
-            );
-            let review_call = ToolCall {
-                id: format!(
-                    "reflection-{}",
-                    &reflection_pass.pass_id[..8.min(reflection_pass.pass_id.len())]
-                ),
-                name: "reflection_review".to_string(),
-                arguments: serde_json::json!({
-                    "task_id": reflection_pass.task_id.clone(),
-                    "pass_id": reflection_pass.pass_id.clone(),
-                    "status": format!("{:?}", reflection_pass.status),
-                    "unresolved": reflection_pass.unresolved_count(),
-                    "workflow": format!("{:?}", route.workflow),
-                }),
-            };
-            let mut approved = false;
-            if let (Some(channel), Some(tx)) = (&self.approval_channel, tx) {
-                let _ = tx
-                    .send(StreamEvent::PermissionRequest {
-                        id: review_call.id.clone(),
-                        tool_name: review_call.name.clone(),
-                        arguments: review_call.arguments.clone(),
-                        prompt: review_prompt.clone(),
-                    })
-                    .await;
-                trace.record(TraceEvent::PermissionRequested {
-                    tool: review_call.name.clone(),
-                    call_id: review_call.id.clone(),
-                    prompt: review_prompt.clone(),
-                });
-                match channel
-                    .submit(ToolApprovalRequest {
-                        tool_call: review_call.clone(),
-                        prompt: review_prompt.clone(),
-                        review: Some(
-                            crate::engine::human_review::HumanReviewRequest::reflection_gate(
-                                reflection_pass.pass_id.clone(),
-                                reflection_pass.unresolved_count(),
-                                format!("{:?}", route.workflow),
-                            ),
-                        ),
-                    })
-                    .await
-                {
-                    Ok(is_approved) => approved = is_approved,
-                    Err(e) => warn!("Reflection approval error: {}", e),
-                }
-                trace.record(TraceEvent::PermissionResolved {
-                    tool: review_call.name,
-                    call_id: review_call.id,
-                    approved,
-                });
-            } else {
-                approved = true;
-            }
-            if !approved {
-                let content = "Stopped before code-change execution because reflection found unresolved acceptance gaps.".to_string();
-                trace.record(TraceEvent::AssistantResponded {
-                    chars: content.chars().count(),
-                    iterations: 0,
-                });
+            ReflectionGateFlow::Continue => {}
+            ReflectionGateFlow::Stop { content } => {
                 self.finish_trace(trace.clone(), TurnStatus::Failed);
                 return Ok(LoopResult {
                     content,
