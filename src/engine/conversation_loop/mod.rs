@@ -1441,13 +1441,9 @@ impl ConversationLoop {
                             &mut tool_results_text,
                             FocusedRepairRecoveryController::code_write_forbidden_prompt(),
                         );
-                        turn_state.focused_repair.action_checkpoint_active = false;
-                        turn_state.focused_repair.action_checkpoint_lookup_count = 0;
-                        turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
-                        turn_state.focused_repair.no_code_progress_rounds = 0;
-                        turn_state
-                            .focused_repair
-                            .code_write_forbidden_checkpoint_sent = true;
+                        FocusedRepairStateController::record_code_write_forbidden_recovery(
+                            &mut turn_state.focused_repair,
+                        );
                         continue;
                     }
                     if !Self::patch_synthesis_enabled() {
@@ -1503,10 +1499,9 @@ impl ConversationLoop {
                             .await;
                             final_tool_calls.extend(deterministic_calls);
                             if !changed_files.is_empty() {
-                                turn_state.focused_repair.action_checkpoint_active = false;
-                                turn_state.focused_repair.action_checkpoint_lookup_count = 0;
-                                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
-                                turn_state.focused_repair.no_code_progress_rounds = 0;
+                                FocusedRepairStateController::record_patch_synthesis_success(
+                                    &mut turn_state.focused_repair,
+                                );
                                 continue;
                             }
                         }
@@ -1529,8 +1524,9 @@ impl ConversationLoop {
                             },
                         ) {
                             DisabledPatchSynthesisRecovery::ReturnToModel { prompt } => {
-                                turn_state.focused_repair.patch_synthesis_recovery_used = true;
-                                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
+                                FocusedRepairStateController::record_patch_synthesis_return_to_model(
+                                    &mut turn_state.focused_repair,
+                                );
                                 FocusedRepairRecoveryController::append_system_prompt(
                                     &mut messages,
                                     &mut tool_results_text,
@@ -1542,11 +1538,9 @@ impl ConversationLoop {
                                 prompt,
                                 trace_error,
                             } => {
-                                turn_state.focused_repair.action_checkpoint_reopen_used = true;
-                                turn_state.focused_repair.action_checkpoint_active = false;
-                                turn_state.focused_repair.action_checkpoint_lookup_count = 0;
-                                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
-                                turn_state.focused_repair.no_code_progress_rounds = 1;
+                                FocusedRepairStateController::record_patch_synthesis_reopen_normal_tools(
+                                    &mut turn_state.focused_repair,
+                                );
                                 trace.record(TraceEvent::WorkflowFallback {
                                     error: trace_error.to_string(),
                                 });
@@ -1626,10 +1620,9 @@ impl ConversationLoop {
                             }
                             final_tool_calls.extend(synthesized_calls);
                             if !changed_files.is_empty() {
-                                turn_state.focused_repair.action_checkpoint_active = false;
-                                turn_state.focused_repair.action_checkpoint_lookup_count = 0;
-                                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
-                                turn_state.focused_repair.no_code_progress_rounds = 0;
+                                FocusedRepairStateController::record_patch_synthesis_success(
+                                    &mut turn_state.focused_repair,
+                                );
                             } else {
                                 FocusedRepairRecoveryController::stop_with_message(
                                     tx,
@@ -1651,13 +1644,9 @@ impl ConversationLoop {
                                 turn_state.focused_repair.action_checkpoint_reopen_used,
                             ) {
                                 PatchSynthesisFailureRecovery::InsufficientEvidence { prompt } => {
-                                    turn_state.focused_repair.patch_synthesis_recovery_used = true;
-                                    turn_state.focused_repair.action_checkpoint_active = false;
-                                    turn_state.focused_repair.action_checkpoint_lookup_count = 0;
-                                    turn_state.focused_repair.action_checkpoint_no_change_rounds =
-                                        0;
-                                    turn_state.focused_repair.no_code_progress_rounds = 1;
-                                    turn_state.focused_repair.file_edit_failure_retry_used = false;
+                                    FocusedRepairStateController::record_patch_synthesis_insufficient_evidence(
+                                        &mut turn_state.focused_repair,
+                                    );
                                     FocusedRepairRecoveryController::append_system_prompt(
                                         &mut messages,
                                         &mut tool_results_text,
@@ -1669,12 +1658,9 @@ impl ConversationLoop {
                                     prompt,
                                     trace_error,
                                 } => {
-                                    turn_state.focused_repair.action_checkpoint_reopen_used = true;
-                                    turn_state.focused_repair.action_checkpoint_active = false;
-                                    turn_state.focused_repair.action_checkpoint_lookup_count = 0;
-                                    turn_state.focused_repair.action_checkpoint_no_change_rounds =
-                                        0;
-                                    turn_state.focused_repair.no_code_progress_rounds = 1;
+                                    FocusedRepairStateController::record_patch_synthesis_reopen_normal_tools(
+                                        &mut turn_state.focused_repair,
+                                    );
                                     trace.record(TraceEvent::WorkflowFallback {
                                         error: trace_error.to_string(),
                                     });

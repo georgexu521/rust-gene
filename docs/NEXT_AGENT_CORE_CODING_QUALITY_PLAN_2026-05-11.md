@@ -340,6 +340,17 @@
   `tool_batch_result_processor`, `post_edit_repair_controller`, and
   `repair_controller` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` all passed.
+- 2026-05-15: Phase A focused-repair patch-synthesis state cleanup
+  continued. `FocusedRepairStateController` now also owns patch-synthesis
+  success resets, code-write-forbidden recovery marking, disabled-synthesis
+  return/reopen state, and insufficient-evidence/reopen recovery state. The
+  main loop still performs prompt/trace/patch execution, but no longer mutates
+  these focused-repair fields inline in the patch-synthesis branch.
+- Validation after the patch-synthesis state cleanup: `cargo fmt --check`,
+  `git diff --check`, targeted `focused_repair_state_controller`,
+  `focused_repair_recovery`, and `patch_synthesis_executor` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` all
+  passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

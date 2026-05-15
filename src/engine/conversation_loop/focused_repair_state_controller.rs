@@ -113,6 +113,48 @@ impl FocusedRepairStateController {
             force_patch_synthesis_reason: None,
         }
     }
+
+    pub(super) fn record_code_write_forbidden_recovery(state: &mut FocusedRepairRuntimeState) {
+        Self::clear_checkpoint_after_patch_path(state);
+        state.code_write_forbidden_checkpoint_sent = true;
+    }
+
+    pub(super) fn record_patch_synthesis_success(state: &mut FocusedRepairRuntimeState) {
+        Self::clear_checkpoint_after_patch_path(state);
+    }
+
+    pub(super) fn record_patch_synthesis_return_to_model(state: &mut FocusedRepairRuntimeState) {
+        state.patch_synthesis_recovery_used = true;
+        state.action_checkpoint_no_change_rounds = 0;
+    }
+
+    pub(super) fn record_patch_synthesis_reopen_normal_tools(
+        state: &mut FocusedRepairRuntimeState,
+    ) {
+        state.action_checkpoint_reopen_used = true;
+        state.action_checkpoint_active = false;
+        state.action_checkpoint_lookup_count = 0;
+        state.action_checkpoint_no_change_rounds = 0;
+        state.no_code_progress_rounds = 1;
+    }
+
+    pub(super) fn record_patch_synthesis_insufficient_evidence(
+        state: &mut FocusedRepairRuntimeState,
+    ) {
+        state.patch_synthesis_recovery_used = true;
+        state.action_checkpoint_active = false;
+        state.action_checkpoint_lookup_count = 0;
+        state.action_checkpoint_no_change_rounds = 0;
+        state.no_code_progress_rounds = 1;
+        state.file_edit_failure_retry_used = false;
+    }
+
+    fn clear_checkpoint_after_patch_path(state: &mut FocusedRepairRuntimeState) {
+        state.action_checkpoint_active = false;
+        state.action_checkpoint_lookup_count = 0;
+        state.action_checkpoint_no_change_rounds = 0;
+        state.no_code_progress_rounds = 0;
+    }
 }
 
 #[cfg(test)]
@@ -228,6 +270,48 @@ mod tests {
             ..request(&mut state)
         });
 
+        assert_eq!(state.no_code_progress_rounds, 1);
+    }
+
+    #[test]
+    fn patch_synthesis_success_clears_checkpoint_progress() {
+        let mut state = FocusedRepairRuntimeState {
+            no_code_progress_rounds: 3,
+            action_checkpoint_active: true,
+            action_checkpoint_lookup_count: 2,
+            action_checkpoint_no_change_rounds: 3,
+            ..FocusedRepairRuntimeState::default()
+        };
+
+        FocusedRepairStateController::record_patch_synthesis_success(&mut state);
+
+        assert_eq!(state.no_code_progress_rounds, 0);
+        assert!(!state.action_checkpoint_active);
+        assert_eq!(state.action_checkpoint_lookup_count, 0);
+        assert_eq!(state.action_checkpoint_no_change_rounds, 0);
+    }
+
+    #[test]
+    fn patch_synthesis_recovery_markers_update_state() {
+        let mut state = FocusedRepairRuntimeState {
+            action_checkpoint_active: true,
+            action_checkpoint_lookup_count: 2,
+            action_checkpoint_no_change_rounds: 3,
+            file_edit_failure_retry_used: true,
+            ..FocusedRepairRuntimeState::default()
+        };
+
+        FocusedRepairStateController::record_patch_synthesis_insufficient_evidence(&mut state);
+
+        assert!(state.patch_synthesis_recovery_used);
+        assert!(!state.action_checkpoint_active);
+        assert_eq!(state.action_checkpoint_lookup_count, 0);
+        assert_eq!(state.action_checkpoint_no_change_rounds, 0);
+        assert_eq!(state.no_code_progress_rounds, 1);
+        assert!(!state.file_edit_failure_retry_used);
+
+        FocusedRepairStateController::record_patch_synthesis_reopen_normal_tools(&mut state);
+        assert!(state.action_checkpoint_reopen_used);
         assert_eq!(state.no_code_progress_rounds, 1);
     }
 }
