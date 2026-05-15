@@ -379,6 +379,14 @@
   `cargo fmt --check`, `git diff --check`, targeted
   `post_edit_verification_controller` and `post_edit_repair_controller` tests,
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- 2026-05-15: Phase A post-edit repair runtime parameter cleanup continued.
+  Added `PostEditRepairRuntimeContext::from_turn_state` so the repair
+  controller receives grouped turn repair state instead of `run_inner`
+  threading individual action-checkpoint and repair-attempt fields.
+- Validation after the `PostEditRepairRuntimeContext` slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `post_edit_repair_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

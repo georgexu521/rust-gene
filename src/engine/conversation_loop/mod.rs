@@ -78,7 +78,9 @@ use patch_synthesis_flow_controller::{
     PatchSynthesisFailureRecoveryApplicationContext, PatchSynthesisFlowController,
     PatchSynthesisRecoveryFlow,
 };
-use post_edit_repair_controller::{PostEditRepairContext, PostEditRepairController};
+use post_edit_repair_controller::{
+    PostEditRepairContext, PostEditRepairController, PostEditRepairRuntimeContext,
+};
 use post_edit_verification_controller::{
     PostEditVerificationContext, PostEditVerificationController,
 };
@@ -1704,25 +1706,8 @@ impl ConversationLoop {
                         changed_files: &changed_files,
                         verification: &verification,
                         required_validation_commands: &required_validation_commands,
-                        acceptance_repair_attempts: &mut turn_state.acceptance_repair_attempts,
-                        reserved_repair_rounds: &mut turn_state.reserved_repair_rounds,
-                        effective_iterations: turn_state.effective_iterations,
+                        runtime: PostEditRepairRuntimeContext::from_turn_state(&mut turn_state),
                         max_iterations: self.max_iterations,
-                        action_checkpoint_no_change_rounds: &mut turn_state
-                            .focused_repair
-                            .action_checkpoint_no_change_rounds,
-                        action_checkpoint_active: &mut turn_state
-                            .focused_repair
-                            .action_checkpoint_active,
-                        action_checkpoint_lookup_count: &mut turn_state
-                            .focused_repair
-                            .action_checkpoint_lookup_count,
-                        file_edit_failure_retry_used: &mut turn_state
-                            .focused_repair
-                            .file_edit_failure_retry_used,
-                        action_checkpoint_requires_patch_before_validation: &mut turn_state
-                            .focused_repair
-                            .action_checkpoint_requires_patch_before_validation,
                         should_closeout_after_verified_change,
                         final_content: &mut final_content,
                         tool_results_text: &mut tool_results_text,

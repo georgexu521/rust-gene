@@ -2,6 +2,7 @@ use super::post_edit_verification_controller::PostEditVerificationOutcome;
 use super::repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
 };
+use super::turn_runtime_state::{FocusedRepairRuntimeState, TurnRuntimeState};
 use super::workflow_trace::{apply_workflow_feedback_and_trace, trace_stage_validation};
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
@@ -20,20 +21,31 @@ pub(super) struct PostEditRepairContext<'a> {
     pub(super) changed_files: &'a [PathBuf],
     pub(super) verification: &'a PostEditVerificationOutcome,
     pub(super) required_validation_commands: &'a [String],
-    pub(super) acceptance_repair_attempts: &'a mut usize,
-    pub(super) reserved_repair_rounds: &'a mut usize,
-    pub(super) effective_iterations: usize,
+    pub(super) runtime: PostEditRepairRuntimeContext<'a>,
     pub(super) max_iterations: usize,
-    pub(super) action_checkpoint_no_change_rounds: &'a mut usize,
-    pub(super) action_checkpoint_active: &'a mut bool,
-    pub(super) action_checkpoint_lookup_count: &'a mut usize,
-    pub(super) file_edit_failure_retry_used: &'a mut bool,
-    pub(super) action_checkpoint_requires_patch_before_validation: &'a mut bool,
     pub(super) should_closeout_after_verified_change: bool,
     pub(super) final_content: &'a mut String,
     pub(super) tool_results_text: &'a mut String,
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) last_user_preview: &'a str,
+}
+
+pub(super) struct PostEditRepairRuntimeContext<'a> {
+    pub(super) focused_repair: &'a mut FocusedRepairRuntimeState,
+    pub(super) acceptance_repair_attempts: &'a mut usize,
+    pub(super) reserved_repair_rounds: &'a mut usize,
+    pub(super) effective_iterations: usize,
+}
+
+impl<'a> PostEditRepairRuntimeContext<'a> {
+    pub(super) fn from_turn_state(turn_state: &'a mut TurnRuntimeState) -> Self {
+        Self {
+            focused_repair: &mut turn_state.focused_repair,
+            acceptance_repair_attempts: &mut turn_state.acceptance_repair_attempts,
+            reserved_repair_rounds: &mut turn_state.reserved_repair_rounds,
+            effective_iterations: turn_state.effective_iterations,
+        }
+    }
 }
 
 pub(super) struct PostEditRepairOutcome {
@@ -60,7 +72,7 @@ impl PostEditRepairController {
                 verify_passed,
                 post_edit_evidence: &context.verification.post_edit_evidence,
                 failed_commands: &context.verification.failed_commands,
-                acceptance_repair_attempts: *context.acceptance_repair_attempts,
+                acceptance_repair_attempts: *context.runtime.acceptance_repair_attempts,
                 tool_results_text: &mut *context.tool_results_text,
                 messages: &mut *context.messages,
             });
@@ -108,14 +120,27 @@ impl PostEditRepairController {
                 acceptance_evidence: &context.verification.acceptance_evidence,
                 required_validation_passed: context.verification.required_validation_passed,
                 check_passed: context.verification.check_passed,
-                acceptance_repair_attempts: &mut *context.acceptance_repair_attempts,
-                reserved_repair_rounds: &mut *context.reserved_repair_rounds,
-                action_checkpoint_no_change_rounds: &mut *context
+                acceptance_repair_attempts: &mut *context.runtime.acceptance_repair_attempts,
+                reserved_repair_rounds: &mut *context.runtime.reserved_repair_rounds,
+                action_checkpoint_no_change_rounds: &mut context
+                    .runtime
+                    .focused_repair
                     .action_checkpoint_no_change_rounds,
-                action_checkpoint_active: &mut *context.action_checkpoint_active,
-                action_checkpoint_lookup_count: &mut *context.action_checkpoint_lookup_count,
-                file_edit_failure_retry_used: &mut *context.file_edit_failure_retry_used,
-                action_checkpoint_requires_patch_before_validation: &mut *context
+                action_checkpoint_active: &mut context
+                    .runtime
+                    .focused_repair
+                    .action_checkpoint_active,
+                action_checkpoint_lookup_count: &mut context
+                    .runtime
+                    .focused_repair
+                    .action_checkpoint_lookup_count,
+                file_edit_failure_retry_used: &mut context
+                    .runtime
+                    .focused_repair
+                    .file_edit_failure_retry_used,
+                action_checkpoint_requires_patch_before_validation: &mut context
+                    .runtime
+                    .focused_repair
                     .action_checkpoint_requires_patch_before_validation,
                 should_closeout_after_verified_change,
                 tool_results_text: &mut *context.tool_results_text,
@@ -140,12 +165,15 @@ impl PostEditRepairController {
 
         let reflection_action = Self::reflection_repair_action(
             post_edit_reflection.status,
-            context.effective_iterations,
+            context.runtime.effective_iterations,
             context.max_iterations,
         );
         if reflection_action.requires_patch_before_validation {
             should_closeout_after_verified_change = false;
-            *context.action_checkpoint_requires_patch_before_validation = true;
+            context
+                .runtime
+                .focused_repair
+                .action_checkpoint_requires_patch_before_validation = true;
             let repair_instruction = format!(
                 "{}\nPost-edit reflection found unresolved quality gaps. Fix the changed files before giving a final answer.",
                 post_edit_reflection.format_for_prompt()
@@ -154,7 +182,8 @@ impl PostEditRepairController {
             context.tool_results_text.push_str(&repair_instruction);
             context.messages.push(Message::system(repair_instruction));
             if reflection_action.reserve_repair_round {
-                *context.reserved_repair_rounds = (*context.reserved_repair_rounds).max(1);
+                *context.runtime.reserved_repair_rounds =
+                    (*context.runtime.reserved_repair_rounds).max(1);
                 context.trace.record(TraceEvent::WorkflowFallback {
                     error: "reserved repair round granted after post-edit reflection failure"
                         .to_string(),
@@ -191,6 +220,26 @@ struct PostEditReflectionRepairAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_context_groups_turn_repair_state() {
+        let mut turn_state = TurnRuntimeState::new(true);
+        turn_state.effective_iterations = 3;
+        {
+            let runtime = PostEditRepairRuntimeContext::from_turn_state(&mut turn_state);
+            assert_eq!(runtime.effective_iterations, 3);
+            *runtime.acceptance_repair_attempts = 2;
+            *runtime.reserved_repair_rounds = 1;
+            runtime.focused_repair.action_checkpoint_no_change_rounds = 4;
+        }
+
+        assert_eq!(turn_state.acceptance_repair_attempts, 2);
+        assert_eq!(turn_state.reserved_repair_rounds, 1);
+        assert_eq!(
+            turn_state.focused_repair.action_checkpoint_no_change_rounds,
+            4
+        );
+    }
 
     #[test]
     fn reflection_repair_action_only_blocks_for_unresolved_reflection() {
