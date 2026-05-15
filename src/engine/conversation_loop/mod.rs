@@ -37,6 +37,7 @@ mod runtime_diet;
 mod runtime_timeouts;
 mod session_processor;
 mod step_executor;
+mod task_context_trace_controller;
 mod text_sanitizer;
 mod tool_batch_result_processor;
 mod tool_call_lifecycle;
@@ -101,6 +102,7 @@ use request_preparation_controller::{RequestPreparationContext, RequestPreparati
 use retrieval_prompt_controller::{RetrievalPromptContext, RetrievalPromptController};
 use runtime_diet::trace_runtime_diet_report;
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
+use task_context_trace_controller::{TaskContextTraceContext, TaskContextTraceController};
 use text_sanitizer::strip_think_blocks;
 #[cfg(test)]
 use text_sanitizer::VisibleTextSanitizer;
@@ -755,24 +757,12 @@ impl ConversationLoop {
             trace: &trace,
         })
         .await;
-        trace.record(TraceEvent::TaskContextBuilt {
-            task_id: task_bundle.task_id.clone(),
-            workflow: format!("{:?}", task_bundle.route.workflow),
-            files: task_bundle.relevant_files.len(),
-            constraints: task_bundle.constraints.len(),
-            risks: task_bundle.risks.len(),
-            acceptance_checks: task_bundle.acceptance_checks.len(),
+        TaskContextTraceController::record(TaskContextTraceContext {
+            task_bundle: &task_bundle,
+            route_workflow: route.workflow,
+            required_validation_commands: &required_validation_commands,
+            trace: &trace,
         });
-        if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-            trace.record(TraceEvent::ImplementationIntentRecorded {
-                task_id: task_bundle.task_id.clone(),
-                workflow: format!("{:?}", task_bundle.route.workflow),
-                target_files: task_bundle.relevant_files.len(),
-                validation_commands: required_validation_commands.clone(),
-                risks: task_bundle.risks.len(),
-                reason: "code-change workflow must identify target scope and validation before first edit".to_string(),
-            });
-        }
         match ReflectionGateController::run(ReflectionGateContext {
             task_bundle: &task_bundle,
             route: &route,
