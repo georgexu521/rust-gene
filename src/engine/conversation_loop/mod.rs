@@ -25,6 +25,7 @@ mod patch_synthesis_executor;
 mod permission_controller;
 mod post_edit_repair_controller;
 mod post_edit_verification_controller;
+mod preflight_compression_controller;
 mod pseudo_tool_text;
 mod repair_controller;
 mod request_preparation_controller;
@@ -61,7 +62,6 @@ use assistant_response_retry_controller::{
     AssistantResponseRetryController, AssistantResponseRetryRequest,
 };
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
-use context_budget_controller::ContextBudgetController;
 use first_code_change_controller::{FirstCodeChangeContext, FirstCodeChangeController};
 use focused_repair_recovery::{
     DisabledPatchSynthesisRecovery, DisabledPatchSynthesisRecoveryRequest,
@@ -75,6 +75,9 @@ use patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExe
 use post_edit_repair_controller::{PostEditRepairContext, PostEditRepairController};
 use post_edit_verification_controller::{
     PostEditVerificationContext, PostEditVerificationController,
+};
+use preflight_compression_controller::{
+    PreflightCompressionContext, PreflightCompressionController,
 };
 use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
 use runtime_diet::trace_runtime_diet_report;
@@ -118,7 +121,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, warn};
 
-use super::context_compressor::{estimate_messages_tokens, ContextCompressor};
+use super::context_compressor::ContextCompressor;
 use super::hooks::ToolHookManager;
 use super::streaming::StreamEvent;
 
@@ -1131,52 +1134,14 @@ impl ConversationLoop {
         .await;
 
         // ── 前置压缩（Preflight）─────────────────────────
-        if let Some(ref compressor_mutex) = self.compressor {
-            let mut no_gain_passes = 0u8;
-            for pass in 0..3 {
-                let compressor = compressor_mutex.lock().await;
-                let preflight =
-                    ContextBudgetController::observe_preflight(&compressor, &messages, &base_tools);
-                ContextBudgetController::record_runtime_diet(
-                    &mut turn_state.runtime_diet,
-                    &preflight.observation,
-                );
-                if !preflight.should_compact {
-                    break;
-                }
-                debug!(
-                    "Preflight compression pass {}/3 ({} msg + {} tool tokens)",
-                    pass + 1,
-                    preflight.observation.message_tokens,
-                    preflight.observation.tool_schema_tokens
-                );
-                drop(compressor);
-                let before_tokens = preflight.observation.message_tokens;
-                messages = compressor_mutex
-                    .lock()
-                    .await
-                    .compress_async(&messages)
-                    .await;
-                let after_tokens = estimate_messages_tokens(&messages);
-                trace.record(TraceEvent::ContextCompacted {
-                    before_tokens: before_tokens as usize,
-                    after_tokens: after_tokens as usize,
-                    strategy: "preflight".to_string(),
-                });
-                if after_tokens >= before_tokens {
-                    no_gain_passes += 1;
-                    if no_gain_passes >= 2 {
-                        warn!(
-                            "Preflight compression made no progress for 2 consecutive passes ({} -> {}). Stop retrying this turn.",
-                            before_tokens, after_tokens
-                        );
-                        break;
-                    }
-                } else {
-                    no_gain_passes = 0;
-                }
-            }
-        }
+        PreflightCompressionController::run(PreflightCompressionContext {
+            compressor: self.compressor.as_ref(),
+            messages: &mut messages,
+            tools: &base_tools,
+            runtime_diet: &mut turn_state.runtime_diet,
+            trace: &trace,
+        })
+        .await;
 
         if let Some(tx) = tx {
             let _ = tx.send(StreamEvent::Start).await;
