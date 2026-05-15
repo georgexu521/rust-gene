@@ -6,10 +6,25 @@ pub(super) struct TurnRuntimeState {
     pub(super) evidence_ledger: EvidenceLedger,
     pub(super) runtime_diet: RuntimeDietSnapshot,
     pub(super) tool_lifecycle: ToolCallLifecycle,
+    pub(super) focused_repair: FocusedRepairRuntimeState,
     pub(super) iterations_used: usize,
     pub(super) effective_iterations: usize,
     pub(super) acceptance_repair_attempts: usize,
     pub(super) reserved_repair_rounds: usize,
+}
+
+#[derive(Default)]
+pub(super) struct FocusedRepairRuntimeState {
+    pub(super) no_code_progress_rounds: usize,
+    pub(super) action_checkpoint_active: bool,
+    pub(super) action_checkpoint_lookup_count: usize,
+    pub(super) action_checkpoint_no_change_rounds: usize,
+    pub(super) action_checkpoint_requires_patch_before_validation: bool,
+    pub(super) patch_synthesis_recovery_used: bool,
+    pub(super) action_checkpoint_reopen_used: bool,
+    pub(super) no_diff_audit_validation_checkpoint_sent: bool,
+    pub(super) code_write_forbidden_checkpoint_sent: bool,
+    pub(super) file_edit_failure_retry_used: bool,
 }
 
 impl TurnRuntimeState {
@@ -18,6 +33,7 @@ impl TurnRuntimeState {
             evidence_ledger: EvidenceLedger::new(),
             runtime_diet: RuntimeDietSnapshot::new(route_scoped_tools_enabled),
             tool_lifecycle: ToolCallLifecycle::default(),
+            focused_repair: FocusedRepairRuntimeState::default(),
             iterations_used: 0,
             effective_iterations: 0,
             acceptance_repair_attempts: 0,

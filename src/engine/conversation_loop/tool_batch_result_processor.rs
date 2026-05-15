@@ -26,7 +26,6 @@ pub(super) struct ToolBatchProcessingContext<'a> {
     pub(super) required_validation_commands: &'a [String],
     pub(super) successful_required_validation_commands: &'a mut HashSet<String>,
     pub(super) action_checkpoint_active: bool,
-    pub(super) action_checkpoint_requires_patch_before_validation: &'a mut bool,
     pub(super) destructive_scope: &'a DestructiveScopeContract,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
 }
@@ -67,7 +66,6 @@ impl ToolBatchResultProcessor {
             required_validation_commands,
             successful_required_validation_commands,
             action_checkpoint_active,
-            action_checkpoint_requires_patch_before_validation,
             destructive_scope,
             baseline_git_status_files,
         } = context;
@@ -131,7 +129,9 @@ impl ToolBatchResultProcessor {
 
             if result.success && matches!(tc.name.as_str(), "file_edit" | "file_write") {
                 outcome.successful_write_tool = true;
-                *action_checkpoint_requires_patch_before_validation = false;
+                turn_state
+                    .focused_repair
+                    .action_checkpoint_requires_patch_before_validation = false;
                 if let Some(path) = tc.arguments["path"].as_str() {
                     outcome.changed_files.push(PathBuf::from(path));
                 }
@@ -311,7 +311,9 @@ mod tests {
         let mut failed_names = HashMap::new();
         let required = vec!["cargo test -q".to_string()];
         let mut successful_required = HashSet::from(["cargo test -q".to_string()]);
-        let mut requires_patch_before_validation = true;
+        turn_state
+            .focused_repair
+            .action_checkpoint_requires_patch_before_validation = true;
         let destructive_scope = destructive_scope();
         let baseline = HashSet::new();
 
@@ -330,8 +332,6 @@ mod tests {
             required_validation_commands: &required,
             successful_required_validation_commands: &mut successful_required,
             action_checkpoint_active: false,
-            action_checkpoint_requires_patch_before_validation:
-                &mut requires_patch_before_validation,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
         })
@@ -341,7 +341,11 @@ mod tests {
         assert!(outcome.successful_write_tool);
         assert_eq!(outcome.changed_files, vec![PathBuf::from("src/lib.rs")]);
         assert!(successful_required.is_empty());
-        assert!(!requires_patch_before_validation);
+        assert!(
+            !turn_state
+                .focused_repair
+                .action_checkpoint_requires_patch_before_validation
+        );
         assert_eq!(messages.len(), 1);
     }
 
@@ -364,7 +368,6 @@ mod tests {
         let mut failed_fingerprints = HashMap::from([(fingerprint, 1usize)]);
         let mut failed_names = HashMap::new();
         let mut successful_required = HashSet::new();
-        let mut requires_patch_before_validation = false;
         let destructive_scope = destructive_scope();
         let baseline = WorkflowChangeTracker::git_status_files();
 
@@ -383,8 +386,6 @@ mod tests {
             required_validation_commands: &[],
             successful_required_validation_commands: &mut successful_required,
             action_checkpoint_active: true,
-            action_checkpoint_requires_patch_before_validation:
-                &mut requires_patch_before_validation,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
         })

@@ -314,6 +314,18 @@
   `cargo clippy --all-features -- -D warnings` all passed.
 - Full validation after the 2026-05-15 continuation batch:
   `cargo test -q` passed (`1336 passed; 0 failed`).
+- 2026-05-15: Phase A focused-repair runtime state ownership migration
+  started. Added `FocusedRepairRuntimeState` under `TurnRuntimeState` and moved
+  action-checkpoint counters, patch-synthesis recovery flags, no-progress
+  counters, and file-edit retry state out of `run_inner` locals. Tool-batch and
+  patch-synthesis collection now update the shared turn-owned repair state
+  instead of receiving separate mutable field references.
+- Validation after the `FocusedRepairRuntimeState` slice: `cargo fmt --check`,
+  `git diff --check`, targeted `action_checkpoint`,
+  `focused_repair_recovery`, `patch_synthesis_executor`,
+  `tool_batch_result_processor`, `post_edit_repair_controller`, and
+  `repair_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

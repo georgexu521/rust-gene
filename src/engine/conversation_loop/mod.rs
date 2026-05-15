@@ -1100,14 +1100,6 @@ impl ConversationLoop {
         let mut final_content = String::new();
         let mut final_tool_calls = Vec::new();
         let mut tool_calls_made = false;
-        let mut no_code_progress_rounds = 0usize;
-        let mut action_checkpoint_active = false;
-        let mut action_checkpoint_lookup_count = 0usize;
-        let mut patch_synthesis_recovery_used = false;
-        let mut action_checkpoint_reopen_used = false;
-        let mut no_diff_audit_validation_checkpoint_sent = false;
-        let mut code_write_forbidden_checkpoint_sent = false;
-        let mut file_edit_failure_retry_used = false;
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
         let mut companion_context_keys: HashSet<String> = HashSet::new();
@@ -1157,8 +1149,6 @@ impl ConversationLoop {
         // ── 迭代预算 ─────────────────────────────────────
         let max_loop_iterations = self.max_iterations + code_workflow.max_repair_attempts().max(3);
         let baseline_git_status_files = WorkflowChangeTracker::git_status_files();
-        let mut action_checkpoint_no_change_rounds = 0usize;
-        let mut action_checkpoint_requires_patch_before_validation = false;
 
         for iteration in 0..max_loop_iterations {
             debug!(
@@ -1196,9 +1186,13 @@ impl ConversationLoop {
             let exposure_plan = ToolExposurePlan::build(ToolExposureRequest {
                 base_tools: &base_tools,
                 has_changes_before_request,
-                action_checkpoint_active,
-                action_checkpoint_lookup_count,
-                action_checkpoint_requires_patch_before_validation,
+                action_checkpoint_active: turn_state.focused_repair.action_checkpoint_active,
+                action_checkpoint_lookup_count: turn_state
+                    .focused_repair
+                    .action_checkpoint_lookup_count,
+                action_checkpoint_requires_patch_before_validation: turn_state
+                    .focused_repair
+                    .action_checkpoint_requires_patch_before_validation,
             });
             let tools = exposure_plan.tools;
             let exposed_tool_names = exposure_plan.exposed_tool_names;
@@ -1322,8 +1316,12 @@ impl ConversationLoop {
                         trace: Some(trace.clone()),
                         resource_policy: &resource_policy,
                         exposed_tool_names: &exposed_tool_names,
-                        action_checkpoint_active,
-                        action_checkpoint_lookup_count,
+                        action_checkpoint_active: turn_state
+                            .focused_repair
+                            .action_checkpoint_active,
+                        action_checkpoint_lookup_count: turn_state
+                            .focused_repair
+                            .action_checkpoint_lookup_count,
                         has_changes_before_tools,
                         destructive_scope: &destructive_scope,
                         lifecycle: &mut turn_state.tool_lifecycle,
@@ -1336,6 +1334,8 @@ impl ConversationLoop {
                 debug!("All tools read-only, refunding iteration budget");
             }
 
+            let action_checkpoint_active_before_batch =
+                turn_state.focused_repair.action_checkpoint_active;
             let batch_processing = ToolBatchResultProcessor::process(ToolBatchProcessingContext {
                 tool_calls: &tool_calls,
                 tool_batch: &mut tool_batch,
@@ -1352,9 +1352,7 @@ impl ConversationLoop {
                 required_validation_commands: &required_validation_commands,
                 successful_required_validation_commands:
                     &mut successful_required_validation_commands,
-                action_checkpoint_active,
-                action_checkpoint_requires_patch_before_validation:
-                    &mut action_checkpoint_requires_patch_before_validation,
+                action_checkpoint_active: action_checkpoint_active_before_batch,
                 destructive_scope: &destructive_scope,
                 baseline_git_status_files: &baseline_git_status_files,
             })
@@ -1376,13 +1374,13 @@ impl ConversationLoop {
             let has_worktree_changes = !changed_files.is_empty();
 
             if Self::should_retry_after_file_edit_failure_correction(
-                action_checkpoint_active,
+                turn_state.focused_repair.action_checkpoint_active,
                 file_edit_failure_correction_added,
-                file_edit_failure_retry_used,
+                turn_state.focused_repair.file_edit_failure_retry_used,
                 successful_write_tool,
             ) {
-                file_edit_failure_retry_used = true;
-                action_checkpoint_no_change_rounds = 0;
+                turn_state.focused_repair.file_edit_failure_retry_used = true;
+                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
                 trace.record(TraceEvent::WorkflowFallback {
                     error: "file_edit repair correction returned to model before patch synthesis"
                         .to_string(),
@@ -1394,13 +1392,15 @@ impl ConversationLoop {
             let mut force_patch_synthesis_reason: Option<&'static str> = None;
             if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
                 if successful_write_tool {
-                    no_code_progress_rounds = 0;
-                    action_checkpoint_no_change_rounds = 0;
-                    action_checkpoint_active = false;
-                    action_checkpoint_lookup_count = 0;
-                    file_edit_failure_retry_used = false;
+                    turn_state.focused_repair.no_code_progress_rounds = 0;
+                    turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
+                    turn_state.focused_repair.action_checkpoint_active = false;
+                    turn_state.focused_repair.action_checkpoint_lookup_count = 0;
+                    turn_state.focused_repair.file_edit_failure_retry_used = false;
                 } else if used_write_tool {
-                    action_checkpoint_requires_patch_before_validation = true;
+                    turn_state
+                        .focused_repair
+                        .action_checkpoint_requires_patch_before_validation = true;
                 } else if any_tool_success && !used_write_tool {
                     let decision = ProgressCheckpointController::evaluate_read_only_success(
                         ProgressCheckpointRequest {
@@ -1408,28 +1408,47 @@ impl ConversationLoop {
                             has_worktree_changes,
                             has_successful_validation_commands: !successful_validation_commands
                                 .is_empty(),
-                            no_code_progress_rounds,
-                            action_checkpoint_active,
-                            action_checkpoint_lookup_count,
-                            action_checkpoint_no_change_rounds,
-                            no_diff_audit_validation_checkpoint_sent,
+                            no_code_progress_rounds: turn_state
+                                .focused_repair
+                                .no_code_progress_rounds,
+                            action_checkpoint_active: turn_state
+                                .focused_repair
+                                .action_checkpoint_active,
+                            action_checkpoint_lookup_count: turn_state
+                                .focused_repair
+                                .action_checkpoint_lookup_count,
+                            action_checkpoint_no_change_rounds: turn_state
+                                .focused_repair
+                                .action_checkpoint_no_change_rounds,
+                            no_diff_audit_validation_checkpoint_sent: turn_state
+                                .focused_repair
+                                .no_diff_audit_validation_checkpoint_sent,
                             code_write_tools_forbidden,
-                            code_write_forbidden_checkpoint_sent,
+                            code_write_forbidden_checkpoint_sent: turn_state
+                                .focused_repair
+                                .code_write_forbidden_checkpoint_sent,
                             used_action_checkpoint_lookup,
                         },
                     );
 
-                    no_code_progress_rounds = decision.no_code_progress_rounds;
-                    action_checkpoint_active = decision.action_checkpoint_active;
-                    action_checkpoint_lookup_count = decision.action_checkpoint_lookup_count;
-                    action_checkpoint_no_change_rounds =
+                    turn_state.focused_repair.no_code_progress_rounds =
+                        decision.no_code_progress_rounds;
+                    turn_state.focused_repair.action_checkpoint_active =
+                        decision.action_checkpoint_active;
+                    turn_state.focused_repair.action_checkpoint_lookup_count =
+                        decision.action_checkpoint_lookup_count;
+                    turn_state.focused_repair.action_checkpoint_no_change_rounds =
                         decision.action_checkpoint_no_change_rounds;
-                    no_diff_audit_validation_checkpoint_sent =
+                    turn_state
+                        .focused_repair
+                        .no_diff_audit_validation_checkpoint_sent =
                         decision.no_diff_audit_validation_checkpoint_sent;
-                    code_write_forbidden_checkpoint_sent =
+                    turn_state
+                        .focused_repair
+                        .code_write_forbidden_checkpoint_sent =
                         decision.code_write_forbidden_checkpoint_sent;
                     if decision.reset_file_edit_failure_retry {
-                        file_edit_failure_retry_used = false;
+                        turn_state.focused_repair.file_edit_failure_retry_used = false;
                     }
                     force_patch_synthesis_after_no_change =
                         decision.force_patch_synthesis_after_no_change;
@@ -1448,18 +1467,23 @@ impl ConversationLoop {
 
             if let Some(repair_proposal) =
                 Self::focused_repair_action_proposal(FocusedRepairActionRequest {
-                    action_checkpoint_active,
+                    action_checkpoint_active: turn_state.focused_repair.action_checkpoint_active,
                     any_tool_success,
                     batch_has_unsuccessful_tools,
                     failed_tool_evidence_present: !failed_tool_evidence.is_empty(),
                     force_patch_synthesis_after_no_change,
                     force_patch_synthesis_reason,
-                    action_checkpoint_no_change_rounds,
-                    action_checkpoint_lookup_count,
+                    action_checkpoint_no_change_rounds: turn_state
+                        .focused_repair
+                        .action_checkpoint_no_change_rounds,
+                    action_checkpoint_lookup_count: turn_state
+                        .focused_repair
+                        .action_checkpoint_lookup_count,
                     exposed_tool_names: &exposed_tool_names,
                 })
             {
-                action_checkpoint_no_change_rounds = repair_proposal.next_no_change_rounds;
+                turn_state.focused_repair.action_checkpoint_no_change_rounds =
+                    repair_proposal.next_no_change_rounds;
                 if repair_proposal.enter_patch_synthesis {
                     trace.record(TraceEvent::WorkflowFallback {
                         error: repair_proposal.trace_error.clone(),
@@ -1474,11 +1498,13 @@ impl ConversationLoop {
                             &mut tool_results_text,
                             FocusedRepairRecoveryController::code_write_forbidden_prompt(),
                         );
-                        action_checkpoint_active = false;
-                        action_checkpoint_lookup_count = 0;
-                        action_checkpoint_no_change_rounds = 0;
-                        no_code_progress_rounds = 0;
-                        code_write_forbidden_checkpoint_sent = true;
+                        turn_state.focused_repair.action_checkpoint_active = false;
+                        turn_state.focused_repair.action_checkpoint_lookup_count = 0;
+                        turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
+                        turn_state.focused_repair.no_code_progress_rounds = 0;
+                        turn_state
+                            .focused_repair
+                            .code_write_forbidden_checkpoint_sent = true;
                         continue;
                     }
                     if !Self::patch_synthesis_enabled() {
@@ -1529,17 +1555,15 @@ impl ConversationLoop {
                                     baseline_git_status_files: &baseline_git_status_files,
                                     is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
                                     mark_patch_requirement_on_success: true,
-                                    action_checkpoint_requires_patch_before_validation:
-                                        &mut action_checkpoint_requires_patch_before_validation,
                                 },
                             )
                             .await;
                             final_tool_calls.extend(deterministic_calls);
                             if !changed_files.is_empty() {
-                                action_checkpoint_active = false;
-                                action_checkpoint_lookup_count = 0;
-                                action_checkpoint_no_change_rounds = 0;
-                                no_code_progress_rounds = 0;
+                                turn_state.focused_repair.action_checkpoint_active = false;
+                                turn_state.focused_repair.action_checkpoint_lookup_count = 0;
+                                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
+                                turn_state.focused_repair.no_code_progress_rounds = 0;
                                 continue;
                             }
                         }
@@ -1549,15 +1573,21 @@ impl ConversationLoop {
                         });
                         match FocusedRepairRecoveryController::disabled_patch_synthesis_recovery(
                             DisabledPatchSynthesisRecoveryRequest {
-                                patch_synthesis_recovery_used,
-                                action_checkpoint_reopen_used,
-                                action_checkpoint_lookup_count,
+                                patch_synthesis_recovery_used: turn_state
+                                    .focused_repair
+                                    .patch_synthesis_recovery_used,
+                                action_checkpoint_reopen_used: turn_state
+                                    .focused_repair
+                                    .action_checkpoint_reopen_used,
+                                action_checkpoint_lookup_count: turn_state
+                                    .focused_repair
+                                    .action_checkpoint_lookup_count,
                                 exposed_tool_names: &exposed_tool_names,
                             },
                         ) {
                             DisabledPatchSynthesisRecovery::ReturnToModel { prompt } => {
-                                patch_synthesis_recovery_used = true;
-                                action_checkpoint_no_change_rounds = 0;
+                                turn_state.focused_repair.patch_synthesis_recovery_used = true;
+                                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
                                 FocusedRepairRecoveryController::append_system_prompt(
                                     &mut messages,
                                     &mut tool_results_text,
@@ -1569,11 +1599,11 @@ impl ConversationLoop {
                                 prompt,
                                 trace_error,
                             } => {
-                                action_checkpoint_reopen_used = true;
-                                action_checkpoint_active = false;
-                                action_checkpoint_lookup_count = 0;
-                                action_checkpoint_no_change_rounds = 0;
-                                no_code_progress_rounds = 1;
+                                turn_state.focused_repair.action_checkpoint_reopen_used = true;
+                                turn_state.focused_repair.action_checkpoint_active = false;
+                                turn_state.focused_repair.action_checkpoint_lookup_count = 0;
+                                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
+                                turn_state.focused_repair.no_code_progress_rounds = 1;
                                 trace.record(TraceEvent::WorkflowFallback {
                                     error: trace_error.to_string(),
                                 });
@@ -1645,8 +1675,6 @@ impl ConversationLoop {
                                     baseline_git_status_files: &baseline_git_status_files,
                                     is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
                                     mark_patch_requirement_on_success: false,
-                                    action_checkpoint_requires_patch_before_validation:
-                                        &mut action_checkpoint_requires_patch_before_validation,
                                 },
                             )
                             .await;
@@ -1655,10 +1683,10 @@ impl ConversationLoop {
                             }
                             final_tool_calls.extend(synthesized_calls);
                             if !changed_files.is_empty() {
-                                action_checkpoint_active = false;
-                                action_checkpoint_lookup_count = 0;
-                                action_checkpoint_no_change_rounds = 0;
-                                no_code_progress_rounds = 0;
+                                turn_state.focused_repair.action_checkpoint_active = false;
+                                turn_state.focused_repair.action_checkpoint_lookup_count = 0;
+                                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
+                                turn_state.focused_repair.no_code_progress_rounds = 0;
                             } else {
                                 FocusedRepairRecoveryController::stop_with_message(
                                     tx,
@@ -1676,16 +1704,17 @@ impl ConversationLoop {
                             let err_text = err.to_string();
                             match FocusedRepairRecoveryController::patch_synthesis_failure_recovery(
                                 &err_text,
-                                patch_synthesis_recovery_used,
-                                action_checkpoint_reopen_used,
+                                turn_state.focused_repair.patch_synthesis_recovery_used,
+                                turn_state.focused_repair.action_checkpoint_reopen_used,
                             ) {
                                 PatchSynthesisFailureRecovery::InsufficientEvidence { prompt } => {
-                                    patch_synthesis_recovery_used = true;
-                                    action_checkpoint_active = false;
-                                    action_checkpoint_lookup_count = 0;
-                                    action_checkpoint_no_change_rounds = 0;
-                                    no_code_progress_rounds = 1;
-                                    file_edit_failure_retry_used = false;
+                                    turn_state.focused_repair.patch_synthesis_recovery_used = true;
+                                    turn_state.focused_repair.action_checkpoint_active = false;
+                                    turn_state.focused_repair.action_checkpoint_lookup_count = 0;
+                                    turn_state.focused_repair.action_checkpoint_no_change_rounds =
+                                        0;
+                                    turn_state.focused_repair.no_code_progress_rounds = 1;
+                                    turn_state.focused_repair.file_edit_failure_retry_used = false;
                                     FocusedRepairRecoveryController::append_system_prompt(
                                         &mut messages,
                                         &mut tool_results_text,
@@ -1697,11 +1726,12 @@ impl ConversationLoop {
                                     prompt,
                                     trace_error,
                                 } => {
-                                    action_checkpoint_reopen_used = true;
-                                    action_checkpoint_active = false;
-                                    action_checkpoint_lookup_count = 0;
-                                    action_checkpoint_no_change_rounds = 0;
-                                    no_code_progress_rounds = 1;
+                                    turn_state.focused_repair.action_checkpoint_reopen_used = true;
+                                    turn_state.focused_repair.action_checkpoint_active = false;
+                                    turn_state.focused_repair.action_checkpoint_lookup_count = 0;
+                                    turn_state.focused_repair.action_checkpoint_no_change_rounds =
+                                        0;
+                                    turn_state.focused_repair.no_code_progress_rounds = 1;
                                     trace.record(TraceEvent::WorkflowFallback {
                                         error: trace_error.to_string(),
                                     });
@@ -1812,12 +1842,21 @@ impl ConversationLoop {
                         reserved_repair_rounds: &mut turn_state.reserved_repair_rounds,
                         effective_iterations: turn_state.effective_iterations,
                         max_iterations: self.max_iterations,
-                        action_checkpoint_no_change_rounds: &mut action_checkpoint_no_change_rounds,
-                        action_checkpoint_active: &mut action_checkpoint_active,
-                        action_checkpoint_lookup_count: &mut action_checkpoint_lookup_count,
-                        file_edit_failure_retry_used: &mut file_edit_failure_retry_used,
-                        action_checkpoint_requires_patch_before_validation:
-                            &mut action_checkpoint_requires_patch_before_validation,
+                        action_checkpoint_no_change_rounds: &mut turn_state
+                            .focused_repair
+                            .action_checkpoint_no_change_rounds,
+                        action_checkpoint_active: &mut turn_state
+                            .focused_repair
+                            .action_checkpoint_active,
+                        action_checkpoint_lookup_count: &mut turn_state
+                            .focused_repair
+                            .action_checkpoint_lookup_count,
+                        file_edit_failure_retry_used: &mut turn_state
+                            .focused_repair
+                            .file_edit_failure_retry_used,
+                        action_checkpoint_requires_patch_before_validation: &mut turn_state
+                            .focused_repair
+                            .action_checkpoint_requires_patch_before_validation,
                         should_closeout_after_verified_change,
                         final_content: &mut final_content,
                         tool_results_text: &mut tool_results_text,

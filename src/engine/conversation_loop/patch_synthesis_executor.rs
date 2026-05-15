@@ -28,7 +28,6 @@ pub(super) struct PatchSynthesisExecutionContext<'a> {
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
     pub(super) is_programming_workflow: bool,
     pub(super) mark_patch_requirement_on_success: bool,
-    pub(super) action_checkpoint_requires_patch_before_validation: &'a mut bool,
 }
 
 pub(super) struct PatchSynthesisExecutionOutcome {
@@ -44,7 +43,6 @@ struct PatchSynthesisCollectionContext<'a> {
     baseline_git_status_files: &'a HashSet<PathBuf>,
     is_programming_workflow: bool,
     mark_patch_requirement_on_success: bool,
-    action_checkpoint_requires_patch_before_validation: &'a mut bool,
 }
 
 pub(super) struct PatchSynthesisExecutor;
@@ -64,8 +62,6 @@ impl PatchSynthesisExecutor {
             baseline_git_status_files: context.baseline_git_status_files,
             is_programming_workflow: context.is_programming_workflow,
             mark_patch_requirement_on_success: context.mark_patch_requirement_on_success,
-            action_checkpoint_requires_patch_before_validation: context
-                .action_checkpoint_requires_patch_before_validation,
         })
         .await
     }
@@ -117,7 +113,10 @@ impl PatchSynthesisExecutor {
             }
             if result.success && ConversationLoop::is_code_write_tool_name(&tc.name) {
                 if context.mark_patch_requirement_on_success {
-                    *context.action_checkpoint_requires_patch_before_validation = false;
+                    context
+                        .turn_state
+                        .focused_repair
+                        .action_checkpoint_requires_patch_before_validation = false;
                 }
                 if let Some(path) = tc.arguments["path"].as_str() {
                     context.changed_files.push(PathBuf::from(path));
@@ -159,7 +158,9 @@ mod tests {
         let mut messages = Vec::new();
         let mut changed_files = Vec::new();
         let baseline = HashSet::new();
-        let mut requires_patch_before_validation = true;
+        turn_state
+            .focused_repair
+            .action_checkpoint_requires_patch_before_validation = true;
 
         let outcome =
             PatchSynthesisExecutor::collect_batch_results(PatchSynthesisCollectionContext {
@@ -171,14 +172,16 @@ mod tests {
                 baseline_git_status_files: &baseline,
                 is_programming_workflow: false,
                 mark_patch_requirement_on_success: true,
-                action_checkpoint_requires_patch_before_validation:
-                    &mut requires_patch_before_validation,
             })
             .await;
 
         assert!(outcome.any_tool_success);
         assert_eq!(changed_files, vec![PathBuf::from("src/lib.rs")]);
-        assert!(!requires_patch_before_validation);
+        assert!(
+            !turn_state
+                .focused_repair
+                .action_checkpoint_requires_patch_before_validation
+        );
         assert_eq!(messages.len(), 1);
         assert!(tool_results_text.contains("wrote file"));
     }
@@ -193,7 +196,9 @@ mod tests {
         let mut messages = Vec::new();
         let mut changed_files = Vec::new();
         let baseline = HashSet::new();
-        let mut requires_patch_before_validation = true;
+        turn_state
+            .focused_repair
+            .action_checkpoint_requires_patch_before_validation = true;
 
         PatchSynthesisExecutor::collect_batch_results(PatchSynthesisCollectionContext {
             tool_batch: &mut batch,
@@ -204,12 +209,14 @@ mod tests {
             baseline_git_status_files: &baseline,
             is_programming_workflow: false,
             mark_patch_requirement_on_success: false,
-            action_checkpoint_requires_patch_before_validation:
-                &mut requires_patch_before_validation,
         })
         .await;
 
-        assert!(requires_patch_before_validation);
+        assert!(
+            turn_state
+                .focused_repair
+                .action_checkpoint_requires_patch_before_validation
+        );
         assert_eq!(changed_files, vec![PathBuf::from("src/lib.rs")]);
     }
 }
