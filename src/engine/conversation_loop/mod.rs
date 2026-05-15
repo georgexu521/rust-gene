@@ -35,6 +35,7 @@ mod request_preparation_controller;
 mod retrieval_prompt_controller;
 mod runtime_diet;
 mod runtime_timeouts;
+mod session_goal_controller;
 mod session_processor;
 mod step_executor;
 mod task_context_trace_controller;
@@ -101,6 +102,7 @@ use reflection_gate_controller::{
 use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
 use retrieval_prompt_controller::{RetrievalPromptContext, RetrievalPromptController};
 use runtime_diet::trace_runtime_diet_report;
+use session_goal_controller::{SessionGoalController, SessionGoalUpdateContext};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use task_context_trace_controller::{TaskContextTraceContext, TaskContextTraceController};
 use text_sanitizer::strip_think_blocks;
@@ -785,16 +787,12 @@ impl ConversationLoop {
                 });
             }
         }
-        if let Some(manager) = &self.goal_manager {
-            if let Some(goal) = manager.update_from_user_message(&last_user_preview, Some(&route)) {
-                trace.record(TraceEvent::SessionGoalUpdated {
-                    goal_id: goal.id,
-                    title: goal.title,
-                    status: format!("{:?}", goal.status),
-                    reason: "user turn routed to trackable workflow".to_string(),
-                });
-            }
-        }
+        SessionGoalController::update(SessionGoalUpdateContext {
+            manager: self.goal_manager.as_ref(),
+            last_user_preview: &last_user_preview,
+            route: &route,
+            trace: &trace,
+        });
 
         // ── Workflow 闸门检查 ──────────────────────────
         let already_triggered = self

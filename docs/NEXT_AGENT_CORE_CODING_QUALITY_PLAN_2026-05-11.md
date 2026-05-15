@@ -488,6 +488,13 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the task-context trace slice:
   `cargo test -q` passed (`1366 passed; 0 failed`).
+- 2026-05-15: Phase A session-goal update cleanup started. Added
+  `session_goal_controller.rs`; session goal update and corresponding trace
+  recording now live outside `run_inner`.
+- Validation after the session-goal update slice: `cargo fmt --check`,
+  `git diff --check`, targeted `session_goal_controller` and `session_goal`
+  tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
