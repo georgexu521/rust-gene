@@ -1687,16 +1687,13 @@ impl ConversationLoop {
                         messages: &mut messages,
                     })
                     .await;
-                let verify_passed = verification.verify_passed;
-                should_closeout_after_verified_change = verify_passed;
-                trace.record(TraceEvent::VerificationCompleted {
-                    changed_files: changed_files.len(),
-                    passed: verify_passed,
-                    check_passed: verification.effective_check_passed,
-                    tests_passed: verification.effective_tests_passed,
-                    review_passed: verification.review_success,
-                    failed_commands: verification.failed_commands.clone(),
-                });
+                let verification_trace = PostEditVerificationController::record_trace(
+                    &trace,
+                    &changed_files,
+                    &verification,
+                );
+                should_closeout_after_verified_change =
+                    verification_trace.should_closeout_after_verified_change;
                 let post_edit_repair_outcome = PostEditRepairController::run(
                     self,
                     PostEditRepairContext {

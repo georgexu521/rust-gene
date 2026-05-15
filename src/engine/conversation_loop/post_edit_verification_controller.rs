@@ -2,6 +2,7 @@ use super::validation_runner::{verification_source_context, RequiredValidationCo
 use crate::engine::auto_verify::VerificationResult;
 use crate::engine::evidence_ledger::{changed_files_diff_evidence, EvidenceLedger};
 use crate::engine::lsp::LspManager;
+use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::Message;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,10 @@ pub(super) struct PostEditVerificationOutcome {
     pub(super) failed_commands: Vec<String>,
     pub(super) post_edit_evidence: Vec<String>,
     pub(super) acceptance_evidence: Vec<String>,
+}
+
+pub(super) struct PostEditVerificationTraceOutcome {
+    pub(super) should_closeout_after_verified_change: bool,
 }
 
 pub(super) struct PostEditVerificationController;
@@ -240,6 +245,24 @@ impl PostEditVerificationController {
         }
     }
 
+    pub(super) fn record_trace(
+        trace: &TraceCollector,
+        changed_files: &[PathBuf],
+        verification: &PostEditVerificationOutcome,
+    ) -> PostEditVerificationTraceOutcome {
+        trace.record(TraceEvent::VerificationCompleted {
+            changed_files: changed_files.len(),
+            passed: verification.verify_passed,
+            check_passed: verification.effective_check_passed,
+            tests_passed: verification.effective_tests_passed,
+            review_passed: verification.review_success,
+            failed_commands: verification.failed_commands.clone(),
+        });
+        PostEditVerificationTraceOutcome {
+            should_closeout_after_verified_change: verification.verify_passed,
+        }
+    }
+
     fn summarize(
         effective_check_passed: bool,
         effective_tests_passed: bool,
@@ -375,6 +398,7 @@ struct VerificationResultApplication<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::trace::{TurnStatus, TurnTrace};
 
     #[test]
     fn summary_requires_all_validation_channels_to_pass() {
@@ -383,5 +407,61 @@ mod tests {
         assert!(!PostEditVerificationController::summarize(true, false, true, true).verify_passed);
         assert!(!PostEditVerificationController::summarize(true, true, false, true).verify_passed);
         assert!(!PostEditVerificationController::summarize(true, true, true, false).verify_passed);
+    }
+
+    fn verification_outcome(verify_passed: bool) -> PostEditVerificationOutcome {
+        PostEditVerificationOutcome {
+            check_passed: verify_passed,
+            effective_check_passed: verify_passed,
+            effective_tests_passed: true,
+            required_validation_passed: true,
+            review_success: true,
+            verify_passed,
+            failed_commands: vec!["cargo test -q".to_string()],
+            post_edit_evidence: Vec::new(),
+            acceptance_evidence: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn record_trace_maps_verification_fields_to_trace_and_closeout_flag() {
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "change code"));
+        let changed_files = vec![PathBuf::from("src/lib.rs"), PathBuf::from("src/main.rs")];
+        let verification = verification_outcome(false);
+
+        let outcome =
+            PostEditVerificationController::record_trace(&trace, &changed_files, &verification);
+
+        assert!(!outcome.should_closeout_after_verified_change);
+        let finished = trace.finish(TurnStatus::Completed);
+        let event = finished
+            .events
+            .iter()
+            .find_map(|event| match event {
+                TraceEvent::VerificationCompleted {
+                    changed_files,
+                    passed,
+                    check_passed,
+                    tests_passed,
+                    review_passed,
+                    failed_commands,
+                } => Some((
+                    *changed_files,
+                    *passed,
+                    *check_passed,
+                    *tests_passed,
+                    *review_passed,
+                    failed_commands.clone(),
+                )),
+                _ => None,
+            })
+            .expect("verification trace event");
+
+        assert_eq!(event.0, 2);
+        assert!(!event.1);
+        assert!(!event.2);
+        assert!(event.3);
+        assert!(event.4);
+        assert_eq!(event.5, vec!["cargo test -q".to_string()]);
     }
 }

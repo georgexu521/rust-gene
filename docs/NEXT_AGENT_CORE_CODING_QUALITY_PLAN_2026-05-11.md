@@ -370,6 +370,15 @@
   `cargo clippy --all-features -- -D warnings` all passed.
 - Full validation after the patch-synthesis flow continuation batch:
   `cargo test -q` passed (`1350 passed; 0 failed`).
+- 2026-05-15: Phase A post-edit verification trace cleanup started. Moved
+  verification trace recording and the verified-change closeout flag mapping
+  into `PostEditVerificationController`, leaving `run_inner` to run
+  verification, pass the outcome to repair handling, and branch on the repair
+  outcome.
+- Validation after the `PostEditVerificationController` trace slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `post_edit_verification_controller` and `post_edit_repair_controller` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
