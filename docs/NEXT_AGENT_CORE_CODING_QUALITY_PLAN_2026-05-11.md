@@ -418,6 +418,15 @@
   `iteration_budget_controller`, `tool_batch_result_processor`, and
   `tool_execution` tests, `cargo check -q`, `git diff --check`, and
   `cargo clippy --all-features -- -D warnings` passed.
+- 2026-05-15: Phase A focused-repair round application cleanup continued.
+  `FocusedRepairStateController::apply_tool_round` now applies post-batch
+  focused-repair state transitions, file-edit failure retry trace recording,
+  and progress checkpoint prompt effects before patch-synthesis orchestration.
+- Validation after the focused-repair round application slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `focused_repair_state_controller`, `action_checkpoint`, and
+  `tool_batch_result_processor` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

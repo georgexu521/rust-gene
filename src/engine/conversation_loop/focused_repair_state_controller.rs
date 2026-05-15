@@ -1,8 +1,13 @@
 use super::action_checkpoint::{
-    ProgressCheckpointAction, ProgressCheckpointController, ProgressCheckpointRequest,
+    ProgressCheckpointAction, ProgressCheckpointActionApplier, ProgressCheckpointActionContext,
+    ProgressCheckpointController, ProgressCheckpointRequest,
 };
 use super::turn_runtime_state::FocusedRepairRuntimeState;
 use super::ConversationLoop;
+use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use crate::engine::intent_router::WorkflowKind;
+use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::services::api::Message;
 
 pub(super) struct FocusedRepairStateContext<'a> {
     pub(super) state: &'a mut FocusedRepairRuntimeState,
@@ -25,9 +30,41 @@ pub(super) struct FocusedRepairStateOutcome {
     pub(super) force_patch_synthesis_reason: Option<&'static str>,
 }
 
+pub(super) struct FocusedRepairRoundApplicationContext<'a> {
+    pub(super) state_context: FocusedRepairStateContext<'a>,
+    pub(super) workflow: WorkflowKind,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) code_workflow: &'a mut CodeChangeWorkflowRunner,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) tool_results_text: &'a mut String,
+}
+
 pub(super) struct FocusedRepairStateController;
 
 impl FocusedRepairStateController {
+    pub(super) fn apply_tool_round(
+        context: FocusedRepairRoundApplicationContext<'_>,
+    ) -> FocusedRepairStateOutcome {
+        let outcome = Self::record_tool_round(context.state_context);
+        if outcome.retry_after_file_edit_failure_correction {
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error: "file_edit repair correction returned to model before patch synthesis"
+                    .to_string(),
+            });
+            return outcome;
+        }
+
+        ProgressCheckpointActionApplier::apply(ProgressCheckpointActionContext {
+            action: outcome.progress_checkpoint_action,
+            workflow: context.workflow,
+            trace: context.trace,
+            code_workflow: &mut *context.code_workflow,
+            messages: &mut *context.messages,
+            tool_results_text: &mut *context.tool_results_text,
+        });
+        outcome
+    }
+
     pub(super) fn record_tool_round(
         context: FocusedRepairStateContext<'_>,
     ) -> FocusedRepairStateOutcome {
@@ -313,5 +350,47 @@ mod tests {
         FocusedRepairStateController::record_patch_synthesis_reopen_normal_tools(&mut state);
         assert!(state.action_checkpoint_reopen_used);
         assert_eq!(state.no_code_progress_rounds, 1);
+    }
+
+    #[test]
+    fn apply_tool_round_records_file_edit_failure_retry_trace() {
+        let trace = TraceCollector::new(crate::engine::trace::TurnTrace::new(
+            "session", 1, "fix code",
+        ));
+        let route = crate::engine::intent_router::IntentRouter::new().route("fix code");
+        let workflow = route.workflow;
+        let task_bundle =
+            crate::engine::task_context::TaskContextBundle::new("fix code", ".", route, None);
+        let mut code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        let mut state = FocusedRepairRuntimeState {
+            action_checkpoint_active: true,
+            action_checkpoint_no_change_rounds: 2,
+            ..FocusedRepairRuntimeState::default()
+        };
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+
+        let outcome =
+            FocusedRepairStateController::apply_tool_round(FocusedRepairRoundApplicationContext {
+                state_context: FocusedRepairStateContext {
+                    file_edit_failure_correction_added: true,
+                    ..request(&mut state)
+                },
+                workflow,
+                trace: &trace,
+                code_workflow: &mut code_workflow,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+            });
+
+        assert!(outcome.retry_after_file_edit_failure_correction);
+        assert!(messages.is_empty());
+        assert!(tool_results_text.is_empty());
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error == "file_edit repair correction returned to model before patch synthesis"
+        )));
     }
 }

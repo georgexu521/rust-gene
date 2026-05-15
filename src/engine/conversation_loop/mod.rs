@@ -56,9 +56,7 @@ mod workflow_change_tracker;
 mod workflow_prompt_policy;
 mod workflow_trace;
 
-use action_checkpoint::{
-    FocusedRepairActionRequest, ProgressCheckpointActionApplier, ProgressCheckpointActionContext,
-};
+use action_checkpoint::FocusedRepairActionRequest;
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use assistant_response_retry_controller::{
@@ -71,7 +69,9 @@ use first_code_change_controller::{FirstCodeChangeContext, FirstCodeChangeContro
 use focused_repair_recovery::{
     DisabledPatchSynthesisRecoveryRequest, FocusedRepairRecoveryController,
 };
-use focused_repair_state_controller::{FocusedRepairStateContext, FocusedRepairStateController};
+use focused_repair_state_controller::{
+    FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
+};
 use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetController};
 use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
@@ -1353,39 +1353,36 @@ impl ConversationLoop {
             let successful_validation_commands = batch_processing.successful_validation_commands;
             let mut should_closeout_after_verified_change = false;
             let has_worktree_changes = !changed_files.is_empty();
-            let focused_repair_state = FocusedRepairStateController::record_tool_round(
-                FocusedRepairStateContext {
-                    state: &mut turn_state.focused_repair,
-                    is_programming_workflow:
-                        crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
-                    no_diff_audit_closeout_allowed,
-                    has_worktree_changes,
-                    has_successful_validation_commands: !successful_validation_commands.is_empty(),
-                    code_write_tools_forbidden,
-                    used_action_checkpoint_lookup,
-                    successful_write_tool,
-                    used_write_tool,
-                    any_tool_success,
-                    file_edit_failure_correction_added,
+            let focused_repair_state = FocusedRepairStateController::apply_tool_round(
+                FocusedRepairRoundApplicationContext {
+                    state_context: FocusedRepairStateContext {
+                        state: &mut turn_state.focused_repair,
+                        is_programming_workflow:
+                            crate::engine::code_change_workflow::is_programming_workflow(
+                                route.workflow,
+                            ),
+                        no_diff_audit_closeout_allowed,
+                        has_worktree_changes,
+                        has_successful_validation_commands: !successful_validation_commands
+                            .is_empty(),
+                        code_write_tools_forbidden,
+                        used_action_checkpoint_lookup,
+                        successful_write_tool,
+                        used_write_tool,
+                        any_tool_success,
+                        file_edit_failure_correction_added,
+                    },
+                    workflow: route.workflow,
+                    trace: &trace,
+                    code_workflow: &mut code_workflow,
+                    messages: &mut messages,
+                    tool_results_text: &mut tool_results_text,
                 },
             );
 
             if focused_repair_state.retry_after_file_edit_failure_correction {
-                trace.record(TraceEvent::WorkflowFallback {
-                    error: "file_edit repair correction returned to model before patch synthesis"
-                        .to_string(),
-                });
                 continue;
             }
-
-            ProgressCheckpointActionApplier::apply(ProgressCheckpointActionContext {
-                action: focused_repair_state.progress_checkpoint_action,
-                workflow: route.workflow,
-                trace: &trace,
-                code_workflow: &mut code_workflow,
-                messages: &mut messages,
-                tool_results_text: &mut tool_results_text,
-            });
 
             if let Some(repair_proposal) =
                 Self::focused_repair_action_proposal(FocusedRepairActionRequest {
