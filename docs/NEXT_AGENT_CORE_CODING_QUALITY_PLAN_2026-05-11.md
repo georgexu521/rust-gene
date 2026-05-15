@@ -457,6 +457,8 @@
   `cargo fmt --check`, `git diff --check`, targeted `validation_runner` and
   `required_validation` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the required-validation trigger slice:
+  `cargo test -q` passed (`1360 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
