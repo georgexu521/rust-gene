@@ -60,7 +60,8 @@ use action_checkpoint::FocusedRepairActionRequest;
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use assistant_response_retry_controller::{
-    AssistantResponseRetryController, AssistantResponseRetryRequest,
+    AssistantResponseRetryApplicationContext, AssistantResponseRetryController,
+    AssistantResponseRetryRequest,
 };
 use closeout_controller::{
     FinalCloseoutContext, FinalCloseoutController, VerifiedChangeCloseoutController,
@@ -1291,17 +1292,15 @@ impl ConversationLoop {
                         filesystem_grounding_retry_used,
                     })
                 {
-                    if retry_decision.mark_filesystem_grounding_retry_used {
-                        filesystem_grounding_retry_used = true;
-                    }
-                    if retry_decision.mark_pseudo_tool_retry_used {
-                        pseudo_tool_retry_used = true;
-                    }
-                    trace.record(TraceEvent::WorkflowFallback {
-                        error: retry_decision.fallback_error,
-                    });
-                    messages.push(retry_decision.assistant_message);
-                    messages.push(retry_decision.correction_message);
+                    AssistantResponseRetryController::apply_decision(
+                        AssistantResponseRetryApplicationContext {
+                            decision: retry_decision,
+                            pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
+                            filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                            trace: &trace,
+                            messages: &mut messages,
+                        },
+                    );
                     continue;
                 }
                 if let Some(tx) = tx {

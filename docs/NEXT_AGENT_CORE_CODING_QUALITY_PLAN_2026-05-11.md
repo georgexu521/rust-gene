@@ -440,6 +440,14 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the patch-synthesis proposal application slice:
   `cargo test -q` passed (`1357 passed; 0 failed`).
+- 2026-05-15: Phase A assistant-response retry application cleanup continued.
+  `AssistantResponseRetryController::apply_decision` now owns retry marker
+  updates, workflow-fallback trace recording, and assistant/system correction
+  message injection after a no-tool assistant response needs to be retried.
+- Validation after the assistant-response retry application slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `assistant_response_retry_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

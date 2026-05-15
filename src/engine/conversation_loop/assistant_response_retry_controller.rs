@@ -1,5 +1,6 @@
 use super::pseudo_tool_text;
 use super::tool_execution::safe_prefix_by_bytes;
+use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::Message;
 use std::collections::HashSet;
 
@@ -19,6 +20,14 @@ pub(super) struct AssistantResponseRetryDecision {
     pub(super) correction_message: Message,
     pub(super) mark_pseudo_tool_retry_used: bool,
     pub(super) mark_filesystem_grounding_retry_used: bool,
+}
+
+pub(super) struct AssistantResponseRetryApplicationContext<'a> {
+    pub(super) decision: AssistantResponseRetryDecision,
+    pub(super) pseudo_tool_retry_used: &'a mut bool,
+    pub(super) filesystem_grounding_retry_used: &'a mut bool,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) messages: &'a mut Vec<Message>,
 }
 
 pub(super) struct AssistantResponseRetryController;
@@ -89,14 +98,34 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             mark_filesystem_grounding_retry_used,
         })
     }
+
+    pub(super) fn apply_decision(context: AssistantResponseRetryApplicationContext<'_>) {
+        let decision = context.decision;
+        if decision.mark_filesystem_grounding_retry_used {
+            *context.filesystem_grounding_retry_used = true;
+        }
+        if decision.mark_pseudo_tool_retry_used {
+            *context.pseudo_tool_retry_used = true;
+        }
+        context.trace.record(TraceEvent::WorkflowFallback {
+            error: decision.fallback_error,
+        });
+        context.messages.push(decision.assistant_message);
+        context.messages.push(decision.correction_message);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::trace::TurnTrace;
 
     fn exposed(names: &[&str]) -> HashSet<String> {
         names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    fn trace() -> TraceCollector {
+        TraceCollector::new(TurnTrace::new("test", 1, "assistant-retry"))
     }
 
     #[test]
@@ -178,5 +207,45 @@ mod tests {
         });
 
         assert!(decision.is_none());
+    }
+
+    #[test]
+    fn apply_decision_updates_retry_state_trace_and_messages() {
+        let trace = trace();
+        let mut pseudo_tool_retry_used = false;
+        let mut filesystem_grounding_retry_used = false;
+        let mut messages = Vec::new();
+        let decision = AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
+            content: "```bash\npython3 app.py\n```",
+            exposed_tool_names: &exposed(&["bash"]),
+            tool_calls_made: false,
+            is_local_filesystem_inspection_route: false,
+            unsupported_filesystem_claims: Vec::new(),
+            pseudo_tool_retry_used,
+            filesystem_grounding_retry_used,
+        })
+        .expect("bash command should trigger retry");
+
+        AssistantResponseRetryController::apply_decision(
+            AssistantResponseRetryApplicationContext {
+                decision,
+                pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
+                filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                trace: &trace,
+                messages: &mut messages,
+            },
+        );
+
+        assert!(pseudo_tool_retry_used);
+        assert!(!filesystem_grounding_retry_used);
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(messages[0], Message::Assistant { .. }));
+        assert!(matches!(messages[1], Message::System { .. }));
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error.contains("explicit bash tool-use correction")
+        )));
     }
 }
