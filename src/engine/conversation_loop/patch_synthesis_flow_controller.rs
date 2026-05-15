@@ -1,12 +1,15 @@
+use super::focused_repair_recovery::{
+    DisabledPatchSynthesisRecovery, FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
+};
 use super::focused_repair_state_controller::FocusedRepairStateController;
 use super::patch_recovery::PatchSynthesisSource;
 use super::patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExecutor};
-use super::turn_runtime_state::TurnRuntimeState;
+use super::turn_runtime_state::{FocusedRepairRuntimeState, TurnRuntimeState};
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
-use crate::engine::trace::TraceCollector;
+use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, ToolCall};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -33,6 +36,32 @@ pub(super) struct PatchSynthesisCallExecutionContext<'a> {
 pub(super) struct PatchSynthesisCallExecutionOutcome {
     pub(super) any_tool_success: bool,
     pub(super) changed_files_available: bool,
+}
+
+pub(super) struct DisabledPatchSynthesisRecoveryApplicationContext<'a> {
+    pub(super) recovery: DisabledPatchSynthesisRecovery,
+    pub(super) state: &'a mut FocusedRepairRuntimeState,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) tool_results_text: &'a mut String,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) final_content: &'a mut String,
+}
+
+pub(super) struct PatchSynthesisFailureRecoveryApplicationContext<'a> {
+    pub(super) recovery: PatchSynthesisFailureRecovery,
+    pub(super) state: &'a mut FocusedRepairRuntimeState,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) tool_results_text: &'a mut String,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) final_content: &'a mut String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PatchSynthesisRecoveryFlow {
+    Continue,
+    Stop,
 }
 
 pub(super) struct PatchSynthesisFlowController;
@@ -96,11 +125,104 @@ impl PatchSynthesisFlowController {
             changed_files_available,
         }
     }
+
+    pub(super) async fn apply_disabled_recovery(
+        context: DisabledPatchSynthesisRecoveryApplicationContext<'_>,
+    ) -> PatchSynthesisRecoveryFlow {
+        match context.recovery {
+            DisabledPatchSynthesisRecovery::ReturnToModel { prompt } => {
+                FocusedRepairStateController::record_patch_synthesis_return_to_model(
+                    &mut *context.state,
+                );
+                FocusedRepairRecoveryController::append_system_prompt(
+                    &mut *context.messages,
+                    &mut *context.tool_results_text,
+                    prompt,
+                );
+                PatchSynthesisRecoveryFlow::Continue
+            }
+            DisabledPatchSynthesisRecovery::ReopenNormalTools {
+                prompt,
+                trace_error,
+            } => {
+                FocusedRepairStateController::record_patch_synthesis_reopen_normal_tools(
+                    &mut *context.state,
+                );
+                context.trace.record(TraceEvent::WorkflowFallback {
+                    error: trace_error.to_string(),
+                });
+                FocusedRepairRecoveryController::append_system_prompt(
+                    &mut *context.messages,
+                    &mut *context.tool_results_text,
+                    prompt,
+                );
+                PatchSynthesisRecoveryFlow::Continue
+            }
+            DisabledPatchSynthesisRecovery::Stop { message } => {
+                FocusedRepairRecoveryController::stop_with_message(
+                    context.tx,
+                    &mut *context.final_content,
+                    message,
+                )
+                .await;
+                PatchSynthesisRecoveryFlow::Stop
+            }
+        }
+    }
+
+    pub(super) async fn apply_failure_recovery(
+        context: PatchSynthesisFailureRecoveryApplicationContext<'_>,
+    ) -> PatchSynthesisRecoveryFlow {
+        match context.recovery {
+            PatchSynthesisFailureRecovery::InsufficientEvidence { prompt } => {
+                FocusedRepairStateController::record_patch_synthesis_insufficient_evidence(
+                    &mut *context.state,
+                );
+                FocusedRepairRecoveryController::append_system_prompt(
+                    &mut *context.messages,
+                    &mut *context.tool_results_text,
+                    prompt,
+                );
+                PatchSynthesisRecoveryFlow::Continue
+            }
+            PatchSynthesisFailureRecovery::ReopenNormalTools {
+                prompt,
+                trace_error,
+            } => {
+                FocusedRepairStateController::record_patch_synthesis_reopen_normal_tools(
+                    &mut *context.state,
+                );
+                context.trace.record(TraceEvent::WorkflowFallback {
+                    error: trace_error.to_string(),
+                });
+                FocusedRepairRecoveryController::append_system_prompt(
+                    &mut *context.messages,
+                    &mut *context.tool_results_text,
+                    prompt,
+                );
+                PatchSynthesisRecoveryFlow::Continue
+            }
+            PatchSynthesisFailureRecovery::Stop { message } => {
+                FocusedRepairRecoveryController::stop_with_message(
+                    context.tx,
+                    &mut *context.final_content,
+                    message,
+                )
+                .await;
+                PatchSynthesisRecoveryFlow::Stop
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::trace::TurnTrace;
+
+    fn trace() -> TraceCollector {
+        TraceCollector::new(TurnTrace::new("test", 1, "repair"))
+    }
 
     #[test]
     fn deterministic_seed_uses_evidence_when_task_is_empty() {
@@ -146,5 +268,99 @@ mod tests {
             ),
             "Applying synthesized patch from prior evidence."
         );
+    }
+
+    #[tokio::test]
+    async fn disabled_return_to_model_recovery_updates_state_and_prompt() {
+        let trace = trace();
+        let mut state = FocusedRepairRuntimeState::default();
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+        let mut final_content = String::new();
+
+        let flow = PatchSynthesisFlowController::apply_disabled_recovery(
+            DisabledPatchSynthesisRecoveryApplicationContext {
+                recovery: DisabledPatchSynthesisRecovery::ReturnToModel {
+                    prompt: "return to model".to_string(),
+                },
+                state: &mut state,
+                trace: &trace,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+                tx: None,
+                final_content: &mut final_content,
+            },
+        )
+        .await;
+
+        assert_eq!(flow, PatchSynthesisRecoveryFlow::Continue);
+        assert!(state.patch_synthesis_recovery_used);
+        assert_eq!(messages.len(), 1);
+        assert!(tool_results_text.contains("return to model"));
+        assert!(final_content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failure_reopen_recovery_updates_state_and_prompt() {
+        let trace = trace();
+        let mut state = FocusedRepairRuntimeState::default();
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+        let mut final_content = String::new();
+
+        let flow = PatchSynthesisFlowController::apply_failure_recovery(
+            PatchSynthesisFailureRecoveryApplicationContext {
+                recovery: PatchSynthesisFailureRecovery::ReopenNormalTools {
+                    prompt: "reopen tools".to_string(),
+                    trace_error: "patch synthesis failed; reopening normal code-change tools once",
+                },
+                state: &mut state,
+                trace: &trace,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+                tx: None,
+                final_content: &mut final_content,
+            },
+        )
+        .await;
+
+        assert_eq!(flow, PatchSynthesisRecoveryFlow::Continue);
+        assert!(state.action_checkpoint_reopen_used);
+        assert!(!state.action_checkpoint_active);
+        assert_eq!(state.no_code_progress_rounds, 1);
+        assert_eq!(messages.len(), 1);
+        assert!(tool_results_text.contains("reopen tools"));
+    }
+
+    #[tokio::test]
+    async fn stop_recovery_sets_final_content() {
+        let trace = trace();
+        let mut state = FocusedRepairRuntimeState::default();
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+        let mut final_content = String::new();
+
+        let flow = PatchSynthesisFlowController::apply_failure_recovery(
+            PatchSynthesisFailureRecoveryApplicationContext {
+                recovery: PatchSynthesisFailureRecovery::Stop {
+                    message: FocusedRepairRecoveryController::FAILURE_STOP_MESSAGE,
+                },
+                state: &mut state,
+                trace: &trace,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+                tx: None,
+                final_content: &mut final_content,
+            },
+        )
+        .await;
+
+        assert_eq!(flow, PatchSynthesisRecoveryFlow::Stop);
+        assert_eq!(
+            final_content,
+            FocusedRepairRecoveryController::FAILURE_STOP_MESSAGE
+        );
+        assert!(messages.is_empty());
+        assert!(tool_results_text.is_empty());
     }
 }

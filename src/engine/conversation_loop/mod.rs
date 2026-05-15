@@ -66,8 +66,7 @@ use assistant_response_retry_controller::{
 use closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
 use first_code_change_controller::{FirstCodeChangeContext, FirstCodeChangeController};
 use focused_repair_recovery::{
-    DisabledPatchSynthesisRecovery, DisabledPatchSynthesisRecoveryRequest,
-    FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
+    DisabledPatchSynthesisRecoveryRequest, FocusedRepairRecoveryController,
 };
 use focused_repair_state_controller::{FocusedRepairStateContext, FocusedRepairStateController};
 use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetController};
@@ -75,7 +74,9 @@ use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjecti
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
-    PatchSynthesisCallExecutionContext, PatchSynthesisFlowController,
+    DisabledPatchSynthesisRecoveryApplicationContext, PatchSynthesisCallExecutionContext,
+    PatchSynthesisFailureRecoveryApplicationContext, PatchSynthesisFlowController,
+    PatchSynthesisRecoveryFlow,
 };
 use post_edit_repair_controller::{PostEditRepairContext, PostEditRepairController};
 use post_edit_verification_controller::{
@@ -1502,57 +1503,36 @@ impl ConversationLoop {
                             error: "patch synthesis disabled by default; returning control to model-led repair"
                                 .to_string(),
                         });
-                        match FocusedRepairRecoveryController::disabled_patch_synthesis_recovery(
-                            DisabledPatchSynthesisRecoveryRequest {
-                                patch_synthesis_recovery_used: turn_state
-                                    .focused_repair
-                                    .patch_synthesis_recovery_used,
-                                action_checkpoint_reopen_used: turn_state
-                                    .focused_repair
-                                    .action_checkpoint_reopen_used,
-                                action_checkpoint_lookup_count: turn_state
-                                    .focused_repair
-                                    .action_checkpoint_lookup_count,
-                                exposed_tool_names: &exposed_tool_names,
+                        let recovery =
+                            FocusedRepairRecoveryController::disabled_patch_synthesis_recovery(
+                                DisabledPatchSynthesisRecoveryRequest {
+                                    patch_synthesis_recovery_used: turn_state
+                                        .focused_repair
+                                        .patch_synthesis_recovery_used,
+                                    action_checkpoint_reopen_used: turn_state
+                                        .focused_repair
+                                        .action_checkpoint_reopen_used,
+                                    action_checkpoint_lookup_count: turn_state
+                                        .focused_repair
+                                        .action_checkpoint_lookup_count,
+                                    exposed_tool_names: &exposed_tool_names,
+                                },
+                            );
+                        match PatchSynthesisFlowController::apply_disabled_recovery(
+                            DisabledPatchSynthesisRecoveryApplicationContext {
+                                recovery,
+                                state: &mut turn_state.focused_repair,
+                                trace: &trace,
+                                messages: &mut messages,
+                                tool_results_text: &mut tool_results_text,
+                                tx,
+                                final_content: &mut final_content,
                             },
-                        ) {
-                            DisabledPatchSynthesisRecovery::ReturnToModel { prompt } => {
-                                FocusedRepairStateController::record_patch_synthesis_return_to_model(
-                                    &mut turn_state.focused_repair,
-                                );
-                                FocusedRepairRecoveryController::append_system_prompt(
-                                    &mut messages,
-                                    &mut tool_results_text,
-                                    prompt,
-                                );
-                                continue;
-                            }
-                            DisabledPatchSynthesisRecovery::ReopenNormalTools {
-                                prompt,
-                                trace_error,
-                            } => {
-                                FocusedRepairStateController::record_patch_synthesis_reopen_normal_tools(
-                                    &mut turn_state.focused_repair,
-                                );
-                                trace.record(TraceEvent::WorkflowFallback {
-                                    error: trace_error.to_string(),
-                                });
-                                FocusedRepairRecoveryController::append_system_prompt(
-                                    &mut messages,
-                                    &mut tool_results_text,
-                                    prompt,
-                                );
-                                continue;
-                            }
-                            DisabledPatchSynthesisRecovery::Stop { message } => {
-                                FocusedRepairRecoveryController::stop_with_message(
-                                    tx,
-                                    &mut final_content,
-                                    message,
-                                )
-                                .await;
-                                break;
-                            }
+                        )
+                        .await
+                        {
+                            PatchSynthesisRecoveryFlow::Continue => continue,
+                            PatchSynthesisRecoveryFlow::Stop => break,
                         }
                     }
                     match self
@@ -1618,47 +1598,27 @@ impl ConversationLoop {
                                 error: format!("patch synthesis failed: {}", err),
                             });
                             let err_text = err.to_string();
-                            match FocusedRepairRecoveryController::patch_synthesis_failure_recovery(
-                                &err_text,
-                                turn_state.focused_repair.patch_synthesis_recovery_used,
-                                turn_state.focused_repair.action_checkpoint_reopen_used,
-                            ) {
-                                PatchSynthesisFailureRecovery::InsufficientEvidence { prompt } => {
-                                    FocusedRepairStateController::record_patch_synthesis_insufficient_evidence(
-                                        &mut turn_state.focused_repair,
-                                    );
-                                    FocusedRepairRecoveryController::append_system_prompt(
-                                        &mut messages,
-                                        &mut tool_results_text,
-                                        prompt,
-                                    );
-                                    continue;
-                                }
-                                PatchSynthesisFailureRecovery::ReopenNormalTools {
-                                    prompt,
-                                    trace_error,
-                                } => {
-                                    FocusedRepairStateController::record_patch_synthesis_reopen_normal_tools(
-                                        &mut turn_state.focused_repair,
-                                    );
-                                    trace.record(TraceEvent::WorkflowFallback {
-                                        error: trace_error.to_string(),
-                                    });
-                                    FocusedRepairRecoveryController::append_system_prompt(
-                                        &mut messages,
-                                        &mut tool_results_text,
-                                        prompt,
-                                    );
-                                    continue;
-                                }
-                                PatchSynthesisFailureRecovery::Stop { message } => {
-                                    FocusedRepairRecoveryController::stop_with_message(
+                            let recovery =
+                                FocusedRepairRecoveryController::patch_synthesis_failure_recovery(
+                                    &err_text,
+                                    turn_state.focused_repair.patch_synthesis_recovery_used,
+                                    turn_state.focused_repair.action_checkpoint_reopen_used,
+                                );
+                            let recovery_flow =
+                                PatchSynthesisFlowController::apply_failure_recovery(
+                                    PatchSynthesisFailureRecoveryApplicationContext {
+                                        recovery,
+                                        state: &mut turn_state.focused_repair,
+                                        trace: &trace,
+                                        messages: &mut messages,
+                                        tool_results_text: &mut tool_results_text,
                                         tx,
-                                        &mut final_content,
-                                        message,
-                                    )
-                                    .await;
-                                }
+                                        final_content: &mut final_content,
+                                    },
+                                )
+                                .await;
+                            if recovery_flow == PatchSynthesisRecoveryFlow::Continue {
+                                continue;
                             }
                             break;
                         }

@@ -360,10 +360,13 @@
   final tool-call recording, changed-file detection, and focused-repair success
   state updates. The same controller now also owns deterministic fallback seed
   construction from the last user task preview and collected patch evidence.
+  Disabled-synthesis and synthesis-failure recovery application also moved
+  behind this controller: `run_inner` now asks for a recovery decision, applies
+  it once, and only branches on continue/stop.
 - Validation after the `PatchSynthesisFlowController` slice:
   `cargo fmt --check`, targeted `patch_synthesis_flow_controller`,
-  `focused_repair_state_controller`, and `patch_synthesis_executor` tests,
-  `cargo check -q`, `git diff --check`, and
+  `focused_repair_recovery`, `focused_repair_state_controller`, and
+  `patch_synthesis_executor` tests, `cargo check -q`, `git diff --check`, and
   `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
