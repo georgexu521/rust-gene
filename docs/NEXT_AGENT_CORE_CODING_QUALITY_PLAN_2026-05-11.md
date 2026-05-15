@@ -408,6 +408,16 @@
   passed.
 - Full validation after the patch-synthesis recovery follow-up:
   `cargo test -q` passed (`1354 passed; 0 failed`).
+- 2026-05-15: Phase A tool-round execution extraction started. Added
+  `src/engine/conversation_loop/tool_round_controller.rs` so one tool round
+  now owns assistant tool-call message insertion, tool execution, iteration
+  budget charging/refund, and handoff into `ToolBatchResultProcessor`.
+  `run_inner` now receives the processed batch outcome and continues with
+  focused-repair and post-edit decisions.
+- Validation after the `ToolRoundController` slice: `cargo fmt --check`, targeted
+  `iteration_budget_controller`, `tool_batch_result_processor`, and
+  `tool_execution` tests, `cargo check -q`, `git diff --check`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

@@ -47,6 +47,7 @@ mod tool_failure_stop_controller;
 mod tool_metadata;
 mod tool_orchestrator;
 mod tool_result_controller;
+mod tool_round_controller;
 mod tool_turn_controller;
 mod turn_recording;
 mod turn_runtime_state;
@@ -96,10 +97,10 @@ pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExe
 use text_sanitizer::strip_think_blocks;
 #[cfg(test)]
 use text_sanitizer::VisibleTextSanitizer;
-use tool_batch_result_processor::{ToolBatchProcessingContext, ToolBatchResultProcessor};
 #[cfg(test)]
 use tool_execution::truncate_tool_result;
 pub(crate) use tool_execution::{safe_prefix_by_bytes, safe_suffix_by_bytes, READ_ONLY_TOOLS};
+#[cfg(test)]
 use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
@@ -111,6 +112,7 @@ use tool_failure_stop_controller::{ToolFailureStopController, ToolFailureStopReq
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
+use tool_round_controller::{ToolRoundContext, ToolRoundController};
 use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
@@ -1311,46 +1313,17 @@ impl ConversationLoop {
                 break;
             }
 
-            messages.push(Message::assistant_with_tools(&content, tool_calls.clone()));
-
-            let has_changes_before_tools =
-                crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
-                    && WorkflowChangeTracker::has_changes_since(&baseline_git_status_files);
-            let mut tool_batch =
-                ToolExecutionController::new(ToolExecutionContext::from_conversation(self))
-                    .execute_tools_parallel(ToolExecutionRequest {
-                        tool_calls: &tool_calls,
-                        tx,
-                        pre_executed,
-                        trace: Some(trace.clone()),
-                        resource_policy: &resource_policy,
-                        exposed_tool_names: &exposed_tool_names,
-                        action_checkpoint_active: turn_state
-                            .focused_repair
-                            .action_checkpoint_active,
-                        action_checkpoint_lookup_count: turn_state
-                            .focused_repair
-                            .action_checkpoint_lookup_count,
-                        has_changes_before_tools,
-                        destructive_scope: &destructive_scope,
-                        lifecycle: &mut turn_state.tool_lifecycle,
-                    })
-                    .await;
-
-            let tool_budget =
-                IterationBudgetController::record_tool_round(&mut turn_state, &tool_calls);
-            if tool_budget.refunded {
-                debug!("All tools read-only, refunding iteration budget");
-            }
-
-            let action_checkpoint_active_before_batch =
-                turn_state.focused_repair.action_checkpoint_active;
-            let batch_processing = ToolBatchResultProcessor::process(ToolBatchProcessingContext {
+            let batch_processing = ToolRoundController::execute(ToolRoundContext {
+                conversation: self,
+                content: &content,
                 tool_calls: &tool_calls,
-                tool_batch: &mut tool_batch,
+                tx,
+                pre_executed,
+                trace: &trace,
+                resource_policy: &resource_policy,
+                exposed_tool_names: &exposed_tool_names,
                 turn_state: &mut turn_state,
                 messages: &mut messages,
-                trace: &trace,
                 is_programming_workflow:
                     crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
                 working_dir: &working_dir,
@@ -1361,7 +1334,6 @@ impl ConversationLoop {
                 required_validation_commands: &required_validation_commands,
                 successful_required_validation_commands:
                     &mut successful_required_validation_commands,
-                action_checkpoint_active: action_checkpoint_active_before_batch,
                 destructive_scope: &destructive_scope,
                 baseline_git_status_files: &baseline_git_status_files,
             })
