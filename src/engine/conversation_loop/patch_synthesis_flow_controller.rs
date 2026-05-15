@@ -58,6 +58,13 @@ pub(super) struct PatchSynthesisFailureRecoveryApplicationContext<'a> {
     pub(super) final_content: &'a mut String,
 }
 
+pub(super) struct CodeWriteForbiddenRecoveryContext<'a> {
+    pub(super) state: &'a mut FocusedRepairRuntimeState,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) tool_results_text: &'a mut String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PatchSynthesisRecoveryFlow {
     Continue,
@@ -124,6 +131,20 @@ impl PatchSynthesisFlowController {
             any_tool_success: execution.any_tool_success,
             changed_files_available,
         }
+    }
+
+    pub(super) fn apply_code_write_forbidden_recovery(
+        context: CodeWriteForbiddenRecoveryContext<'_>,
+    ) {
+        context.trace.record(TraceEvent::WorkflowFallback {
+            error: "patch synthesis blocked by prompt-forbidden code-write tools".to_string(),
+        });
+        FocusedRepairRecoveryController::append_system_prompt(
+            &mut *context.messages,
+            &mut *context.tool_results_text,
+            FocusedRepairRecoveryController::code_write_forbidden_prompt(),
+        );
+        FocusedRepairStateController::record_code_write_forbidden_recovery(&mut *context.state);
     }
 
     pub(super) async fn apply_disabled_recovery(
@@ -268,6 +289,39 @@ mod tests {
             ),
             "Applying synthesized patch from prior evidence."
         );
+    }
+
+    #[test]
+    fn code_write_forbidden_recovery_updates_trace_prompt_and_state() {
+        let trace = trace();
+        let mut state = FocusedRepairRuntimeState::default();
+        state.action_checkpoint_active = true;
+        state.action_checkpoint_lookup_count = 2;
+        state.action_checkpoint_no_change_rounds = 2;
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+
+        PatchSynthesisFlowController::apply_code_write_forbidden_recovery(
+            CodeWriteForbiddenRecoveryContext {
+                state: &mut state,
+                trace: &trace,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+            },
+        );
+
+        assert!(state.code_write_forbidden_checkpoint_sent);
+        assert!(!state.action_checkpoint_active);
+        assert_eq!(state.action_checkpoint_lookup_count, 0);
+        assert_eq!(state.action_checkpoint_no_change_rounds, 0);
+        assert_eq!(messages.len(), 1);
+        assert!(tool_results_text.contains("Patch synthesis skipped"));
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error == "patch synthesis blocked by prompt-forbidden code-write tools"
+        )));
     }
 
     #[tokio::test]

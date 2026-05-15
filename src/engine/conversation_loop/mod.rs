@@ -76,9 +76,9 @@ use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjecti
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
-    DisabledPatchSynthesisRecoveryApplicationContext, PatchSynthesisCallExecutionContext,
-    PatchSynthesisFailureRecoveryApplicationContext, PatchSynthesisFlowController,
-    PatchSynthesisRecoveryFlow,
+    CodeWriteForbiddenRecoveryContext, DisabledPatchSynthesisRecoveryApplicationContext,
+    PatchSynthesisCallExecutionContext, PatchSynthesisFailureRecoveryApplicationContext,
+    PatchSynthesisFlowController, PatchSynthesisRecoveryFlow,
 };
 use post_edit_repair_controller::{
     PostEditRepairContext, PostEditRepairController, PostEditRepairRuntimeContext,
@@ -1440,17 +1440,13 @@ impl ConversationLoop {
                         error: repair_proposal.trace_error.clone(),
                     });
                     if code_write_tools_forbidden {
-                        trace.record(TraceEvent::WorkflowFallback {
-                            error: "patch synthesis blocked by prompt-forbidden code-write tools"
-                                .to_string(),
-                        });
-                        FocusedRepairRecoveryController::append_system_prompt(
-                            &mut messages,
-                            &mut tool_results_text,
-                            FocusedRepairRecoveryController::code_write_forbidden_prompt(),
-                        );
-                        FocusedRepairStateController::record_code_write_forbidden_recovery(
-                            &mut turn_state.focused_repair,
+                        PatchSynthesisFlowController::apply_code_write_forbidden_recovery(
+                            CodeWriteForbiddenRecoveryContext {
+                                state: &mut turn_state.focused_repair,
+                                trace: &trace,
+                                messages: &mut messages,
+                                tool_results_text: &mut tool_results_text,
+                            },
                         );
                         continue;
                     }

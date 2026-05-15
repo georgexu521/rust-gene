@@ -396,6 +396,16 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the post-edit verification/closeout continuation
   batch: `cargo test -q` passed (`1353 passed; 0 failed`).
+- 2026-05-15: Phase A patch-synthesis recovery cleanup continued. The
+  prompt-forbidden code-write recovery path now uses
+  `PatchSynthesisFlowController::apply_code_write_forbidden_recovery`, keeping
+  trace recording, system prompt injection, and focused-repair state updates
+  with the other patch-synthesis recovery application paths.
+- Validation after the code-write-forbidden patch-synthesis recovery slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `patch_synthesis_flow_controller` and `focused_repair_state_controller`
+  tests, `cargo check -q`, and `cargo clippy --all-features -- -D warnings`
+  passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
