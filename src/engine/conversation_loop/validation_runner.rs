@@ -1,5 +1,8 @@
 use super::safe_prefix_by_bytes;
+use super::trace_adaptive_workflow_trigger;
 use crate::engine::auto_verify::{VerificationIssue, VerificationResult};
+use crate::engine::code_change_workflow::{AdaptiveWorkflowTrigger, CodeChangeWorkflowRunner};
+use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
 use std::collections::HashSet;
 use tokio::io::AsyncReadExt;
@@ -212,7 +215,36 @@ pub(super) struct RequiredValidationLedgerRecord {
     pub(super) dialog_text: String,
 }
 
+pub(super) struct RequiredValidationTriggerContext<'a> {
+    pub(super) commands: &'a [String],
+    pub(super) code_workflow: &'a mut CodeChangeWorkflowRunner,
+    pub(super) trace: &'a TraceCollector,
+}
+
 impl RequiredValidationController {
+    pub(super) fn record_initial_trigger(context: RequiredValidationTriggerContext<'_>) -> bool {
+        if context.commands.is_empty()
+            || !context
+                .code_workflow
+                .activate_trigger(AdaptiveWorkflowTrigger::RequiredValidation)
+        {
+            return false;
+        }
+
+        trace_adaptive_workflow_trigger(
+            context.trace,
+            AdaptiveWorkflowTrigger::RequiredValidation,
+            context.code_workflow,
+        );
+        context.trace.record(TraceEvent::WorkflowFallback {
+            error: format!(
+                "adaptive workflow trigger activated: required_validation commands={}",
+                context.commands.len()
+            ),
+        });
+        true
+    }
+
     pub(super) fn should_run_default_auto_tests(required_validation_commands: &[String]) -> bool {
         required_validation_commands.is_empty()
     }
@@ -478,4 +510,98 @@ fn is_safe_required_search_assertion(command: &str) -> bool {
         .filter(|token| !token.starts_with('-'))
         .collect::<Vec<_>>();
     positional.len() >= 2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::intent_router::IntentRouter;
+    use crate::engine::task_context::TaskContextBundle;
+    use crate::engine::trace::{TurnStatus, TurnTrace};
+
+    fn code_workflow() -> CodeChangeWorkflowRunner {
+        let route = IntentRouter::new().route("修改 src/main.rs 并运行验证");
+        let bundle = TaskContextBundle::new("修改 src/main.rs", ".", route, None);
+        CodeChangeWorkflowRunner::new(&bundle)
+    }
+
+    fn trace() -> TraceCollector {
+        TraceCollector::new(TurnTrace::new(
+            "session".to_string(),
+            1,
+            "required-validation",
+        ))
+    }
+
+    #[test]
+    fn initial_required_validation_trigger_records_once() {
+        let trace = trace();
+        let mut code_workflow = code_workflow();
+        let commands = vec!["cargo test -q".to_string()];
+
+        assert!(RequiredValidationController::record_initial_trigger(
+            RequiredValidationTriggerContext {
+                commands: &commands,
+                code_workflow: &mut code_workflow,
+                trace: &trace,
+            },
+        ));
+        assert!(!RequiredValidationController::record_initial_trigger(
+            RequiredValidationTriggerContext {
+                commands: &commands,
+                code_workflow: &mut code_workflow,
+                trace: &trace,
+            },
+        ));
+
+        assert_eq!(
+            code_workflow.adaptive_trigger_labels(),
+            vec!["required_validation"]
+        );
+        let finished = trace.finish(TurnStatus::Completed);
+        assert_eq!(
+            finished
+                .events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    TraceEvent::AdaptiveWorkflowTriggered { trigger, .. }
+                    if trigger == "required_validation"
+                ))
+                .count(),
+            1
+        );
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error == "adaptive workflow trigger activated: required_validation commands=1"
+        )));
+    }
+
+    #[test]
+    fn initial_required_validation_trigger_ignores_empty_commands() {
+        let trace = trace();
+        let mut code_workflow = code_workflow();
+
+        assert!(!RequiredValidationController::record_initial_trigger(
+            RequiredValidationTriggerContext {
+                commands: &[],
+                code_workflow: &mut code_workflow,
+                trace: &trace,
+            },
+        ));
+
+        assert!(code_workflow.adaptive_trigger_labels().is_empty());
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(!finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::AdaptiveWorkflowTriggered { trigger, .. }
+                if trigger == "required_validation"
+        )));
+        assert!(!finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error.contains("required_validation")
+        )));
+    }
 }

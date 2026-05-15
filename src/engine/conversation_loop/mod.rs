@@ -120,7 +120,7 @@ use turn_runtime_state::TurnRuntimeState;
 use validation_runner::shell_output_with_timeout;
 #[cfg(test)]
 use validation_runner::verification_source_context;
-use validation_runner::RequiredValidationController;
+use validation_runner::{RequiredValidationController, RequiredValidationTriggerContext};
 use workflow_change_tracker::WorkflowChangeTracker;
 use workflow_prompt_policy::WorkflowPromptPolicy;
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
@@ -728,23 +728,11 @@ impl ConversationLoop {
         let mut code_workflow =
             crate::engine::code_change_workflow::CodeChangeWorkflowRunner::new(&task_bundle);
         let mut turn_state = TurnRuntimeState::new(Self::route_scoped_tools_enabled());
-        if !required_validation_commands.is_empty()
-            && code_workflow.activate_trigger(
-                crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RequiredValidation,
-            )
-        {
-            trace_adaptive_workflow_trigger(
-                &trace,
-                crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RequiredValidation,
-                &code_workflow,
-            );
-            trace.record(TraceEvent::WorkflowFallback {
-                error: format!(
-                    "adaptive workflow trigger activated: required_validation commands={}",
-                    required_validation_commands.len()
-                ),
-            });
-        }
+        RequiredValidationController::record_initial_trigger(RequiredValidationTriggerContext {
+            commands: &required_validation_commands,
+            code_workflow: &mut code_workflow,
+            trace: &trace,
+        });
         let workflow_contract_prompt =
             crate::engine::workflow_contract::WorkflowContractPrompt::new(
                 last_user_preview.as_str(),
