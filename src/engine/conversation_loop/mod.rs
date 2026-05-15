@@ -16,6 +16,7 @@ mod companion_context;
 mod context_budget_controller;
 mod first_code_change_controller;
 mod focused_repair_recovery;
+mod focused_repair_state_controller;
 mod iteration_budget_controller;
 mod memory_snapshot_controller;
 mod memory_sync_controller;
@@ -55,7 +56,6 @@ mod workflow_trace;
 
 use action_checkpoint::{
     FocusedRepairActionRequest, ProgressCheckpointActionApplier, ProgressCheckpointActionContext,
-    ProgressCheckpointController, ProgressCheckpointRequest,
 };
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
@@ -68,6 +68,7 @@ use focused_repair_recovery::{
     DisabledPatchSynthesisRecovery, DisabledPatchSynthesisRecoveryRequest,
     FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
 };
+use focused_repair_state_controller::{FocusedRepairStateContext, FocusedRepairStateController};
 use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetController};
 use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
@@ -1372,15 +1373,24 @@ impl ConversationLoop {
             let successful_validation_commands = batch_processing.successful_validation_commands;
             let mut should_closeout_after_verified_change = false;
             let has_worktree_changes = !changed_files.is_empty();
+            let focused_repair_state = FocusedRepairStateController::record_tool_round(
+                FocusedRepairStateContext {
+                    state: &mut turn_state.focused_repair,
+                    is_programming_workflow:
+                        crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
+                    no_diff_audit_closeout_allowed,
+                    has_worktree_changes,
+                    has_successful_validation_commands: !successful_validation_commands.is_empty(),
+                    code_write_tools_forbidden,
+                    used_action_checkpoint_lookup,
+                    successful_write_tool,
+                    used_write_tool,
+                    any_tool_success,
+                    file_edit_failure_correction_added,
+                },
+            );
 
-            if Self::should_retry_after_file_edit_failure_correction(
-                turn_state.focused_repair.action_checkpoint_active,
-                file_edit_failure_correction_added,
-                turn_state.focused_repair.file_edit_failure_retry_used,
-                successful_write_tool,
-            ) {
-                turn_state.focused_repair.file_edit_failure_retry_used = true;
-                turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
+            if focused_repair_state.retry_after_file_edit_failure_correction {
                 trace.record(TraceEvent::WorkflowFallback {
                     error: "file_edit repair correction returned to model before patch synthesis"
                         .to_string(),
@@ -1388,82 +1398,14 @@ impl ConversationLoop {
                 continue;
             }
 
-            let mut force_patch_synthesis_after_no_change = false;
-            let mut force_patch_synthesis_reason: Option<&'static str> = None;
-            if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-                if successful_write_tool {
-                    turn_state.focused_repair.no_code_progress_rounds = 0;
-                    turn_state.focused_repair.action_checkpoint_no_change_rounds = 0;
-                    turn_state.focused_repair.action_checkpoint_active = false;
-                    turn_state.focused_repair.action_checkpoint_lookup_count = 0;
-                    turn_state.focused_repair.file_edit_failure_retry_used = false;
-                } else if used_write_tool {
-                    turn_state
-                        .focused_repair
-                        .action_checkpoint_requires_patch_before_validation = true;
-                } else if any_tool_success && !used_write_tool {
-                    let decision = ProgressCheckpointController::evaluate_read_only_success(
-                        ProgressCheckpointRequest {
-                            no_diff_audit_closeout_allowed,
-                            has_worktree_changes,
-                            has_successful_validation_commands: !successful_validation_commands
-                                .is_empty(),
-                            no_code_progress_rounds: turn_state
-                                .focused_repair
-                                .no_code_progress_rounds,
-                            action_checkpoint_active: turn_state
-                                .focused_repair
-                                .action_checkpoint_active,
-                            action_checkpoint_lookup_count: turn_state
-                                .focused_repair
-                                .action_checkpoint_lookup_count,
-                            action_checkpoint_no_change_rounds: turn_state
-                                .focused_repair
-                                .action_checkpoint_no_change_rounds,
-                            no_diff_audit_validation_checkpoint_sent: turn_state
-                                .focused_repair
-                                .no_diff_audit_validation_checkpoint_sent,
-                            code_write_tools_forbidden,
-                            code_write_forbidden_checkpoint_sent: turn_state
-                                .focused_repair
-                                .code_write_forbidden_checkpoint_sent,
-                            used_action_checkpoint_lookup,
-                        },
-                    );
-
-                    turn_state.focused_repair.no_code_progress_rounds =
-                        decision.no_code_progress_rounds;
-                    turn_state.focused_repair.action_checkpoint_active =
-                        decision.action_checkpoint_active;
-                    turn_state.focused_repair.action_checkpoint_lookup_count =
-                        decision.action_checkpoint_lookup_count;
-                    turn_state.focused_repair.action_checkpoint_no_change_rounds =
-                        decision.action_checkpoint_no_change_rounds;
-                    turn_state
-                        .focused_repair
-                        .no_diff_audit_validation_checkpoint_sent =
-                        decision.no_diff_audit_validation_checkpoint_sent;
-                    turn_state
-                        .focused_repair
-                        .code_write_forbidden_checkpoint_sent =
-                        decision.code_write_forbidden_checkpoint_sent;
-                    if decision.reset_file_edit_failure_retry {
-                        turn_state.focused_repair.file_edit_failure_retry_used = false;
-                    }
-                    force_patch_synthesis_after_no_change =
-                        decision.force_patch_synthesis_after_no_change;
-                    force_patch_synthesis_reason = decision.force_patch_synthesis_reason;
-
-                    ProgressCheckpointActionApplier::apply(ProgressCheckpointActionContext {
-                        action: decision.action,
-                        workflow: route.workflow,
-                        trace: &trace,
-                        code_workflow: &mut code_workflow,
-                        messages: &mut messages,
-                        tool_results_text: &mut tool_results_text,
-                    });
-                }
-            }
+            ProgressCheckpointActionApplier::apply(ProgressCheckpointActionContext {
+                action: focused_repair_state.progress_checkpoint_action,
+                workflow: route.workflow,
+                trace: &trace,
+                code_workflow: &mut code_workflow,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+            });
 
             if let Some(repair_proposal) =
                 Self::focused_repair_action_proposal(FocusedRepairActionRequest {
@@ -1471,8 +1413,9 @@ impl ConversationLoop {
                     any_tool_success,
                     batch_has_unsuccessful_tools,
                     failed_tool_evidence_present: !failed_tool_evidence.is_empty(),
-                    force_patch_synthesis_after_no_change,
-                    force_patch_synthesis_reason,
+                    force_patch_synthesis_after_no_change: focused_repair_state
+                        .force_patch_synthesis_after_no_change,
+                    force_patch_synthesis_reason: focused_repair_state.force_patch_synthesis_reason,
                     action_checkpoint_no_change_rounds: turn_state
                         .focused_repair
                         .action_checkpoint_no_change_rounds,

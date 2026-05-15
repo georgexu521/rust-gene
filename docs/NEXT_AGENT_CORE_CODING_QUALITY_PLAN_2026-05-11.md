@@ -326,6 +326,20 @@
   `tool_batch_result_processor`, `post_edit_repair_controller`, and
   `repair_controller` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` all passed.
+- 2026-05-15: Phase A focused-repair state transition extraction started.
+  Added `src/engine/conversation_loop/focused_repair_state_controller.rs` so
+  the post-tool-batch repair state transition now lives behind one controller:
+  file-edit correction retry gating, successful write resets, failed-write
+  patch-before-validation marking, and read-only progress checkpoint state
+  updates. `run_inner` now applies the returned checkpoint action and continues
+  with patch-synthesis orchestration.
+- Validation after the `FocusedRepairStateController` slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `focused_repair_state_controller`, `action_checkpoint`,
+  `focused_repair_recovery`, `patch_synthesis_executor`,
+  `tool_batch_result_processor`, `post_edit_repair_controller`, and
+  `repair_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` all passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
