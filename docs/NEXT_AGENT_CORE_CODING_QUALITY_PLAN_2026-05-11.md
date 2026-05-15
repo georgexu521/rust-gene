@@ -312,6 +312,8 @@
 - Validation after the `RetrievalPromptController` slice: `cargo fmt`,
   targeted `retrieval_prompt_controller` tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` all passed.
+- Full validation after the 2026-05-15 continuation batch:
+  `cargo test -q` passed (`1336 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
