@@ -38,6 +38,16 @@ pub(super) struct PatchSynthesisCallExecutionOutcome {
 pub(super) struct PatchSynthesisFlowController;
 
 impl PatchSynthesisFlowController {
+    pub(super) fn deterministic_seed(last_user_preview: &str, evidence: &str) -> String {
+        if last_user_preview.trim().is_empty() {
+            evidence.to_string()
+        } else if evidence.trim().is_empty() {
+            format!("TASK:\n{}", last_user_preview)
+        } else {
+            format!("TASK:\n{}\n\nEVIDENCE:\n{}", last_user_preview, evidence)
+        }
+    }
+
     pub(super) fn assistant_message_for_source(source: PatchSynthesisSource) -> &'static str {
         match source {
             PatchSynthesisSource::DeterministicFallback => {
@@ -91,6 +101,30 @@ impl PatchSynthesisFlowController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deterministic_seed_uses_evidence_when_task_is_empty() {
+        assert_eq!(
+            PatchSynthesisFlowController::deterministic_seed("", "compile error"),
+            "compile error"
+        );
+    }
+
+    #[test]
+    fn deterministic_seed_uses_task_when_evidence_is_empty() {
+        assert_eq!(
+            PatchSynthesisFlowController::deterministic_seed("fix the build", ""),
+            "TASK:\nfix the build"
+        );
+    }
+
+    #[test]
+    fn deterministic_seed_combines_task_and_evidence() {
+        assert_eq!(
+            PatchSynthesisFlowController::deterministic_seed("fix the build", "compile error"),
+            "TASK:\nfix the build\n\nEVIDENCE:\ncompile error"
+        );
+    }
 
     #[test]
     fn assistant_message_names_patch_source() {

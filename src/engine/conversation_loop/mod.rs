@@ -1452,17 +1452,11 @@ impl ConversationLoop {
                     if !Self::patch_synthesis_enabled() {
                         let deterministic_calls = if Self::deterministic_patch_synthesis_enabled() {
                             let evidence = Self::patch_synthesis_evidence(&messages);
-                            let deterministic_seed = if last_user_preview.trim().is_empty() {
-                                evidence.clone()
-                            } else if evidence.trim().is_empty() {
-                                format!("TASK:\n{}", last_user_preview.as_str())
-                            } else {
-                                format!(
-                                    "TASK:\n{}\n\nEVIDENCE:\n{}",
+                            let deterministic_seed =
+                                PatchSynthesisFlowController::deterministic_seed(
                                     last_user_preview.as_str(),
-                                    evidence
-                                )
-                            };
+                                    &evidence,
+                                );
                             let cwd = std::env::current_dir()
                                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
                             self.deterministic_patch_tool_calls(&deterministic_seed, &cwd)

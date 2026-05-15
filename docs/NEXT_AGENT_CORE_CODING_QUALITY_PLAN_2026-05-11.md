@@ -358,7 +358,8 @@
   deterministic and model-backed patch synthesis share the same execution
   path: assistant tool-call message insertion, synthesized call execution,
   final tool-call recording, changed-file detection, and focused-repair success
-  state updates.
+  state updates. The same controller now also owns deterministic fallback seed
+  construction from the last user task preview and collected patch evidence.
 - Validation after the `PatchSynthesisFlowController` slice:
   `cargo fmt --check`, targeted `patch_synthesis_flow_controller`,
   `focused_repair_state_controller`, and `patch_synthesis_executor` tests,
