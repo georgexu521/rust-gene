@@ -149,6 +149,7 @@ impl EvidenceLedger {
         self.record_permission_tool_result(tool_call, result);
         match tool_call.name.as_str() {
             "bash" => self.record_bash_tool_result(tool_call, result),
+            "file_patch" => self.record_file_patch_tool_result(result),
             "file_read" | "file_write" | "file_edit" | "glob" | "grep" => {
                 self.record_file_tool_result(tool_call, result)
             }
@@ -405,6 +406,43 @@ impl EvidenceLedger {
         });
     }
 
+    fn record_file_patch_tool_result(&mut self, result: &ToolResult) {
+        let Some(files) = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("files"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            return;
+        };
+        for file in files {
+            let path = file
+                .get("path")
+                .or_else(|| file.get("resolved_path"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            if result.success {
+                if let Some(path) = path.as_ref() {
+                    self.changed_files.insert(path.clone());
+                }
+            }
+            let diff = file.get("diff");
+            self.file_facts.push(FileEvidence {
+                tool: "file_patch".to_string(),
+                path,
+                success: result.success,
+                kind: Some("patch".to_string()),
+                line_start: nested_u64(diff, "changed_line_start"),
+                line_end: nested_u64(diff, "changed_line_end"),
+                total_lines: None,
+                displayed_lines: None,
+                truncated: nested_bool(diff, "preview_truncated"),
+                content_hash: None,
+                summary: file_patch_result_summary(result, file),
+            });
+        }
+    }
+
     fn record_permission_tool_result(&mut self, tool_call: &ToolCall, result: &ToolResult) {
         let Some(permission_request) = result
             .data
@@ -496,6 +534,46 @@ fn file_result_summary(result: &ToolResult) -> String {
     preview(&format!("[metadata: {}] {}", metadata.join(" "), summary))
 }
 
+fn file_patch_result_summary(result: &ToolResult, file: &serde_json::Value) -> String {
+    let mut metadata = Vec::new();
+    metadata.push("kind=patch".to_string());
+    for key in ["path", "replacements", "bytes_written"] {
+        let Some(value) = file.get(key) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let rendered = value
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string());
+        metadata.push(format!("{key}={rendered}"));
+    }
+    if let Some(diff) = file.get("diff") {
+        for key in [
+            "additions",
+            "deletions",
+            "changed_line_start",
+            "changed_line_end",
+            "preview_truncated",
+        ] {
+            let Some(value) = diff.get(key) else {
+                continue;
+            };
+            if value.is_null() {
+                continue;
+            }
+            metadata.push(format!("{key}={value}"));
+        }
+    }
+    preview(&format!(
+        "[metadata: {}] {}",
+        metadata.join(" "),
+        result_summary(result)
+    ))
+}
+
 fn diagnostics_metadata_summary(value: Option<&serde_json::Value>) -> Option<String> {
     let diagnostics = value?;
     let status = diagnostics
@@ -521,6 +599,18 @@ fn diagnostics_metadata_summary(value: Option<&serde_json::Value>) -> Option<Str
     Some(format!(
         "lsp_diagnostics=status:{status} checked:{checked} total:{total} errors:{errors} warnings:{warnings}"
     ))
+}
+
+fn nested_u64(value: Option<&serde_json::Value>, key: &str) -> Option<u64> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_u64)
+}
+
+fn nested_bool(value: Option<&serde_json::Value>, key: &str) -> Option<bool> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_bool)
 }
 
 fn result_data_string(result: &ToolResult, key: &str) -> Option<String> {
@@ -659,6 +749,71 @@ mod tests {
             .contains("lsp_diagnostics=status:diagnostics_found"));
         assert!(fact.summary.contains("errors:1"));
         assert!(fact.summary.contains("warnings:1"));
+    }
+
+    #[test]
+    fn records_file_patch_files_as_changed_file_facts() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "Applied file_patch successfully: 2 operation(s), 2 file(s)",
+            serde_json::json!({
+                "files": [
+                    {
+                        "path": "src/lib.rs",
+                        "replacements": 1,
+                        "bytes_written": 42,
+                        "diff": {
+                            "additions": 1,
+                            "deletions": 1,
+                            "changed_line_start": 3,
+                            "changed_line_end": 3,
+                            "preview_truncated": false
+                        }
+                    },
+                    {
+                        "path": "README.md",
+                        "replacements": 1,
+                        "bytes_written": 20,
+                        "diff": {
+                            "additions": 2,
+                            "deletions": 1,
+                            "changed_line_start": 7,
+                            "changed_line_end": 8,
+                            "preview_truncated": false
+                        }
+                    }
+                ]
+            }),
+        );
+
+        ledger.record_tool_result(
+            &tool_call(
+                "file_patch",
+                serde_json::json!({
+                    "operations": [
+                        {"path": "src/lib.rs"},
+                        {"path": "README.md"}
+                    ]
+                }),
+            ),
+            &result,
+        );
+
+        let snapshot = ledger.snapshot();
+        assert_eq!(
+            snapshot.changed_files,
+            vec!["README.md".to_string(), "src/lib.rs".to_string()]
+        );
+        assert_eq!(snapshot.file_facts, 2);
+        let fact = &ledger.file_facts[0];
+        assert_eq!(fact.tool, "file_patch");
+        assert_eq!(fact.path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(fact.kind.as_deref(), Some("patch"));
+        assert_eq!(fact.line_start, Some(3));
+        assert_eq!(fact.line_end, Some(3));
+        assert_eq!(fact.truncated, Some(false));
+        assert!(fact.summary.contains("bytes_written=42"));
+        assert!(fact.summary.contains("changed_line_start=3"));
     }
 
     #[test]

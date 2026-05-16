@@ -1339,6 +1339,18 @@
   passed.
 - Full validation after the file-patch encoded bytes slice:
   `cargo test -q` passed (`1433 passed; 0 failed`).
+- 2026-05-16: Phase 3 Batch 3.6 evidence integration continued.
+  EvidenceLedger now records each successful `file_patch` file as structured
+  file evidence and changed-file evidence, including patch kind, changed line
+  range, diff truncation state, and compact bytes-written metadata. This aligns
+  multi-file patches with `file_edit` / `file_write` for closeout and repair
+  evidence.
+- Validation after the file-patch evidence slice: `cargo fmt --check`,
+  `git diff --check`, targeted
+  `records_file_patch_files_as_changed_file_facts` and `evidence_ledger` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the file-patch evidence slice:
+  `cargo test -q` passed (`1434 passed; 0 failed`).
 - 2026-05-12: Phase 3 Batch 3.0 started. `file_read` now returns structured
   raw/display boundary metadata for file reads: resolved path, displayed line
   range, total/displayed line counts, truncation, full/selected content hashes,
