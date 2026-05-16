@@ -693,6 +693,17 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn iteration setup slice:
   `cargo test -q` passed (`1394 passed; 0 failed`).
+- 2026-05-16: Phase A assistant response transition cleanup continued. Added
+  `turn_assistant_response_controller.rs`; API outcome application,
+  final-content/tool-call accumulation, no-tool response retry handling, and
+  the `Retry` / `Finish` / tool-round transition now live outside `run_inner`.
+- Validation after the assistant response transition slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `turn_assistant_response_controller`, `api_request_controller`, and
+  `assistant_response_retry_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the assistant response transition slice:
+  `cargo test -q` passed (`1396 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
