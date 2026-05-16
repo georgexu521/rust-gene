@@ -596,9 +596,49 @@ fn diagnostics_metadata_summary(value: Option<&serde_json::Value>) -> Option<Str
         .get("checked")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    Some(format!(
+    let mut parts = vec![format!(
         "lsp_diagnostics=status:{status} checked:{checked} total:{total} errors:{errors} warnings:{warnings}"
-    ))
+    )];
+    if let Some(first_error) = diagnostic_item_metadata(diagnostics.get("first_error")) {
+        parts.push(format!("first_error:{first_error}"));
+    }
+    Some(parts.join(" "))
+}
+
+fn diagnostic_item_metadata(value: Option<&serde_json::Value>) -> Option<String> {
+    let item = value?;
+    if item.is_null() {
+        return None;
+    }
+    let message = item.get("message").and_then(serde_json::Value::as_str)?;
+    let line = item
+        .get("range")
+        .and_then(|range| range.get("start_line"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|line| format!("line:{line}"))
+        .unwrap_or_else(|| "line:unknown".to_string());
+    let source = item
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        .filter(|source| !source.is_empty())
+        .map(|source| format!(" source:{source}"))
+        .unwrap_or_default();
+    let code = item
+        .get("code")
+        .filter(|code| !code.is_null())
+        .map(|code| {
+            code.as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| code.to_string())
+        })
+        .filter(|code| !code.is_empty())
+        .map(|code| format!(" code:{code}"))
+        .unwrap_or_default();
+    let mut preview = message.chars().take(80).collect::<String>();
+    if message.chars().count() > 80 {
+        preview.push_str("...");
+    }
+    Some(format!("{line}{source}{code} message:{preview}"))
 }
 
 fn nested_u64(value: Option<&serde_json::Value>, key: &str) -> Option<u64> {
@@ -733,7 +773,15 @@ mod tests {
                     "status": "diagnostics_found",
                     "diagnostic_count": 2,
                     "error_count": 1,
-                    "warning_count": 1
+                    "warning_count": 1,
+                    "first_error": {
+                        "message": "type mismatch in return value",
+                        "source": "rust-analyzer",
+                        "code": "E0308",
+                        "range": {
+                            "start_line": 7
+                        }
+                    }
                 }
             }),
         );
@@ -749,6 +797,9 @@ mod tests {
             .contains("lsp_diagnostics=status:diagnostics_found"));
         assert!(fact.summary.contains("errors:1"));
         assert!(fact.summary.contains("warnings:1"));
+        assert!(fact.summary.contains("first_error:line:7"));
+        assert!(fact.summary.contains("source:rust-analyzer"));
+        assert!(fact.summary.contains("code:E0308"));
     }
 
     #[test]

@@ -167,6 +167,9 @@ fn file_edit_diagnostics_summary_json(
     };
     let checked = initialized_server_count > 0 || diagnostic_count > 0;
     let truncated = diagnostic_count > MAX_FILE_EDIT_DIAGNOSTIC_ITEMS;
+    let first_error = first_diagnostic_summary_json(&diagnostics, Some(1));
+    let first_warning = first_diagnostic_summary_json(&diagnostics, Some(2));
+    let affected_line_range = diagnostic_line_range_json(&diagnostics);
 
     json!({
         "available": true,
@@ -180,6 +183,9 @@ fn file_edit_diagnostics_summary_json(
         "information_count": information_count,
         "hint_count": hint_count,
         "unknown_count": unknown_count,
+        "affected_line_range": affected_line_range.unwrap_or(Value::Null),
+        "first_error": first_error.unwrap_or(Value::Null),
+        "first_warning": first_warning.unwrap_or(Value::Null),
         "truncated": truncated,
         "items": diagnostics
             .into_iter()
@@ -189,6 +195,34 @@ fn file_edit_diagnostics_summary_json(
         "sync_actions": sync_actions,
         "collection_errors": collection_errors,
     })
+}
+
+fn first_diagnostic_summary_json(
+    diagnostics: &[(String, LspDiagnostic)],
+    severity: Option<u8>,
+) -> Option<Value> {
+    diagnostics
+        .iter()
+        .find(|(_, diagnostic)| {
+            severity.is_none_or(|severity| diagnostic.severity == Some(severity))
+        })
+        .map(|(server, diagnostic)| file_edit_diagnostic_item_json(server, diagnostic))
+}
+
+fn diagnostic_line_range_json(diagnostics: &[(String, LspDiagnostic)]) -> Option<Value> {
+    let start = diagnostics
+        .iter()
+        .map(|(_, diagnostic)| diagnostic.range.start.line + 1)
+        .min()?;
+    let end = diagnostics
+        .iter()
+        .map(|(_, diagnostic)| diagnostic.range.end.line + 1)
+        .max()
+        .unwrap_or(start);
+    Some(json!({
+        "start_line": start,
+        "end_line": end,
+    }))
 }
 
 fn file_edit_diagnostic_item_json(server: &str, diagnostic: &LspDiagnostic) -> Value {
@@ -239,26 +273,114 @@ pub(super) fn file_edit_diagnostics_content_line(diagnostics: &Value) -> Option<
         });
     }
 
-    let first_message = diagnostics
-        .get("items")
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .and_then(|item| item.get("message"))
-        .and_then(Value::as_str)
-        .map(|message| {
-            let mut preview = message.chars().take(160).collect::<String>();
-            if message.chars().count() > 160 {
-                preview.push_str("...");
-            }
-            preview
-        });
-    let first = first_message
-        .map(|message| format!(" First: {message}"))
+    let first = diagnostic_headline(diagnostics, "first_error", "First error")
+        .or_else(|| diagnostic_headline(diagnostics, "first_warning", "First warning"))
+        .or_else(|| {
+            diagnostics
+                .get("items")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| diagnostic_headline_from_item(item, "First diagnostic"))
+        })
+        .map(|headline| format!(" {headline}"))
         .unwrap_or_default();
 
     Some(format!(
         "LSP diagnostics: {errors} error(s), {warnings} warning(s), {total} total.{first}"
     ))
+}
+
+fn diagnostic_headline(diagnostics: &Value, key: &str, label: &str) -> Option<String> {
+    diagnostics
+        .get(key)
+        .filter(|value| !value.is_null())
+        .and_then(|item| diagnostic_headline_from_item(item, label))
+}
+
+fn diagnostic_headline_from_item(item: &Value, label: &str) -> Option<String> {
+    let message = item.get("message").and_then(Value::as_str)?;
+    let mut preview = message.chars().take(160).collect::<String>();
+    if message.chars().count() > 160 {
+        preview.push_str("...");
+    }
+    let line = item
+        .get("range")
+        .and_then(|range| range.get("start_line"))
+        .and_then(Value::as_u64)
+        .map(|line| format!(" at line {line}"))
+        .unwrap_or_default();
+    let source = item
+        .get("source")
+        .and_then(Value::as_str)
+        .filter(|source| !source.is_empty())
+        .map(|source| format!(" from {source}"))
+        .unwrap_or_default();
+    let code = item
+        .get("code")
+        .filter(|code| !code.is_null())
+        .map(|code| {
+            code.as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| code.to_string())
+        })
+        .filter(|code| !code.is_empty())
+        .map(|code| format!(" [{code}]"))
+        .unwrap_or_default();
+    Some(format!("{label}{line}{source}{code}: {preview}"))
+}
+
+#[cfg(test)]
+fn test_diagnostic(severity: u8, line: u32, message: &str) -> LspDiagnostic {
+    LspDiagnostic {
+        range: crate::engine::lsp::LspRange {
+            start: crate::engine::lsp::LspPosition { line, character: 2 },
+            end: crate::engine::lsp::LspPosition { line, character: 8 },
+        },
+        severity: Some(severity),
+        code: Some(json!("E0001")),
+        source: Some("rust-analyzer".to_string()),
+        message: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+fn assert_diagnostics_summary_has_first_error(summary: &Value) {
+    assert_eq!(summary["diagnostic_count"], 2);
+    assert_eq!(summary["affected_line_range"]["start_line"], 2);
+    assert_eq!(summary["affected_line_range"]["end_line"], 4);
+    assert_eq!(summary["first_error"]["severity"], "error");
+    assert_eq!(summary["first_error"]["range"]["start_line"], 4);
+    assert_eq!(summary["first_warning"]["severity"], "warning");
+}
+
+#[cfg(test)]
+fn assert_diagnostics_content_prefers_first_error(summary: &Value) {
+    let content_line = file_edit_diagnostics_content_line(summary).unwrap();
+    assert!(content_line.contains("1 error(s), 1 warning(s), 2 total"));
+    assert!(content_line.contains("First error at line 4"));
+    assert!(content_line.contains("from rust-analyzer"));
+    assert!(content_line.contains("[E0001]"));
+    assert!(content_line.contains("type mismatch"));
+}
+
+#[cfg(test)]
+fn diagnostics_summary_with_warning_then_error() -> Value {
+    file_edit_diagnostics_summary_json(
+        1,
+        1,
+        vec![
+            (
+                "rust-analyzer".to_string(),
+                test_diagnostic(2, 1, "unused variable"),
+            ),
+            (
+                "rust-analyzer".to_string(),
+                test_diagnostic(1, 3, "type mismatch"),
+            ),
+        ],
+        Vec::new(),
+        Vec::new(),
+    )
 }
 
 #[cfg(test)]
@@ -271,5 +393,19 @@ mod tests {
         let second = next_file_edit_lsp_version();
 
         assert!(second > first);
+    }
+
+    #[test]
+    fn diagnostics_summary_exposes_first_error_and_line_range() {
+        let summary = diagnostics_summary_with_warning_then_error();
+
+        assert_diagnostics_summary_has_first_error(&summary);
+    }
+
+    #[test]
+    fn diagnostics_content_line_prefers_first_error() {
+        let summary = diagnostics_summary_with_warning_then_error();
+
+        assert_diagnostics_content_prefers_first_error(&summary);
     }
 }

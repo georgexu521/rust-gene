@@ -64,7 +64,7 @@ permission-controller, context-budget, tool-result-budget, schema-gate, and
 tool-result normalizer work:
 
 ```text
-1435 passed; 0 failed
+1437 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -121,12 +121,14 @@ paths, rollback success, and restored/removed/failed rollback files. `file_edit`
 success results now include additions,
 deletions, changed line range, and a bounded unified diff preview so later
 closeout and diagnostics paths can cite actual edit evidence. `file_edit` also
-returns a non-blocking `diagnostics` summary. It samples cached LSP diagnostics
-only from already-initialized clients, avoids triggering slow language-server
-startup on the edit path, and records compact LSP status/counts in
-EvidenceLedger file facts. The LSP sync path now tracks documents already sent
-through `textDocument/didOpen`; follow-up edits use `didChange` plus `didSave`
-with monotonic document versions instead of repeating `didOpen`.
+returns a non-blocking `diagnostics` summary with first-error, first-warning,
+affected-line-range, and compact EvidenceLedger first-error metadata. It samples
+cached LSP diagnostics only from already-initialized clients, avoids triggering
+slow language-server startup on the edit path, and records compact LSP
+status/counts in EvidenceLedger file facts. The LSP sync path now tracks
+documents already sent through `textDocument/didOpen`; follow-up edits use
+`didChange` plus `didSave` with monotonic document versions instead of repeating
+`didOpen`.
 
 Validated locally with:
 
@@ -444,7 +446,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-16 with `1435 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-16 with `1437 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry
