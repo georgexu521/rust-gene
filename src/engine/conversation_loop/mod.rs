@@ -45,6 +45,7 @@ mod task_context_trace_controller;
 mod text_sanitizer;
 mod tool_batch_result_processor;
 mod tool_call_lifecycle;
+mod tool_context_helpers;
 mod tool_execution;
 mod tool_execution_controller;
 mod tool_exposure_plan;
@@ -95,12 +96,15 @@ use text_sanitizer::strip_think_blocks;
 #[cfg(test)]
 use text_sanitizer::VisibleTextSanitizer;
 #[cfg(test)]
+use tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
+#[cfg(test)]
 use tool_execution::truncate_tool_result;
 pub(crate) use tool_execution::{safe_prefix_by_bytes, safe_suffix_by_bytes, READ_ONLY_TOOLS};
 #[cfg(test)]
 use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
+#[cfg(test)]
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
@@ -137,35 +141,6 @@ use tokio::sync::{mpsc, Mutex};
 use super::context_compressor::ContextCompressor;
 use super::hooks::ToolHookManager;
 use super::streaming::StreamEvent;
-
-fn tool_result_dialog_content(result: &ToolResult) -> String {
-    if !result.content.is_empty() {
-        result.content.clone()
-    } else {
-        result.error.clone().unwrap_or_default()
-    }
-}
-
-fn tool_call_fingerprint(tc: &ToolCall) -> String {
-    let args = serde_json::to_string(&tc.arguments).unwrap_or_else(|_| "null".to_string());
-    format!("{}|{}", tc.name, args)
-}
-
-fn tool_allowed_by_context(allowed_tools: &Option<HashSet<String>>, tool_name: &str) -> bool {
-    allowed_tools
-        .as_ref()
-        .map(|allowed| allowed.contains(tool_name))
-        .unwrap_or(true)
-}
-
-fn tool_not_allowed_result(tool_call: &ToolCall) -> ToolResult {
-    let mut result = ToolResult::error(format!(
-        "Tool '{}' is not allowed in this agent context",
-        tool_call.name
-    ));
-    attach_tool_execution_metadata(tool_call, &mut result);
-    result
-}
 
 fn should_use_nonstreaming_tools(
     provider: &dyn LlmProvider,

@@ -1,5 +1,6 @@
 use super::permission_controller::PermissionController;
 use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, ToolCallStatus};
+use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
 use super::tool_execution::{is_read_only, read_only_tool_concurrency};
 use super::tool_metadata::{
     attach_tool_execution_metadata, persist_tool_outcome_learning_event,
@@ -10,7 +11,7 @@ use super::turn_recording::{
     record_goal_drift_if_needed, record_hook_traces, record_mcp_resource_trace,
     record_web_retrieval_trace,
 };
-use super::{tool_allowed_by_context, tool_not_allowed_result, ConversationLoop};
+use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::hooks::HookDecision;
 use crate::engine::resource_policy::ResourcePolicy;

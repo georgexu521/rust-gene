@@ -1,4 +1,5 @@
-use super::{tool_allowed_by_context, ConversationLoop};
+use super::tool_context_helpers::tool_allowed_by_context;
+use super::ConversationLoop;
 use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};
 use crate::services::api::Tool;
 use std::collections::HashSet;

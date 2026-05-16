@@ -1,10 +1,11 @@
 use super::companion_context;
+use super::tool_context_helpers::{tool_call_fingerprint, tool_result_dialog_content};
 use super::tool_execution_controller::ToolExecutionBatch;
 use super::tool_turn_controller::{ToolTurnAppendContext, ToolTurnController};
 use super::turn_runtime_state::TurnRuntimeState;
 use super::validation_runner::RequiredValidationController;
 use super::workflow_change_tracker::WorkflowChangeTracker;
-use super::{tool_call_fingerprint, tool_result_dialog_content, ConversationLoop};
+use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, ToolCall};

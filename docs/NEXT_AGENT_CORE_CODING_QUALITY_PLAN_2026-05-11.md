@@ -889,6 +889,18 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the workflow-runtime helper slice:
   `cargo test -q` passed (`1424 passed; 0 failed`).
+- 2026-05-16: Phase A tool-context helper cleanup continued. Added
+  `tool_context_helpers.rs`; tool-call fingerprinting, model-facing
+  tool-result text selection, allowed-tool checks, and not-allowed tool results
+  now live outside `conversation_loop/mod.rs`. Tool execution, tool batch
+  processing, and tool orchestration now import those helpers directly.
+- Validation after the tool-context helper slice: `cargo fmt --check`,
+  `git diff --check`, targeted `tool_context_helpers`, `tool_context`,
+  `tool_execution_controller`, `tool_batch_result_processor`,
+  `route_scoped_tools`, and `tool_recovery_metadata` tests, `cargo check -q`,
+  and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the tool-context helper slice:
+  `cargo test -q` passed (`1428 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
