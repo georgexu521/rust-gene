@@ -1274,6 +1274,19 @@
   diff --check`, targeted `bash_tool` tests, `cargo check -q`, `cargo clippy
   --all-features -- -D warnings`, and full `cargo test -q` all passed (`1260
   passed; 0 failed`).
+- 2026-05-16: Phase 2 Batch 2.4 terminal task data cleanup continued.
+  Background shell results now include a structured `terminal_task` object
+  beside the existing `shell_background` payload, and `bash_tasks` now returns
+  a `terminal_tasks` array. The object carries task id/handle, command, cwd,
+  status, start/end timestamps, duration, exit code, output artifact path, and
+  the read/cancel tool handles, moving the background-shell path closer to the
+  planned terminal task abstraction without breaking old fields.
+- Validation after the terminal-task data slice: `cargo fmt --check`,
+  `git diff --check`, targeted `bash_tasks_tool_lists_background_shells`,
+  `bash_output_tool_reports_completed_output`, and `bash_tool` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the terminal-task data slice:
+  `cargo test -q` passed (`1428 passed; 0 failed`).
 - 2026-05-12: Phase 3 Batch 3.0 started. `file_read` now returns structured
   raw/display boundary metadata for file reads: resolved path, displayed line
   range, total/displayed line counts, truncation, full/selected content hashes,

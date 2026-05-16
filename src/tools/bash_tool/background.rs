@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::{oneshot, Mutex, RwLock};
@@ -55,7 +55,9 @@ struct BackgroundShellState {
     backend: BashExecutionBackend,
     timeout_secs: u64,
     started_at: Instant,
+    started_at_wall: SystemTime,
     completed_at: Option<Instant>,
+    completed_at_wall: Option<SystemTime>,
     status: BackgroundShellStatus,
     exit_code: Option<i32>,
     stdout: String,
@@ -81,6 +83,7 @@ impl BackgroundShellState {
         self.status = status;
         self.exit_code = exit_code;
         self.completed_at = Some(Instant::now());
+        self.completed_at_wall = Some(SystemTime::now());
     }
 }
 
@@ -108,6 +111,8 @@ pub(super) struct BackgroundShellSnapshot {
     stdout_truncated: bool,
     stderr_truncated: bool,
     duration_ms: u64,
+    started_at_ms: u128,
+    ended_at_ms: Option<u128>,
 }
 
 impl BackgroundShellSnapshot {
@@ -142,6 +147,7 @@ impl BackgroundShellSnapshot {
     fn data(&self, max_chars: usize, output_path: Option<String>) -> serde_json::Value {
         let (stdout_preview, stdout_truncated) = preview_text(&self.stdout, max_chars);
         let (stderr_preview, stderr_truncated) = preview_text(&self.stderr, max_chars);
+        let output_path_for_task = output_path.clone();
         json!({
             "shell_background": {
                 "handle": self.handle,
@@ -160,6 +166,26 @@ impl BackgroundShellSnapshot {
                 "stdout_preview": stdout_preview,
                 "stderr_preview": stderr_preview,
                 "classification": classification_data(&self.command),
+            },
+            "terminal_task": {
+                "task_id": self.handle,
+                "handle": self.handle,
+                "command": self.command,
+                "cwd": self.working_dir.display().to_string(),
+                "status": self.status.as_str(),
+                "started_at_ms": self.started_at_ms,
+                "ended_at_ms": self.ended_at_ms,
+                "duration_ms": self.duration_ms,
+                "exit_code": self.exit_code,
+                "output_path": output_path_for_task,
+                "read_tool": "bash_output",
+                "cancel_tool": "bash_cancel",
+                "cancel_handle": if self.status == BackgroundShellStatus::Running {
+                    serde_json::Value::String(self.handle.clone())
+                } else {
+                    serde_json::Value::Null
+                },
+                "terminal_kind": "background_shell"
             }
         })
     }
@@ -284,7 +310,9 @@ pub(super) async fn start_background_shell(
         backend,
         timeout_secs,
         started_at: Instant::now(),
+        started_at_wall: SystemTime::now(),
         completed_at: None,
+        completed_at_wall: None,
         status: BackgroundShellStatus::Running,
         exit_code: None,
         stdout: String::new(),
@@ -410,7 +438,15 @@ fn snapshot_from_state(handle: &str, state: &BackgroundShellState) -> Background
         stdout_truncated: state.stdout_truncated,
         stderr_truncated: state.stderr_truncated,
         duration_ms: end.duration_since(state.started_at).as_millis() as u64,
+        started_at_ms: system_time_millis(state.started_at_wall),
+        ended_at_ms: state.completed_at_wall.map(system_time_millis),
     }
+}
+
+fn system_time_millis(time: SystemTime) -> u128 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
 }
 
 fn append_bounded(target: &mut String, text: &str) -> bool {
@@ -499,6 +535,7 @@ pub(super) fn background_shell_result_data(
             "background": true,
         },
         "shell_background": snapshot.data(DEFAULT_READ_PREVIEW_CHARS, None)["shell_background"].clone(),
+        "terminal_task": snapshot.data(DEFAULT_READ_PREVIEW_CHARS, None)["terminal_task"].clone(),
         "execution": {
             "exit_code": serde_json::Value::Null,
             "backend": snapshot.backend.as_str(),
@@ -637,7 +674,7 @@ impl Tool for BashTasksTool {
         if snapshots.is_empty() {
             return ToolResult::success_with_data(
                 "No background shell tasks.".to_string(),
-                json!({ "shell_background_tasks": [] }),
+                json!({ "shell_background_tasks": [], "terminal_tasks": [] }),
             );
         }
 
@@ -663,13 +700,22 @@ impl Tool for BashTasksTool {
                 snapshot.data(DEFAULT_READ_PREVIEW_CHARS, None)["shell_background"].clone()
             })
             .collect::<Vec<_>>();
+        let terminal_tasks = snapshots
+            .iter()
+            .map(|snapshot| {
+                snapshot.data(DEFAULT_READ_PREVIEW_CHARS, None)["terminal_task"].clone()
+            })
+            .collect::<Vec<_>>();
         ToolResult::success_with_data(
             format!(
                 "Background shell tasks ({}):\n{}",
                 lines.len(),
                 lines.join("\n")
             ),
-            json!({ "shell_background_tasks": tasks }),
+            json!({
+                "shell_background_tasks": tasks,
+                "terminal_tasks": terminal_tasks
+            }),
         )
     }
 }
@@ -743,6 +789,11 @@ mod tests {
             result.data.as_ref().unwrap()["shell_background"]["status"],
             "completed"
         );
+        let terminal_task = &result.data.as_ref().unwrap()["terminal_task"];
+        assert_eq!(terminal_task["task_id"], snapshot.handle);
+        assert_eq!(terminal_task["status"], "completed");
+        assert_eq!(terminal_task["read_tool"], "bash_output");
+        assert_eq!(terminal_task["cancel_handle"], serde_json::Value::Null);
     }
 
     #[tokio::test]
@@ -781,6 +832,10 @@ mod tests {
             .expect("long background output should be stored");
         assert!(output_path.starts_with(".priority-agent/tool-results/"));
         assert!(dir.path().join(output_path).exists());
+        assert_eq!(
+            result.data.as_ref().unwrap()["terminal_task"]["output_path"],
+            output_path
+        );
     }
 
     #[tokio::test]
@@ -811,6 +866,19 @@ mod tests {
         assert!(tasks
             .iter()
             .any(|task| task["handle"].as_str() == Some(snapshot.handle.as_str())));
+        let terminal_tasks = result.data.as_ref().unwrap()["terminal_tasks"]
+            .as_array()
+            .expect("terminal tasks array");
+        let terminal_task = terminal_tasks
+            .iter()
+            .find(|task| task["task_id"].as_str() == Some(snapshot.handle.as_str()))
+            .expect("terminal task for background shell");
+        assert_eq!(terminal_task["status"], "running");
+        assert_eq!(
+            terminal_task["cancel_handle"].as_str(),
+            Some(snapshot.handle.as_str())
+        );
+        assert_eq!(terminal_task["read_tool"], "bash_output");
 
         let _ = cancel_background_shell(&snapshot.handle).await;
     }
