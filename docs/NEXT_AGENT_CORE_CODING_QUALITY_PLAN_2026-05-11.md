@@ -594,6 +594,15 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the post-change workflow sequencing slice:
   `cargo test -q` passed (`1379 passed; 0 failed`).
+- 2026-05-16: Phase A turn-iteration closeout cleanup started. Added
+  `turn_iteration_closeout_controller.rs`; end-of-iteration memory sync and
+  verified-change closeout break detection now live outside `run_inner`.
+- Validation after the turn-iteration closeout slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_iteration_closeout_controller`,
+  `memory_sync_controller`, and `closeout` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn-iteration closeout slice:
+  `cargo test -q` passed (`1380 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
