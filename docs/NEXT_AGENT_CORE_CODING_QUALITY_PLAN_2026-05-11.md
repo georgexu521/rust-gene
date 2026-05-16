@@ -517,6 +517,8 @@
   `git diff --check`, targeted `api_request_controller` / `api_request`
   tests, `cargo check -q`, and
   `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the API response application slice:
+  `cargo test -q` passed (`1372 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
