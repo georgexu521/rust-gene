@@ -56,6 +56,7 @@ mod tool_round_controller;
 mod tool_turn_controller;
 mod turn_completion_controller;
 mod turn_iteration_closeout_controller;
+mod turn_iteration_setup_controller;
 mod turn_loop_state_controller;
 mod turn_recording;
 mod turn_request_bootstrap_controller;
@@ -82,7 +83,6 @@ use focused_repair_recovery::FocusedRepairRecoveryController;
 use focused_repair_state_controller::{
     FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
 };
-use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetController};
 use legacy_workflow_gate_controller::{
     LegacyWorkflowGateContext, LegacyWorkflowGateController, LegacyWorkflowGateFlow,
 };
@@ -111,7 +111,6 @@ pub(crate) use tool_execution::{safe_prefix_by_bytes, safe_suffix_by_bytes, READ
 use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
-use tool_exposure_plan::{ToolExposurePlan, ToolExposureRequest};
 use tool_failure_guided_debugging::{
     GuidedToolFailureDebuggingContext, GuidedToolFailureDebuggingController,
 };
@@ -123,6 +122,9 @@ use tool_round_controller::{ToolRoundContext, ToolRoundController};
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
 use turn_iteration_closeout_controller::{
     TurnIterationCloseoutContext, TurnIterationCloseoutController,
+};
+use turn_iteration_setup_controller::{
+    TurnIterationSetupContext, TurnIterationSetupController, TurnIterationSetupFlow,
 };
 use turn_loop_state_controller::TurnLoopStateController;
 use turn_request_bootstrap_controller::{
@@ -156,7 +158,7 @@ use anyhow::Result;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, warn};
+use tracing::warn;
 
 use super::context_compressor::ContextCompressor;
 use super::hooks::ToolHookManager;
@@ -740,49 +742,21 @@ impl ConversationLoop {
         let baseline_git_status_files = WorkflowChangeTracker::git_status_files();
 
         for iteration in 0..max_loop_iterations {
-            debug!(
-                "Conversation loop iteration {} (effective: {}/{})",
-                iteration, turn_state.effective_iterations, self.max_iterations
-            );
-            turn_state.iterations_used = iteration + 1;
-
-            if let Some(ref mem_mutex) = self.memory_manager {
-                let mut mem = mem_mutex.lock().await;
-                mem.reset_turn();
-            }
-
-            match IterationBudgetController::check_before_request(
-                &mut turn_state,
-                self.max_iterations,
-                &trace,
-            ) {
-                IterationBudgetCheck::Continue => {}
-                IterationBudgetCheck::Stop {
-                    effective_iterations,
-                    max_iterations,
-                } => {
-                    warn!(
-                        "Effective iteration budget exhausted ({}/{})",
-                        effective_iterations, max_iterations
-                    );
-                    break;
-                }
-            }
-
-            let has_changes_before_request =
-                crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
-                    && WorkflowChangeTracker::has_changes_since(&baseline_git_status_files);
-            let exposure_plan = ToolExposurePlan::build(ToolExposureRequest {
+            let exposure_plan = match TurnIterationSetupController::run(TurnIterationSetupContext {
+                iteration,
+                max_iterations: self.max_iterations,
+                turn_state: &mut turn_state,
+                memory_manager: self.memory_manager.as_ref(),
+                trace: &trace,
+                route_workflow: route.workflow,
+                baseline_git_status_files: &baseline_git_status_files,
                 base_tools: &base_tools,
-                has_changes_before_request,
-                action_checkpoint_active: turn_state.focused_repair.action_checkpoint_active,
-                action_checkpoint_lookup_count: turn_state
-                    .focused_repair
-                    .action_checkpoint_lookup_count,
-                action_checkpoint_requires_patch_before_validation: turn_state
-                    .focused_repair
-                    .action_checkpoint_requires_patch_before_validation,
-            });
+            })
+            .await
+            {
+                TurnIterationSetupFlow::Continue { exposure_plan } => exposure_plan,
+                TurnIterationSetupFlow::Stop => break,
+            };
             let tools = exposure_plan.tools;
             let exposed_tool_names = exposure_plan.exposed_tool_names;
 
