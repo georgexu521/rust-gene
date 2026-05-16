@@ -636,6 +636,17 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn retrieval-context slice:
   `cargo test -q` passed (`1386 passed; 0 failed`).
+- 2026-05-16: Phase A turn task-context setup cleanup continued. Added
+  `turn_task_context_controller.rs`; task-bundle construction, retrieval
+  attachment, resource-policy constraint insertion, programming-workflow risk
+  seeding, code-workflow runner creation, turn runtime state creation, and
+  required-validation initial trigger recording now live outside `run_inner`.
+- Validation after the turn task-context setup slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_task_context_controller`,
+  `task_context_trace_controller`, and `required_validation` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn task-context setup slice:
+  `cargo test -q` passed (`1388 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
