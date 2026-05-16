@@ -26,9 +26,9 @@ Active next-stage direction:
   artifact. It records the Claude/opencode reference map, current
   `ConversationLoop` architecture map, current product capability table, and
   the recommended Batch 2-5 order.
-- Current implementation focus is Phase 2 terminal/bash productization after
-  the main-loop, provider-protocol, focused-repair, permission, context-budget,
-  and shell-result schema slices.
+- Current implementation focus is Phase 3 file-quality and Phase 3.6
+  file-patch evidence/history alignment after the Phase 2 terminal/bash
+  productization pass.
 - The first provider-protocol regression matrix slice is complete:
   OpenAI-compatible, MiniMax, and Kimi request conversion now share provider
   message normalization; pure assistant `tool_calls` omit empty content,
@@ -441,7 +441,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-16 with `1428 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-16 with `1434 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry

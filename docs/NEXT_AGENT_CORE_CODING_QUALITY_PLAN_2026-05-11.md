@@ -1439,7 +1439,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1428 passed; 0 failed`。
+- 最近全量本地测试基线是 `1434 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 
