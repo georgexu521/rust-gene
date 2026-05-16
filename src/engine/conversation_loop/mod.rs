@@ -65,6 +65,7 @@ mod turn_iteration_closeout_controller;
 mod turn_iteration_setup_controller;
 mod turn_loop_bootstrap_controller;
 mod turn_loop_state_controller;
+mod turn_model_step_controller;
 mod turn_post_change_closeout_controller;
 mod turn_recording;
 mod turn_request_bootstrap_controller;
@@ -81,10 +82,8 @@ mod workflow_contract_controller;
 mod workflow_prompt_policy;
 mod workflow_trace;
 
-use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use patch_recovery::PatchSynthesisAction;
-use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 #[cfg(test)]
 use text_sanitizer::strip_think_blocks;
@@ -101,10 +100,6 @@ use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
 use tool_round_controller::{ToolRoundContext, ToolRoundController};
-use turn_api_failure_controller::{TurnApiFailureContext, TurnApiFailureController};
-use turn_assistant_response_controller::{
-    TurnAssistantResponseContext, TurnAssistantResponseController, TurnAssistantResponseFlow,
-};
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
 use turn_context_bootstrap_controller::{
     TurnContextBootstrapContext, TurnContextBootstrapController,
@@ -119,6 +114,9 @@ use turn_iteration_setup_controller::{
     TurnIterationSetupContext, TurnIterationSetupController, TurnIterationSetupFlow,
 };
 use turn_loop_bootstrap_controller::{TurnLoopBootstrapContext, TurnLoopBootstrapController};
+use turn_model_step_controller::{
+    TurnModelStepContext, TurnModelStepController, TurnModelStepFlow,
+};
 use turn_post_change_closeout_controller::{
     TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
 };
@@ -678,65 +676,27 @@ impl ConversationLoop {
             let tools = exposure_plan.tools;
             let exposed_tool_names = exposure_plan.exposed_tool_names;
 
-            let prepared_request =
-                RequestPreparationController::prepare(RequestPreparationContext {
-                    messages: &messages,
-                    focused_repair_prompt: exposure_plan.focused_repair_prompt,
-                    turn_retrieval_context: turn_retrieval_context.as_ref(),
-                    retrieval_policy: route.retrieval,
-                    memory_manager: self.memory_manager.as_ref(),
-                    provider: Some(self.provider.as_ref()),
-                    model: &self.model,
-                    tools: &tools,
-                    trace: &trace,
-                    runtime_diet: &mut turn_state.runtime_diet,
-                })
-                .await;
-            let api_outcome = match ApiRequestController::execute(ApiRequestContext {
-                conversation: self,
-                request: prepared_request.request,
-                messages: &messages,
-                tools: &tools,
-                exposed_tool_names: &exposed_tool_names,
-                tx,
-                trace: &trace,
-                iteration: iteration + 1,
-            })
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(e) => {
-                    let error_message = e.to_string();
-                    TurnApiFailureController::record(TurnApiFailureContext {
-                        conversation: self,
-                        trace: &trace,
-                        route: &route,
-                        code_workflow: &code_workflow,
-                        runtime_diet: &mut turn_state.runtime_diet,
-                        error_message: &error_message,
-                    });
-                    return Err(e);
-                }
-            };
             let (content, tool_calls, pre_executed) =
-                match TurnAssistantResponseController::handle(TurnAssistantResponseContext {
-                    outcome: api_outcome,
-                    loop_state: &mut loop_state,
-                    trace: &trace,
+                match TurnModelStepController::run(TurnModelStepContext {
+                    conversation: self,
                     iteration: iteration + 1,
                     route: &route,
-                    evidence_ledger: &turn_state.evidence_ledger,
-                    exposed_tool_names: &exposed_tool_names,
-                    provider: self.provider.as_ref(),
+                    code_workflow: &code_workflow,
+                    turn_retrieval_context: turn_retrieval_context.as_ref(),
+                    focused_repair_prompt: exposure_plan.focused_repair_prompt,
                     tools: &tools,
-                    tx,
+                    exposed_tool_names: &exposed_tool_names,
+                    loop_state: &mut loop_state,
+                    turn_state: &mut turn_state,
                     messages: &mut messages,
+                    trace: &trace,
+                    tx,
                 })
-                .await
+                .await?
                 {
-                    TurnAssistantResponseFlow::Retry => continue,
-                    TurnAssistantResponseFlow::Finish => break,
-                    TurnAssistantResponseFlow::ToolRound {
+                    TurnModelStepFlow::Retry => continue,
+                    TurnModelStepFlow::Finish => break,
+                    TurnModelStepFlow::ToolRound {
                         content,
                         tool_calls,
                         pre_executed,

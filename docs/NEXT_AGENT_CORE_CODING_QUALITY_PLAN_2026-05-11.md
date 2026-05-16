@@ -814,6 +814,19 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn-context bootstrap slice:
   `cargo test -q` passed (`1413 passed; 0 failed`).
+- 2026-05-16: Phase A model-step sequencing cleanup continued. Added
+  `turn_model_step_controller.rs`; request preparation, API execution,
+  provider/API failure closeout recording, and assistant-response retry /
+  finish / tool-round transition now live behind one iteration model-step
+  controller. `run_inner` now only follows `Retry` / `Finish` / `ToolRound`.
+- Validation after the model-step sequencing slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_model_step_controller`,
+  `request_preparation_controller`, `api_request_controller`,
+  `turn_assistant_response_controller`, and `turn_api_failure_controller`
+  tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the model-step sequencing slice:
+  `cargo test -q` passed (`1416 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
