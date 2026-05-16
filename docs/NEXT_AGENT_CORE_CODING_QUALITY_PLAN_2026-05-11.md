@@ -670,6 +670,18 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn loop-local state slice:
   `cargo test -q` passed (`1391 passed; 0 failed`).
+- 2026-05-16: Phase A turn request bootstrap cleanup continued. Added
+  `turn_request_bootstrap_controller.rs`; memory snapshot injection,
+  preflight compression, stream-start emission, and retrieval prompt injection
+  now run behind one request-bootstrap controller while preserving the original
+  ordering before the iteration loop.
+- Validation after the turn request-bootstrap slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_request_bootstrap_controller`,
+  `memory_snapshot_controller`, `preflight_compression_controller`, and
+  `retrieval_prompt_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn request-bootstrap slice:
+  `cargo test -q` passed (`1392 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
