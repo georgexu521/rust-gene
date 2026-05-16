@@ -54,6 +54,7 @@ mod tool_orchestrator;
 mod tool_result_controller;
 mod tool_round_controller;
 mod tool_turn_controller;
+mod turn_assistant_response_controller;
 mod turn_completion_controller;
 mod turn_iteration_closeout_controller;
 mod turn_iteration_setup_controller;
@@ -72,13 +73,8 @@ mod workflow_prompt_policy;
 mod workflow_trace;
 
 use action_checkpoint::FocusedRepairActionRequest;
-use api_request_controller::{
-    ApiRequestApplicationContext, ApiRequestContext, ApiRequestController,
-};
+use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
-use assistant_response_retry_controller::{
-    AssistantResponseRetryController, NoToolAssistantResponseContext, NoToolAssistantResponseFlow,
-};
 use focused_repair_recovery::FocusedRepairRecoveryController;
 use focused_repair_state_controller::{
     FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
@@ -119,6 +115,9 @@ use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
 use tool_round_controller::{ToolRoundContext, ToolRoundController};
+use turn_assistant_response_controller::{
+    TurnAssistantResponseContext, TurnAssistantResponseController, TurnAssistantResponseFlow,
+};
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
 use turn_iteration_closeout_controller::{
     TurnIterationCloseoutContext, TurnIterationCloseoutController,
@@ -802,43 +801,30 @@ impl ConversationLoop {
                     return Err(e);
                 }
             };
-            let api_application =
-                ApiRequestController::apply_outcome(ApiRequestApplicationContext {
+            let (content, tool_calls, pre_executed) =
+                match TurnAssistantResponseController::handle(TurnAssistantResponseContext {
                     outcome: api_outcome,
-                    final_content: &mut loop_state.final_content,
-                    final_tool_calls: &mut loop_state.final_tool_calls,
-                    tool_calls_made: &mut loop_state.tool_calls_made,
+                    loop_state: &mut loop_state,
                     trace: &trace,
                     iteration: iteration + 1,
-                });
-            let content = api_application.content;
-            let tool_calls = api_application.tool_calls;
-            let pre_executed = api_application.pre_executed;
-
-            if tool_calls.is_empty() {
-                match AssistantResponseRetryController::handle_no_tool_response(
-                    NoToolAssistantResponseContext {
-                        content: &content,
-                        route: &route,
-                        evidence_ledger: &turn_state.evidence_ledger,
-                        exposed_tool_names: &exposed_tool_names,
-                        tool_calls_made: loop_state.tool_calls_made,
-                        pseudo_tool_retry_used: &mut loop_state.pseudo_tool_retry_used,
-                        filesystem_grounding_retry_used: &mut loop_state
-                            .filesystem_grounding_retry_used,
-                        provider: self.provider.as_ref(),
-                        tools: &tools,
-                        tx,
-                        trace: &trace,
-                        messages: &mut messages,
-                    },
-                )
+                    route: &route,
+                    evidence_ledger: &turn_state.evidence_ledger,
+                    exposed_tool_names: &exposed_tool_names,
+                    provider: self.provider.as_ref(),
+                    tools: &tools,
+                    tx,
+                    messages: &mut messages,
+                })
                 .await
                 {
-                    NoToolAssistantResponseFlow::Retry => continue,
-                    NoToolAssistantResponseFlow::Finish => break,
-                }
-            }
+                    TurnAssistantResponseFlow::Retry => continue,
+                    TurnAssistantResponseFlow::Finish => break,
+                    TurnAssistantResponseFlow::ToolRound {
+                        content,
+                        tool_calls,
+                        pre_executed,
+                    } => (content, tool_calls, pre_executed),
+                };
 
             let batch_processing = ToolRoundController::execute(ToolRoundContext {
                 conversation: self,
