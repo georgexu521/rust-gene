@@ -58,6 +58,7 @@ mod turn_completion_controller;
 mod turn_iteration_closeout_controller;
 mod turn_recording;
 mod turn_retrieval_context_controller;
+mod turn_runtime_diet_bootstrap_controller;
 mod turn_runtime_state;
 mod turn_setup_controller;
 mod turn_task_context_controller;
@@ -128,6 +129,9 @@ use turn_iteration_closeout_controller::{
 };
 use turn_retrieval_context_controller::{
     TurnRetrievalContextController, TurnRetrievalContextRequest,
+};
+use turn_runtime_diet_bootstrap_controller::{
+    TurnRuntimeDietBootstrapContext, TurnRuntimeDietBootstrapController,
 };
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
 use turn_task_context_controller::{TurnTaskContextSetupContext, TurnTaskContextSetupController};
@@ -719,16 +723,12 @@ impl ConversationLoop {
         let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
         let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
         let mut successful_required_validation_commands: HashSet<String> = HashSet::new();
-        if let Some(ref ctx) = turn_retrieval_context {
-            turn_state.runtime_diet.observe_retrieval_context(ctx);
-        }
-        if base_tools.iter().any(|tool| tool.name == "skills_list") {
-            let skill_summary =
-                crate::skills::SkillRuntime::load(&working_dir).discovery_summary("", 30);
-            turn_state
-                .runtime_diet
-                .observe_skill_list_summary(&skill_summary);
-        }
+        TurnRuntimeDietBootstrapController::observe(TurnRuntimeDietBootstrapContext {
+            retrieval_context: turn_retrieval_context.as_ref(),
+            tools: &base_tools,
+            working_dir: &working_dir,
+            runtime_diet: &mut turn_state.runtime_diet,
+        });
 
         // ── 记忆围栏注入：先注入，再让 preflight 统计真实请求大小 ──
         MemorySnapshotController::inject(MemorySnapshotInjectionContext {
