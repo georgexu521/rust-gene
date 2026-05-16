@@ -647,6 +647,17 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn task-context setup slice:
   `cargo test -q` passed (`1388 passed; 0 failed`).
+- 2026-05-16: Phase A turn runtime-diet bootstrap cleanup continued. Added
+  `turn_runtime_diet_bootstrap_controller.rs`; initial retrieval-context
+  budget observation and skills discovery-summary budget observation now live
+  outside `run_inner`, while memory snapshot injection and preflight
+  compression keep their existing order.
+- Validation after the turn runtime-diet bootstrap slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `turn_runtime_diet_bootstrap_controller` and `context_budget` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn runtime-diet bootstrap slice:
+  `cargo test -q` passed (`1390 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
