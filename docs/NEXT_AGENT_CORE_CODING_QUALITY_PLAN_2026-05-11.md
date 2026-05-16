@@ -1316,6 +1316,16 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the terminal-task summary slice:
   `cargo test -q` passed (`1430 passed; 0 failed`).
+- 2026-05-16: Phase 2 terminal status visibility continued. `/status` now
+  includes a terminal task status line from the read-only `bash_tasks` data,
+  summarizing known background terminal tasks by running/completed/failed/
+  cancelled/timed-out state beside the existing bash exposure diagnostic.
+- Validation after the `/status` terminal task visibility slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `terminal_task_status_counts` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the `/status` terminal task visibility slice:
+  `cargo test -q` passed (`1432 passed; 0 failed`).
 - 2026-05-12: Phase 3 Batch 3.0 started. `file_read` now returns structured
   raw/display boundary metadata for file reads: resolved path, displayed line
   range, total/displayed line counts, truncation, full/selected content hashes,

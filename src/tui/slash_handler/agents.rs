@@ -85,6 +85,7 @@ pub async fn handle_status(app: &TuiApp) -> String {
         "Bash exposure: {}",
         format_terminal_bash_exposure(&bash_exposure)
     ));
+    lines.push(terminal_task_status_line(app).await);
 
     // 查询状态
     lines.push(format!("Querying: {}", app.is_querying));
@@ -244,6 +245,56 @@ fn format_terminal_bash_exposure(
             schema
         )
     }
+}
+
+async fn terminal_task_status_line(app: &TuiApp) -> String {
+    let context = app.build_tool_context().await;
+    let result = crate::tools::bash_tool::BashTasksTool
+        .execute(serde_json::json!({}), context)
+        .await;
+    if !result.success {
+        return format!(
+            "Terminal tasks: unavailable ({})",
+            result
+                .error
+                .as_deref()
+                .filter(|error| !error.trim().is_empty())
+                .unwrap_or("bash_tasks failed")
+        );
+    }
+    let tasks = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("terminal_tasks"))
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    format_terminal_task_status_counts(tasks)
+}
+
+fn format_terminal_task_status_counts(tasks: &[serde_json::Value]) -> String {
+    if tasks.is_empty() {
+        return "Terminal tasks: none".to_string();
+    }
+    let count_status = |status: &str| -> usize {
+        tasks
+            .iter()
+            .filter(|task| {
+                task.get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| value == status)
+            })
+            .count()
+    };
+    format!(
+        "Terminal tasks: {} known ({} running, {} completed, {} failed, {} cancelled, {} timed out)",
+        tasks.len(),
+        count_status("running"),
+        count_status("completed"),
+        count_status("failed"),
+        count_status("cancelled"),
+        count_status("timed_out")
+    )
 }
 
 pub async fn handle_tasks(app: &TuiApp) -> String {
@@ -2032,6 +2083,31 @@ mod tests {
 
         assert!(line.contains("hidden for terminal requests"));
         assert!(line.contains("permission mode is read_only"));
+    }
+
+    #[test]
+    fn terminal_task_status_counts_empty_tasks() {
+        let line = format_terminal_task_status_counts(&[]);
+
+        assert_eq!(line, "Terminal tasks: none");
+    }
+
+    #[test]
+    fn terminal_task_status_counts_known_task_states() {
+        let tasks = serde_json::json!([
+            {"status": "running"},
+            {"status": "completed"},
+            {"status": "failed"},
+            {"status": "cancelled"},
+            {"status": "timed_out"},
+            {"status": "running"}
+        ]);
+        let line = format_terminal_task_status_counts(tasks.as_array().unwrap());
+
+        assert_eq!(
+            line,
+            "Terminal tasks: 6 known (2 running, 1 completed, 1 failed, 1 cancelled, 1 timed out)"
+        );
     }
 
     #[test]
