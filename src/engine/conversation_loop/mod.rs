@@ -88,10 +88,10 @@ use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
     CodeWriteForbiddenRecoveryContext, DisabledPatchSynthesisRecoveryApplicationContext,
-    PatchSynthesisCallExecutionContext, PatchSynthesisFailureHandlingContext,
-    PatchSynthesisFlowController, PatchSynthesisPostExecutionContext,
-    PatchSynthesisPostExecutionFlow, PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
-    PatchSynthesisRecoveryFlow,
+    ModelPatchSynthesisExecutionContext, PatchSynthesisCallExecutionContext,
+    PatchSynthesisFailureHandlingContext, PatchSynthesisFlowController,
+    PatchSynthesisPostExecutionContext, PatchSynthesisPostExecutionFlow,
+    PatchSynthesisProposalContext, PatchSynthesisProposalFlow, PatchSynthesisRecoveryFlow,
 };
 use post_edit_repair_controller::{
     PostEditRepairContext, PostEditRepairController, PostEditRepairRuntimeContext,
@@ -1203,32 +1203,12 @@ impl ConversationLoop {
                             .await
                         {
                             Ok(synthesis_outcome) => {
-                                let synthesis_source = synthesis_outcome.source;
-                                let synthesis_source_label = synthesis_source.label();
-                                let synthesis_reason = synthesis_outcome
-                                    .fallback_reason
-                                    .as_deref()
-                                    .unwrap_or(&repair_proposal.fallback_reason)
-                                    .to_string();
-                                let synthesized_calls = synthesis_outcome.tool_calls;
-                                trace.record(TraceEvent::WorkflowFallback {
-                                    error: format!(
-                                        "patch synthesis owner={} reason={} source={} produced {} file_edit action(s)",
-                                        repair_proposal.fallback_owner,
-                                        synthesis_reason,
-                                        synthesis_source_label,
-                                        synthesized_calls.len()
-                                    ),
-                                });
                                 let synthesis_execution =
-                                    PatchSynthesisFlowController::execute_calls(
-                                        PatchSynthesisCallExecutionContext {
+                                    PatchSynthesisFlowController::execute_model_synthesis_outcome(
+                                        ModelPatchSynthesisExecutionContext {
+                                            proposal: &repair_proposal,
+                                            synthesis_outcome,
                                             conversation: self,
-                                            tool_calls: synthesized_calls,
-                                            assistant_message:
-                                                PatchSynthesisFlowController::assistant_message_for_source(
-                                                    synthesis_source,
-                                                ),
                                             tx,
                                             trace: &trace,
                                             resource_policy: &resource_policy,
@@ -1242,7 +1222,6 @@ impl ConversationLoop {
                                                 crate::engine::code_change_workflow::is_programming_workflow(
                                                     route.workflow,
                                                 ),
-                                            mark_patch_requirement_on_success: false,
                                             final_tool_calls: &mut final_tool_calls,
                                         },
                                     )

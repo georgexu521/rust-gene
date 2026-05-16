@@ -3,7 +3,7 @@ use super::focused_repair_recovery::{
     DisabledPatchSynthesisRecovery, FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
 };
 use super::focused_repair_state_controller::FocusedRepairStateController;
-use super::patch_recovery::PatchSynthesisSource;
+use super::patch_recovery::{PatchSynthesisOutcome, PatchSynthesisSource};
 use super::patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExecutor};
 use super::turn_runtime_state::{FocusedRepairRuntimeState, TurnRuntimeState};
 use super::ConversationLoop;
@@ -31,6 +31,23 @@ pub(super) struct PatchSynthesisCallExecutionContext<'a> {
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
     pub(super) is_programming_workflow: bool,
     pub(super) mark_patch_requirement_on_success: bool,
+    pub(super) final_tool_calls: &'a mut Vec<ToolCall>,
+}
+
+pub(super) struct ModelPatchSynthesisExecutionContext<'a> {
+    pub(super) proposal: &'a FocusedRepairActionProposal,
+    pub(super) synthesis_outcome: PatchSynthesisOutcome,
+    pub(super) conversation: &'a ConversationLoop,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) resource_policy: &'a ResourcePolicy,
+    pub(super) destructive_scope: &'a DestructiveScopeContract,
+    pub(super) turn_state: &'a mut TurnRuntimeState,
+    pub(super) tool_results_text: &'a mut String,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) changed_files: &'a mut Vec<PathBuf>,
+    pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
+    pub(super) is_programming_workflow: bool,
     pub(super) final_tool_calls: &'a mut Vec<ToolCall>,
 }
 
@@ -188,6 +205,47 @@ impl PatchSynthesisFlowController {
             any_tool_success: execution.any_tool_success,
             changed_files_available,
         }
+    }
+
+    pub(super) async fn execute_model_synthesis_outcome(
+        context: ModelPatchSynthesisExecutionContext<'_>,
+    ) -> PatchSynthesisCallExecutionOutcome {
+        let PatchSynthesisOutcome {
+            tool_calls,
+            source,
+            fallback_reason,
+        } = context.synthesis_outcome;
+        let synthesis_reason = fallback_reason
+            .as_deref()
+            .unwrap_or(&context.proposal.fallback_reason)
+            .to_string();
+        context.trace.record(TraceEvent::WorkflowFallback {
+            error: format!(
+                "patch synthesis owner={} reason={} source={} produced {} file_edit action(s)",
+                context.proposal.fallback_owner,
+                synthesis_reason,
+                source.label(),
+                tool_calls.len()
+            ),
+        });
+        Self::execute_calls(PatchSynthesisCallExecutionContext {
+            conversation: context.conversation,
+            tool_calls,
+            assistant_message: Self::assistant_message_for_source(source),
+            tx: context.tx,
+            trace: context.trace,
+            resource_policy: context.resource_policy,
+            destructive_scope: context.destructive_scope,
+            turn_state: context.turn_state,
+            tool_results_text: context.tool_results_text,
+            messages: context.messages,
+            changed_files: context.changed_files,
+            baseline_git_status_files: context.baseline_git_status_files,
+            is_programming_workflow: context.is_programming_workflow,
+            mark_patch_requirement_on_success: false,
+            final_tool_calls: context.final_tool_calls,
+        })
+        .await
     }
 
     pub(super) async fn apply_model_execution_outcome(
