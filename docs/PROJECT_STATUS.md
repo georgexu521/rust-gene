@@ -472,10 +472,11 @@ Latest maintenance note:
   fixtures were refreshed for the extracted repair controller and learning
   slash-handler modules, and skill-promotion evidence detection was widened so
   `skill-promotion-gate` is counted as a skill-specific task.
-- `conversation_loop/mod.rs` is down to 3566 lines after moving turn setup,
+- `conversation_loop/mod.rs` is down to 3159 lines after moving turn setup,
   entry gates, loop bootstrap, iteration sequencing, tool-round sequencing,
   post-change closeout, retrieval helpers, workflow-runtime helpers, and
-  tool-context helpers into dedicated conversation-loop modules.
+  tool-context helpers into dedicated conversation-loop modules, then moving
+  route-scoped tool exposure tests out of the main module.
 - `cargo clippy --all-features -- -D warnings` was last recorded clean on
   2026-05-16 after the tool-context helper split.
 - `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command

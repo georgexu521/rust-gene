@@ -901,6 +901,17 @@
   and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the tool-context helper slice:
   `cargo test -q` passed (`1428 passed; 0 failed`).
+- 2026-05-16: Phase A route-scoped tool test cleanup continued. Added
+  `route_scoped_tools_tests.rs`; the route-scoped tool exposure regression
+  tests now live outside `conversation_loop/mod.rs`. This brings
+  `conversation_loop/mod.rs` down to 3159 lines and satisfies the Phase 1
+  line-count completion standard without changing runtime behavior.
+- Validation after the route-scoped tool test slice: `cargo fmt --check`,
+  `git diff --check`, targeted `route_scoped_tools` and
+  `tool_context_helpers` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the route-scoped tool test slice:
+  `cargo test -q` passed (`1428 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
@@ -1355,8 +1366,8 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 
-- 主循环仍需继续瘦身，`src/engine/conversation_loop/mod.rs` 已从
-  5600+/6013 行历史基线降到 3566 行。
+- 主循环 Phase 1 行数目标已达成，`src/engine/conversation_loop/mod.rs`
+  已从 5600+/6013 行历史基线降到 3159 行；后续 2500 行以内是第二阶段清理目标。
 - shell 仍是普通工具，不是完整终端运行时。
 - 文件编辑工具已经有 stale-read 检测、路径身份修复、BOM/编码/换行保真、per-file mutation lock、atomic write 和 diff metadata，但还缺成熟产品里的 LSP、历史恢复等细节。
 
