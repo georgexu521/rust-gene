@@ -739,6 +739,19 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the tool-failure followup slice:
   `cargo test -q` passed (`1402 passed; 0 failed`).
+- 2026-05-16: Phase A post-change closeout sequencing cleanup continued.
+  Added `turn_post_change_closeout_controller.rs`; post-change workflow
+  execution, closeout flag propagation, end-of-iteration memory sync, and
+  verified-change break selection now live behind one controller after the
+  tool-failure followup path. `run_inner` now only follows
+  `Continue` / `Break`.
+- Validation after the post-change closeout sequencing slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `turn_post_change_closeout_controller`, `post_change_workflow_controller`,
+  and `turn_iteration_closeout_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the post-change closeout sequencing slice:
+  `cargo test -q` passed (`1404 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

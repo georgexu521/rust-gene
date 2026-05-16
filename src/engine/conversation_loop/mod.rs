@@ -60,6 +60,7 @@ mod turn_focused_repair_action_controller;
 mod turn_iteration_closeout_controller;
 mod turn_iteration_setup_controller;
 mod turn_loop_state_controller;
+mod turn_post_change_closeout_controller;
 mod turn_recording;
 mod turn_request_bootstrap_controller;
 mod turn_retrieval_context_controller;
@@ -87,7 +88,6 @@ use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
     EnterPatchSynthesisContext, EnterPatchSynthesisFlow, PatchSynthesisFlowController,
 };
-use post_change_workflow_controller::{PostChangeWorkflowContext, PostChangeWorkflowController};
 use reflection_gate_controller::{
     ReflectionGateContext, ReflectionGateController, ReflectionGateFlow,
 };
@@ -118,13 +118,13 @@ use turn_completion_controller::{TurnCompletionContext, TurnCompletionController
 use turn_focused_repair_action_controller::{
     TurnFocusedRepairActionContext, TurnFocusedRepairActionController, TurnFocusedRepairActionFlow,
 };
-use turn_iteration_closeout_controller::{
-    TurnIterationCloseoutContext, TurnIterationCloseoutController,
-};
 use turn_iteration_setup_controller::{
     TurnIterationSetupContext, TurnIterationSetupController, TurnIterationSetupFlow,
 };
 use turn_loop_state_controller::TurnLoopStateController;
+use turn_post_change_closeout_controller::{
+    TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
+};
 use turn_request_bootstrap_controller::{
     TurnRequestBootstrapContext, TurnRequestBootstrapController,
 };
@@ -954,48 +954,25 @@ impl ConversationLoop {
                 TurnToolFailureFollowupFlow::Stop => break,
             }
 
-            let post_change_workflow =
-                PostChangeWorkflowController::run(PostChangeWorkflowContext {
-                    conversation: self,
-                    trace: &trace,
-                    route: &route,
-                    code_workflow: &mut code_workflow,
-                    task_bundle: &mut task_bundle,
-                    changed_files: &tool_round_state.changed_files,
-                    required_validation_commands: &required_validation_commands,
-                    successful_validation_commands: &tool_round_state
-                        .successful_validation_commands,
-                    successful_required_validation_commands: &mut loop_state
-                        .successful_required_validation_commands,
-                    turn_state: &mut turn_state,
-                    should_closeout_after_verified_change: tool_round_state
-                        .should_closeout_after_verified_change,
-                    final_content: &mut loop_state.final_content,
-                    tool_results_text: &mut tool_round_state.tool_results_text,
-                    messages: &mut messages,
-                    last_user_preview: last_user_preview.as_str(),
-                })
-                .await;
-            tool_round_state.should_closeout_after_verified_change =
-                post_change_workflow.should_closeout_after_verified_change;
-            if post_change_workflow.break_loop {
-                break;
-            }
-
-            let iteration_closeout =
-                TurnIterationCloseoutController::run(TurnIterationCloseoutContext {
-                    conversation: self,
-                    trace: &trace,
-                    messages: &messages,
-                    final_content: &loop_state.final_content,
-                    tool_results_text: &tool_round_state.tool_results_text,
-                    should_closeout_after_verified_change: tool_round_state
-                        .should_closeout_after_verified_change,
-                })
-                .await;
-
-            if iteration_closeout.break_loop {
-                break;
+            match TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
+                conversation: self,
+                trace: &trace,
+                route: &route,
+                code_workflow: &mut code_workflow,
+                task_bundle: &mut task_bundle,
+                round_state: &mut tool_round_state,
+                required_validation_commands: &required_validation_commands,
+                successful_required_validation_commands: &mut loop_state
+                    .successful_required_validation_commands,
+                turn_state: &mut turn_state,
+                final_content: &mut loop_state.final_content,
+                messages: &mut messages,
+                last_user_preview: last_user_preview.as_str(),
+            })
+            .await
+            {
+                TurnPostChangeCloseoutFlow::Continue => {}
+                TurnPostChangeCloseoutFlow::Break => break,
             }
         }
 
