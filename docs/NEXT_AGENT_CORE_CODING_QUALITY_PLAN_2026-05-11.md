@@ -508,6 +508,15 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the legacy workflow gate slice:
   `cargo test -q` passed (`1371 passed; 0 failed`).
+- 2026-05-16: Phase A API response application cleanup continued.
+  `ApiRequestController::apply_outcome` now owns API completion trace
+  recording, compressed-turn debug logging, final content/tool-call state
+  updates, and returns the compact request application for the tool/no-tool
+  branches.
+- Validation after the API response application slice: `cargo fmt --check`,
+  `git diff --check`, targeted `api_request_controller` / `api_request`
+  tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

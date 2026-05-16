@@ -62,7 +62,9 @@ mod workflow_prompt_policy;
 mod workflow_trace;
 
 use action_checkpoint::FocusedRepairActionRequest;
-use api_request_controller::{ApiRequestContext, ApiRequestController};
+use api_request_controller::{
+    ApiRequestApplicationContext, ApiRequestContext, ApiRequestController,
+};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use assistant_response_retry_controller::{
     AssistantResponseRetryApplicationContext, AssistantResponseRetryController,
@@ -970,25 +972,18 @@ impl ConversationLoop {
                     return Err(e);
                 }
             };
-            let session_step = api_outcome.session_step;
-            let content = session_step.assistant_text;
-            let tool_calls = session_step.tool_calls;
-            let pre_executed = session_step.pre_executed_results;
-            trace.record(TraceEvent::ApiRequestCompleted {
-                iteration: iteration + 1,
-                tool_calls: tool_calls.len(),
-                content_chars: content.chars().count(),
-            });
-
-            if api_outcome.compressed_this_turn {
-                debug!("Context compressed due to size limits");
-            }
-
-            final_content = content.clone();
-            final_tool_calls = tool_calls.clone();
-            if !tool_calls.is_empty() {
-                tool_calls_made = true;
-            }
+            let api_application =
+                ApiRequestController::apply_outcome(ApiRequestApplicationContext {
+                    outcome: api_outcome,
+                    final_content: &mut final_content,
+                    final_tool_calls: &mut final_tool_calls,
+                    tool_calls_made: &mut tool_calls_made,
+                    trace: &trace,
+                    iteration: iteration + 1,
+                });
+            let content = api_application.content;
+            let tool_calls = api_application.tool_calls;
+            let pre_executed = api_application.pre_executed;
 
             if tool_calls.is_empty() {
                 let is_local_filesystem_route = is_local_filesystem_inspection_route(&route);
