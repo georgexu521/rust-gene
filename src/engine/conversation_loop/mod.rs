@@ -53,6 +53,7 @@ mod tool_orchestrator;
 mod tool_result_controller;
 mod tool_round_controller;
 mod tool_turn_controller;
+mod turn_completion_controller;
 mod turn_recording;
 mod turn_runtime_state;
 mod validation_runner;
@@ -69,9 +70,7 @@ pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use assistant_response_retry_controller::{
     AssistantResponseRetryController, NoToolAssistantResponseContext, NoToolAssistantResponseFlow,
 };
-use closeout_controller::{
-    FinalCloseoutContext, FinalCloseoutController, VerifiedChangeCloseoutController,
-};
+use closeout_controller::VerifiedChangeCloseoutController;
 use first_code_change_controller::{FirstCodeChangeContext, FirstCodeChangeController};
 use focused_repair_recovery::FocusedRepairRecoveryController;
 use focused_repair_state_controller::{
@@ -129,6 +128,7 @@ use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
 use tool_round_controller::{ToolRoundContext, ToolRoundController};
+use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
 use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
@@ -1311,8 +1311,9 @@ impl ConversationLoop {
             }
         }
 
-        FinalCloseoutController::apply_final_closeout(FinalCloseoutContext {
+        let result = TurnCompletionController::complete(TurnCompletionContext {
             trace: &trace,
+            route: &route,
             code_workflow: &code_workflow,
             task_bundle: &task_bundle,
             runtime_diet: &mut turn_state.runtime_diet,
@@ -1320,30 +1321,15 @@ impl ConversationLoop {
             final_tool_calls: &final_tool_calls,
             iterations_used: turn_state.iterations_used,
             max_iterations: self.max_iterations,
+            tool_calls_made,
             evidence_ledger: &turn_state.evidence_ledger,
             tx,
         })
         .await;
 
-        trace_runtime_diet_report(&trace, &route, &code_workflow, &turn_state.runtime_diet);
-
-        if let Some(tx) = tx {
-            let _ = tx.send(StreamEvent::Complete).await;
-        }
-
-        trace.record(TraceEvent::AssistantResponded {
-            chars: final_content.chars().count(),
-            iterations: turn_state.iterations_used,
-        });
         self.finish_trace(trace, TurnStatus::Completed);
 
-        Ok(LoopResult {
-            content: final_content,
-            tool_calls: Vec::new(),
-            tool_calls_made,
-            iterations: turn_state.iterations_used,
-            pre_executed_results: std::collections::HashMap::new(),
-        })
+        Ok(result)
     }
 }
 
