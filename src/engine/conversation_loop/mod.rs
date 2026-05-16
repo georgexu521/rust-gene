@@ -57,6 +57,7 @@ mod tool_turn_controller;
 mod turn_api_failure_controller;
 mod turn_assistant_response_controller;
 mod turn_completion_controller;
+mod turn_context_bootstrap_controller;
 mod turn_entry_gate_controller;
 mod turn_focused_repair_action_controller;
 mod turn_focused_repair_flow_controller;
@@ -105,6 +106,9 @@ use turn_assistant_response_controller::{
     TurnAssistantResponseContext, TurnAssistantResponseController, TurnAssistantResponseFlow,
 };
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
+use turn_context_bootstrap_controller::{
+    TurnContextBootstrapContext, TurnContextBootstrapController,
+};
 use turn_entry_gate_controller::{
     TurnEntryGateContext, TurnEntryGateController, TurnEntryGateFlow,
 };
@@ -118,11 +122,7 @@ use turn_loop_bootstrap_controller::{TurnLoopBootstrapContext, TurnLoopBootstrap
 use turn_post_change_closeout_controller::{
     TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
 };
-use turn_retrieval_context_controller::{
-    TurnRetrievalContextController, TurnRetrievalContextRequest,
-};
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
-use turn_task_context_controller::{TurnTaskContextSetupContext, TurnTaskContextSetupController};
 use turn_tool_failure_followup_controller::{
     TurnToolFailureFollowupContext, TurnToolFailureFollowupController, TurnToolFailureFollowupFlow,
 };
@@ -597,36 +597,21 @@ impl ConversationLoop {
         let resource_policy = setup.resource_policy;
         let working_dir = setup.working_dir;
         let destructive_scope = setup.destructive_scope;
-        let turn_retrieval_context =
-            TurnRetrievalContextController::build(TurnRetrievalContextRequest {
+        let turn_context_bootstrap =
+            TurnContextBootstrapController::run(TurnContextBootstrapContext {
+                conversation: self,
                 last_user_preview: &last_user_preview,
+                route: &route,
+                resource_policy: &resource_policy,
                 working_dir: &working_dir,
-                retrieval_policy: route.retrieval,
-                session_store: self.session_store.clone(),
-                memory_manager: self.memory_manager.as_ref(),
-                provider: self.provider.as_ref(),
-                model: &self.model,
+                required_validation_commands: &required_validation_commands,
                 trace: &trace,
             })
             .await;
-        let task_context_setup =
-            TurnTaskContextSetupController::prepare(TurnTaskContextSetupContext {
-                last_user_preview: &last_user_preview,
-                working_dir: &working_dir,
-                route: &route,
-                current_goal: self
-                    .goal_manager
-                    .as_ref()
-                    .and_then(|manager| manager.current()),
-                retrieval_context: turn_retrieval_context.as_ref(),
-                resource_policy: &resource_policy,
-                required_validation_commands: &required_validation_commands,
-                route_scoped_tools_enabled: Self::route_scoped_tools_enabled(),
-                trace: &trace,
-            });
-        let mut task_bundle = task_context_setup.task_bundle;
-        let mut code_workflow = task_context_setup.code_workflow;
-        let mut turn_state = task_context_setup.turn_state;
+        let turn_retrieval_context = turn_context_bootstrap.retrieval_context;
+        let mut task_bundle = turn_context_bootstrap.task_bundle;
+        let mut code_workflow = turn_context_bootstrap.code_workflow;
+        let mut turn_state = turn_context_bootstrap.turn_state;
         match TurnEntryGateController::run(TurnEntryGateContext {
             conversation: self,
             last_user_preview: last_user_preview.as_str(),

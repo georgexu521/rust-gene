@@ -802,6 +802,18 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn-entry gate slice:
   `cargo test -q` passed (`1411 passed; 0 failed`).
+- 2026-05-16: Phase A turn-context bootstrap cleanup continued. Added
+  `turn_context_bootstrap_controller.rs`; retrieval-context construction and
+  task-context / code-workflow / turn-state setup now live behind one
+  pre-entry-gate controller. `run_inner` now receives the prepared retrieval
+  context and mutable turn objects as a single bootstrap result.
+- Validation after the turn-context bootstrap slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_context_bootstrap_controller`,
+  `turn_retrieval_context_controller`, `turn_task_context_controller`, and
+  `turn_entry_gate_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn-context bootstrap slice:
+  `cargo test -q` passed (`1413 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
