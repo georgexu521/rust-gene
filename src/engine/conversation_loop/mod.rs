@@ -88,7 +88,7 @@ use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
     CodeWriteForbiddenRecoveryContext, DisabledPatchSynthesisRecoveryApplicationContext,
-    PatchSynthesisCallExecutionContext, PatchSynthesisFailureRecoveryApplicationContext,
+    PatchSynthesisCallExecutionContext, PatchSynthesisFailureHandlingContext,
     PatchSynthesisFlowController, PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
     PatchSynthesisRecoveryFlow,
 };
@@ -1260,20 +1260,10 @@ impl ConversationLoop {
                                 }
                             }
                             Err(err) => {
-                                trace.record(TraceEvent::WorkflowFallback {
-                                    error: format!("patch synthesis failed: {}", err),
-                                });
-                                let err_text = err.to_string();
-                                let recovery =
-                                    FocusedRepairRecoveryController::patch_synthesis_failure_recovery(
-                                        &err_text,
-                                        turn_state.focused_repair.patch_synthesis_recovery_used,
-                                        turn_state.focused_repair.action_checkpoint_reopen_used,
-                                    );
                                 let recovery_flow =
-                                    PatchSynthesisFlowController::apply_failure_recovery(
-                                        PatchSynthesisFailureRecoveryApplicationContext {
-                                            recovery,
+                                    PatchSynthesisFlowController::recover_after_synthesis_failure(
+                                        PatchSynthesisFailureHandlingContext {
+                                            error_text: err.to_string(),
                                             state: &mut turn_state.focused_repair,
                                             trace: &trace,
                                             messages: &mut messages,

@@ -59,6 +59,16 @@ pub(super) struct PatchSynthesisFailureRecoveryApplicationContext<'a> {
     pub(super) final_content: &'a mut String,
 }
 
+pub(super) struct PatchSynthesisFailureHandlingContext<'a> {
+    pub(super) error_text: String,
+    pub(super) state: &'a mut FocusedRepairRuntimeState,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) tool_results_text: &'a mut String,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) final_content: &'a mut String,
+}
+
 pub(super) struct CodeWriteForbiddenRecoveryContext<'a> {
     pub(super) state: &'a mut FocusedRepairRuntimeState,
     pub(super) trace: &'a TraceCollector,
@@ -267,6 +277,29 @@ impl PatchSynthesisFlowController {
                 PatchSynthesisRecoveryFlow::Stop
             }
         }
+    }
+
+    pub(super) async fn recover_after_synthesis_failure(
+        context: PatchSynthesisFailureHandlingContext<'_>,
+    ) -> PatchSynthesisRecoveryFlow {
+        context.trace.record(TraceEvent::WorkflowFallback {
+            error: format!("patch synthesis failed: {}", context.error_text),
+        });
+        let recovery = FocusedRepairRecoveryController::patch_synthesis_failure_recovery(
+            &context.error_text,
+            context.state.patch_synthesis_recovery_used,
+            context.state.action_checkpoint_reopen_used,
+        );
+        Self::apply_failure_recovery(PatchSynthesisFailureRecoveryApplicationContext {
+            recovery,
+            state: context.state,
+            trace: context.trace,
+            messages: context.messages,
+            tool_results_text: context.tool_results_text,
+            tx: context.tx,
+            final_content: context.final_content,
+        })
+        .await
     }
 }
 
@@ -512,5 +545,39 @@ mod tests {
         );
         assert!(messages.is_empty());
         assert!(tool_results_text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failure_handling_records_trace_and_applies_recovery() {
+        let trace = trace();
+        let mut state = FocusedRepairRuntimeState::default();
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+        let mut final_content = String::new();
+
+        let flow = PatchSynthesisFlowController::recover_after_synthesis_failure(
+            PatchSynthesisFailureHandlingContext {
+                error_text: "not enough evidence for an edit".to_string(),
+                state: &mut state,
+                trace: &trace,
+                messages: &mut messages,
+                tool_results_text: &mut tool_results_text,
+                tx: None,
+                final_content: &mut final_content,
+            },
+        )
+        .await;
+
+        assert_eq!(flow, PatchSynthesisRecoveryFlow::Continue);
+        assert!(state.patch_synthesis_recovery_used);
+        assert_eq!(messages.len(), 1);
+        assert!(tool_results_text.contains("Patch synthesis declined"));
+        assert!(final_content.is_empty());
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error == "patch synthesis failed: not enough evidence for an edit"
+        )));
     }
 }
