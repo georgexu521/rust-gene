@@ -66,6 +66,7 @@ mod turn_runtime_diet_bootstrap_controller;
 mod turn_runtime_state;
 mod turn_setup_controller;
 mod turn_task_context_controller;
+mod turn_tool_round_outcome_controller;
 mod validation_runner;
 mod workflow_change_tracker;
 mod workflow_contract_controller;
@@ -137,6 +138,7 @@ use turn_runtime_diet_bootstrap_controller::{
 };
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
 use turn_task_context_controller::{TurnTaskContextSetupContext, TurnTaskContextSetupController};
+use turn_tool_round_outcome_controller::TurnToolRoundOutcomeController;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
 #[cfg(test)]
@@ -851,21 +853,7 @@ impl ConversationLoop {
                 baseline_git_status_files: &baseline_git_status_files,
             })
             .await;
-            let mut tool_results_text = batch_processing.tool_results_text;
-            let mut changed_files = batch_processing.changed_files;
-            let batch_has_unsuccessful_tools = batch_processing.batch_has_unsuccessful_tools;
-            let used_write_tool = batch_processing.used_write_tool;
-            let successful_write_tool = batch_processing.successful_write_tool;
-            let used_action_checkpoint_lookup = batch_processing.used_action_checkpoint_lookup;
-            let mut any_tool_success = batch_processing.any_tool_success;
-            let repeated_failed_tools = batch_processing.repeated_failed_tools;
-            let failed_tool_names_this_round = batch_processing.failed_tool_names_this_round;
-            let failed_tool_evidence = batch_processing.failed_tool_evidence;
-            let file_edit_failure_correction_added =
-                batch_processing.file_edit_failure_correction_added;
-            let successful_validation_commands = batch_processing.successful_validation_commands;
-            let mut should_closeout_after_verified_change = false;
-            let has_worktree_changes = !changed_files.is_empty();
+            let mut tool_round_state = TurnToolRoundOutcomeController::from_batch(batch_processing);
             let focused_repair_state = FocusedRepairStateController::apply_tool_round(
                 FocusedRepairRoundApplicationContext {
                     state_context: FocusedRepairStateContext {
@@ -875,21 +863,23 @@ impl ConversationLoop {
                                 route.workflow,
                             ),
                         no_diff_audit_closeout_allowed,
-                        has_worktree_changes,
-                        has_successful_validation_commands: !successful_validation_commands
-                            .is_empty(),
+                        has_worktree_changes: tool_round_state.has_worktree_changes(),
+                        has_successful_validation_commands: tool_round_state
+                            .has_successful_validation_commands(),
                         code_write_tools_forbidden,
-                        used_action_checkpoint_lookup,
-                        successful_write_tool,
-                        used_write_tool,
-                        any_tool_success,
-                        file_edit_failure_correction_added,
+                        used_action_checkpoint_lookup: tool_round_state
+                            .used_action_checkpoint_lookup,
+                        successful_write_tool: tool_round_state.successful_write_tool,
+                        used_write_tool: tool_round_state.used_write_tool,
+                        any_tool_success: tool_round_state.any_tool_success,
+                        file_edit_failure_correction_added: tool_round_state
+                            .file_edit_failure_correction_added,
                     },
                     workflow: route.workflow,
                     trace: &trace,
                     code_workflow: &mut code_workflow,
                     messages: &mut messages,
-                    tool_results_text: &mut tool_results_text,
+                    tool_results_text: &mut tool_round_state.tool_results_text,
                 },
             );
 
@@ -900,9 +890,9 @@ impl ConversationLoop {
             if let Some(repair_proposal) =
                 Self::focused_repair_action_proposal(FocusedRepairActionRequest {
                     action_checkpoint_active: turn_state.focused_repair.action_checkpoint_active,
-                    any_tool_success,
-                    batch_has_unsuccessful_tools,
-                    failed_tool_evidence_present: !failed_tool_evidence.is_empty(),
+                    any_tool_success: tool_round_state.any_tool_success,
+                    batch_has_unsuccessful_tools: tool_round_state.batch_has_unsuccessful_tools,
+                    failed_tool_evidence_present: tool_round_state.failed_tool_evidence_present(),
                     force_patch_synthesis_after_no_change: focused_repair_state
                         .force_patch_synthesis_after_no_change,
                     force_patch_synthesis_reason: focused_repair_state.force_patch_synthesis_reason,
@@ -921,7 +911,7 @@ impl ConversationLoop {
                         state: &mut turn_state.focused_repair,
                         trace: &trace,
                         messages: &mut messages,
-                        tool_results_text: &mut tool_results_text,
+                        tool_results_text: &mut tool_round_state.tool_results_text,
                     },
                 ) {
                     PatchSynthesisProposalFlow::Continue => continue,
@@ -933,15 +923,15 @@ impl ConversationLoop {
                                 code_write_tools_forbidden,
                                 last_user_preview: last_user_preview.as_str(),
                                 exposed_tool_names: &exposed_tool_names,
-                                any_tool_success: &mut any_tool_success,
+                                any_tool_success: &mut tool_round_state.any_tool_success,
                                 tx,
                                 trace: &trace,
                                 resource_policy: &resource_policy,
                                 destructive_scope: &destructive_scope,
                                 turn_state: &mut turn_state,
-                                tool_results_text: &mut tool_results_text,
+                                tool_results_text: &mut tool_round_state.tool_results_text,
                                 messages: &mut messages,
-                                changed_files: &mut changed_files,
+                                changed_files: &mut tool_round_state.changed_files,
                                 baseline_git_status_files: &baseline_git_status_files,
                                 is_programming_workflow:
                                     crate::engine::code_change_workflow::is_programming_workflow(
@@ -967,19 +957,19 @@ impl ConversationLoop {
                 session_store: self.session_store.as_ref(),
                 session_id: &self.session_id,
                 trace: &trace,
-                any_tool_success,
+                any_tool_success: tool_round_state.any_tool_success,
                 last_user_preview: last_user_preview.as_str(),
                 task_bundle: &mut task_bundle,
-                failed_tool_names: &failed_tool_names_this_round,
-                failed_tool_evidence: &failed_tool_evidence,
-                tool_results_text: &mut tool_results_text,
+                failed_tool_names: &tool_round_state.failed_tool_names_this_round,
+                failed_tool_evidence: &tool_round_state.failed_tool_evidence,
+                tool_results_text: &mut tool_round_state.tool_results_text,
                 messages: &mut messages,
             })
             .await;
 
             if let Some(stop) = ToolFailureStopController::decide(ToolFailureStopRequest {
-                any_tool_success,
-                repeated_failed_tools: &repeated_failed_tools,
+                any_tool_success: tool_round_state.any_tool_success,
+                repeated_failed_tools: &tool_round_state.repeated_failed_tools,
                 failed_tool_names: &loop_state.failed_tool_names,
             }) {
                 FocusedRepairRecoveryController::stop_with_message(
@@ -998,20 +988,22 @@ impl ConversationLoop {
                     route: &route,
                     code_workflow: &mut code_workflow,
                     task_bundle: &mut task_bundle,
-                    changed_files: &changed_files,
+                    changed_files: &tool_round_state.changed_files,
                     required_validation_commands: &required_validation_commands,
-                    successful_validation_commands: &successful_validation_commands,
+                    successful_validation_commands: &tool_round_state
+                        .successful_validation_commands,
                     successful_required_validation_commands: &mut loop_state
                         .successful_required_validation_commands,
                     turn_state: &mut turn_state,
-                    should_closeout_after_verified_change,
+                    should_closeout_after_verified_change: tool_round_state
+                        .should_closeout_after_verified_change,
                     final_content: &mut loop_state.final_content,
-                    tool_results_text: &mut tool_results_text,
+                    tool_results_text: &mut tool_round_state.tool_results_text,
                     messages: &mut messages,
                     last_user_preview: last_user_preview.as_str(),
                 })
                 .await;
-            should_closeout_after_verified_change =
+            tool_round_state.should_closeout_after_verified_change =
                 post_change_workflow.should_closeout_after_verified_change;
             if post_change_workflow.break_loop {
                 break;
@@ -1023,8 +1015,9 @@ impl ConversationLoop {
                     trace: &trace,
                     messages: &messages,
                     final_content: &loop_state.final_content,
-                    tool_results_text: &tool_results_text,
-                    should_closeout_after_verified_change,
+                    tool_results_text: &tool_round_state.tool_results_text,
+                    should_closeout_after_verified_change: tool_round_state
+                        .should_closeout_after_verified_change,
                 })
                 .await;
 
