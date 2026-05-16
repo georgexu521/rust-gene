@@ -716,6 +716,18 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the tool-round outcome state slice:
   `cargo test -q` passed (`1397 passed; 0 failed`).
+- 2026-05-16: Phase A focused repair action flow cleanup continued. Added
+  `turn_focused_repair_action_controller.rs`; focused-repair proposal
+  construction, no-change round advancement, focused repair prompt insertion,
+  and `NoAction` / `Continue` / `EnterPatchSynthesis` flow selection now live
+  outside `run_inner`.
+- Validation after the focused repair action flow slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `turn_focused_repair_action_controller`, `patch_synthesis_flow_controller`,
+  `action_checkpoint`, and `focused_repair_state_controller` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the focused repair action flow slice:
+  `cargo test -q` passed (`1400 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
