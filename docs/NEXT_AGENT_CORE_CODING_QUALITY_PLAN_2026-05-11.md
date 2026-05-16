@@ -704,6 +704,18 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the assistant response transition slice:
   `cargo test -q` passed (`1396 passed; 0 failed`).
+- 2026-05-16: Phase A tool-round outcome state cleanup continued. Added
+  `turn_tool_round_outcome_controller.rs`; `ToolRoundController` batch
+  results now become a named round-state object before focused repair, patch
+  synthesis, guided debugging, stop checks, post-change workflow, and
+  iteration closeout consume them.
+- Validation after the tool-round outcome state slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_tool_round_outcome_controller`,
+  `tool_batch_result_processor`, `focused_repair_state_controller`, and
+  `post_change_workflow_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the tool-round outcome state slice:
+  `cargo test -q` passed (`1397 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
