@@ -497,6 +497,15 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the session-goal update slice:
   `cargo test -q` passed (`1368 passed; 0 failed`).
+- 2026-05-16: Phase A legacy workflow gate cleanup started. Added
+  `legacy_workflow_gate_controller.rs`; legacy workflow routing, drift
+  interruption metric recording, workflow-engine execution, workflow decision
+  memory writes, streaming completion, and completed legacy workflow content
+  now live outside `run_inner`.
+- Validation after the legacy workflow gate slice: `cargo fmt --check`,
+  `git diff --check`, targeted `legacy_workflow_gate_controller` and
+  `workflow` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

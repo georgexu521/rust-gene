@@ -18,6 +18,7 @@ mod first_code_change_controller;
 mod focused_repair_recovery;
 mod focused_repair_state_controller;
 mod iteration_budget_controller;
+mod legacy_workflow_gate_controller;
 mod memory_snapshot_controller;
 mod memory_sync_controller;
 mod patch_recovery;
@@ -78,6 +79,9 @@ use focused_repair_state_controller::{
     FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
 };
 use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetController};
+use legacy_workflow_gate_controller::{
+    LegacyWorkflowGateContext, LegacyWorkflowGateController, LegacyWorkflowGateFlow,
+};
 use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
 use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::PatchSynthesisAction;
@@ -105,6 +109,7 @@ use runtime_diet::trace_runtime_diet_report;
 use session_goal_controller::{SessionGoalController, SessionGoalUpdateContext};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use task_context_trace_controller::{TaskContextTraceContext, TaskContextTraceController};
+#[cfg(test)]
 use text_sanitizer::strip_think_blocks;
 #[cfg(test)]
 use text_sanitizer::VisibleTextSanitizer;
@@ -137,7 +142,7 @@ use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_
 
 use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
-use crate::engine::workflow::{Gate, WorkflowEngine, WorkflowPolicy};
+use crate::engine::workflow::WorkflowPolicy;
 use crate::services::api::{LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
@@ -794,125 +799,31 @@ impl ConversationLoop {
             trace: &trace,
         });
 
-        // ── Workflow 闸门检查 ──────────────────────────
-        let already_triggered = self
-            .workflow_triggered_this_turn
-            .swap(true, std::sync::atomic::Ordering::SeqCst);
-        if crate::engine::code_change_workflow::is_programming_workflow(route.workflow) {
-            trace.record(TraceEvent::WorkflowRouted {
-                decision: "direct".to_string(),
-                reason:
-                    "code-change contract uses the tool loop; legacy workflow step executor skipped"
-                        .to_string(),
-            });
-        } else if !already_triggered {
-            if let Some(last_user_msg) = messages
-                .iter()
-                .rposition(|m| matches!(m, Message::User { .. }))
-                .and_then(|i| match &messages[i] {
-                    Message::User { content } => Some(content.as_str()),
-                    _ => None,
-                })
-            {
-                let workflow_policy = self.workflow_policy.clone();
-                let gate = Gate::new().with_policy(workflow_policy.gate.clone());
-                if is_drift_interruption_signal(last_user_msg) {
-                    crate::engine::workflow::metrics::record_drift_interruption();
-                }
-                let decision = if workflow_policy.gate.llm_classifier_enabled {
-                    gate.decide_with_llm(last_user_msg, self.provider.as_ref(), &self.model)
-                        .await
-                } else {
-                    gate.decide(last_user_msg)
-                };
-                trace.record(TraceEvent::WorkflowRouted {
-                    decision: if decision.is_workflow() {
-                        "workflow".to_string()
-                    } else {
-                        "direct".to_string()
-                    },
-                    reason: decision.reason().to_string(),
+        match LegacyWorkflowGateController::run(LegacyWorkflowGateContext {
+            route: &route,
+            messages: &messages,
+            workflow_triggered_this_turn: &self.workflow_triggered_this_turn,
+            workflow_policy: self.workflow_policy.clone(),
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            tool_registry: self.tool_registry.clone(),
+            base_context: self.create_tool_context_with_trace(&trace),
+            memory_manager: self.memory_manager.as_ref(),
+            tx,
+            trace: &trace,
+        })
+        .await
+        {
+            LegacyWorkflowGateFlow::Continue => {}
+            LegacyWorkflowGateFlow::Completed { content } => {
+                self.finish_trace(trace.clone(), TurnStatus::Completed);
+                return Ok(LoopResult {
+                    content,
+                    tool_calls: Vec::new(),
+                    tool_calls_made: false,
+                    iterations: 0,
+                    pre_executed_results: std::collections::HashMap::new(),
                 });
-                if decision.is_workflow() {
-                    crate::engine::workflow::metrics::record_workflow_run();
-                    if let Some(ref mem_mgr) = self.memory_manager {
-                        let mut mem = mem_mgr.lock().await;
-                        mem.save_workflow_decision(
-                            "gate",
-                            last_user_msg,
-                            "Workflow",
-                            decision.reason(),
-                        );
-                    }
-                    debug!("Workflow mode activated: {}", decision.reason());
-                    let workflow_executor = WorkflowRealStepExecutor {
-                        tool_registry: self.tool_registry.clone(),
-                        llm_provider: self.provider.clone(),
-                        model: self.model.clone(),
-                        base_context: self.create_tool_context_with_trace(&trace),
-                    };
-                    let workflow_engine =
-                        WorkflowEngine::new(self.provider.clone()).with_policy(workflow_policy);
-                    match workflow_engine
-                        .run(last_user_msg, last_user_msg, &workflow_executor)
-                        .await
-                    {
-                        Ok(result) => {
-                            trace.record(TraceEvent::WorkflowCompleted {
-                                steps: result.plan.steps.len(),
-                            });
-                            let workflow_report = strip_think_blocks(&result.final_report);
-                            if let Some(ref mem_mgr) = self.memory_manager {
-                                let mut mem = mem_mgr.lock().await;
-                                mem.save_workflow_decision(
-                                    "execution",
-                                    last_user_msg,
-                                    "Success",
-                                    &format!(
-                                        "workflow completed with {} steps",
-                                        result.plan.steps.len()
-                                    ),
-                                );
-                            }
-                            if let Some(tx) = tx {
-                                if !workflow_report.trim().is_empty() {
-                                    let _ = tx
-                                        .send(StreamEvent::TextChunk(workflow_report.clone()))
-                                        .await;
-                                }
-                                let _ = tx.send(StreamEvent::Complete).await;
-                            }
-                            trace.record(TraceEvent::AssistantResponded {
-                                chars: workflow_report.chars().count(),
-                                iterations: 0,
-                            });
-                            self.finish_trace(trace.clone(), TurnStatus::Completed);
-                            return Ok(LoopResult {
-                                content: workflow_report,
-                                tool_calls: Vec::new(),
-                                tool_calls_made: false,
-                                iterations: 0,
-                                pre_executed_results: std::collections::HashMap::new(),
-                            });
-                        }
-                        Err(e) => {
-                            trace.record(TraceEvent::WorkflowFallback { error: e.clone() });
-                            if let Some(ref mem_mgr) = self.memory_manager {
-                                let mut mem = mem_mgr.lock().await;
-                                mem.save_workflow_decision(
-                                    "fallback",
-                                    last_user_msg,
-                                    "DirectMode",
-                                    &e,
-                                );
-                            }
-                            warn!(
-                                "Workflow execution failed: {}, falling back to direct mode",
-                                e
-                            );
-                        }
-                    }
-                }
             }
         }
 
