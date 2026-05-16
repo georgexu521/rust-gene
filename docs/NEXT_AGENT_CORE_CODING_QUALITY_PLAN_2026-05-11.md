@@ -530,6 +530,17 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the no-tool assistant response slice:
   `cargo test -q` passed (`1374 passed; 0 failed`).
+- 2026-05-16: Phase A patch-synthesis failure handling cleanup continued.
+  `PatchSynthesisFlowController::recover_after_synthesis_failure` now owns
+  failure trace recording, recovery selection, and failure recovery
+  application. `run_inner` only passes the error text and follows the returned
+  recovery flow.
+- Validation after the patch-synthesis failure handling slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `patch_synthesis_flow_controller` / `patch_synthesis` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the patch-synthesis failure handling slice:
+  `cargo test -q` passed (`1375 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
