@@ -603,6 +603,18 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn-iteration closeout slice:
   `cargo test -q` passed (`1380 passed; 0 failed`).
+- 2026-05-16: Phase A patch-synthesis entry cleanup continued.
+  `PatchSynthesisFlowController::handle_enter_patch_synthesis` now owns the
+  outer enter-patch-synthesis branch: prompt-forbidden code write recovery,
+  disabled patch synthesis fallback/recovery, model synthesis execution, and
+  synthesis failure recovery. `run_inner` now only applies
+  `Continue` / `Stop` / `Proceed`.
+- Validation after the patch-synthesis entry slice: `cargo fmt --check`,
+  `git diff --check`, targeted `patch_synthesis_flow_controller` /
+  `patch_synthesis` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the patch-synthesis entry slice:
+  `cargo test -q` passed (`1381 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
