@@ -58,6 +58,7 @@ mod turn_completion_controller;
 mod turn_iteration_closeout_controller;
 mod turn_recording;
 mod turn_runtime_state;
+mod turn_setup_controller;
 mod validation_runner;
 mod workflow_change_tracker;
 mod workflow_contract_controller;
@@ -124,6 +125,7 @@ use turn_iteration_closeout_controller::{
     TurnIterationCloseoutContext, TurnIterationCloseoutController,
 };
 use turn_runtime_state::TurnRuntimeState;
+use turn_setup_controller::{TurnSetupContext, TurnSetupController};
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
 #[cfg(test)]
@@ -131,13 +133,11 @@ use validation_runner::verification_source_context;
 use validation_runner::{RequiredValidationController, RequiredValidationTriggerContext};
 use workflow_change_tracker::WorkflowChangeTracker;
 use workflow_contract_controller::{WorkflowContractController, WorkflowContractJudgmentContext};
-use workflow_prompt_policy::WorkflowPromptPolicy;
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
-use crate::engine::intent_router::IntentRouter;
 #[cfg(test)]
-use crate::engine::intent_router::{IntentKind, WorkflowKind};
-use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
+use crate::engine::intent_router::{IntentKind, IntentRouter, WorkflowKind};
+use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus};
 use crate::engine::workflow::WorkflowPolicy;
 use crate::services::api::{LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
@@ -580,69 +580,20 @@ impl ConversationLoop {
         mut messages: Vec<Message>,
         tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<LoopResult> {
-        let last_user_preview = messages
-            .iter()
-            .rposition(|m| matches!(m, Message::User { .. }))
-            .and_then(|i| match &messages[i] {
-                Message::User { content } => Some(content.as_str()),
-                _ => None,
-            })
-            .unwrap_or("")
-            .to_string();
-        let required_validation_commands =
-            RequiredValidationController::extract_commands(&last_user_preview);
-        let no_diff_audit_closeout_allowed =
-            WorkflowPromptPolicy::allows_no_diff_audit_closeout(&last_user_preview);
-        let code_write_tools_forbidden =
-            WorkflowPromptPolicy::forbids_code_write_tools(&last_user_preview);
-        let turn_index = self
-            .trace_store
-            .as_ref()
-            .and_then(|store| store.latest().map(|trace| trace.turn_index + 1))
-            .unwrap_or_else(|| {
-                self.turn_counter
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                    + 1
-            });
-        let trace = TraceCollector::new(TurnTrace::new(
-            self.session_id.clone(),
-            turn_index,
-            &last_user_preview,
-        ));
-        let learning_events = self
-            .session_store
-            .as_ref()
-            .and_then(|store| store.recent_learning_events(&self.session_id, 20).ok())
-            .unwrap_or_default();
-        let mut route =
-            IntentRouter::new().route_with_learning(&last_user_preview, &learning_events);
-        self.agent_mode.apply_to_route(&mut route);
-        trace.record(TraceEvent::IntentRouted {
-            agent_mode: Some(self.agent_mode.label().to_string()),
-            intent: format!("{:?}", route.intent),
-            workflow: format!("{:?}", route.workflow),
-            retrieval: format!("{:?}", route.retrieval),
-            confidence: route.confidence,
-            risk: format!("{:?}", route.risk),
-            reason: route.reason.clone(),
+        let setup = TurnSetupController::prepare(TurnSetupContext {
+            conversation: self,
+            messages: &messages,
         });
-        let resource_policy = crate::engine::resource_policy::ResourcePolicy::from_route(&route);
-        trace.record(TraceEvent::ResourcePolicySelected {
-            latency: format!("{:?}", resource_policy.latency),
-            target_ms: resource_policy.latency.target_ms(),
-            cost_ceiling_usd: resource_policy.cost_ceiling_usd,
-            reasoning: format!("{:?}", resource_policy.reasoning),
-            parallelism_limit: resource_policy.parallelism_limit,
-            max_tool_calls: resource_policy.max_tool_calls,
-            context_budget_tokens: resource_policy.context_budget_tokens,
-            reason: resource_policy.reason.clone(),
-        });
-        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let destructive_scope =
-            crate::engine::destructive_scope::DestructiveScopeContract::from_user_request(
-                &last_user_preview,
-                &working_dir,
-            );
+        let last_user_preview = setup.last_user_preview;
+        let required_validation_commands = setup.required_validation_commands;
+        let no_diff_audit_closeout_allowed = setup.no_diff_audit_closeout_allowed;
+        let code_write_tools_forbidden = setup.code_write_tools_forbidden;
+        let trace = setup.trace;
+        let learning_events = setup.learning_events;
+        let route = setup.route;
+        let resource_policy = setup.resource_policy;
+        let working_dir = setup.working_dir;
+        let destructive_scope = setup.destructive_scope;
         let mut turn_retrieval_context =
             build_project_retrieval_context(&last_user_preview, &working_dir, route.retrieval)
                 .await;
