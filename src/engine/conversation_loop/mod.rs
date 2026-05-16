@@ -57,6 +57,7 @@ mod tool_turn_controller;
 mod turn_assistant_response_controller;
 mod turn_completion_controller;
 mod turn_focused_repair_action_controller;
+mod turn_focused_repair_flow_controller;
 mod turn_iteration_closeout_controller;
 mod turn_iteration_setup_controller;
 mod turn_loop_state_controller;
@@ -78,16 +79,10 @@ mod workflow_trace;
 
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
-use focused_repair_state_controller::{
-    FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
-};
 use legacy_workflow_gate_controller::{
     LegacyWorkflowGateContext, LegacyWorkflowGateController, LegacyWorkflowGateFlow,
 };
 use patch_recovery::PatchSynthesisAction;
-use patch_synthesis_flow_controller::{
-    EnterPatchSynthesisContext, EnterPatchSynthesisFlow, PatchSynthesisFlowController,
-};
 use reflection_gate_controller::{
     ReflectionGateContext, ReflectionGateController, ReflectionGateFlow,
 };
@@ -115,8 +110,8 @@ use turn_assistant_response_controller::{
     TurnAssistantResponseContext, TurnAssistantResponseController, TurnAssistantResponseFlow,
 };
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
-use turn_focused_repair_action_controller::{
-    TurnFocusedRepairActionContext, TurnFocusedRepairActionController, TurnFocusedRepairActionFlow,
+use turn_focused_repair_flow_controller::{
+    TurnFocusedRepairFlow, TurnFocusedRepairFlowContext, TurnFocusedRepairFlowController,
 };
 use turn_iteration_setup_controller::{
     TurnIterationSetupContext, TurnIterationSetupController, TurnIterationSetupFlow,
@@ -855,82 +850,30 @@ impl ConversationLoop {
             })
             .await;
             let mut tool_round_state = TurnToolRoundOutcomeController::from_batch(batch_processing);
-            let focused_repair_state = FocusedRepairStateController::apply_tool_round(
-                FocusedRepairRoundApplicationContext {
-                    state_context: FocusedRepairStateContext {
-                        state: &mut turn_state.focused_repair,
-                        is_programming_workflow:
-                            crate::engine::code_change_workflow::is_programming_workflow(
-                                route.workflow,
-                            ),
-                        no_diff_audit_closeout_allowed,
-                        has_worktree_changes: tool_round_state.has_worktree_changes(),
-                        has_successful_validation_commands: tool_round_state
-                            .has_successful_validation_commands(),
-                        code_write_tools_forbidden,
-                        used_action_checkpoint_lookup: tool_round_state
-                            .used_action_checkpoint_lookup,
-                        successful_write_tool: tool_round_state.successful_write_tool,
-                        used_write_tool: tool_round_state.used_write_tool,
-                        any_tool_success: tool_round_state.any_tool_success,
-                        file_edit_failure_correction_added: tool_round_state
-                            .file_edit_failure_correction_added,
-                    },
-                    workflow: route.workflow,
-                    trace: &trace,
-                    code_workflow: &mut code_workflow,
-                    messages: &mut messages,
-                    tool_results_text: &mut tool_round_state.tool_results_text,
-                },
-            );
-
-            if focused_repair_state.retry_after_file_edit_failure_correction {
-                continue;
-            }
-
-            match TurnFocusedRepairActionController::run(TurnFocusedRepairActionContext {
-                focused_repair_state: &focused_repair_state,
-                runtime_state: &mut turn_state.focused_repair,
+            match TurnFocusedRepairFlowController::run(TurnFocusedRepairFlowContext {
+                conversation: self,
+                workflow: route.workflow,
+                no_diff_audit_closeout_allowed,
+                code_write_tools_forbidden,
+                trace: &trace,
+                code_workflow: &mut code_workflow,
+                turn_state: &mut turn_state,
                 round_state: &mut tool_round_state,
                 exposed_tool_names: &exposed_tool_names,
-                trace: &trace,
+                tx,
+                resource_policy: &resource_policy,
+                destructive_scope: &destructive_scope,
+                baseline_git_status_files: &baseline_git_status_files,
+                last_user_preview: last_user_preview.as_str(),
                 messages: &mut messages,
-            }) {
-                TurnFocusedRepairActionFlow::NoAction => {}
-                TurnFocusedRepairActionFlow::Continue => continue,
-                TurnFocusedRepairActionFlow::EnterPatchSynthesis { proposal } => {
-                    match PatchSynthesisFlowController::handle_enter_patch_synthesis(
-                        EnterPatchSynthesisContext {
-                            proposal: &proposal,
-                            conversation: self,
-                            code_write_tools_forbidden,
-                            last_user_preview: last_user_preview.as_str(),
-                            exposed_tool_names: &exposed_tool_names,
-                            any_tool_success: &mut tool_round_state.any_tool_success,
-                            tx,
-                            trace: &trace,
-                            resource_policy: &resource_policy,
-                            destructive_scope: &destructive_scope,
-                            turn_state: &mut turn_state,
-                            tool_results_text: &mut tool_round_state.tool_results_text,
-                            messages: &mut messages,
-                            changed_files: &mut tool_round_state.changed_files,
-                            baseline_git_status_files: &baseline_git_status_files,
-                            is_programming_workflow:
-                                crate::engine::code_change_workflow::is_programming_workflow(
-                                    route.workflow,
-                                ),
-                            final_content: &mut loop_state.final_content,
-                            final_tool_calls: &mut loop_state.final_tool_calls,
-                        },
-                    )
-                    .await
-                    {
-                        EnterPatchSynthesisFlow::Continue => continue,
-                        EnterPatchSynthesisFlow::Stop => break,
-                        EnterPatchSynthesisFlow::Proceed => {}
-                    }
-                }
+                final_content: &mut loop_state.final_content,
+                final_tool_calls: &mut loop_state.final_tool_calls,
+            })
+            .await
+            {
+                TurnFocusedRepairFlow::Continue => continue,
+                TurnFocusedRepairFlow::Stop => break,
+                TurnFocusedRepairFlow::Proceed => {}
             }
 
             match TurnToolFailureFollowupController::run(TurnToolFailureFollowupContext {
