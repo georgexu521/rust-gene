@@ -658,6 +658,18 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn runtime-diet bootstrap slice:
   `cargo test -q` passed (`1390 passed; 0 failed`).
+- 2026-05-16: Phase A turn loop-local state cleanup continued. Added
+  `turn_loop_state_controller.rs`; final content/tool-call accumulation,
+  no-tool retry flags, companion-context dedupe keys, failed-tool counters,
+  and successful required-validation command tracking now live behind one
+  explicit loop-state object instead of separate `run_inner` locals.
+- Validation after the turn loop-local state slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_loop_state_controller`,
+  `assistant_response_retry_controller`, `tool_batch_result_processor`,
+  `patch_synthesis_flow_controller`, and `turn_completion_controller` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn loop-local state slice:
+  `cargo test -q` passed (`1391 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
