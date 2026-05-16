@@ -541,6 +541,16 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the patch-synthesis failure handling slice:
   `cargo test -q` passed (`1375 passed; 0 failed`).
+- 2026-05-16: Phase A patch-synthesis execution outcome cleanup continued.
+  `PatchSynthesisFlowController::apply_model_execution_outcome` now owns the
+  post-synthesis success flag merge and the no-change stop message. `run_inner`
+  now only checks whether the patch synthesis flow should stop.
+- Validation after the patch-synthesis execution outcome slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `patch_synthesis_flow_controller` / `patch_synthesis` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the patch-synthesis execution outcome slice:
+  `cargo test -q` passed (`1377 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
