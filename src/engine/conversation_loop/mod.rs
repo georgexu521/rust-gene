@@ -76,6 +76,7 @@ mod turn_setup_controller;
 mod turn_task_context_controller;
 mod turn_tool_failure_followup_controller;
 mod turn_tool_round_outcome_controller;
+mod turn_tool_round_step_controller;
 mod validation_runner;
 mod workflow_change_tracker;
 mod workflow_contract_controller;
@@ -99,7 +100,6 @@ use tool_execution_controller::{
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
-use tool_round_controller::{ToolRoundContext, ToolRoundController};
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
 use turn_context_bootstrap_controller::{
     TurnContextBootstrapContext, TurnContextBootstrapController,
@@ -124,7 +124,7 @@ use turn_setup_controller::{TurnSetupContext, TurnSetupController};
 use turn_tool_failure_followup_controller::{
     TurnToolFailureFollowupContext, TurnToolFailureFollowupController, TurnToolFailureFollowupFlow,
 };
-use turn_tool_round_outcome_controller::TurnToolRoundOutcomeController;
+use turn_tool_round_step_controller::{TurnToolRoundStepContext, TurnToolRoundStepController};
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
 #[cfg(test)]
@@ -703,7 +703,7 @@ impl ConversationLoop {
                     } => (content, tool_calls, pre_executed),
                 };
 
-            let batch_processing = ToolRoundController::execute(ToolRoundContext {
+            let mut tool_round_state = TurnToolRoundStepController::run(TurnToolRoundStepContext {
                 conversation: self,
                 content: &content,
                 tool_calls: &tool_calls,
@@ -718,17 +718,12 @@ impl ConversationLoop {
                     crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
                 working_dir: &working_dir,
                 last_user_preview: &last_user_preview,
-                companion_context_keys: &mut loop_state.companion_context_keys,
-                failed_tool_fingerprints: &mut loop_state.failed_tool_fingerprints,
-                failed_tool_names: &mut loop_state.failed_tool_names,
+                loop_state: &mut loop_state,
                 required_validation_commands: &required_validation_commands,
-                successful_required_validation_commands: &mut loop_state
-                    .successful_required_validation_commands,
                 destructive_scope: &destructive_scope,
                 baseline_git_status_files: &baseline_git_status_files,
             })
             .await;
-            let mut tool_round_state = TurnToolRoundOutcomeController::from_batch(batch_processing);
             match TurnFocusedRepairFlowController::run(TurnFocusedRepairFlowContext {
                 conversation: self,
                 workflow: route.workflow,

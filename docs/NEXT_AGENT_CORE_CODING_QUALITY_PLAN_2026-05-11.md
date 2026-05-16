@@ -827,6 +827,18 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the model-step sequencing slice:
   `cargo test -q` passed (`1416 passed; 0 failed`).
+- 2026-05-16: Phase A tool-round step cleanup continued. Added
+  `turn_tool_round_step_controller.rs`; tool-round execution and batch-outcome
+  to round-state conversion now live behind one controller. `run_inner` now
+  receives a `TurnToolRoundState` directly before focused repair / failure
+  followup / closeout.
+- Validation after the tool-round step slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_tool_round_step_controller`,
+  `turn_tool_round_outcome_controller`, and `tool_batch_result_processor`
+  tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the tool-round step slice:
+  `cargo test -q` passed (`1417 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
