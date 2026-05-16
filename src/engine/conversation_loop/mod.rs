@@ -67,6 +67,7 @@ mod turn_runtime_diet_bootstrap_controller;
 mod turn_runtime_state;
 mod turn_setup_controller;
 mod turn_task_context_controller;
+mod turn_tool_failure_followup_controller;
 mod turn_tool_round_outcome_controller;
 mod validation_runner;
 mod workflow_change_tracker;
@@ -76,7 +77,6 @@ mod workflow_trace;
 
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
-use focused_repair_recovery::FocusedRepairRecoveryController;
 use focused_repair_state_controller::{
     FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
 };
@@ -107,10 +107,6 @@ pub(crate) use tool_execution::{safe_prefix_by_bytes, safe_suffix_by_bytes, READ
 use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
-use tool_failure_guided_debugging::{
-    GuidedToolFailureDebuggingContext, GuidedToolFailureDebuggingController,
-};
-use tool_failure_stop_controller::{ToolFailureStopController, ToolFailureStopRequest};
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
@@ -140,6 +136,9 @@ use turn_runtime_diet_bootstrap_controller::{
 };
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
 use turn_task_context_controller::{TurnTaskContextSetupContext, TurnTaskContextSetupController};
+use turn_tool_failure_followup_controller::{
+    TurnToolFailureFollowupContext, TurnToolFailureFollowupController, TurnToolFailureFollowupFlow,
+};
 use turn_tool_round_outcome_controller::TurnToolRoundOutcomeController;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
@@ -934,7 +933,7 @@ impl ConversationLoop {
                 }
             }
 
-            GuidedToolFailureDebuggingController::run(GuidedToolFailureDebuggingContext {
+            match TurnToolFailureFollowupController::run(TurnToolFailureFollowupContext {
                 provider: self.provider.as_ref(),
                 model: self.model.clone(),
                 session_store: self.session_store.as_ref(),
@@ -943,25 +942,16 @@ impl ConversationLoop {
                 any_tool_success: tool_round_state.any_tool_success,
                 last_user_preview: last_user_preview.as_str(),
                 task_bundle: &mut task_bundle,
-                failed_tool_names: &tool_round_state.failed_tool_names_this_round,
-                failed_tool_evidence: &tool_round_state.failed_tool_evidence,
-                tool_results_text: &mut tool_round_state.tool_results_text,
+                round_state: &mut tool_round_state,
+                failed_tool_names: &loop_state.failed_tool_names,
+                tx,
+                final_content: &mut loop_state.final_content,
                 messages: &mut messages,
             })
-            .await;
-
-            if let Some(stop) = ToolFailureStopController::decide(ToolFailureStopRequest {
-                any_tool_success: tool_round_state.any_tool_success,
-                repeated_failed_tools: &tool_round_state.repeated_failed_tools,
-                failed_tool_names: &loop_state.failed_tool_names,
-            }) {
-                FocusedRepairRecoveryController::stop_with_message(
-                    tx,
-                    &mut loop_state.final_content,
-                    &stop.message,
-                )
-                .await;
-                break;
+            .await
+            {
+                TurnToolFailureFollowupFlow::Continue => {}
+                TurnToolFailureFollowupFlow::Stop => break,
             }
 
             let post_change_workflow =
