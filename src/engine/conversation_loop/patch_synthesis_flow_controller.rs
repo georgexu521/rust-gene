@@ -1,6 +1,7 @@
 use super::action_checkpoint::FocusedRepairActionProposal;
 use super::focused_repair_recovery::{
-    DisabledPatchSynthesisRecovery, FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
+    DisabledPatchSynthesisRecovery, DisabledPatchSynthesisRecoveryRequest,
+    FocusedRepairRecoveryController, PatchSynthesisFailureRecovery,
 };
 use super::focused_repair_state_controller::FocusedRepairStateController;
 use super::patch_recovery::{PatchSynthesisOutcome, PatchSynthesisSource};
@@ -48,6 +49,25 @@ pub(super) struct ModelPatchSynthesisExecutionContext<'a> {
     pub(super) changed_files: &'a mut Vec<PathBuf>,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
     pub(super) is_programming_workflow: bool,
+    pub(super) final_tool_calls: &'a mut Vec<ToolCall>,
+}
+
+pub(super) struct DisabledPatchSynthesisContext<'a> {
+    pub(super) proposal: &'a FocusedRepairActionProposal,
+    pub(super) conversation: &'a ConversationLoop,
+    pub(super) last_user_preview: &'a str,
+    pub(super) exposed_tool_names: &'a HashSet<String>,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) resource_policy: &'a ResourcePolicy,
+    pub(super) destructive_scope: &'a DestructiveScopeContract,
+    pub(super) turn_state: &'a mut TurnRuntimeState,
+    pub(super) tool_results_text: &'a mut String,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) changed_files: &'a mut Vec<PathBuf>,
+    pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
+    pub(super) is_programming_workflow: bool,
+    pub(super) final_content: &'a mut String,
     pub(super) final_tool_calls: &'a mut Vec<ToolCall>,
 }
 
@@ -123,6 +143,12 @@ pub(super) enum PatchSynthesisRecoveryFlow {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PatchSynthesisPostExecutionFlow {
     Proceed,
+    Stop,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum DisabledPatchSynthesisFlow {
+    Continue,
     Stop,
 }
 
@@ -246,6 +272,89 @@ impl PatchSynthesisFlowController {
             final_tool_calls: context.final_tool_calls,
         })
         .await
+    }
+
+    pub(super) async fn handle_disabled_patch_synthesis(
+        context: DisabledPatchSynthesisContext<'_>,
+    ) -> DisabledPatchSynthesisFlow {
+        let deterministic_calls = if ConversationLoop::deterministic_patch_synthesis_enabled() {
+            let evidence = ConversationLoop::patch_synthesis_evidence(context.messages);
+            let deterministic_seed = Self::deterministic_seed(context.last_user_preview, &evidence);
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            context
+                .conversation
+                .deterministic_patch_tool_calls(&deterministic_seed, &cwd)
+        } else {
+            Vec::new()
+        };
+
+        if !deterministic_calls.is_empty() {
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error: format!(
+                    "deterministic patch synthesis fallback owner={} reason={} produced {} file_edit action(s)",
+                    context.proposal.fallback_owner,
+                    context.proposal.fallback_reason,
+                    deterministic_calls.len()
+                ),
+            });
+            let deterministic_execution = Self::execute_calls(PatchSynthesisCallExecutionContext {
+                conversation: context.conversation,
+                tool_calls: deterministic_calls,
+                assistant_message: "Applying deterministic patch from prior evidence.",
+                tx: context.tx,
+                trace: context.trace,
+                resource_policy: context.resource_policy,
+                destructive_scope: context.destructive_scope,
+                turn_state: &mut *context.turn_state,
+                tool_results_text: &mut *context.tool_results_text,
+                messages: &mut *context.messages,
+                changed_files: &mut *context.changed_files,
+                baseline_git_status_files: context.baseline_git_status_files,
+                is_programming_workflow: context.is_programming_workflow,
+                mark_patch_requirement_on_success: true,
+                final_tool_calls: &mut *context.final_tool_calls,
+            })
+            .await;
+            if deterministic_execution.changed_files_available {
+                return DisabledPatchSynthesisFlow::Continue;
+            }
+        }
+
+        context.trace.record(TraceEvent::WorkflowFallback {
+            error: "patch synthesis disabled by default; returning control to model-led repair"
+                .to_string(),
+        });
+        let recovery = FocusedRepairRecoveryController::disabled_patch_synthesis_recovery(
+            DisabledPatchSynthesisRecoveryRequest {
+                patch_synthesis_recovery_used: context
+                    .turn_state
+                    .focused_repair
+                    .patch_synthesis_recovery_used,
+                action_checkpoint_reopen_used: context
+                    .turn_state
+                    .focused_repair
+                    .action_checkpoint_reopen_used,
+                action_checkpoint_lookup_count: context
+                    .turn_state
+                    .focused_repair
+                    .action_checkpoint_lookup_count,
+                exposed_tool_names: context.exposed_tool_names,
+            },
+        );
+        match Self::apply_disabled_recovery(DisabledPatchSynthesisRecoveryApplicationContext {
+            recovery,
+            state: &mut context.turn_state.focused_repair,
+            trace: context.trace,
+            messages: &mut *context.messages,
+            tool_results_text: &mut *context.tool_results_text,
+            tx: context.tx,
+            final_content: &mut *context.final_content,
+        })
+        .await
+        {
+            PatchSynthesisRecoveryFlow::Continue => DisabledPatchSynthesisFlow::Continue,
+            PatchSynthesisRecoveryFlow::Stop => DisabledPatchSynthesisFlow::Stop,
+        }
     }
 
     pub(super) async fn apply_model_execution_outcome(
