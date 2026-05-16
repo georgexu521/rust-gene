@@ -2322,7 +2322,10 @@ cargo check -q
 - action checkpoint 下的 bash 只在已有文件变更后用于验证命令，避免多文件 patch 通过 shell 绕过 permission、stale-read、diff 和 rollback 记录。
 - 已补 `patch_recovery_focused_repair_blocks_bash_patch_bypass` 回归测试，确保 `cargo test -q patch_recovery -- --test-threads=1` 不再空跑。
 - 已新增 `file_patch` 多文件 patch tool/path：预检全部 operation、要求既有文件先被 `file_read`、检查 stale-read、统一生成 diff，并复用 checkpoint / file history / rollback 记录。
-- 剩余产品化细节：继续补强 live-eval 的 multi-file edit 回归 case。
+- live-eval 的 multi-file edit 回归 case 已由 `core-multi-file-edit` 覆盖，并在
+  `core-quality-multifile-fix2-20260513-152308` 中验证 `file_patch` 路径、
+  first-write 统计、two-file diff、required commands 和 closeout。
+- 剩余产品化细节：后续只在多文件 patch 行为变化时扩展 regression fixture。
 
 ### Phase 3 完成标准
 
