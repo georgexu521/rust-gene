@@ -1351,6 +1351,20 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the file-patch evidence slice:
   `cargo test -q` passed (`1434 passed; 0 failed`).
+- 2026-05-16: Phase 3 Batch 3.6 partial-failure recovery evidence continued.
+  `file_patch` write failures now return structured partial-failure metadata:
+  failed path, checkpoint metadata, paths written before failure, rollback
+  attempted/success booleans, restored/removed/failed rollback files, and
+  rollback error details when restore fails. The restore path also reuses the
+  `ToolContext` checkpoint manager when one is injected, so partial rollback
+  does not accidentally fall back to a different session manager.
+- Validation after the file-patch partial-failure evidence slice:
+  `cargo fmt --check`, targeted
+  `file_patch_write_failure_reports_rollback_metadata`, `file_patch`, and
+  `file_tool` tests, plus `cargo check -q`, passed.
+- Full validation after the file-patch partial-failure evidence slice:
+  `cargo test -q` passed (`1435 passed; 0 failed`) after rerunning one
+  independently passing background-bash timing flake.
 - 2026-05-12: Phase 3 Batch 3.0 started. `file_read` now returns structured
   raw/display boundary metadata for file reads: resolved path, displayed line
   range, total/displayed line counts, truncation, full/selected content hashes,
@@ -1439,7 +1453,7 @@ Priority Agent 的基础编码能力已经不再是空白：
 
 - 有 `file_read`、`grep`、`glob`、`file_edit`、`file_write`、`bash`、`git`、`format`、`lsp`。
 - 有 route-scoped tools、权限上下文、closeout、EvidenceLedger、live eval、provider retry 和 provider-safe tool result work。
-- 最近全量本地测试基线是 `1434 passed; 0 failed`。
+- 最近全量本地测试基线是 `1435 passed; 0 failed`。
 
 但还没有完全赶上 Claude Code / opencode 的核心编码质量。差距主要不是功能数量，而是运行时产品化程度：
 
@@ -2296,7 +2310,7 @@ cargo check -q
 - action checkpoint 下的 bash 只在已有文件变更后用于验证命令，避免多文件 patch 通过 shell 绕过 permission、stale-read、diff 和 rollback 记录。
 - 已补 `patch_recovery_focused_repair_blocks_bash_patch_bypass` 回归测试，确保 `cargo test -q patch_recovery -- --test-threads=1` 不再空跑。
 - 已新增 `file_patch` 多文件 patch tool/path：预检全部 operation、要求既有文件先被 `file_read`、检查 stale-read、统一生成 diff，并复用 checkpoint / file history / rollback 记录。
-- 剩余产品化细节：继续补强 partial failure 恢复证据、更多 LSP/diagnostics 汇总、以及 live-eval 的 multi-file edit 回归 case。
+- 剩余产品化细节：继续补强更多 LSP/diagnostics 汇总、以及 live-eval 的 multi-file edit 回归 case。
 
 ### Phase 3 完成标准
 

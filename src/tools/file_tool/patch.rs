@@ -12,6 +12,7 @@ use super::{
     resolve_path, FileEditTool, FilePathIdentity, ReadBeforeEditStatus,
     MAX_EDITABLE_FILE_SIZE_BYTES,
 };
+use crate::engine::checkpoint::RestoreResult;
 use crate::tools::{Tool, ToolContext, ToolPermissionLevel, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -173,27 +174,13 @@ impl Tool for FilePatchTool {
             {
                 Ok(written) => written,
                 Err(err) => {
-                    let manager =
-                        crate::engine::checkpoint::get_checkpoint_manager(&context.session_id)
-                            .await;
-                    let restore = manager
-                        .lock()
-                        .await
-                        .restore_checkpoint(&checkpoint.id)
-                        .await
-                        .err();
-                    return ToolResult::error_with_content(
-                        format!(
-                            "file_patch failed while writing {}: {}",
-                            patch.path.display(),
-                            err
-                        ),
-                        json!({
-                            "partial_failure": true,
-                            "written_paths": written_paths,
-                            "rollback_error": restore,
-                        })
-                        .to_string(),
+                    let rollback = restore_patch_checkpoint(&context, &checkpoint.id).await;
+                    return patch_write_failure_result(
+                        patch,
+                        &checkpoint,
+                        &written_paths,
+                        err,
+                        rollback,
                     );
                 }
             };
@@ -291,6 +278,77 @@ impl Tool for FilePatchTool {
     fn permission_level(&self) -> ToolPermissionLevel {
         ToolPermissionLevel::MediumRisk
     }
+}
+
+async fn restore_patch_checkpoint(context: &ToolContext, checkpoint_id: &str) -> Value {
+    let manager = match &context.checkpoint_manager {
+        Some(manager) => manager.clone(),
+        None => crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await,
+    };
+    let result = manager.lock().await.restore_checkpoint(checkpoint_id).await;
+    rollback_metadata_json(checkpoint_id, result)
+}
+
+fn rollback_metadata_json(checkpoint_id: &str, result: Result<RestoreResult, String>) -> Value {
+    match result {
+        Ok(result) => {
+            let failed_files = result
+                .failed_files
+                .into_iter()
+                .map(|(path, error)| json!({ "path": path, "error": error }))
+                .collect::<Vec<_>>();
+            let success = failed_files.is_empty();
+            json!({
+                "attempted": true,
+                "success": success,
+                "checkpoint_id": result.checkpoint_id,
+                "restored_files": result.restored_files,
+                "removed_files": result.removed_files,
+                "failed_files": failed_files,
+            })
+        }
+        Err(error) => json!({
+            "attempted": true,
+            "success": false,
+            "checkpoint_id": checkpoint_id,
+            "error": error,
+        }),
+    }
+}
+
+fn patch_write_failure_result(
+    patch: &PreparedPatch,
+    checkpoint: &crate::engine::checkpoint::Checkpoint,
+    written_paths: &[String],
+    write_error: String,
+    rollback: Value,
+) -> ToolResult {
+    let rollback_error = rollback.get("error").cloned().unwrap_or(Value::Null);
+    let data = json!({
+        "partial_failure": true,
+        "failed_path": patch.path_arg,
+        "failed_resolved_path": patch.identity.resolved_path,
+        "checkpoint": checkpoint_metadata_json(Some(checkpoint)),
+        "written_paths": written_paths,
+        "rollback_attempted": rollback
+            .get("attempted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "rollback_success": rollback
+            .get("success")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "rollback_error": rollback_error,
+        "rollback": rollback,
+    });
+    let mut result = ToolResult::error(format!(
+        "file_patch failed while writing {}: {}",
+        patch.path.display(),
+        write_error
+    ));
+    result.content = data.to_string();
+    result.data = Some(data);
+    result
 }
 
 fn prepare_specs(operations: &[Value], context: &ToolContext) -> Result<Vec<PatchSpec>, String> {

@@ -2385,6 +2385,94 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_patch_write_failure_reports_rollback_metadata() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let locked_dir = dir.path().join("locked");
+        tokio::fs::create_dir_all(&locked_dir).await.unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), "alpha\nold-a\n")
+            .await
+            .unwrap();
+        tokio::fs::write(locked_dir.join("b.txt"), "beta\nold-b\n")
+            .await
+            .unwrap();
+        let session_id = format!(
+            "test-session-file-patch-write-failure-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let checkpoint_manager = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::engine::checkpoint::CheckpointManager::new(&session_id).await,
+        ));
+        checkpoint_manager.lock().await.clear_all().await.unwrap();
+        let context = ToolContext::new(dir.path(), &session_id)
+            .with_checkpoint_manager(checkpoint_manager.clone());
+        let read_tool = FileReadTool;
+        assert!(
+            read_tool
+                .execute(json!({ "path": "a.txt" }), context.clone())
+                .await
+                .success
+        );
+        assert!(
+            read_tool
+                .execute(json!({ "path": "locked/b.txt" }), context.clone())
+                .await
+                .success
+        );
+
+        std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let patch_tool = FilePatchTool;
+        let result = patch_tool
+            .execute(
+                json!({
+                    "operations": [
+                        {
+                            "path": "a.txt",
+                            "old_string": "old-a",
+                            "new_string": "new-a"
+                        },
+                        {
+                            "path": "locked/b.txt",
+                            "old_string": "old-b",
+                            "new_string": "new-b"
+                        }
+                    ]
+                }),
+                context,
+            )
+            .await;
+        std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(!result.success);
+        let data = result.data.expect("partial failure metadata");
+        assert_eq!(data["partial_failure"], true);
+        assert_eq!(data["failed_path"], "locked/b.txt");
+        assert!(data["checkpoint"]["id"].as_str().is_some());
+        assert_eq!(data["rollback_attempted"], true);
+        assert_eq!(data["rollback_success"], true);
+        assert_eq!(data["written_paths"].as_array().unwrap().len(), 1);
+        assert!(!data["rollback"]["restored_files"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("a.txt"))
+                .await
+                .unwrap(),
+            "alpha\nold-a\n"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(locked_dir.join("b.txt"))
+                .await
+                .unwrap(),
+            "beta\nold-b\n"
+        );
+        checkpoint_manager.lock().await.clear_all().await.unwrap();
+    }
+
     #[tokio::test]
     async fn file_patch_rejects_unread_existing_file() {
         let dir = tempfile::tempdir().unwrap();

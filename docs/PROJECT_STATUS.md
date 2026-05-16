@@ -64,7 +64,7 @@ permission-controller, context-budget, tool-result-budget, schema-gate, and
 tool-result normalizer work:
 
 ```text
-1434 passed; 0 failed
+1435 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -115,7 +115,10 @@ actual encoded bytes written for each patched file, so UTF-16LE/BOM file
 history matches disk bytes instead of normalized UTF-8 string length. Each
 successful `file_patch` file now also enters EvidenceLedger as changed-file
 evidence with patch kind, changed line range, diff truncation state, and compact
-bytes-written metadata. `file_edit` success results now include additions,
+bytes-written metadata. `file_patch` partial write failures now return structured
+rollback evidence with failed path, checkpoint metadata, written-before-failure
+paths, rollback success, and restored/removed/failed rollback files. `file_edit`
+success results now include additions,
 deletions, changed line range, and a bounded unified diff preview so later
 closeout and diagnostics paths can cite actual edit evidence. `file_edit` also
 returns a non-blocking `diagnostics` summary. It samples cached LSP diagnostics
@@ -441,7 +444,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-16 with `1434 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-16 with `1435 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry
