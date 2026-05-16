@@ -615,6 +615,17 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the patch-synthesis entry slice:
   `cargo test -q` passed (`1381 passed; 0 failed`).
+- 2026-05-16: Phase A turn setup bootstrap cleanup started. Added
+  `turn_setup_controller.rs`; latest-user extraction, required-validation
+  command extraction, prompt-policy flags, trace creation, learning-assisted
+  routing, resource-policy tracing, working-dir capture, and destructive-scope
+  setup now live outside `run_inner`.
+- Validation after the turn setup bootstrap slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_setup_controller`,
+  `route_scoped_tools`, and `required_validation` tests, `cargo check -q`,
+  and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn setup bootstrap slice:
+  `cargo test -q` passed (`1383 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
