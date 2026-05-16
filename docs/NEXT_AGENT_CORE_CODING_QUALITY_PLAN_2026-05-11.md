@@ -626,6 +626,16 @@
   and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn setup bootstrap slice:
   `cargo test -q` passed (`1383 passed; 0 failed`).
+- 2026-05-16: Phase A turn retrieval-context setup cleanup continued. Added
+  `turn_retrieval_context_controller.rs`; project, session, and memory
+  retrieval-context assembly, memory prefetch trace recording, context merge,
+  and final retrieval-context trace recording now live outside `run_inner`.
+- Validation after the turn retrieval-context slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_retrieval_context_controller`,
+  `retrieval_context`, and `request_preparation_controller` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn retrieval-context slice:
+  `cargo test -q` passed (`1386 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
