@@ -55,6 +55,7 @@ mod tool_result_controller;
 mod tool_round_controller;
 mod tool_turn_controller;
 mod turn_completion_controller;
+mod turn_iteration_closeout_controller;
 mod turn_recording;
 mod turn_runtime_state;
 mod validation_runner;
@@ -71,7 +72,6 @@ pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use assistant_response_retry_controller::{
     AssistantResponseRetryController, NoToolAssistantResponseContext, NoToolAssistantResponseFlow,
 };
-use closeout_controller::VerifiedChangeCloseoutController;
 use focused_repair_recovery::FocusedRepairRecoveryController;
 use focused_repair_state_controller::{
     FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
@@ -81,7 +81,6 @@ use legacy_workflow_gate_controller::{
     LegacyWorkflowGateContext, LegacyWorkflowGateController, LegacyWorkflowGateFlow,
 };
 use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
-use memory_sync_controller::{MemorySyncContext, MemorySyncController};
 use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
     CodeWriteForbiddenRecoveryContext, DisabledPatchSynthesisContext, DisabledPatchSynthesisFlow,
@@ -124,6 +123,9 @@ use tool_metadata::attach_tool_execution_metadata;
 use tool_metadata::tool_execution_start_progress;
 use tool_round_controller::{ToolRoundContext, ToolRoundController};
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
+use turn_iteration_closeout_controller::{
+    TurnIterationCloseoutContext, TurnIterationCloseoutController,
+};
 use turn_runtime_state::TurnRuntimeState;
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
@@ -1254,22 +1256,18 @@ impl ConversationLoop {
                 break;
             }
 
-            MemorySyncController::sync_turn(MemorySyncContext {
-                memory_manager: self.memory_manager.as_ref(),
-                llm_memory_extraction: self.llm_memory_extraction,
-                provider: Some(self.provider.as_ref()),
-                model: &self.model,
-                trace: &trace,
-                messages: &messages,
-                final_content: &final_content,
-                tool_results_text: &tool_results_text,
-            })
-            .await;
+            let iteration_closeout =
+                TurnIterationCloseoutController::run(TurnIterationCloseoutContext {
+                    conversation: self,
+                    trace: &trace,
+                    messages: &messages,
+                    final_content: &final_content,
+                    tool_results_text: &tool_results_text,
+                    should_closeout_after_verified_change,
+                })
+                .await;
 
-            if VerifiedChangeCloseoutController::should_break_for_verified_change(
-                &trace,
-                should_closeout_after_verified_change,
-            ) {
+            if iteration_closeout.break_loop {
                 break;
             }
         }
