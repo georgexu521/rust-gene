@@ -2369,6 +2369,12 @@ scripts/run_live_eval.sh --case core-coding-quality --mode agent-run --run-tests
 - 已在 required validation outcome 继续抽取后重跑 `core-permission-rejection-recovery`：`required-validation-outcome-20260513-184649` 通过。该 run 先出现一次 verification/acceptance 失败，再经修复闭环恢复，manifest 仍只改两行，三条 required commands 通过，MiniMax provider health 中出现两次 transient reconnect 后恢复，`runtime_diet.validation=passed:6/6 recovered_failed:1`、`closeout_status=passed`、`failure_owner=none`。
 - 已在 `RequiredValidationApplication` 抽取后重跑 `core-permission-rejection-recovery`：`required-validation-application-20260513-190445` 通过。manifest 仍只改两行，三条 required commands 通过，MiniMax 一次 transient reconnect 后恢复，`runtime_diet.validation=passed:5/5`、`closeout_status=passed`、`failure_owner=none`。
 - 已重跑 `core-rollback-product-path`：`core-quality-rollback-20260513-163404` 通过。这个 case 验证 rollback 是正常产品路径而不是 debug/git fallback。agent 没制造 diff，检查了 checkpoint、file tool history、`/rollback` slash handler 和 `file_write` / `file_edit` / `file_patch` 接线；required `cargo test -q rollback -- --test-threads=1` 和 `cargo test -q checkpoint -- --test-threads=1` 通过，共 18 个相关测试。最终明确区分 `/rollback last-file` / `fc_*` 走 `CheckpointManager.restore_latest_file_change()` / `restore_file_change()`，其他 target 才走 git `reset --hard` fallback；`runtime_diet.validation=passed:4/4`、`closeout_status=passed`、`failure_owner=none`。
+- 2026-05-16 本地确定性 Phase 4 门已刷新：`bash scripts/live-eval-summary-smoke.sh`、
+  `bash -n scripts/run_live_eval.sh`、`python3 -m py_compile
+  scripts/live_eval_report_parser.py`、以及
+  `scripts/run_live_eval.sh --list --case core-coding-quality` 均通过。这个
+  验证只覆盖 summary/report/list/parser 回归入口，不代表重新跑真实 provider
+  agent-run。
 
 任务：
 
