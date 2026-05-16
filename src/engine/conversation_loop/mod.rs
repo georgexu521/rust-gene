@@ -57,6 +57,7 @@ mod tool_turn_controller;
 mod turn_api_failure_controller;
 mod turn_assistant_response_controller;
 mod turn_completion_controller;
+mod turn_entry_gate_controller;
 mod turn_focused_repair_action_controller;
 mod turn_focused_repair_flow_controller;
 mod turn_iteration_closeout_controller;
@@ -81,17 +82,9 @@ mod workflow_trace;
 
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
-use legacy_workflow_gate_controller::{
-    LegacyWorkflowGateContext, LegacyWorkflowGateController, LegacyWorkflowGateFlow,
-};
 use patch_recovery::PatchSynthesisAction;
-use reflection_gate_controller::{
-    ReflectionGateContext, ReflectionGateController, ReflectionGateFlow,
-};
 use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
-use session_goal_controller::{SessionGoalController, SessionGoalUpdateContext};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
-use task_context_trace_controller::{TaskContextTraceContext, TaskContextTraceController};
 #[cfg(test)]
 use text_sanitizer::strip_think_blocks;
 #[cfg(test)]
@@ -112,6 +105,9 @@ use turn_assistant_response_controller::{
     TurnAssistantResponseContext, TurnAssistantResponseController, TurnAssistantResponseFlow,
 };
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
+use turn_entry_gate_controller::{
+    TurnEntryGateContext, TurnEntryGateController, TurnEntryGateFlow,
+};
 use turn_focused_repair_flow_controller::{
     TurnFocusedRepairFlow, TurnFocusedRepairFlowContext, TurnFocusedRepairFlowController,
 };
@@ -138,7 +134,6 @@ use validation_runner::verification_source_context;
 #[cfg(test)]
 use validation_runner::RequiredValidationController;
 use workflow_change_tracker::WorkflowChangeTracker;
-use workflow_contract_controller::{WorkflowContractController, WorkflowContractJudgmentContext};
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
 #[cfg(test)]
@@ -632,11 +627,8 @@ impl ConversationLoop {
         let mut task_bundle = task_context_setup.task_bundle;
         let mut code_workflow = task_context_setup.code_workflow;
         let mut turn_state = task_context_setup.turn_state;
-        WorkflowContractController::run(WorkflowContractJudgmentContext {
-            provider: self.provider.as_ref(),
-            model: self.model.clone(),
-            session_store: self.session_store.as_ref(),
-            session_id: &self.session_id,
+        match TurnEntryGateController::run(TurnEntryGateContext {
+            conversation: self,
             last_user_preview: last_user_preview.as_str(),
             route: &route,
             working_dir: &working_dir,
@@ -644,63 +636,16 @@ impl ConversationLoop {
             retrieval_context: turn_retrieval_context.as_ref(),
             task_bundle: &mut task_bundle,
             code_workflow: &mut code_workflow,
+            required_validation_commands: &required_validation_commands,
             messages: &mut messages,
             trace: &trace,
-        })
-        .await;
-        TaskContextTraceController::record(TaskContextTraceContext {
-            task_bundle: &task_bundle,
-            route_workflow: route.workflow,
-            required_validation_commands: &required_validation_commands,
-            trace: &trace,
-        });
-        match ReflectionGateController::run(ReflectionGateContext {
-            task_bundle: &task_bundle,
-            route: &route,
-            code_workflow: &code_workflow,
-            approval_channel: self.approval_channel.as_ref(),
             tx,
-            trace: &trace,
         })
         .await
         {
-            ReflectionGateFlow::Continue => {}
-            ReflectionGateFlow::Stop { content } => {
-                self.finish_trace(trace.clone(), TurnStatus::Failed);
-                return Ok(LoopResult {
-                    content,
-                    tool_calls: Vec::new(),
-                    tool_calls_made: false,
-                    iterations: 0,
-                    pre_executed_results: std::collections::HashMap::new(),
-                });
-            }
-        }
-        SessionGoalController::update(SessionGoalUpdateContext {
-            manager: self.goal_manager.as_ref(),
-            last_user_preview: &last_user_preview,
-            route: &route,
-            trace: &trace,
-        });
-
-        match LegacyWorkflowGateController::run(LegacyWorkflowGateContext {
-            route: &route,
-            messages: &messages,
-            workflow_triggered_this_turn: &self.workflow_triggered_this_turn,
-            workflow_policy: self.workflow_policy.clone(),
-            provider: self.provider.clone(),
-            model: self.model.clone(),
-            tool_registry: self.tool_registry.clone(),
-            base_context: self.create_tool_context_with_trace(&trace),
-            memory_manager: self.memory_manager.as_ref(),
-            tx,
-            trace: &trace,
-        })
-        .await
-        {
-            LegacyWorkflowGateFlow::Continue => {}
-            LegacyWorkflowGateFlow::Completed { content } => {
-                self.finish_trace(trace.clone(), TurnStatus::Completed);
+            TurnEntryGateFlow::Continue => {}
+            TurnEntryGateFlow::Stop { content, status } => {
+                self.finish_trace(trace.clone(), status);
                 return Ok(LoopResult {
                     content,
                     tool_calls: Vec::new(),

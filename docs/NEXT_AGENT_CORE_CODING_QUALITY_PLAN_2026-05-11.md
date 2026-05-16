@@ -788,6 +788,20 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the API failure closeout slice:
   `cargo test -q` passed (`1409 passed; 0 failed`).
+- 2026-05-16: Phase A turn-entry gate cleanup continued. Added
+  `turn_entry_gate_controller.rs`; workflow-contract judgment, task-context
+  trace recording, reflection gate approval/stop handling, session-goal
+  update, and legacy workflow gate routing now live behind one pre-loop
+  controller. `run_inner` now only follows the returned continue/stop flow and
+  keeps trace finalization plus zero-iteration result construction local.
+- Validation after the turn-entry gate slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_entry_gate_controller`,
+  `reflection_gate_controller`, `legacy_workflow_gate_controller`,
+  `workflow_contract_controller`, `task_context_trace_controller`, and
+  `session_goal_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn-entry gate slice:
+  `cargo test -q` passed (`1411 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
