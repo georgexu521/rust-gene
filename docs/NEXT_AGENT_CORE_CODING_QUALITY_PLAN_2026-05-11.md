@@ -519,6 +519,17 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the API response application slice:
   `cargo test -q` passed (`1372 passed; 0 failed`).
+- 2026-05-16: Phase A no-tool assistant response cleanup continued.
+  `AssistantResponseRetryController` now owns the no-tool assistant response
+  branch: local-filesystem route detection, unsupported filesystem claim
+  retry checks, retry message application, and non-streaming provider text
+  chunk replay. `run_inner` now only branches on `Retry` versus `Finish`.
+- Validation after the no-tool assistant response slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `assistant_response_retry_controller` / `assistant_response_retry` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the no-tool assistant response slice:
+  `cargo test -q` passed (`1374 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
