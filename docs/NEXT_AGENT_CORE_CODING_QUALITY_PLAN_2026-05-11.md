@@ -562,6 +562,17 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the model patch-synthesis execution slice:
   `cargo test -q` passed (`1377 passed; 0 failed`).
+- 2026-05-16: Phase A disabled patch-synthesis cleanup continued.
+  `PatchSynthesisFlowController::handle_disabled_patch_synthesis` now owns
+  deterministic fallback probing/execution, disabled-synthesis trace
+  recording, disabled recovery selection, and disabled recovery application.
+  `run_inner` now only follows the returned disabled-synthesis flow.
+- Validation after the disabled patch-synthesis slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `patch_synthesis_flow_controller` / `patch_synthesis` tests,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the disabled patch-synthesis slice:
+  `cargo test -q` passed (`1377 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
