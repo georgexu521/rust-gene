@@ -57,6 +57,7 @@ mod tool_turn_controller;
 mod turn_completion_controller;
 mod turn_iteration_closeout_controller;
 mod turn_recording;
+mod turn_retrieval_context_controller;
 mod turn_runtime_state;
 mod turn_setup_controller;
 mod validation_runner;
@@ -123,6 +124,9 @@ use tool_round_controller::{ToolRoundContext, ToolRoundController};
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
 use turn_iteration_closeout_controller::{
     TurnIterationCloseoutContext, TurnIterationCloseoutController,
+};
+use turn_retrieval_context_controller::{
+    TurnRetrievalContextController, TurnRetrievalContextRequest,
 };
 use turn_runtime_state::TurnRuntimeState;
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
@@ -594,64 +598,18 @@ impl ConversationLoop {
         let resource_policy = setup.resource_policy;
         let working_dir = setup.working_dir;
         let destructive_scope = setup.destructive_scope;
-        let mut turn_retrieval_context =
-            build_project_retrieval_context(&last_user_preview, &working_dir, route.retrieval)
-                .await;
-        if let Some(session_ctx) = build_session_retrieval_context(
-            &last_user_preview,
-            self.session_store.clone(),
-            route.retrieval,
-        )
-        .await
-        {
-            if let Some(ref mut ctx) = turn_retrieval_context {
-                ctx.extend(session_ctx);
-            } else {
-                turn_retrieval_context = Some(session_ctx);
-            }
-        }
-        if route.retrieval.allows_memory_context() {
-            if let Some(ref mem_mutex) = self.memory_manager {
-                let mut mem = mem_mutex.lock().await;
-                mem.reset_turn();
-                if let Some(memory_ctx) = mem
-                    .prefetch_retrieval_context_with_llm_rerank(
-                        &last_user_preview,
-                        self.provider.as_ref(),
-                        &self.model,
-                        route.retrieval,
-                    )
-                    .await
-                {
-                    trace.record(TraceEvent::MemoryPrefetch {
-                        chars: memory_ctx
-                            .items
-                            .iter()
-                            .map(|item| item.content_preview.chars().count())
-                            .sum(),
-                    });
-                    if let Some(ref mut ctx) = turn_retrieval_context {
-                        ctx.extend(memory_ctx);
-                    } else {
-                        turn_retrieval_context = Some(memory_ctx);
-                    }
-                }
-            }
-        }
-        if let Some(ref ctx) = turn_retrieval_context {
-            trace.record(TraceEvent::RetrievalContextBuilt {
-                policy: format!("{:?}", ctx.policy),
-                sources: ctx
-                    .items
-                    .iter()
-                    .map(|item| format!("{:?}", item.source))
-                    .collect(),
-                items: ctx.items.len(),
-                estimated_tokens: ctx.token_estimate,
-                provenance: ctx.provenance_summaries(),
-                conflicts: ctx.conflict_count(),
-            });
-        }
+        let turn_retrieval_context =
+            TurnRetrievalContextController::build(TurnRetrievalContextRequest {
+                last_user_preview: &last_user_preview,
+                working_dir: &working_dir,
+                retrieval_policy: route.retrieval,
+                session_store: self.session_store.clone(),
+                memory_manager: self.memory_manager.as_ref(),
+                provider: self.provider.as_ref(),
+                model: &self.model,
+                trace: &trace,
+            })
+            .await;
         let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
             &last_user_preview,
             &working_dir,
