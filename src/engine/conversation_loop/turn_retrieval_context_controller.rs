@@ -1,4 +1,6 @@
-use super::{build_project_retrieval_context, build_session_retrieval_context};
+use super::retrieval_context_builder::{
+    build_project_retrieval_context, build_session_retrieval_context,
+};
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::trace::{TraceCollector, TraceEvent};

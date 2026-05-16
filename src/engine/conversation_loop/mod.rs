@@ -34,6 +34,7 @@ mod pseudo_tool_text;
 mod reflection_gate_controller;
 mod repair_controller;
 mod request_preparation_controller;
+mod retrieval_context_builder;
 mod retrieval_prompt_controller;
 mod runtime_diet;
 mod runtime_timeouts;
@@ -165,70 +166,6 @@ fn tool_not_allowed_result(tool_call: &ToolCall) -> ToolResult {
     ));
     attach_tool_execution_metadata(tool_call, &mut result);
     result
-}
-
-async fn build_project_retrieval_context(
-    query: &str,
-    working_dir: &std::path::Path,
-    policy: crate::engine::intent_router::RetrievalPolicy,
-) -> Option<crate::engine::retrieval_context::RetrievalContext> {
-    if !policy.allows_project_context() {
-        return None;
-    }
-    let root = working_dir.to_path_buf();
-    let query = query.to_string();
-    tokio::task::spawn_blocking(move || {
-        let mut scanner = crate::tools::project_tool::ProjectScanner::new();
-        scanner.scan(&root);
-        crate::engine::retrieval_context::RetrievalContext::from_project_summary(
-            &query,
-            scanner.tree_summary(),
-            &root,
-            policy,
-        )
-    })
-    .await
-    .ok()
-    .flatten()
-}
-
-async fn build_session_retrieval_context(
-    query: &str,
-    store: Option<Arc<crate::session_store::SessionStore>>,
-    policy: crate::engine::intent_router::RetrievalPolicy,
-) -> Option<crate::engine::retrieval_context::RetrievalContext> {
-    if !policy.allows_memory_context() {
-        return None;
-    }
-    let store = store?;
-    let query = fts_phrase_query(query);
-    if query.trim().is_empty() {
-        return None;
-    }
-    tokio::task::spawn_blocking(move || {
-        store.search_messages(&query, 4).ok().and_then(|messages| {
-            crate::engine::retrieval_context::RetrievalContext::from_session_messages(
-                &query, &messages, policy,
-            )
-        })
-    })
-    .await
-    .ok()
-    .flatten()
-}
-
-fn fts_phrase_query(query: &str) -> String {
-    let compact = query
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take(160)
-        .collect::<String>()
-        .replace('"', "\"\"");
-    if compact.trim().is_empty() {
-        String::new()
-    } else {
-        format!("\"{}\"", compact)
-    }
 }
 
 fn workflow_contract_enabled(provider: &dyn LlmProvider) -> bool {

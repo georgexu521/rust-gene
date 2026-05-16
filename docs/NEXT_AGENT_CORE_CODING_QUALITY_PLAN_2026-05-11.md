@@ -865,6 +865,17 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn-iteration loop slice:
   `cargo test -q` passed (`1419 passed; 0 failed`).
+- 2026-05-16: Phase A retrieval helper cleanup continued. Added
+  `retrieval_context_builder.rs`; project/session retrieval-context helper
+  construction and FTS phrase escaping now live beside
+  `turn_retrieval_context_controller.rs` instead of as free helpers in
+  `conversation_loop/mod.rs`.
+- Validation after the retrieval helper slice: `cargo fmt --check`,
+  `git diff --check`, targeted `retrieval_context_builder` and
+  `turn_retrieval_context_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the retrieval helper slice:
+  `cargo test -q` passed (`1421 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
