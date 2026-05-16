@@ -839,6 +839,20 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the tool-round step slice:
   `cargo test -q` passed (`1417 passed; 0 failed`).
+- 2026-05-16: Phase A turn-iteration sequencing cleanup continued. Added
+  `turn_iteration_controller.rs`; iteration setup, model-step sequencing,
+  tool-round step execution, focused-repair flow, tool-failure followup, and
+  post-change closeout now live behind one per-iteration controller.
+  `run_inner` now only follows the returned `Continue` / `Break` flow inside
+  the loop.
+- Validation after the turn-iteration sequencing slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_iteration_controller`,
+  `turn_model_step_controller`, `turn_tool_round_step_controller`,
+  `turn_focused_repair_flow_controller`, `turn_tool_failure_followup_controller`,
+  and `turn_post_change_closeout_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn-iteration sequencing slice:
+  `cargo test -q` passed (`1418 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

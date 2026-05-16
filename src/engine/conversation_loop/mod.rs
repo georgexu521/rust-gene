@@ -62,6 +62,7 @@ mod turn_entry_gate_controller;
 mod turn_focused_repair_action_controller;
 mod turn_focused_repair_flow_controller;
 mod turn_iteration_closeout_controller;
+mod turn_iteration_controller;
 mod turn_iteration_setup_controller;
 mod turn_loop_bootstrap_controller;
 mod turn_loop_state_controller;
@@ -107,24 +108,9 @@ use turn_context_bootstrap_controller::{
 use turn_entry_gate_controller::{
     TurnEntryGateContext, TurnEntryGateController, TurnEntryGateFlow,
 };
-use turn_focused_repair_flow_controller::{
-    TurnFocusedRepairFlow, TurnFocusedRepairFlowContext, TurnFocusedRepairFlowController,
-};
-use turn_iteration_setup_controller::{
-    TurnIterationSetupContext, TurnIterationSetupController, TurnIterationSetupFlow,
-};
+use turn_iteration_controller::{TurnIterationContext, TurnIterationController, TurnIterationFlow};
 use turn_loop_bootstrap_controller::{TurnLoopBootstrapContext, TurnLoopBootstrapController};
-use turn_model_step_controller::{
-    TurnModelStepContext, TurnModelStepController, TurnModelStepFlow,
-};
-use turn_post_change_closeout_controller::{
-    TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
-};
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
-use turn_tool_failure_followup_controller::{
-    TurnToolFailureFollowupContext, TurnToolFailureFollowupController, TurnToolFailureFollowupFlow,
-};
-use turn_tool_round_step_controller::{TurnToolRoundStepContext, TurnToolRoundStepController};
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
 #[cfg(test)]
@@ -658,138 +644,32 @@ impl ConversationLoop {
         let baseline_git_status_files = WorkflowChangeTracker::git_status_files();
 
         for iteration in 0..max_loop_iterations {
-            let exposure_plan = match TurnIterationSetupController::run(TurnIterationSetupContext {
+            match TurnIterationController::run(TurnIterationContext {
+                conversation: self,
                 iteration,
-                max_iterations: self.max_iterations,
-                turn_state: &mut turn_state,
-                memory_manager: self.memory_manager.as_ref(),
-                trace: &trace,
-                route_workflow: route.workflow,
-                baseline_git_status_files: &baseline_git_status_files,
-                base_tools: &base_tools,
-            })
-            .await
-            {
-                TurnIterationSetupFlow::Continue { exposure_plan } => exposure_plan,
-                TurnIterationSetupFlow::Stop => break,
-            };
-            let tools = exposure_plan.tools;
-            let exposed_tool_names = exposure_plan.exposed_tool_names;
-
-            let (content, tool_calls, pre_executed) =
-                match TurnModelStepController::run(TurnModelStepContext {
-                    conversation: self,
-                    iteration: iteration + 1,
-                    route: &route,
-                    code_workflow: &code_workflow,
-                    turn_retrieval_context: turn_retrieval_context.as_ref(),
-                    focused_repair_prompt: exposure_plan.focused_repair_prompt,
-                    tools: &tools,
-                    exposed_tool_names: &exposed_tool_names,
-                    loop_state: &mut loop_state,
-                    turn_state: &mut turn_state,
-                    messages: &mut messages,
-                    trace: &trace,
-                    tx,
-                })
-                .await?
-                {
-                    TurnModelStepFlow::Retry => continue,
-                    TurnModelStepFlow::Finish => break,
-                    TurnModelStepFlow::ToolRound {
-                        content,
-                        tool_calls,
-                        pre_executed,
-                    } => (content, tool_calls, pre_executed),
-                };
-
-            let mut tool_round_state = TurnToolRoundStepController::run(TurnToolRoundStepContext {
-                conversation: self,
-                content: &content,
-                tool_calls: &tool_calls,
-                tx,
-                pre_executed,
-                trace: &trace,
-                resource_policy: &resource_policy,
-                exposed_tool_names: &exposed_tool_names,
-                turn_state: &mut turn_state,
-                messages: &mut messages,
-                is_programming_workflow:
-                    crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
-                working_dir: &working_dir,
-                last_user_preview: &last_user_preview,
-                loop_state: &mut loop_state,
-                required_validation_commands: &required_validation_commands,
-                destructive_scope: &destructive_scope,
-                baseline_git_status_files: &baseline_git_status_files,
-            })
-            .await;
-            match TurnFocusedRepairFlowController::run(TurnFocusedRepairFlowContext {
-                conversation: self,
-                workflow: route.workflow,
-                no_diff_audit_closeout_allowed,
-                code_write_tools_forbidden,
-                trace: &trace,
-                code_workflow: &mut code_workflow,
-                turn_state: &mut turn_state,
-                round_state: &mut tool_round_state,
-                exposed_tool_names: &exposed_tool_names,
-                tx,
-                resource_policy: &resource_policy,
-                destructive_scope: &destructive_scope,
-                baseline_git_status_files: &baseline_git_status_files,
-                last_user_preview: last_user_preview.as_str(),
-                messages: &mut messages,
-                final_content: &mut loop_state.final_content,
-                final_tool_calls: &mut loop_state.final_tool_calls,
-            })
-            .await
-            {
-                TurnFocusedRepairFlow::Continue => continue,
-                TurnFocusedRepairFlow::Stop => break,
-                TurnFocusedRepairFlow::Proceed => {}
-            }
-
-            match TurnToolFailureFollowupController::run(TurnToolFailureFollowupContext {
-                provider: self.provider.as_ref(),
-                model: self.model.clone(),
-                session_store: self.session_store.as_ref(),
-                session_id: &self.session_id,
-                trace: &trace,
-                any_tool_success: tool_round_state.any_tool_success,
-                last_user_preview: last_user_preview.as_str(),
-                task_bundle: &mut task_bundle,
-                round_state: &mut tool_round_state,
-                failed_tool_names: &loop_state.failed_tool_names,
-                tx,
-                final_content: &mut loop_state.final_content,
-                messages: &mut messages,
-            })
-            .await
-            {
-                TurnToolFailureFollowupFlow::Continue => {}
-                TurnToolFailureFollowupFlow::Stop => break,
-            }
-
-            match TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
-                conversation: self,
-                trace: &trace,
                 route: &route,
                 code_workflow: &mut code_workflow,
                 task_bundle: &mut task_bundle,
-                round_state: &mut tool_round_state,
-                required_validation_commands: &required_validation_commands,
-                successful_required_validation_commands: &mut loop_state
-                    .successful_required_validation_commands,
+                turn_retrieval_context: turn_retrieval_context.as_ref(),
+                base_tools: &base_tools,
+                loop_state: &mut loop_state,
                 turn_state: &mut turn_state,
-                final_content: &mut loop_state.final_content,
-                messages: &mut messages,
+                no_diff_audit_closeout_allowed,
+                code_write_tools_forbidden,
+                resource_policy: &resource_policy,
+                working_dir: &working_dir,
                 last_user_preview: last_user_preview.as_str(),
+                required_validation_commands: &required_validation_commands,
+                destructive_scope: &destructive_scope,
+                baseline_git_status_files: &baseline_git_status_files,
+                messages: &mut messages,
+                trace: &trace,
+                tx,
             })
-            .await
+            .await?
             {
-                TurnPostChangeCloseoutFlow::Continue => {}
-                TurnPostChangeCloseoutFlow::Break => break,
+                TurnIterationFlow::Continue => continue,
+                TurnIterationFlow::Break => break,
             }
         }
 
