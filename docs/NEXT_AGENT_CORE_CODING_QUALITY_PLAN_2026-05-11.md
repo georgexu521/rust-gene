@@ -728,6 +728,17 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the focused repair action flow slice:
   `cargo test -q` passed (`1400 passed; 0 failed`).
+- 2026-05-16: Phase A tool-failure followup cleanup continued. Added
+  `turn_tool_failure_followup_controller.rs`; guided tool-failure debugging,
+  repeated/noisy failure stop decision, and stop-message output now live
+  behind one followup controller after focused repair / patch-synthesis
+  handling.
+- Validation after the tool-failure followup slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_tool_failure_followup_controller`,
+  `tool_failure_stop_controller`, `tool_failure_guided_debugging`,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the tool-failure followup slice:
+  `cargo test -q` passed (`1402 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
