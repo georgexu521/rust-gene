@@ -56,6 +56,7 @@ mod tool_round_controller;
 mod tool_turn_controller;
 mod turn_completion_controller;
 mod turn_iteration_closeout_controller;
+mod turn_loop_state_controller;
 mod turn_recording;
 mod turn_retrieval_context_controller;
 mod turn_runtime_diet_bootstrap_controller;
@@ -127,6 +128,7 @@ use turn_completion_controller::{TurnCompletionContext, TurnCompletionController
 use turn_iteration_closeout_controller::{
     TurnIterationCloseoutContext, TurnIterationCloseoutController,
 };
+use turn_loop_state_controller::TurnLoopStateController;
 use turn_retrieval_context_controller::{
     TurnRetrievalContextController, TurnRetrievalContextRequest,
 };
@@ -152,7 +154,7 @@ use crate::engine::workflow::WorkflowPolicy;
 use crate::services::api::{LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, warn};
@@ -714,15 +716,7 @@ impl ConversationLoop {
         }
 
         let base_tools = self.get_tools_for_route(&route);
-        let mut final_content = String::new();
-        let mut final_tool_calls = Vec::new();
-        let mut tool_calls_made = false;
-        let mut pseudo_tool_retry_used = false;
-        let mut filesystem_grounding_retry_used = false;
-        let mut companion_context_keys: HashSet<String> = HashSet::new();
-        let mut failed_tool_fingerprints: HashMap<String, usize> = HashMap::new();
-        let mut failed_tool_names: HashMap<String, usize> = HashMap::new();
-        let mut successful_required_validation_commands: HashSet<String> = HashSet::new();
+        let mut loop_state = TurnLoopStateController::initial_state();
         TurnRuntimeDietBootstrapController::observe(TurnRuntimeDietBootstrapContext {
             retrieval_context: turn_retrieval_context.as_ref(),
             tools: &base_tools,
@@ -855,9 +849,9 @@ impl ConversationLoop {
             let api_application =
                 ApiRequestController::apply_outcome(ApiRequestApplicationContext {
                     outcome: api_outcome,
-                    final_content: &mut final_content,
-                    final_tool_calls: &mut final_tool_calls,
-                    tool_calls_made: &mut tool_calls_made,
+                    final_content: &mut loop_state.final_content,
+                    final_tool_calls: &mut loop_state.final_tool_calls,
+                    tool_calls_made: &mut loop_state.tool_calls_made,
                     trace: &trace,
                     iteration: iteration + 1,
                 });
@@ -872,9 +866,10 @@ impl ConversationLoop {
                         route: &route,
                         evidence_ledger: &turn_state.evidence_ledger,
                         exposed_tool_names: &exposed_tool_names,
-                        tool_calls_made,
-                        pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
-                        filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                        tool_calls_made: loop_state.tool_calls_made,
+                        pseudo_tool_retry_used: &mut loop_state.pseudo_tool_retry_used,
+                        filesystem_grounding_retry_used: &mut loop_state
+                            .filesystem_grounding_retry_used,
                         provider: self.provider.as_ref(),
                         tools: &tools,
                         tx,
@@ -904,12 +899,12 @@ impl ConversationLoop {
                     crate::engine::code_change_workflow::is_programming_workflow(route.workflow),
                 working_dir: &working_dir,
                 last_user_preview: &last_user_preview,
-                companion_context_keys: &mut companion_context_keys,
-                failed_tool_fingerprints: &mut failed_tool_fingerprints,
-                failed_tool_names: &mut failed_tool_names,
+                companion_context_keys: &mut loop_state.companion_context_keys,
+                failed_tool_fingerprints: &mut loop_state.failed_tool_fingerprints,
+                failed_tool_names: &mut loop_state.failed_tool_names,
                 required_validation_commands: &required_validation_commands,
-                successful_required_validation_commands:
-                    &mut successful_required_validation_commands,
+                successful_required_validation_commands: &mut loop_state
+                    .successful_required_validation_commands,
                 destructive_scope: &destructive_scope,
                 baseline_git_status_files: &baseline_git_status_files,
             })
@@ -1010,8 +1005,8 @@ impl ConversationLoop {
                                     crate::engine::code_change_workflow::is_programming_workflow(
                                         route.workflow,
                                     ),
-                                final_content: &mut final_content,
-                                final_tool_calls: &mut final_tool_calls,
+                                final_content: &mut loop_state.final_content,
+                                final_tool_calls: &mut loop_state.final_tool_calls,
                             },
                         )
                         .await
@@ -1043,11 +1038,11 @@ impl ConversationLoop {
             if let Some(stop) = ToolFailureStopController::decide(ToolFailureStopRequest {
                 any_tool_success,
                 repeated_failed_tools: &repeated_failed_tools,
-                failed_tool_names: &failed_tool_names,
+                failed_tool_names: &loop_state.failed_tool_names,
             }) {
                 FocusedRepairRecoveryController::stop_with_message(
                     tx,
-                    &mut final_content,
+                    &mut loop_state.final_content,
                     &stop.message,
                 )
                 .await;
@@ -1064,11 +1059,11 @@ impl ConversationLoop {
                     changed_files: &changed_files,
                     required_validation_commands: &required_validation_commands,
                     successful_validation_commands: &successful_validation_commands,
-                    successful_required_validation_commands:
-                        &mut successful_required_validation_commands,
+                    successful_required_validation_commands: &mut loop_state
+                        .successful_required_validation_commands,
                     turn_state: &mut turn_state,
                     should_closeout_after_verified_change,
-                    final_content: &mut final_content,
+                    final_content: &mut loop_state.final_content,
                     tool_results_text: &mut tool_results_text,
                     messages: &mut messages,
                     last_user_preview: last_user_preview.as_str(),
@@ -1085,7 +1080,7 @@ impl ConversationLoop {
                     conversation: self,
                     trace: &trace,
                     messages: &messages,
-                    final_content: &final_content,
+                    final_content: &loop_state.final_content,
                     tool_results_text: &tool_results_text,
                     should_closeout_after_verified_change,
                 })
@@ -1102,11 +1097,11 @@ impl ConversationLoop {
             code_workflow: &code_workflow,
             task_bundle: &task_bundle,
             runtime_diet: &mut turn_state.runtime_diet,
-            final_content: &mut final_content,
-            final_tool_calls: &final_tool_calls,
+            final_content: &mut loop_state.final_content,
+            final_tool_calls: &loop_state.final_tool_calls,
             iterations_used: turn_state.iterations_used,
             max_iterations: self.max_iterations,
-            tool_calls_made,
+            tool_calls_made: loop_state.tool_calls_made,
             evidence_ledger: &turn_state.evidence_ledger,
             tx,
         })
