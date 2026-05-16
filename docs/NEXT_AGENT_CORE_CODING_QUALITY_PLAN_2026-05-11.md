@@ -853,6 +853,18 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn-iteration sequencing slice:
   `cargo test -q` passed (`1418 passed; 0 failed`).
+- 2026-05-16: Phase A turn-iteration loop cleanup continued. Added
+  `turn_iteration_loop_controller.rs`; total loop budget calculation, baseline
+  git-status snapshot capture, and per-iteration controller dispatch now live
+  outside `run_inner`. `run_inner` now hands prepared turn state into the loop
+  controller and resumes at completion closeout.
+- Validation after the turn-iteration loop slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_iteration_loop_controller`,
+  `turn_iteration_controller`, `iteration_budget_controller`, and
+  `turn_iteration_setup_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn-iteration loop slice:
+  `cargo test -q` passed (`1419 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

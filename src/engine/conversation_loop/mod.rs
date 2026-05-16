@@ -63,6 +63,7 @@ mod turn_focused_repair_action_controller;
 mod turn_focused_repair_flow_controller;
 mod turn_iteration_closeout_controller;
 mod turn_iteration_controller;
+mod turn_iteration_loop_controller;
 mod turn_iteration_setup_controller;
 mod turn_loop_bootstrap_controller;
 mod turn_loop_state_controller;
@@ -108,7 +109,7 @@ use turn_context_bootstrap_controller::{
 use turn_entry_gate_controller::{
     TurnEntryGateContext, TurnEntryGateController, TurnEntryGateFlow,
 };
-use turn_iteration_controller::{TurnIterationContext, TurnIterationController, TurnIterationFlow};
+use turn_iteration_loop_controller::{TurnIterationLoopContext, TurnIterationLoopController};
 use turn_loop_bootstrap_controller::{TurnLoopBootstrapContext, TurnLoopBootstrapController};
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
 #[cfg(test)]
@@ -117,7 +118,6 @@ use validation_runner::shell_output_with_timeout;
 use validation_runner::verification_source_context;
 #[cfg(test)]
 use validation_runner::RequiredValidationController;
-use workflow_change_tracker::WorkflowChangeTracker;
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
 #[cfg(test)]
@@ -639,39 +639,27 @@ impl ConversationLoop {
         let base_tools = turn_loop_bootstrap.base_tools;
         let mut loop_state = turn_loop_bootstrap.loop_state;
 
-        // ── 迭代预算 ─────────────────────────────────────
-        let max_loop_iterations = self.max_iterations + code_workflow.max_repair_attempts().max(3);
-        let baseline_git_status_files = WorkflowChangeTracker::git_status_files();
-
-        for iteration in 0..max_loop_iterations {
-            match TurnIterationController::run(TurnIterationContext {
-                conversation: self,
-                iteration,
-                route: &route,
-                code_workflow: &mut code_workflow,
-                task_bundle: &mut task_bundle,
-                turn_retrieval_context: turn_retrieval_context.as_ref(),
-                base_tools: &base_tools,
-                loop_state: &mut loop_state,
-                turn_state: &mut turn_state,
-                no_diff_audit_closeout_allowed,
-                code_write_tools_forbidden,
-                resource_policy: &resource_policy,
-                working_dir: &working_dir,
-                last_user_preview: last_user_preview.as_str(),
-                required_validation_commands: &required_validation_commands,
-                destructive_scope: &destructive_scope,
-                baseline_git_status_files: &baseline_git_status_files,
-                messages: &mut messages,
-                trace: &trace,
-                tx,
-            })
-            .await?
-            {
-                TurnIterationFlow::Continue => continue,
-                TurnIterationFlow::Break => break,
-            }
-        }
+        TurnIterationLoopController::run(TurnIterationLoopContext {
+            conversation: self,
+            route: &route,
+            code_workflow: &mut code_workflow,
+            task_bundle: &mut task_bundle,
+            turn_retrieval_context: turn_retrieval_context.as_ref(),
+            base_tools: &base_tools,
+            loop_state: &mut loop_state,
+            turn_state: &mut turn_state,
+            no_diff_audit_closeout_allowed,
+            code_write_tools_forbidden,
+            resource_policy: &resource_policy,
+            working_dir: &working_dir,
+            last_user_preview: last_user_preview.as_str(),
+            required_validation_commands: &required_validation_commands,
+            destructive_scope: &destructive_scope,
+            messages: &mut messages,
+            trace: &trace,
+            tx,
+        })
+        .await?;
 
         let result = TurnCompletionController::complete(TurnCompletionContext {
             trace: &trace,
