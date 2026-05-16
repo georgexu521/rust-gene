@@ -58,6 +58,7 @@ mod turn_completion_controller;
 mod turn_iteration_closeout_controller;
 mod turn_loop_state_controller;
 mod turn_recording;
+mod turn_request_bootstrap_controller;
 mod turn_retrieval_context_controller;
 mod turn_runtime_diet_bootstrap_controller;
 mod turn_runtime_state;
@@ -85,21 +86,16 @@ use iteration_budget_controller::{IterationBudgetCheck, IterationBudgetControlle
 use legacy_workflow_gate_controller::{
     LegacyWorkflowGateContext, LegacyWorkflowGateController, LegacyWorkflowGateFlow,
 };
-use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
 use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
     EnterPatchSynthesisContext, EnterPatchSynthesisFlow, PatchSynthesisFlowController,
     PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
 };
 use post_change_workflow_controller::{PostChangeWorkflowContext, PostChangeWorkflowController};
-use preflight_compression_controller::{
-    PreflightCompressionContext, PreflightCompressionController,
-};
 use reflection_gate_controller::{
     ReflectionGateContext, ReflectionGateController, ReflectionGateFlow,
 };
 use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
-use retrieval_prompt_controller::{RetrievalPromptContext, RetrievalPromptController};
 use runtime_diet::trace_runtime_diet_report;
 use session_goal_controller::{SessionGoalController, SessionGoalUpdateContext};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
@@ -129,6 +125,9 @@ use turn_iteration_closeout_controller::{
     TurnIterationCloseoutContext, TurnIterationCloseoutController,
 };
 use turn_loop_state_controller::TurnLoopStateController;
+use turn_request_bootstrap_controller::{
+    TurnRequestBootstrapContext, TurnRequestBootstrapController,
+};
 use turn_retrieval_context_controller::{
     TurnRetrievalContextController, TurnRetrievalContextRequest,
 };
@@ -723,35 +722,18 @@ impl ConversationLoop {
             working_dir: &working_dir,
             runtime_diet: &mut turn_state.runtime_diet,
         });
-
-        // ── 记忆围栏注入：先注入，再让 preflight 统计真实请求大小 ──
-        MemorySnapshotController::inject(MemorySnapshotInjectionContext {
+        TurnRequestBootstrapController::run(TurnRequestBootstrapContext {
             retrieval_policy: route.retrieval,
             memory_manager: self.memory_manager.as_ref(),
-            messages: &mut messages,
-            runtime_diet: &mut turn_state.runtime_diet,
-            trace: &trace,
-        })
-        .await;
-
-        // ── 前置压缩（Preflight）─────────────────────────
-        PreflightCompressionController::run(PreflightCompressionContext {
             compressor: self.compressor.as_ref(),
             messages: &mut messages,
             tools: &base_tools,
+            retrieval_context: turn_retrieval_context.as_ref(),
             runtime_diet: &mut turn_state.runtime_diet,
             trace: &trace,
+            tx,
         })
         .await;
-
-        if let Some(tx) = tx {
-            let _ = tx.send(StreamEvent::Start).await;
-        }
-
-        RetrievalPromptController::inject(RetrievalPromptContext {
-            retrieval_context: turn_retrieval_context.as_ref(),
-            messages: &mut messages,
-        });
 
         // ── 迭代预算 ─────────────────────────────────────
         let max_loop_iterations = self.max_iterations + code_workflow.max_repair_attempts().max(3);
