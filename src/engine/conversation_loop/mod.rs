@@ -83,11 +83,8 @@ use legacy_workflow_gate_controller::{
 use memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
 use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
-    CodeWriteForbiddenRecoveryContext, DisabledPatchSynthesisContext, DisabledPatchSynthesisFlow,
-    ModelPatchSynthesisExecutionContext, PatchSynthesisFailureHandlingContext,
-    PatchSynthesisFlowController, PatchSynthesisPostExecutionContext,
-    PatchSynthesisPostExecutionFlow, PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
-    PatchSynthesisRecoveryFlow,
+    EnterPatchSynthesisContext, EnterPatchSynthesisFlow, PatchSynthesisFlowController,
+    PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
 };
 use post_change_workflow_controller::{PostChangeWorkflowContext, PostChangeWorkflowController};
 use preflight_compression_controller::{
@@ -1093,108 +1090,36 @@ impl ConversationLoop {
                 ) {
                     PatchSynthesisProposalFlow::Continue => continue,
                     PatchSynthesisProposalFlow::EnterPatchSynthesis => {
-                        if code_write_tools_forbidden {
-                            PatchSynthesisFlowController::apply_code_write_forbidden_recovery(
-                                CodeWriteForbiddenRecoveryContext {
-                                    state: &mut turn_state.focused_repair,
-                                    trace: &trace,
-                                    messages: &mut messages,
-                                    tool_results_text: &mut tool_results_text,
-                                },
-                            );
-                            continue;
-                        }
-                        if !Self::patch_synthesis_enabled() {
-                            match PatchSynthesisFlowController::handle_disabled_patch_synthesis(
-                                DisabledPatchSynthesisContext {
-                                    proposal: &repair_proposal,
-                                    conversation: self,
-                                    last_user_preview: last_user_preview.as_str(),
-                                    exposed_tool_names: &exposed_tool_names,
-                                    tx,
-                                    trace: &trace,
-                                    resource_policy: &resource_policy,
-                                    destructive_scope: &destructive_scope,
-                                    turn_state: &mut turn_state,
-                                    tool_results_text: &mut tool_results_text,
-                                    messages: &mut messages,
-                                    changed_files: &mut changed_files,
-                                    baseline_git_status_files: &baseline_git_status_files,
-                                    is_programming_workflow:
-                                        crate::engine::code_change_workflow::is_programming_workflow(
-                                            route.workflow,
-                                        ),
-                                    final_content: &mut final_content,
-                                    final_tool_calls: &mut final_tool_calls,
-                                },
-                            )
-                            .await
-                            {
-                                DisabledPatchSynthesisFlow::Continue => continue,
-                                DisabledPatchSynthesisFlow::Stop => break,
-                            }
-                        }
-                        match self
-                            .synthesize_patch_tool_calls(&messages, last_user_preview.as_str())
-                            .await
+                        match PatchSynthesisFlowController::handle_enter_patch_synthesis(
+                            EnterPatchSynthesisContext {
+                                proposal: &repair_proposal,
+                                conversation: self,
+                                code_write_tools_forbidden,
+                                last_user_preview: last_user_preview.as_str(),
+                                exposed_tool_names: &exposed_tool_names,
+                                any_tool_success: &mut any_tool_success,
+                                tx,
+                                trace: &trace,
+                                resource_policy: &resource_policy,
+                                destructive_scope: &destructive_scope,
+                                turn_state: &mut turn_state,
+                                tool_results_text: &mut tool_results_text,
+                                messages: &mut messages,
+                                changed_files: &mut changed_files,
+                                baseline_git_status_files: &baseline_git_status_files,
+                                is_programming_workflow:
+                                    crate::engine::code_change_workflow::is_programming_workflow(
+                                        route.workflow,
+                                    ),
+                                final_content: &mut final_content,
+                                final_tool_calls: &mut final_tool_calls,
+                            },
+                        )
+                        .await
                         {
-                            Ok(synthesis_outcome) => {
-                                let synthesis_execution =
-                                    PatchSynthesisFlowController::execute_model_synthesis_outcome(
-                                        ModelPatchSynthesisExecutionContext {
-                                            proposal: &repair_proposal,
-                                            synthesis_outcome,
-                                            conversation: self,
-                                            tx,
-                                            trace: &trace,
-                                            resource_policy: &resource_policy,
-                                            destructive_scope: &destructive_scope,
-                                            turn_state: &mut turn_state,
-                                            tool_results_text: &mut tool_results_text,
-                                            messages: &mut messages,
-                                            changed_files: &mut changed_files,
-                                            baseline_git_status_files: &baseline_git_status_files,
-                                            is_programming_workflow:
-                                                crate::engine::code_change_workflow::is_programming_workflow(
-                                                    route.workflow,
-                                                ),
-                                            final_tool_calls: &mut final_tool_calls,
-                                        },
-                                    )
-                                    .await;
-                                if PatchSynthesisFlowController::apply_model_execution_outcome(
-                                    PatchSynthesisPostExecutionContext {
-                                        execution: synthesis_execution,
-                                        any_tool_success: &mut any_tool_success,
-                                        tx,
-                                        final_content: &mut final_content,
-                                    },
-                                )
-                                .await
-                                    == PatchSynthesisPostExecutionFlow::Stop
-                                {
-                                    break;
-                                }
-                            }
-                            Err(err) => {
-                                let recovery_flow =
-                                    PatchSynthesisFlowController::recover_after_synthesis_failure(
-                                        PatchSynthesisFailureHandlingContext {
-                                            error_text: err.to_string(),
-                                            state: &mut turn_state.focused_repair,
-                                            trace: &trace,
-                                            messages: &mut messages,
-                                            tool_results_text: &mut tool_results_text,
-                                            tx,
-                                            final_content: &mut final_content,
-                                        },
-                                    )
-                                    .await;
-                                if recovery_flow == PatchSynthesisRecoveryFlow::Continue {
-                                    continue;
-                                }
-                                break;
-                            }
+                            EnterPatchSynthesisFlow::Continue => continue,
+                            EnterPatchSynthesisFlow::Stop => break,
+                            EnterPatchSynthesisFlow::Proceed => {}
                         }
                     }
                 }

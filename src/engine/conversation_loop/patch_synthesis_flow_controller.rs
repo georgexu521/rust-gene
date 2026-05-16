@@ -71,6 +71,27 @@ pub(super) struct DisabledPatchSynthesisContext<'a> {
     pub(super) final_tool_calls: &'a mut Vec<ToolCall>,
 }
 
+pub(super) struct EnterPatchSynthesisContext<'a> {
+    pub(super) proposal: &'a FocusedRepairActionProposal,
+    pub(super) conversation: &'a ConversationLoop,
+    pub(super) code_write_tools_forbidden: bool,
+    pub(super) last_user_preview: &'a str,
+    pub(super) exposed_tool_names: &'a HashSet<String>,
+    pub(super) any_tool_success: &'a mut bool,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) resource_policy: &'a ResourcePolicy,
+    pub(super) destructive_scope: &'a DestructiveScopeContract,
+    pub(super) turn_state: &'a mut TurnRuntimeState,
+    pub(super) tool_results_text: &'a mut String,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) changed_files: &'a mut Vec<PathBuf>,
+    pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
+    pub(super) is_programming_workflow: bool,
+    pub(super) final_content: &'a mut String,
+    pub(super) final_tool_calls: &'a mut Vec<ToolCall>,
+}
+
 pub(super) struct PatchSynthesisCallExecutionOutcome {
     pub(super) any_tool_success: bool,
     pub(super) changed_files_available: bool,
@@ -150,6 +171,13 @@ pub(super) enum PatchSynthesisPostExecutionFlow {
 pub(super) enum DisabledPatchSynthesisFlow {
     Continue,
     Stop,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum EnterPatchSynthesisFlow {
+    Continue,
+    Stop,
+    Proceed,
 }
 
 pub(super) struct PatchSynthesisFlowController;
@@ -357,6 +385,100 @@ impl PatchSynthesisFlowController {
         }
     }
 
+    pub(super) async fn handle_enter_patch_synthesis(
+        context: EnterPatchSynthesisContext<'_>,
+    ) -> EnterPatchSynthesisFlow {
+        if context.code_write_tools_forbidden {
+            Self::apply_code_write_forbidden_recovery(CodeWriteForbiddenRecoveryContext {
+                state: &mut context.turn_state.focused_repair,
+                trace: context.trace,
+                messages: context.messages,
+                tool_results_text: context.tool_results_text,
+            });
+            return EnterPatchSynthesisFlow::Continue;
+        }
+
+        if !ConversationLoop::patch_synthesis_enabled() {
+            return match Self::handle_disabled_patch_synthesis(DisabledPatchSynthesisContext {
+                proposal: context.proposal,
+                conversation: context.conversation,
+                last_user_preview: context.last_user_preview,
+                exposed_tool_names: context.exposed_tool_names,
+                tx: context.tx,
+                trace: context.trace,
+                resource_policy: context.resource_policy,
+                destructive_scope: context.destructive_scope,
+                turn_state: context.turn_state,
+                tool_results_text: context.tool_results_text,
+                messages: context.messages,
+                changed_files: context.changed_files,
+                baseline_git_status_files: context.baseline_git_status_files,
+                is_programming_workflow: context.is_programming_workflow,
+                final_content: context.final_content,
+                final_tool_calls: context.final_tool_calls,
+            })
+            .await
+            {
+                DisabledPatchSynthesisFlow::Continue => EnterPatchSynthesisFlow::Continue,
+                DisabledPatchSynthesisFlow::Stop => EnterPatchSynthesisFlow::Stop,
+            };
+        }
+
+        match context
+            .conversation
+            .synthesize_patch_tool_calls(context.messages, context.last_user_preview)
+            .await
+        {
+            Ok(synthesis_outcome) => {
+                let synthesis_execution =
+                    Self::execute_model_synthesis_outcome(ModelPatchSynthesisExecutionContext {
+                        proposal: context.proposal,
+                        synthesis_outcome,
+                        conversation: context.conversation,
+                        tx: context.tx,
+                        trace: context.trace,
+                        resource_policy: context.resource_policy,
+                        destructive_scope: context.destructive_scope,
+                        turn_state: context.turn_state,
+                        tool_results_text: context.tool_results_text,
+                        messages: context.messages,
+                        changed_files: context.changed_files,
+                        baseline_git_status_files: context.baseline_git_status_files,
+                        is_programming_workflow: context.is_programming_workflow,
+                        final_tool_calls: context.final_tool_calls,
+                    })
+                    .await;
+                match Self::apply_model_execution_outcome(PatchSynthesisPostExecutionContext {
+                    execution: synthesis_execution,
+                    any_tool_success: context.any_tool_success,
+                    tx: context.tx,
+                    final_content: context.final_content,
+                })
+                .await
+                {
+                    PatchSynthesisPostExecutionFlow::Proceed => EnterPatchSynthesisFlow::Proceed,
+                    PatchSynthesisPostExecutionFlow::Stop => EnterPatchSynthesisFlow::Stop,
+                }
+            }
+            Err(err) => {
+                match Self::recover_after_synthesis_failure(PatchSynthesisFailureHandlingContext {
+                    error_text: err.to_string(),
+                    state: &mut context.turn_state.focused_repair,
+                    trace: context.trace,
+                    messages: context.messages,
+                    tool_results_text: context.tool_results_text,
+                    tx: context.tx,
+                    final_content: context.final_content,
+                })
+                .await
+                {
+                    PatchSynthesisRecoveryFlow::Continue => EnterPatchSynthesisFlow::Continue,
+                    PatchSynthesisRecoveryFlow::Stop => EnterPatchSynthesisFlow::Stop,
+                }
+            }
+        }
+    }
+
     pub(super) async fn apply_model_execution_outcome(
         context: PatchSynthesisPostExecutionContext<'_>,
     ) -> PatchSynthesisPostExecutionFlow {
@@ -505,10 +627,51 @@ impl PatchSynthesisFlowController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::destructive_scope::DestructiveScopeContract;
+    use crate::engine::intent_router::IntentRouter;
+    use crate::engine::resource_policy::ResourcePolicy;
     use crate::engine::trace::TurnTrace;
+    use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
+    use crate::tools::ToolRegistry;
+    use async_openai::types::ChatCompletionResponseStream;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     fn trace() -> TraceCollector {
         TraceCollector::new(TurnTrace::new("test", 1, "repair"))
+    }
+
+    struct MockProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockProvider {
+        async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            Err(anyhow::anyhow!("chat not used in this test"))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("stream not used in this test"))
+        }
+
+        fn base_url(&self) -> &str {
+            "mock://local"
+        }
+
+        fn default_model(&self) -> &str {
+            "mock-model"
+        }
+    }
+
+    fn conversation() -> ConversationLoop {
+        ConversationLoop::new(
+            Arc::new(MockProvider),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "mock-model".to_string(),
+        )
     }
 
     #[test]
@@ -644,6 +807,72 @@ mod tests {
         assert_eq!(state.action_checkpoint_no_change_rounds, 0);
         assert_eq!(messages.len(), 1);
         assert!(tool_results_text.contains("Patch synthesis skipped"));
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error == "patch synthesis blocked by prompt-forbidden code-write tools"
+        )));
+    }
+
+    #[tokio::test]
+    async fn enter_patch_synthesis_handles_code_write_forbidden() {
+        let conversation = conversation();
+        let route = IntentRouter::new().route("修改代码但不要写文件");
+        let resource_policy = ResourcePolicy::from_route(&route);
+        let destructive_scope = DestructiveScopeContract::from_user_request(
+            "修改代码但不要写文件",
+            std::path::Path::new("."),
+        );
+        let trace = trace();
+        let proposal = proposal(true);
+        let mut turn_state = TurnRuntimeState::new(true);
+        turn_state.focused_repair.action_checkpoint_active = true;
+        let mut tool_results_text = String::new();
+        let mut messages = Vec::new();
+        let mut changed_files = Vec::new();
+        let baseline_git_status_files = HashSet::new();
+        let exposed_tool_names = HashSet::new();
+        let mut any_tool_success = false;
+        let mut final_content = String::new();
+        let mut final_tool_calls = Vec::new();
+
+        let flow = PatchSynthesisFlowController::handle_enter_patch_synthesis(
+            EnterPatchSynthesisContext {
+                proposal: &proposal,
+                conversation: &conversation,
+                code_write_tools_forbidden: true,
+                last_user_preview: "修改代码但不要写文件",
+                exposed_tool_names: &exposed_tool_names,
+                any_tool_success: &mut any_tool_success,
+                tx: None,
+                trace: &trace,
+                resource_policy: &resource_policy,
+                destructive_scope: &destructive_scope,
+                turn_state: &mut turn_state,
+                tool_results_text: &mut tool_results_text,
+                messages: &mut messages,
+                changed_files: &mut changed_files,
+                baseline_git_status_files: &baseline_git_status_files,
+                is_programming_workflow: true,
+                final_content: &mut final_content,
+                final_tool_calls: &mut final_tool_calls,
+            },
+        )
+        .await;
+
+        assert_eq!(flow, EnterPatchSynthesisFlow::Continue);
+        assert!(
+            turn_state
+                .focused_repair
+                .code_write_forbidden_checkpoint_sent
+        );
+        assert_eq!(messages.len(), 1);
+        assert!(tool_results_text.contains("Patch synthesis skipped"));
+        assert!(!any_tool_success);
+        assert!(changed_files.is_empty());
+        assert!(final_content.is_empty());
+        assert!(final_tool_calls.is_empty());
         let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
         assert!(finished.events.iter().any(|event| matches!(
             event,
