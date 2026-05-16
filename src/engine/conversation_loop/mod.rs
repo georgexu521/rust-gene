@@ -89,7 +89,8 @@ use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
     CodeWriteForbiddenRecoveryContext, DisabledPatchSynthesisRecoveryApplicationContext,
     PatchSynthesisCallExecutionContext, PatchSynthesisFailureHandlingContext,
-    PatchSynthesisFlowController, PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
+    PatchSynthesisFlowController, PatchSynthesisPostExecutionContext,
+    PatchSynthesisPostExecutionFlow, PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
     PatchSynthesisRecoveryFlow,
 };
 use post_edit_repair_controller::{
@@ -1246,16 +1247,17 @@ impl ConversationLoop {
                                         },
                                     )
                                     .await;
-                                if synthesis_execution.any_tool_success {
-                                    any_tool_success = true;
-                                }
-                                if !synthesis_execution.changed_files_available {
-                                    FocusedRepairRecoveryController::stop_with_message(
+                                if PatchSynthesisFlowController::apply_model_execution_outcome(
+                                    PatchSynthesisPostExecutionContext {
+                                        execution: synthesis_execution,
+                                        any_tool_success: &mut any_tool_success,
                                         tx,
-                                        &mut final_content,
-                                        FocusedRepairRecoveryController::NO_CHANGE_STOP_MESSAGE,
-                                    )
-                                    .await;
+                                        final_content: &mut final_content,
+                                    },
+                                )
+                                .await
+                                    == PatchSynthesisPostExecutionFlow::Stop
+                                {
                                     break;
                                 }
                             }

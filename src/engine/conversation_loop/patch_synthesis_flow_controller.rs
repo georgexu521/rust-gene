@@ -39,6 +39,13 @@ pub(super) struct PatchSynthesisCallExecutionOutcome {
     pub(super) changed_files_available: bool,
 }
 
+pub(super) struct PatchSynthesisPostExecutionContext<'a> {
+    pub(super) execution: PatchSynthesisCallExecutionOutcome,
+    pub(super) any_tool_success: &'a mut bool,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) final_content: &'a mut String,
+}
+
 pub(super) struct DisabledPatchSynthesisRecoveryApplicationContext<'a> {
     pub(super) recovery: DisabledPatchSynthesisRecovery,
     pub(super) state: &'a mut FocusedRepairRuntimeState,
@@ -93,6 +100,12 @@ pub(super) enum PatchSynthesisProposalFlow {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PatchSynthesisRecoveryFlow {
     Continue,
+    Stop,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PatchSynthesisPostExecutionFlow {
+    Proceed,
     Stop,
 }
 
@@ -175,6 +188,25 @@ impl PatchSynthesisFlowController {
             any_tool_success: execution.any_tool_success,
             changed_files_available,
         }
+    }
+
+    pub(super) async fn apply_model_execution_outcome(
+        context: PatchSynthesisPostExecutionContext<'_>,
+    ) -> PatchSynthesisPostExecutionFlow {
+        if context.execution.any_tool_success {
+            *context.any_tool_success = true;
+        }
+        if !context.execution.changed_files_available {
+            FocusedRepairRecoveryController::stop_with_message(
+                context.tx,
+                &mut *context.final_content,
+                FocusedRepairRecoveryController::NO_CHANGE_STOP_MESSAGE,
+            )
+            .await;
+            return PatchSynthesisPostExecutionFlow::Stop;
+        }
+
+        PatchSynthesisPostExecutionFlow::Proceed
     }
 
     pub(super) fn apply_code_write_forbidden_recovery(
@@ -579,5 +611,54 @@ mod tests {
             TraceEvent::WorkflowFallback { error }
                 if error == "patch synthesis failed: not enough evidence for an edit"
         )));
+    }
+
+    #[tokio::test]
+    async fn model_execution_outcome_records_success_and_proceeds_on_change() {
+        let mut any_tool_success = false;
+        let mut final_content = String::new();
+
+        let flow = PatchSynthesisFlowController::apply_model_execution_outcome(
+            PatchSynthesisPostExecutionContext {
+                execution: PatchSynthesisCallExecutionOutcome {
+                    any_tool_success: true,
+                    changed_files_available: true,
+                },
+                any_tool_success: &mut any_tool_success,
+                tx: None,
+                final_content: &mut final_content,
+            },
+        )
+        .await;
+
+        assert_eq!(flow, PatchSynthesisPostExecutionFlow::Proceed);
+        assert!(any_tool_success);
+        assert!(final_content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn model_execution_outcome_stops_without_changed_files() {
+        let mut any_tool_success = false;
+        let mut final_content = String::new();
+
+        let flow = PatchSynthesisFlowController::apply_model_execution_outcome(
+            PatchSynthesisPostExecutionContext {
+                execution: PatchSynthesisCallExecutionOutcome {
+                    any_tool_success: true,
+                    changed_files_available: false,
+                },
+                any_tool_success: &mut any_tool_success,
+                tx: None,
+                final_content: &mut final_content,
+            },
+        )
+        .await;
+
+        assert_eq!(flow, PatchSynthesisPostExecutionFlow::Stop);
+        assert!(any_tool_success);
+        assert_eq!(
+            final_content,
+            FocusedRepairRecoveryController::NO_CHANGE_STOP_MESSAGE
+        );
     }
 }
