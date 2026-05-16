@@ -148,6 +148,7 @@ impl Tool for FilePatchTool {
         };
 
         let mut written_paths = Vec::new();
+        let mut bytes_written = Vec::with_capacity(prepared.len());
         for patch in &prepared {
             if let Some(parent) = patch.path.parent() {
                 if !parent.exists() {
@@ -160,7 +161,7 @@ impl Tool for FilePatchTool {
                     }
                 }
             }
-            if let Err(err) = write_text_file(
+            let written = match write_text_file(
                 &patch.path,
                 &patch.after_content,
                 patch.encoding,
@@ -170,29 +171,34 @@ impl Tool for FilePatchTool {
             )
             .await
             {
-                let manager =
-                    crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await;
-                let restore = manager
-                    .lock()
-                    .await
-                    .restore_checkpoint(&checkpoint.id)
-                    .await
-                    .err();
-                return ToolResult::error_with_content(
-                    format!(
-                        "file_patch failed while writing {}: {}",
-                        patch.path.display(),
-                        err
-                    ),
-                    json!({
-                        "partial_failure": true,
-                        "written_paths": written_paths,
-                        "rollback_error": restore,
-                    })
-                    .to_string(),
-                );
-            }
+                Ok(written) => written,
+                Err(err) => {
+                    let manager =
+                        crate::engine::checkpoint::get_checkpoint_manager(&context.session_id)
+                            .await;
+                    let restore = manager
+                        .lock()
+                        .await
+                        .restore_checkpoint(&checkpoint.id)
+                        .await
+                        .err();
+                    return ToolResult::error_with_content(
+                        format!(
+                            "file_patch failed while writing {}: {}",
+                            patch.path.display(),
+                            err
+                        ),
+                        json!({
+                            "partial_failure": true,
+                            "written_paths": written_paths,
+                            "rollback_error": restore,
+                        })
+                        .to_string(),
+                    );
+                }
+            };
             written_paths.push(patch.path.to_string_lossy().to_string());
+            bytes_written.push(written as u64);
             if let Some(ref cache) = context.file_cache {
                 cache.invalidate_content(&patch.path);
                 cache.invalidate_metadata(&patch.path);
@@ -209,7 +215,7 @@ impl Tool for FilePatchTool {
         }
 
         let mut file_changes = Vec::new();
-        for patch in &prepared {
+        for (patch, bytes_written) in prepared.iter().zip(bytes_written.iter().copied()) {
             if let Some(change) = record_file_change(
                 &context,
                 FileChangeRequest {
@@ -220,7 +226,7 @@ impl Tool for FilePatchTool {
                     before_content: patch.before_content.as_deref(),
                     after_content: &patch.after_content,
                     diff: &patch.diff,
-                    bytes_written: patch.after_content.len() as u64,
+                    bytes_written,
                 },
             )
             .await
@@ -231,13 +237,15 @@ impl Tool for FilePatchTool {
 
         let files = prepared
             .iter()
-            .map(|patch| {
+            .zip(bytes_written.iter().copied())
+            .map(|(patch, bytes_written)| {
                 json!({
                     "path": patch.path_arg,
                     "resolved_path": patch.identity.resolved_path,
                     "path_identity": path_identity_json(&patch.identity),
                     "existed_before": patch.existed_before,
                     "replacements": patch.replacements,
+                    "bytes_written": bytes_written,
                     "text_format": text_write_format_json(
                         patch.encoding,
                         patch.has_bom,

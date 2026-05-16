@@ -2271,6 +2271,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_patch_records_encoded_bytes_written_for_utf16le() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("utf16.txt");
+        let original = encode_text_content(
+            "hello\nworld\n",
+            TextFileEncoding::Utf16Le,
+            true,
+            LineEndingStyle::Lf,
+        );
+        tokio::fs::write(&path, original).await.unwrap();
+        let session_id = format!(
+            "test-session-file-patch-utf16-bytes-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let checkpoint_manager =
+            crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+        checkpoint_manager.lock().await.clear_all().await.unwrap();
+        let context = ToolContext::new(dir.path(), &session_id);
+        let read_tool = FileReadTool;
+        assert!(
+            read_tool
+                .execute(json!({ "path": "utf16.txt" }), context.clone())
+                .await
+                .success
+        );
+
+        let patch_tool = FilePatchTool;
+        let result = patch_tool
+            .execute(
+                json!({
+                    "operations": [
+                        {
+                            "path": "utf16.txt",
+                            "old_string": "world",
+                            "new_string": "世界"
+                        }
+                    ]
+                }),
+                context,
+            )
+            .await;
+
+        assert!(result.success, "file_patch failed: {:?}", result.error);
+        let data = result.data.expect("file_patch metadata");
+        assert_eq!(data["files"][0]["text_format"]["encoding"], "utf-16le");
+        assert_eq!(data["files"][0]["text_format"]["bom"], true);
+        assert_eq!(data["files"][0]["bytes_written"], 20);
+        assert_eq!(data["file_changes"][0]["bytes_written"], 20);
+        let bytes = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(bytes.len(), 20);
+        let decoded = decode_text_file(&path, "test", bytes).unwrap();
+        assert_eq!(decoded.content, "hello\n世界\n");
+
+        checkpoint_manager.lock().await.clear_all().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn file_patch_preflight_failure_does_not_partially_apply() {
         let dir = tempfile::tempdir().unwrap();
         tokio::fs::write(dir.path().join("a.txt"), "alpha\nold-a\n")

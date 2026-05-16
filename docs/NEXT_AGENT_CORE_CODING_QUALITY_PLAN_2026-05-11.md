@@ -1326,6 +1326,19 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the `/status` terminal task visibility slice:
   `cargo test -q` passed (`1432 passed; 0 failed`).
+- 2026-05-16: Phase 3 Batch 3.6 file-patch history accuracy continued.
+  `file_patch` now records encoded bytes written from the text codec write
+  path, rather than normalized UTF-8 string length, and exposes that value in
+  per-file patch metadata. This keeps UTF-16LE/BOM file history aligned with
+  the actual bytes written to disk.
+- Validation after the file-patch encoded bytes slice: `cargo fmt --check`,
+  `git diff --check`, targeted
+  `file_patch_records_encoded_bytes_written_for_utf16le`,
+  `file_patch_applies_multiple_files_and_records_history`, and `file_tool`
+  tests, `cargo check -q`, and `cargo clippy --all-features -- -D warnings`
+  passed.
+- Full validation after the file-patch encoded bytes slice:
+  `cargo test -q` passed (`1433 passed; 0 failed`).
 - 2026-05-12: Phase 3 Batch 3.0 started. `file_read` now returns structured
   raw/display boundary metadata for file reads: resolved path, displayed line
   range, total/displayed line counts, truncation, full/selected content hashes,

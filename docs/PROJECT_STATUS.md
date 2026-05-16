@@ -48,22 +48,23 @@ The recent closure plan is complete:
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
 Latest deterministic local test baseline observed during the 2026-05-16
-terminal-task `/status` visibility, terminal-task summary metadata,
-foreground/PTY terminal-task data, background-shell terminal-task data,
-route-scoped tool-test move, file-edit LSP document sync/diagnostics summary,
-file-edit diff metadata, file-mutation lock, file text codec,
-file-state tracker, partial-read edit state, file-read/search evidence
-metadata, foreground PTY smoke, interactive-shell PTY diagnostic,
-background-shell handles/output artifacts/task listing, shell-result
-duration/schema/artifacts, shell-command UI summary, shell-command category
-permission risk, shell-command category classifier, terminal provider-schema
-exposure diagnostic, explicit patch-synthesis fallback boundary,
-focused-repair proposal boundary, provider-protocol matrix,
-permission-controller, context-budget, tool-result-budget, schema-gate, and
-tool-result normalizer work:
+file-patch encoded bytes history accuracy, terminal-task `/status`
+visibility, terminal-task summary metadata, foreground/PTY terminal-task data,
+background-shell terminal-task data, route-scoped tool-test move,
+file-edit LSP document sync/diagnostics summary, file-edit diff metadata,
+file-mutation lock, file text codec, file-state tracker, partial-read edit
+state, file-read/search evidence metadata, foreground PTY smoke,
+interactive-shell PTY diagnostic, background-shell handles/output
+artifacts/task listing, shell-result duration/schema/artifacts,
+shell-command UI summary, shell-command category permission risk,
+shell-command category classifier, terminal provider-schema exposure
+diagnostic, explicit patch-synthesis fallback boundary, focused-repair
+proposal boundary, provider-protocol matrix, permission-controller,
+context-budget, tool-result-budget, schema-gate, and tool-result normalizer
+work:
 
 ```text
-1432 passed; 0 failed
+1433 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -109,15 +110,18 @@ metadata for encoding, BOM, and line ending; edits and writes preserve UTF-8
 BOM, UTF-16LE BOM, and LF/CRLF style instead of normalizing files by accident.
 File mutations now share a per-canonical-path async lock, and text writes use
 a temporary sibling file plus rename so same-file edits are serialized and
-write failures do not leave partial file contents. `file_edit` success results
-now include additions, deletions, changed line range, and a bounded unified diff
-preview so later closeout and diagnostics paths can cite actual edit evidence.
-`file_edit` also returns a non-blocking `diagnostics` summary. It samples cached
-LSP diagnostics only from already-initialized clients, avoids triggering slow
-language-server startup on the edit path, and records compact LSP status/counts
-in EvidenceLedger file facts. The LSP sync path now tracks documents already
-sent through `textDocument/didOpen`; follow-up edits use `didChange` plus
-`didSave` with monotonic document versions instead of repeating `didOpen`.
+write failures do not leave partial file contents. `file_patch` records the
+actual encoded bytes written for each patched file, so UTF-16LE/BOM file
+history matches disk bytes instead of normalized UTF-8 string length.
+`file_edit` success results now include additions, deletions, changed line
+range, and a bounded unified diff preview so later closeout and diagnostics
+paths can cite actual edit evidence. `file_edit` also returns a non-blocking
+`diagnostics` summary. It samples cached LSP diagnostics only from
+already-initialized clients, avoids triggering slow language-server startup on
+the edit path, and records compact LSP status/counts in EvidenceLedger file
+facts. The LSP sync path now tracks documents already sent through
+`textDocument/didOpen`; follow-up edits use `didChange` plus `didSave` with
+monotonic document versions instead of repeating `didOpen`.
 
 Validated locally with:
 
