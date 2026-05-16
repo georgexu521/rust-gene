@@ -15,7 +15,7 @@ use serde_json::json;
 use std::process::Stdio;
 use std::{
     hash::{Hash, Hasher},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
@@ -297,6 +297,37 @@ struct ShellResultData<'a> {
     backend: BashExecutionBackend,
     timed_out: bool,
     context: &'a ToolContext,
+    terminal_kind: &'a str,
+    pty: bool,
+    started_at_ms: u64,
+    ended_at_ms: u64,
+    duration_ms: u64,
+}
+
+struct TerminalTaskTiming {
+    started_at_ms: u64,
+    started_at: Instant,
+}
+
+impl TerminalTaskTiming {
+    fn start() -> Self {
+        Self {
+            started_at_ms: system_time_millis(SystemTime::now()),
+            started_at: Instant::now(),
+        }
+    }
+
+    fn started_at_ms(&self) -> u64 {
+        self.started_at_ms
+    }
+
+    fn ended_at_ms(&self) -> u64 {
+        system_time_millis(SystemTime::now())
+    }
+
+    fn duration_ms(&self) -> u64 {
+        self.started_at.elapsed().as_millis() as u64
+    }
 }
 
 fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) {
@@ -333,6 +364,13 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
     } else {
         "failed"
     };
+    let terminal_status = terminal_task_status(input.exit_code, input.timed_out);
+    let output_path_for_task = output_path.clone();
+    let read_tool = if output_path_for_task.is_some() {
+        serde_json::Value::String("file_read".to_string())
+    } else {
+        serde_json::Value::Null
+    };
     let data = json!({
         "audit": input.audit,
         "command_classification": classification.clone(),
@@ -349,6 +387,23 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
             "classification": classification,
             "evidence_status": evidence_status,
         },
+        "terminal_task": {
+            "task_id": terminal_task_id(input.command, input.terminal_kind, input.started_at_ms),
+            "handle": serde_json::Value::Null,
+            "command": input.command,
+            "cwd": input.working_dir.display().to_string(),
+            "status": terminal_status,
+            "started_at_ms": input.started_at_ms,
+            "ended_at_ms": input.ended_at_ms,
+            "duration_ms": input.duration_ms,
+            "exit_code": input.exit_code,
+            "output_path": output_path_for_task,
+            "read_tool": read_tool,
+            "cancel_tool": serde_json::Value::Null,
+            "cancel_handle": serde_json::Value::Null,
+            "terminal_kind": input.terminal_kind,
+            "pty": input.pty
+        },
         "execution": {
             "exit_code": input.exit_code,
             "stdout_length": input.stdout.len(),
@@ -359,6 +414,35 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
     });
 
     (content_preview, data)
+}
+
+fn terminal_task_status(exit_code: i32, timed_out: bool) -> &'static str {
+    if timed_out {
+        "timed_out"
+    } else if exit_code == 0 {
+        "completed"
+    } else {
+        "failed"
+    }
+}
+
+fn terminal_task_id(command: &str, terminal_kind: &str, started_at_ms: u64) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    command.hash(&mut hasher);
+    terminal_kind.hash(&mut hasher);
+    started_at_ms.hash(&mut hasher);
+    format!(
+        "shell_{}_{}_{:x}",
+        terminal_kind,
+        started_at_ms,
+        hasher.finish()
+    )
+}
+
+fn system_time_millis(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn shell_compatibility_hint(output: &str) -> Option<&'static str> {
@@ -407,6 +491,7 @@ fn timeout_result(
     working_dir: &std::path::Path,
     backend: BashExecutionBackend,
     context: &ToolContext,
+    timing: &TerminalTaskTiming,
 ) -> ToolResult {
     let message = format!("Command timed out after {} seconds", timeout);
     let (result_preview, result_data) = shell_result_data(ShellResultData {
@@ -420,6 +505,11 @@ fn timeout_result(
         backend,
         timed_out: true,
         context,
+        terminal_kind: "foreground_shell",
+        pty: false,
+        started_at_ms: timing.started_at_ms(),
+        ended_at_ms: timing.ended_at_ms(),
+        duration_ms: timing.duration_ms(),
     });
     let mut result = ToolResult::error_with_content(message, result_preview);
     result.data = Some(result_data);
@@ -495,6 +585,7 @@ async fn execute_pty_command(
     context: &ToolContext,
 ) -> ToolResult {
     let classification = classify_command(command);
+    let timing = TerminalTaskTiming::start();
     let pty_output = match pty::run_pty_shell(
         actual_command.to_string(),
         working_dir.to_path_buf(),
@@ -520,6 +611,11 @@ async fn execute_pty_command(
         backend,
         timed_out: pty_output.timed_out,
         context,
+        terminal_kind: "pty_shell",
+        pty: true,
+        started_at_ms: timing.started_at_ms(),
+        ended_at_ms: timing.ended_at_ms(),
+        duration_ms: timing.duration_ms(),
     });
     attach_pty_metadata(&mut result_data, classification.requires_pty());
 
@@ -784,6 +880,7 @@ impl Tool for BashTool {
             .await;
         }
 
+        let timing = TerminalTaskTiming::start();
         cmd.arg("-c")
             .arg(&actual_command)
             .current_dir(&working_dir)
@@ -837,10 +934,26 @@ impl Tool for BashTool {
                     Ok(Ok(output)) => (output, true),
                     Ok(Err(e)) => {
                         error!("Command timed out and failed while collecting output: {}", e);
-                        return timeout_result(timeout, &audit, command, &working_dir, backend, &context);
+                        return timeout_result(
+                            timeout,
+                            &audit,
+                            command,
+                            &working_dir,
+                            backend,
+                            &context,
+                            &timing,
+                        );
                     }
                     Err(_) => {
-                        return timeout_result(timeout, &audit, command, &working_dir, backend, &context);
+                        return timeout_result(
+                            timeout,
+                            &audit,
+                            command,
+                            &working_dir,
+                            backend,
+                            &context,
+                            &timing,
+                        );
                     }
                 }
             }
@@ -881,6 +994,11 @@ impl Tool for BashTool {
             backend,
             timed_out,
             context: &context,
+            terminal_kind: "foreground_shell",
+            pty: false,
+            started_at_ms: timing.started_at_ms(),
+            ended_at_ms: timing.ended_at_ms(),
+            duration_ms: timing.duration_ms(),
         });
 
         if output.status.success() {
@@ -1168,6 +1286,20 @@ mod tests {
         assert_eq!(shell_result["exit_code"], 0);
         assert_eq!(shell_result["evidence_status"], "passed");
         assert_eq!(shell_result["classification"]["category"], "unknown");
+        let terminal_task = result
+            .data
+            .as_ref()
+            .and_then(|d| d.get("terminal_task"))
+            .expect("terminal_task metadata should be present");
+        assert_eq!(
+            terminal_task["command"],
+            "env PRIORITY_AGENT_WORKFLOW_ENABLED=1 echo classified"
+        );
+        assert_eq!(terminal_task["status"], "completed");
+        assert_eq!(terminal_task["terminal_kind"], "foreground_shell");
+        assert_eq!(terminal_task["pty"], false);
+        assert_eq!(terminal_task["handle"], serde_json::Value::Null);
+        assert_eq!(terminal_task["cancel_handle"], serde_json::Value::Null);
     }
 
     #[tokio::test]
@@ -1216,6 +1348,9 @@ mod tests {
         assert_eq!(data["terminal_requirement"]["pty_available"], true);
         assert_eq!(data["shell_result"]["pty"], true);
         assert_eq!(data["shell_result"]["evidence_status"], "passed");
+        assert_eq!(data["terminal_task"]["terminal_kind"], "pty_shell");
+        assert_eq!(data["terminal_task"]["pty"], true);
+        assert_eq!(data["terminal_task"]["status"], "completed");
     }
 
     #[tokio::test]
@@ -1244,6 +1379,13 @@ mod tests {
             .expect("long output should be stored");
         assert!(output_path.starts_with(".priority-agent/tool-results/"));
         assert!(dir.path().join(output_path).exists());
+        let terminal_task = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("terminal_task"))
+            .expect("terminal_task metadata should be present");
+        assert_eq!(terminal_task["output_path"], output_path);
+        assert_eq!(terminal_task["read_tool"], "file_read");
     }
 
     #[tokio::test]
@@ -1319,6 +1461,13 @@ mod tests {
             .expect("shell_result metadata");
         assert_eq!(shell_result["timed_out"], true);
         assert_eq!(shell_result["evidence_status"], "timed_out");
+        let terminal_task = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("terminal_task"))
+            .expect("terminal_task metadata");
+        assert_eq!(terminal_task["status"], "timed_out");
+        assert_eq!(terminal_task["terminal_kind"], "foreground_shell");
     }
 
     #[tokio::test]

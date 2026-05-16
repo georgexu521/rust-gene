@@ -47,19 +47,22 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic local test baseline observed during the 2026-05-13
-file-edit LSP document sync/diagnostics summary, file-edit diff metadata, file-mutation lock, file text codec, file-state tracker, partial-read edit state,
-file-read/search evidence metadata, foreground PTY smoke,
-interactive-shell PTY diagnostic, background-shell handles/output artifacts/task listing, shell-result
-duration/schema/artifacts, shell-command UI summary, shell-command category
-permission risk, shell-command category classifier, terminal provider-schema
-exposure diagnostic, explicit
-patch-synthesis fallback boundary, focused-repair proposal boundary,
-provider-protocol matrix, permission-controller, context-budget,
-tool-result-budget, schema-gate, and tool-result normalizer work:
+Latest deterministic local test baseline observed during the 2026-05-16
+foreground/PTY terminal-task data, background-shell terminal-task data,
+route-scoped tool-test move, file-edit LSP document sync/diagnostics summary,
+file-edit diff metadata, file-mutation lock, file text codec, file-state
+tracker, partial-read edit state, file-read/search evidence metadata,
+foreground PTY smoke, interactive-shell PTY diagnostic, background-shell
+handles/output artifacts/task listing, shell-result duration/schema/artifacts,
+shell-command UI summary, shell-command category permission risk,
+shell-command category classifier, terminal provider-schema exposure
+diagnostic, explicit patch-synthesis fallback boundary, focused-repair
+proposal boundary, provider-protocol matrix, permission-controller,
+context-budget, tool-result-budget, schema-gate, and tool-result normalizer
+work:
 
 ```text
-1273 passed; 0 failed
+1428 passed; 0 failed
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -69,14 +72,15 @@ process group, foreground timeout results now carry structured
 backgrounded/timed-out/cancelled states. Long background output now also writes
 an `output_path` artifact under `.priority-agent/tool-results/<session>/...`.
 `bash_tasks` lists known background shell handles when the model needs to
-recover or inspect active tasks, and background-shell outputs now also expose
-`terminal_task` / `terminal_tasks` structured facts with task id, status,
-timestamps, artifact path, and read/cancel handles. Obvious interactive
-commands such as bare `python3`, `node -i`, bare `ssh` sessions, and
-`npm init` are now classified as requiring PTY support; non-PTY bash returns a
-structured `mode=pty` recovery diagnostic instead of starting a command it
-cannot control. `bash mode=pty` now runs foreground commands through a
-`portable-pty` backend and records
+recover or inspect active tasks. Foreground bash, `bash mode=pty`, and
+background-shell outputs now expose `terminal_task` structured facts with task
+id, status, timestamps, duration, artifact path, terminal kind, PTY marker, and
+read/cancel handles; `bash_tasks` also exposes the background task list as
+`terminal_tasks`. Obvious interactive commands such as bare `python3`,
+`node -i`, bare `ssh` sessions, and `npm init` are now classified as requiring
+PTY support; non-PTY bash returns a structured `mode=pty` recovery diagnostic
+instead of starting a command it cannot control. `bash mode=pty` now runs
+foreground commands through a `portable-pty` backend and records
 `terminal_requirement.pty_used=true` in the tool result. PTY execution now uses
 the same non-login `bash -c` command shape as foreground bash, avoiding hangs
 from user login-shell startup files during short PTY commands.

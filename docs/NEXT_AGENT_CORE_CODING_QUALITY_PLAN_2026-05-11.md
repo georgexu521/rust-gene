@@ -1287,6 +1287,22 @@
   `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the terminal-task data slice:
   `cargo test -q` passed (`1428 passed; 0 failed`).
+- 2026-05-16: Phase 2 terminal task data cleanup continued for foreground and
+  PTY shell execution. Foreground `bash` and `bash mode=pty` results now include
+  the same top-level `terminal_task` shape used by background shell tasks, with
+  task id, command, cwd, status, timestamps, duration, exit code, output
+  artifact path, read/cancel fields, terminal kind, and PTY marker.
+- Validation after the foreground/PTY terminal-task data slice:
+  `cargo fmt --check`, `git diff --check`, targeted
+  `test_bash_tool_includes_command_classification`,
+  `test_bash_tool_pty_mode_runs_with_tty_stdout`,
+  `test_bash_tool_stores_long_output_artifact`,
+  `test_bash_tool_timeout_records_shell_result_status`,
+  `attach_tool_execution_metadata_fills_shell_result_duration`, and `bash_tool`
+  tests, `cargo check -q`, and `cargo clippy --all-features -- -D warnings`
+  passed.
+- Full validation after the foreground/PTY terminal-task data slice:
+  `cargo test -q` passed (`1428 passed; 0 failed`).
 - 2026-05-12: Phase 3 Batch 3.0 started. `file_read` now returns structured
   raw/display boundary metadata for file reads: resolved path, displayed line
   range, total/displayed line counts, truncation, full/selected content hashes,

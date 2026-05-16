@@ -347,18 +347,28 @@ fn fill_shell_result_duration(result: &mut ToolResult) {
     let Some(duration_ms) = result.duration_ms else {
         return;
     };
-    let Some(shell_result) = result
+    if let Some(shell_result) = result
         .data
         .as_mut()
         .and_then(|data| data.get_mut("shell_result"))
         .and_then(|value| value.as_object_mut())
-    else {
-        return;
-    };
-    shell_result.insert(
-        "duration_ms".to_string(),
-        serde_json::Value::Number(duration_ms.into()),
-    );
+    {
+        shell_result.insert(
+            "duration_ms".to_string(),
+            serde_json::Value::Number(duration_ms.into()),
+        );
+    }
+    if let Some(terminal_task) = result
+        .data
+        .as_mut()
+        .and_then(|data| data.get_mut("terminal_task"))
+        .and_then(|value| value.as_object_mut())
+    {
+        terminal_task.insert(
+            "duration_ms".to_string(),
+            serde_json::Value::Number(duration_ms.into()),
+        );
+    }
 }
 
 pub(super) fn persist_tool_outcome_learning_event(
@@ -466,6 +476,10 @@ mod tests {
                 "shell_result": {
                     "duration_ms": null,
                     "command": "cargo test -q"
+                },
+                "terminal_task": {
+                    "duration_ms": null,
+                    "command": "cargo test -q"
                 }
             }),
         );
@@ -475,6 +489,10 @@ mod tests {
 
         assert_eq!(
             result.data.as_ref().unwrap()["shell_result"]["duration_ms"],
+            42
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["terminal_task"]["duration_ms"],
             42
         );
         assert_eq!(
