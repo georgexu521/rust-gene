@@ -1,4 +1,4 @@
-use super::trace_adaptive_workflow_trigger;
+use super::workflow_trace::trace_adaptive_workflow_trigger;
 use crate::engine::code_change_workflow::{AdaptiveWorkflowTrigger, CodeChangeWorkflowRunner};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::trace::{TraceCollector, TraceEvent};

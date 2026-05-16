@@ -1,6 +1,5 @@
-use super::{
-    apply_workflow_feedback_and_trace, persist_workflow_learning_event, workflow_contract_enabled,
-};
+use super::workflow_runtime::{persist_workflow_learning_event, workflow_contract_enabled};
+use super::workflow_trace::apply_workflow_feedback_and_trace;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::engine::workflow_contract::{

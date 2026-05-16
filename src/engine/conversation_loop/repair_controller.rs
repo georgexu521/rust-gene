@@ -1,7 +1,8 @@
-use super::{
-    apply_workflow_feedback_and_trace, is_high_risk_workflow, persist_workflow_learning_event,
-    trace_adaptive_workflow_trigger, workflow_contract_enabled, ConversationLoop,
+use super::workflow_runtime::{
+    is_high_risk_workflow, persist_workflow_learning_event, workflow_contract_enabled,
 };
+use super::workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
+use super::ConversationLoop;
 use crate::engine::code_change_workflow::{AdaptiveWorkflowTrigger, CodeChangeWorkflowRunner};
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::reflection_pass::ReflectionPass;

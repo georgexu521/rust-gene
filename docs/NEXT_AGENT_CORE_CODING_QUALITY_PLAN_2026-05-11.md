@@ -876,6 +876,19 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the retrieval helper slice:
   `cargo test -q` passed (`1421 passed; 0 failed`).
+- 2026-05-16: Phase A workflow-runtime helper cleanup continued. Added
+  `workflow_runtime.rs`; workflow-contract enablement, workflow learning-event
+  persistence, and high-risk workflow checks now live outside
+  `conversation_loop/mod.rs`. Workflow trace helpers are now imported directly
+  from `workflow_trace.rs` by the controllers that need them.
+- Validation after the workflow-runtime helper slice: `cargo fmt --check`,
+  `git diff --check`, targeted `workflow_runtime`,
+  `workflow_contract_controller`, `repair_controller`,
+  `tool_failure_guided_debugging`, `first_code_change_controller`,
+  `validation_runner`, and `workflow_trace` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the workflow-runtime helper slice:
+  `cargo test -q` passed (`1424 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

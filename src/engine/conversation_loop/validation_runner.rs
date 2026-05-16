@@ -1,5 +1,5 @@
 use super::safe_prefix_by_bytes;
-use super::trace_adaptive_workflow_trigger;
+use super::workflow_trace::trace_adaptive_workflow_trigger;
 use crate::engine::auto_verify::{VerificationIssue, VerificationResult};
 use crate::engine::code_change_workflow::{AdaptiveWorkflowTrigger, CodeChangeWorkflowRunner};
 use crate::engine::trace::{TraceCollector, TraceEvent};

@@ -84,6 +84,7 @@ mod validation_runner;
 mod workflow_change_tracker;
 mod workflow_contract_controller;
 mod workflow_prompt_policy;
+mod workflow_runtime;
 mod workflow_trace;
 
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
@@ -119,7 +120,6 @@ use validation_runner::shell_output_with_timeout;
 use validation_runner::verification_source_context;
 #[cfg(test)]
 use validation_runner::RequiredValidationController;
-use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
 #[cfg(test)]
 use crate::engine::intent_router::{IntentKind, IntentRouter, WorkflowKind};
@@ -133,7 +133,6 @@ use anyhow::Result;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use tracing::warn;
 
 use super::context_compressor::ContextCompressor;
 use super::hooks::ToolHookManager;
@@ -168,19 +167,6 @@ fn tool_not_allowed_result(tool_call: &ToolCall) -> ToolResult {
     result
 }
 
-fn workflow_contract_enabled(provider: &dyn LlmProvider) -> bool {
-    if provider.base_url().starts_with("mock://") {
-        return false;
-    }
-
-    std::env::var("PRIORITY_AGENT_WORKFLOW_CONTRACT")
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            !matches!(value.as_str(), "0" | "false" | "off" | "no")
-        })
-        .unwrap_or(true)
-}
-
 fn should_use_nonstreaming_tools(
     provider: &dyn LlmProvider,
     tools: &[crate::services::api::Tool],
@@ -191,39 +177,6 @@ fn should_use_nonstreaming_tools(
     let base_url = provider.base_url().to_ascii_lowercase();
     let model = provider.default_model().to_ascii_lowercase();
     base_url.contains("minimax") || model.contains("minimax")
-}
-
-fn persist_workflow_learning_event(
-    store: Option<&Arc<crate::session_store::SessionStore>>,
-    session_id: &str,
-    kind: &str,
-    summary: String,
-    confidence: f64,
-    payload: serde_json::Value,
-) {
-    let Some(store) = store else {
-        return;
-    };
-    if let Err(e) = store.add_learning_event(
-        session_id,
-        kind,
-        "conversation_loop",
-        &summary,
-        confidence,
-        &payload,
-    ) {
-        warn!("Failed to persist workflow learning event: {}", e);
-    }
-}
-
-fn is_high_risk_workflow(
-    route: &crate::engine::intent_router::IntentRoute,
-    judgment: Option<&crate::engine::workflow_contract::ProgrammingWorkflowJudgment>,
-) -> bool {
-    matches!(route.risk, crate::engine::intent_router::RiskLevel::High)
-        || judgment
-            .map(|judgment| matches!(judgment.risk, crate::engine::intent_router::RiskLevel::High))
-            .unwrap_or(false)
 }
 
 /// 统一对话循环

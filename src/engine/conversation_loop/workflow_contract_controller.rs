@@ -1,4 +1,4 @@
-use super::{persist_workflow_learning_event, workflow_contract_enabled};
+use super::workflow_runtime::{persist_workflow_learning_event, workflow_contract_enabled};
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::retrieval_context::RetrievalContext;
