@@ -60,6 +60,7 @@ mod turn_recording;
 mod turn_retrieval_context_controller;
 mod turn_runtime_state;
 mod turn_setup_controller;
+mod turn_task_context_controller;
 mod validation_runner;
 mod workflow_change_tracker;
 mod workflow_contract_controller;
@@ -128,13 +129,14 @@ use turn_iteration_closeout_controller::{
 use turn_retrieval_context_controller::{
     TurnRetrievalContextController, TurnRetrievalContextRequest,
 };
-use turn_runtime_state::TurnRuntimeState;
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
+use turn_task_context_controller::{TurnTaskContextSetupContext, TurnTaskContextSetupController};
 #[cfg(test)]
 use validation_runner::shell_output_with_timeout;
 #[cfg(test)]
 use validation_runner::verification_source_context;
-use validation_runner::{RequiredValidationController, RequiredValidationTriggerContext};
+#[cfg(test)]
+use validation_runner::RequiredValidationController;
 use workflow_change_tracker::WorkflowChangeTracker;
 use workflow_contract_controller::{WorkflowContractController, WorkflowContractJudgmentContext};
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
@@ -610,36 +612,24 @@ impl ConversationLoop {
                 trace: &trace,
             })
             .await;
-        let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
-            &last_user_preview,
-            &working_dir,
-            route.clone(),
-            self.goal_manager
-                .as_ref()
-                .and_then(|manager| manager.current()),
-        );
-        if let Some(ref ctx) = turn_retrieval_context {
-            task_bundle = task_bundle.with_retrieval(ctx.clone());
-        }
-        task_bundle.add_constraint(format!(
-            "resource_policy={}",
-            resource_policy.compact_label()
-        ));
-        if matches!(
-            route.workflow,
-            crate::engine::intent_router::WorkflowKind::CodeChange
-                | crate::engine::intent_router::WorkflowKind::BugFix
-        ) {
-            task_bundle.add_risk("code-change tasks require explicit verification");
-        }
-        let mut code_workflow =
-            crate::engine::code_change_workflow::CodeChangeWorkflowRunner::new(&task_bundle);
-        let mut turn_state = TurnRuntimeState::new(Self::route_scoped_tools_enabled());
-        RequiredValidationController::record_initial_trigger(RequiredValidationTriggerContext {
-            commands: &required_validation_commands,
-            code_workflow: &mut code_workflow,
-            trace: &trace,
-        });
+        let task_context_setup =
+            TurnTaskContextSetupController::prepare(TurnTaskContextSetupContext {
+                last_user_preview: &last_user_preview,
+                working_dir: &working_dir,
+                route: &route,
+                current_goal: self
+                    .goal_manager
+                    .as_ref()
+                    .and_then(|manager| manager.current()),
+                retrieval_context: turn_retrieval_context.as_ref(),
+                resource_policy: &resource_policy,
+                required_validation_commands: &required_validation_commands,
+                route_scoped_tools_enabled: Self::route_scoped_tools_enabled(),
+                trace: &trace,
+            });
+        let mut task_bundle = task_context_setup.task_bundle;
+        let mut code_workflow = task_context_setup.code_workflow;
+        let mut turn_state = task_context_setup.turn_state;
         WorkflowContractController::run(WorkflowContractJudgmentContext {
             provider: self.provider.as_ref(),
             model: self.model.clone(),
