@@ -765,6 +765,18 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the focused-repair flow slice:
   `cargo test -q` passed (`1407 passed; 0 failed`).
+- 2026-05-16: Phase A turn-loop bootstrap cleanup continued. Added
+  `turn_loop_bootstrap_controller.rs`; route-scoped base-tool selection,
+  loop-state initialization, runtime-diet bootstrap observation, and request
+  bootstrap now live behind one pre-iteration controller. `run_inner` now only
+  receives `base_tools` and `loop_state` before entering the iteration loop.
+- Validation after the turn-loop bootstrap slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_loop_bootstrap_controller`,
+  `turn_request_bootstrap_controller`, `turn_runtime_diet_bootstrap_controller`,
+  and `turn_loop_state_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the turn-loop bootstrap slice:
+  `cargo test -q` passed (`1408 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.

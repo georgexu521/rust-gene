@@ -60,6 +60,7 @@ mod turn_focused_repair_action_controller;
 mod turn_focused_repair_flow_controller;
 mod turn_iteration_closeout_controller;
 mod turn_iteration_setup_controller;
+mod turn_loop_bootstrap_controller;
 mod turn_loop_state_controller;
 mod turn_post_change_closeout_controller;
 mod turn_recording;
@@ -116,18 +117,12 @@ use turn_focused_repair_flow_controller::{
 use turn_iteration_setup_controller::{
     TurnIterationSetupContext, TurnIterationSetupController, TurnIterationSetupFlow,
 };
-use turn_loop_state_controller::TurnLoopStateController;
+use turn_loop_bootstrap_controller::{TurnLoopBootstrapContext, TurnLoopBootstrapController};
 use turn_post_change_closeout_controller::{
     TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
 };
-use turn_request_bootstrap_controller::{
-    TurnRequestBootstrapContext, TurnRequestBootstrapController,
-};
 use turn_retrieval_context_controller::{
     TurnRetrievalContextController, TurnRetrievalContextRequest,
-};
-use turn_runtime_diet_bootstrap_controller::{
-    TurnRuntimeDietBootstrapContext, TurnRuntimeDietBootstrapController,
 };
 use turn_setup_controller::{TurnSetupContext, TurnSetupController};
 use turn_task_context_controller::{TurnTaskContextSetupContext, TurnTaskContextSetupController};
@@ -713,26 +708,19 @@ impl ConversationLoop {
             }
         }
 
-        let base_tools = self.get_tools_for_route(&route);
-        let mut loop_state = TurnLoopStateController::initial_state();
-        TurnRuntimeDietBootstrapController::observe(TurnRuntimeDietBootstrapContext {
+        let turn_loop_bootstrap = TurnLoopBootstrapController::run(TurnLoopBootstrapContext {
+            conversation: self,
+            route: &route,
             retrieval_context: turn_retrieval_context.as_ref(),
-            tools: &base_tools,
             working_dir: &working_dir,
-            runtime_diet: &mut turn_state.runtime_diet,
-        });
-        TurnRequestBootstrapController::run(TurnRequestBootstrapContext {
-            retrieval_policy: route.retrieval,
-            memory_manager: self.memory_manager.as_ref(),
-            compressor: self.compressor.as_ref(),
+            turn_state: &mut turn_state,
             messages: &mut messages,
-            tools: &base_tools,
-            retrieval_context: turn_retrieval_context.as_ref(),
-            runtime_diet: &mut turn_state.runtime_diet,
             trace: &trace,
             tx,
         })
         .await;
+        let base_tools = turn_loop_bootstrap.base_tools;
+        let mut loop_state = turn_loop_bootstrap.loop_state;
 
         // ── 迭代预算 ─────────────────────────────────────
         let max_loop_iterations = self.max_iterations + code_workflow.max_repair_attempts().max(3);
