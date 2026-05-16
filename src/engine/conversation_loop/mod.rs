@@ -56,6 +56,7 @@ mod tool_round_controller;
 mod tool_turn_controller;
 mod turn_assistant_response_controller;
 mod turn_completion_controller;
+mod turn_focused_repair_action_controller;
 mod turn_iteration_closeout_controller;
 mod turn_iteration_setup_controller;
 mod turn_loop_state_controller;
@@ -73,7 +74,6 @@ mod workflow_contract_controller;
 mod workflow_prompt_policy;
 mod workflow_trace;
 
-use action_checkpoint::FocusedRepairActionRequest;
 use api_request_controller::{ApiRequestContext, ApiRequestController};
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use focused_repair_recovery::FocusedRepairRecoveryController;
@@ -86,7 +86,6 @@ use legacy_workflow_gate_controller::{
 use patch_recovery::PatchSynthesisAction;
 use patch_synthesis_flow_controller::{
     EnterPatchSynthesisContext, EnterPatchSynthesisFlow, PatchSynthesisFlowController,
-    PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
 };
 use post_change_workflow_controller::{PostChangeWorkflowContext, PostChangeWorkflowController};
 use reflection_gate_controller::{
@@ -120,6 +119,9 @@ use turn_assistant_response_controller::{
     TurnAssistantResponseContext, TurnAssistantResponseController, TurnAssistantResponseFlow,
 };
 use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
+use turn_focused_repair_action_controller::{
+    TurnFocusedRepairActionContext, TurnFocusedRepairActionController, TurnFocusedRepairActionFlow,
+};
 use turn_iteration_closeout_controller::{
     TurnIterationCloseoutContext, TurnIterationCloseoutController,
 };
@@ -887,66 +889,47 @@ impl ConversationLoop {
                 continue;
             }
 
-            if let Some(repair_proposal) =
-                Self::focused_repair_action_proposal(FocusedRepairActionRequest {
-                    action_checkpoint_active: turn_state.focused_repair.action_checkpoint_active,
-                    any_tool_success: tool_round_state.any_tool_success,
-                    batch_has_unsuccessful_tools: tool_round_state.batch_has_unsuccessful_tools,
-                    failed_tool_evidence_present: tool_round_state.failed_tool_evidence_present(),
-                    force_patch_synthesis_after_no_change: focused_repair_state
-                        .force_patch_synthesis_after_no_change,
-                    force_patch_synthesis_reason: focused_repair_state.force_patch_synthesis_reason,
-                    action_checkpoint_no_change_rounds: turn_state
-                        .focused_repair
-                        .action_checkpoint_no_change_rounds,
-                    action_checkpoint_lookup_count: turn_state
-                        .focused_repair
-                        .action_checkpoint_lookup_count,
-                    exposed_tool_names: &exposed_tool_names,
-                })
-            {
-                match PatchSynthesisFlowController::apply_repair_proposal(
-                    PatchSynthesisProposalContext {
-                        proposal: &repair_proposal,
-                        state: &mut turn_state.focused_repair,
-                        trace: &trace,
-                        messages: &mut messages,
-                        tool_results_text: &mut tool_round_state.tool_results_text,
-                    },
-                ) {
-                    PatchSynthesisProposalFlow::Continue => continue,
-                    PatchSynthesisProposalFlow::EnterPatchSynthesis => {
-                        match PatchSynthesisFlowController::handle_enter_patch_synthesis(
-                            EnterPatchSynthesisContext {
-                                proposal: &repair_proposal,
-                                conversation: self,
-                                code_write_tools_forbidden,
-                                last_user_preview: last_user_preview.as_str(),
-                                exposed_tool_names: &exposed_tool_names,
-                                any_tool_success: &mut tool_round_state.any_tool_success,
-                                tx,
-                                trace: &trace,
-                                resource_policy: &resource_policy,
-                                destructive_scope: &destructive_scope,
-                                turn_state: &mut turn_state,
-                                tool_results_text: &mut tool_round_state.tool_results_text,
-                                messages: &mut messages,
-                                changed_files: &mut tool_round_state.changed_files,
-                                baseline_git_status_files: &baseline_git_status_files,
-                                is_programming_workflow:
-                                    crate::engine::code_change_workflow::is_programming_workflow(
-                                        route.workflow,
-                                    ),
-                                final_content: &mut loop_state.final_content,
-                                final_tool_calls: &mut loop_state.final_tool_calls,
-                            },
-                        )
-                        .await
-                        {
-                            EnterPatchSynthesisFlow::Continue => continue,
-                            EnterPatchSynthesisFlow::Stop => break,
-                            EnterPatchSynthesisFlow::Proceed => {}
-                        }
+            match TurnFocusedRepairActionController::run(TurnFocusedRepairActionContext {
+                focused_repair_state: &focused_repair_state,
+                runtime_state: &mut turn_state.focused_repair,
+                round_state: &mut tool_round_state,
+                exposed_tool_names: &exposed_tool_names,
+                trace: &trace,
+                messages: &mut messages,
+            }) {
+                TurnFocusedRepairActionFlow::NoAction => {}
+                TurnFocusedRepairActionFlow::Continue => continue,
+                TurnFocusedRepairActionFlow::EnterPatchSynthesis { proposal } => {
+                    match PatchSynthesisFlowController::handle_enter_patch_synthesis(
+                        EnterPatchSynthesisContext {
+                            proposal: &proposal,
+                            conversation: self,
+                            code_write_tools_forbidden,
+                            last_user_preview: last_user_preview.as_str(),
+                            exposed_tool_names: &exposed_tool_names,
+                            any_tool_success: &mut tool_round_state.any_tool_success,
+                            tx,
+                            trace: &trace,
+                            resource_policy: &resource_policy,
+                            destructive_scope: &destructive_scope,
+                            turn_state: &mut turn_state,
+                            tool_results_text: &mut tool_round_state.tool_results_text,
+                            messages: &mut messages,
+                            changed_files: &mut tool_round_state.changed_files,
+                            baseline_git_status_files: &baseline_git_status_files,
+                            is_programming_workflow:
+                                crate::engine::code_change_workflow::is_programming_workflow(
+                                    route.workflow,
+                                ),
+                            final_content: &mut loop_state.final_content,
+                            final_tool_calls: &mut loop_state.final_tool_calls,
+                        },
+                    )
+                    .await
+                    {
+                        EnterPatchSynthesisFlow::Continue => continue,
+                        EnterPatchSynthesisFlow::Stop => break,
+                        EnterPatchSynthesisFlow::Proceed => {}
                     }
                 }
             }
