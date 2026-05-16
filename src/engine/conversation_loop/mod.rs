@@ -26,6 +26,7 @@ mod patch_repair_rules;
 mod patch_synthesis_executor;
 mod patch_synthesis_flow_controller;
 mod permission_controller;
+mod post_change_workflow_controller;
 mod post_edit_repair_controller;
 mod post_edit_verification_controller;
 mod preflight_compression_controller;
@@ -71,7 +72,6 @@ use assistant_response_retry_controller::{
     AssistantResponseRetryController, NoToolAssistantResponseContext, NoToolAssistantResponseFlow,
 };
 use closeout_controller::VerifiedChangeCloseoutController;
-use first_code_change_controller::{FirstCodeChangeContext, FirstCodeChangeController};
 use focused_repair_recovery::FocusedRepairRecoveryController;
 use focused_repair_state_controller::{
     FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
@@ -90,12 +90,7 @@ use patch_synthesis_flow_controller::{
     PatchSynthesisPostExecutionFlow, PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
     PatchSynthesisRecoveryFlow,
 };
-use post_edit_repair_controller::{
-    PostEditRepairContext, PostEditRepairController, PostEditRepairRuntimeContext,
-};
-use post_edit_verification_controller::{
-    PostEditVerificationContext, PostEditVerificationController,
-};
+use post_change_workflow_controller::{PostChangeWorkflowContext, PostChangeWorkflowController};
 use preflight_compression_controller::{
     PreflightCompressionContext, PreflightCompressionController,
 };
@@ -1233,62 +1228,30 @@ impl ConversationLoop {
                 break;
             }
 
-            // ── 自动验证闭环 ──────────────────────────────
-            if !changed_files.is_empty() {
-                FirstCodeChangeController::record(FirstCodeChangeContext {
+            let post_change_workflow =
+                PostChangeWorkflowController::run(PostChangeWorkflowContext {
+                    conversation: self,
                     trace: &trace,
+                    route: &route,
                     code_workflow: &mut code_workflow,
-                    evidence_ledger: &mut turn_state.evidence_ledger,
+                    task_bundle: &mut task_bundle,
                     changed_files: &changed_files,
-                });
-                let working_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let verification =
-                    PostEditVerificationController::run(PostEditVerificationContext {
-                        working_dir: &working_dir,
-                        changed_files: &changed_files,
-                        lsp_manager: self.lsp_manager.as_deref(),
-                        required_validation_commands: &required_validation_commands,
-                        successful_validation_commands: &successful_validation_commands,
-                        successful_required_validation_commands:
-                            &mut successful_required_validation_commands,
-                        evidence_ledger: &mut turn_state.evidence_ledger,
-                        tool_results_text: &mut tool_results_text,
-                        messages: &mut messages,
-                    })
-                    .await;
-                let verification_trace = PostEditVerificationController::record_trace(
-                    &trace,
-                    &changed_files,
-                    &verification,
-                );
-                should_closeout_after_verified_change =
-                    verification_trace.should_closeout_after_verified_change;
-                let post_edit_repair_outcome = PostEditRepairController::run(
-                    self,
-                    PostEditRepairContext {
-                        trace: &trace,
-                        route: &route,
-                        code_workflow: &mut code_workflow,
-                        task_bundle: &mut task_bundle,
-                        changed_files: &changed_files,
-                        verification: &verification,
-                        required_validation_commands: &required_validation_commands,
-                        runtime: PostEditRepairRuntimeContext::from_turn_state(&mut turn_state),
-                        max_iterations: self.max_iterations,
-                        should_closeout_after_verified_change,
-                        final_content: &mut final_content,
-                        tool_results_text: &mut tool_results_text,
-                        messages: &mut messages,
-                        last_user_preview: last_user_preview.as_str(),
-                    },
-                )
+                    required_validation_commands: &required_validation_commands,
+                    successful_validation_commands: &successful_validation_commands,
+                    successful_required_validation_commands:
+                        &mut successful_required_validation_commands,
+                    turn_state: &mut turn_state,
+                    should_closeout_after_verified_change,
+                    final_content: &mut final_content,
+                    tool_results_text: &mut tool_results_text,
+                    messages: &mut messages,
+                    last_user_preview: last_user_preview.as_str(),
+                })
                 .await;
-                should_closeout_after_verified_change =
-                    post_edit_repair_outcome.should_closeout_after_verified_change;
-                if post_edit_repair_outcome.break_loop {
-                    break;
-                }
+            should_closeout_after_verified_change =
+                post_change_workflow.should_closeout_after_verified_change;
+            if post_change_workflow.break_loop {
+                break;
             }
 
             MemorySyncController::sync_turn(MemorySyncContext {
