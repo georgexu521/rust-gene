@@ -1,8 +1,12 @@
-use super::pseudo_tool_text;
 use super::tool_execution::safe_prefix_by_bytes;
+use super::{pseudo_tool_text, should_use_nonstreaming_tools};
+use crate::engine::evidence_ledger::EvidenceLedger;
+use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};
+use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
-use crate::services::api::Message;
+use crate::services::api::{LlmProvider, Message, Tool};
 use std::collections::HashSet;
+use tokio::sync::mpsc;
 
 pub(super) struct AssistantResponseRetryRequest<'a> {
     pub(super) content: &'a str,
@@ -28,6 +32,26 @@ pub(super) struct AssistantResponseRetryApplicationContext<'a> {
     pub(super) filesystem_grounding_retry_used: &'a mut bool,
     pub(super) trace: &'a TraceCollector,
     pub(super) messages: &'a mut Vec<Message>,
+}
+
+pub(super) struct NoToolAssistantResponseContext<'a> {
+    pub(super) content: &'a str,
+    pub(super) route: &'a IntentRoute,
+    pub(super) evidence_ledger: &'a EvidenceLedger,
+    pub(super) exposed_tool_names: &'a HashSet<String>,
+    pub(super) tool_calls_made: bool,
+    pub(super) pseudo_tool_retry_used: &'a mut bool,
+    pub(super) filesystem_grounding_retry_used: &'a mut bool,
+    pub(super) provider: &'a dyn LlmProvider,
+    pub(super) tools: &'a [Tool],
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) messages: &'a mut Vec<Message>,
+}
+
+pub(super) enum NoToolAssistantResponseFlow {
+    Retry,
+    Finish,
 }
 
 pub(super) struct AssistantResponseRetryController;
@@ -113,12 +137,72 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         context.messages.push(decision.assistant_message);
         context.messages.push(decision.correction_message);
     }
+
+    pub(super) async fn handle_no_tool_response(
+        context: NoToolAssistantResponseContext<'_>,
+    ) -> NoToolAssistantResponseFlow {
+        let is_local_filesystem_route = is_local_filesystem_inspection_route(context.route);
+        let filesystem_grounding_gaps = if is_local_filesystem_route {
+            context
+                .evidence_ledger
+                .unsupported_filesystem_claims(context.content)
+        } else {
+            Vec::new()
+        };
+
+        if let Some(retry_decision) = Self::evaluate(AssistantResponseRetryRequest {
+            content: context.content,
+            exposed_tool_names: context.exposed_tool_names,
+            tool_calls_made: context.tool_calls_made,
+            is_local_filesystem_inspection_route: is_local_filesystem_route,
+            unsupported_filesystem_claims: filesystem_grounding_gaps,
+            pseudo_tool_retry_used: *context.pseudo_tool_retry_used,
+            filesystem_grounding_retry_used: *context.filesystem_grounding_retry_used,
+        }) {
+            Self::apply_decision(AssistantResponseRetryApplicationContext {
+                decision: retry_decision,
+                pseudo_tool_retry_used: context.pseudo_tool_retry_used,
+                filesystem_grounding_retry_used: context.filesystem_grounding_retry_used,
+                trace: context.trace,
+                messages: context.messages,
+            });
+            return NoToolAssistantResponseFlow::Retry;
+        }
+
+        if let Some(tx) = context.tx {
+            if should_use_nonstreaming_tools(context.provider, context.tools)
+                && !context.content.is_empty()
+            {
+                let _ = tx
+                    .send(StreamEvent::TextChunk(context.content.to_string()))
+                    .await;
+            }
+        }
+
+        NoToolAssistantResponseFlow::Finish
+    }
+}
+
+pub(super) fn is_local_filesystem_inspection_route(route: &IntentRoute) -> bool {
+    matches!(route.intent, IntentKind::DirectAnswer)
+        && matches!(route.workflow, WorkflowKind::Direct)
+        && route
+            .recommended_tools
+            .iter()
+            .any(|tool| matches!(tool.as_str(), "file_read" | "glob"))
+        && !route
+            .recommended_tools
+            .iter()
+            .any(|tool| tool.as_str() == "bash")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::trace::TurnTrace;
+    use crate::engine::intent_router::IntentRouter;
+    use crate::engine::trace::{TurnStatus, TurnTrace};
+    use crate::services::api::{ChatRequest, ChatResponse};
+    use async_openai::types::ChatCompletionResponseStream;
 
     fn exposed(names: &[&str]) -> HashSet<String> {
         names.iter().map(|name| (*name).to_string()).collect()
@@ -247,5 +331,131 @@ mod tests {
             TraceEvent::WorkflowFallback { error }
                 if error.contains("explicit bash tool-use correction")
         )));
+    }
+
+    struct MockProvider {
+        base_url: &'static str,
+        model: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockProvider {
+        async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            Err(anyhow::anyhow!("chat not used in this test"))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("stream not used in this test"))
+        }
+
+        fn base_url(&self) -> &str {
+            self.base_url
+        }
+
+        fn default_model(&self) -> &str {
+            self.model
+        }
+    }
+
+    #[test]
+    fn local_filesystem_inspection_route_is_distinct_from_terminal_route() {
+        let local_route = IntentRouter::new().route("请帮我看看桌面有没有 gex 文件夹");
+        let terminal_route =
+            IntentRouter::new().route("帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧");
+
+        assert!(is_local_filesystem_inspection_route(&local_route));
+        assert!(!is_local_filesystem_inspection_route(&terminal_route));
+    }
+
+    #[tokio::test]
+    async fn no_tool_response_retries_when_controller_decides_to_correct() {
+        let route = IntentRouter::new().route("运行 python3 app.py 看看输出");
+        let evidence_ledger = EvidenceLedger::new();
+        let trace = trace();
+        let provider = MockProvider {
+            base_url: "mock://local",
+            model: "mock-model",
+        };
+        let tools = vec![Tool::new("bash", "run shell command")];
+        let exposed_tools = exposed(&["bash"]);
+        let mut pseudo_tool_retry_used = false;
+        let mut filesystem_grounding_retry_used = false;
+        let mut messages = Vec::new();
+
+        let flow = AssistantResponseRetryController::handle_no_tool_response(
+            NoToolAssistantResponseContext {
+                content: "```bash\npython3 app.py\n```",
+                route: &route,
+                evidence_ledger: &evidence_ledger,
+                exposed_tool_names: &exposed_tools,
+                tool_calls_made: false,
+                pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
+                filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                provider: &provider,
+                tools: &tools,
+                tx: None,
+                trace: &trace,
+                messages: &mut messages,
+            },
+        )
+        .await;
+
+        assert!(matches!(flow, NoToolAssistantResponseFlow::Retry));
+        assert!(pseudo_tool_retry_used);
+        assert!(!filesystem_grounding_retry_used);
+        assert_eq!(messages.len(), 2);
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error.contains("explicit bash tool-use correction")
+        )));
+    }
+
+    #[tokio::test]
+    async fn no_tool_response_finishes_and_emits_nonstreaming_text_chunk() {
+        let route = IntentRouter::new().route("say hello");
+        let evidence_ledger = EvidenceLedger::new();
+        let trace = trace();
+        let provider = MockProvider {
+            base_url: "https://api.minimaxi.com/v1",
+            model: "MiniMax-M2.7",
+        };
+        let tools = vec![Tool::new("bash", "run shell command")];
+        let exposed_tools = exposed(&["bash"]);
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut pseudo_tool_retry_used = false;
+        let mut filesystem_grounding_retry_used = false;
+        let mut messages = Vec::new();
+
+        let flow = AssistantResponseRetryController::handle_no_tool_response(
+            NoToolAssistantResponseContext {
+                content: "hello",
+                route: &route,
+                evidence_ledger: &evidence_ledger,
+                exposed_tool_names: &exposed_tools,
+                tool_calls_made: false,
+                pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
+                filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                provider: &provider,
+                tools: &tools,
+                tx: Some(&tx),
+                trace: &trace,
+                messages: &mut messages,
+            },
+        )
+        .await;
+
+        assert!(matches!(flow, NoToolAssistantResponseFlow::Finish));
+        assert!(!pseudo_tool_retry_used);
+        assert!(!filesystem_grounding_retry_used);
+        assert!(messages.is_empty());
+        assert!(matches!(
+            rx.recv().await,
+            Some(StreamEvent::TextChunk(content)) if content == "hello"
+        ));
     }
 }

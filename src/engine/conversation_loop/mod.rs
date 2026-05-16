@@ -67,8 +67,7 @@ use api_request_controller::{
 };
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
 use assistant_response_retry_controller::{
-    AssistantResponseRetryApplicationContext, AssistantResponseRetryController,
-    AssistantResponseRetryRequest,
+    AssistantResponseRetryController, NoToolAssistantResponseContext, NoToolAssistantResponseFlow,
 };
 use closeout_controller::{
     FinalCloseoutContext, FinalCloseoutController, VerifiedChangeCloseoutController,
@@ -142,7 +141,9 @@ use workflow_contract_controller::{WorkflowContractController, WorkflowContractJ
 use workflow_prompt_policy::WorkflowPromptPolicy;
 use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_trigger};
 
-use crate::engine::intent_router::{IntentKind, IntentRoute, IntentRouter, WorkflowKind};
+use crate::engine::intent_router::IntentRouter;
+#[cfg(test)]
+use crate::engine::intent_router::{IntentKind, WorkflowKind};
 use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus, TurnTrace};
 use crate::engine::workflow::WorkflowPolicy;
 use crate::services::api::{LlmProvider, Message, ToolCall};
@@ -306,19 +307,6 @@ fn is_high_risk_workflow(
         || judgment
             .map(|judgment| matches!(judgment.risk, crate::engine::intent_router::RiskLevel::High))
             .unwrap_or(false)
-}
-
-fn is_local_filesystem_inspection_route(route: &IntentRoute) -> bool {
-    matches!(route.intent, IntentKind::DirectAnswer)
-        && matches!(route.workflow, WorkflowKind::Direct)
-        && route
-            .recommended_tools
-            .iter()
-            .any(|tool| matches!(tool.as_str(), "file_read" | "glob"))
-        && !route
-            .recommended_tools
-            .iter()
-            .any(|tool| tool.as_str() == "bash")
 }
 
 /// 统一对话循环
@@ -986,44 +974,27 @@ impl ConversationLoop {
             let pre_executed = api_application.pre_executed;
 
             if tool_calls.is_empty() {
-                let is_local_filesystem_route = is_local_filesystem_inspection_route(&route);
-                let filesystem_grounding_gaps = if is_local_filesystem_route {
-                    turn_state
-                        .evidence_ledger
-                        .unsupported_filesystem_claims(&content)
-                } else {
-                    Vec::new()
-                };
-                if let Some(retry_decision) =
-                    AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
+                match AssistantResponseRetryController::handle_no_tool_response(
+                    NoToolAssistantResponseContext {
                         content: &content,
+                        route: &route,
+                        evidence_ledger: &turn_state.evidence_ledger,
                         exposed_tool_names: &exposed_tool_names,
                         tool_calls_made,
-                        is_local_filesystem_inspection_route: is_local_filesystem_route,
-                        unsupported_filesystem_claims: filesystem_grounding_gaps,
-                        pseudo_tool_retry_used,
-                        filesystem_grounding_retry_used,
-                    })
+                        pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
+                        filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                        provider: self.provider.as_ref(),
+                        tools: &tools,
+                        tx,
+                        trace: &trace,
+                        messages: &mut messages,
+                    },
+                )
+                .await
                 {
-                    AssistantResponseRetryController::apply_decision(
-                        AssistantResponseRetryApplicationContext {
-                            decision: retry_decision,
-                            pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
-                            filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
-                            trace: &trace,
-                            messages: &mut messages,
-                        },
-                    );
-                    continue;
+                    NoToolAssistantResponseFlow::Retry => continue,
+                    NoToolAssistantResponseFlow::Finish => break,
                 }
-                if let Some(tx) = tx {
-                    if should_use_nonstreaming_tools(self.provider.as_ref(), &tools)
-                        && !content.is_empty()
-                    {
-                        let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
-                    }
-                }
-                break;
             }
 
             let batch_processing = ToolRoundController::execute(ToolRoundContext {
@@ -1671,16 +1642,6 @@ mod tests {
         assert!(!exposed.contains("memory_save"));
         assert!(!exposed.contains("mcp"));
         assert!(!exposed.contains("agent"));
-    }
-
-    #[test]
-    fn local_filesystem_inspection_route_is_distinct_from_terminal_route() {
-        let local_route = IntentRouter::new().route("请帮我看看桌面有没有 gex 文件夹");
-        let terminal_route =
-            IntentRouter::new().route("帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧");
-
-        assert!(is_local_filesystem_inspection_route(&local_route));
-        assert!(!is_local_filesystem_inspection_route(&terminal_route));
     }
 
     #[test]
