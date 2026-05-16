@@ -54,6 +54,7 @@ mod tool_orchestrator;
 mod tool_result_controller;
 mod tool_round_controller;
 mod tool_turn_controller;
+mod turn_api_failure_controller;
 mod turn_assistant_response_controller;
 mod turn_completion_controller;
 mod turn_focused_repair_action_controller;
@@ -88,7 +89,6 @@ use reflection_gate_controller::{
     ReflectionGateContext, ReflectionGateController, ReflectionGateFlow,
 };
 use request_preparation_controller::{RequestPreparationContext, RequestPreparationController};
-use runtime_diet::trace_runtime_diet_report;
 use session_goal_controller::{SessionGoalController, SessionGoalUpdateContext};
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 use task_context_trace_controller::{TaskContextTraceContext, TaskContextTraceController};
@@ -107,6 +107,7 @@ use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
 use tool_round_controller::{ToolRoundContext, ToolRoundController};
+use turn_api_failure_controller::{TurnApiFailureContext, TurnApiFailureController};
 use turn_assistant_response_controller::{
     TurnAssistantResponseContext, TurnAssistantResponseController, TurnAssistantResponseFlow,
 };
@@ -142,7 +143,9 @@ use workflow_trace::{apply_workflow_feedback_and_trace, trace_adaptive_workflow_
 
 #[cfg(test)]
 use crate::engine::intent_router::{IntentKind, IntentRouter, WorkflowKind};
-use crate::engine::trace::{TraceCollector, TraceEvent, TraceStore, TurnStatus};
+#[cfg(test)]
+use crate::engine::trace::TraceEvent;
+use crate::engine::trace::{TraceCollector, TraceStore, TurnStatus};
 use crate::engine::workflow::WorkflowPolicy;
 use crate::services::api::{LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
@@ -773,17 +776,15 @@ impl ConversationLoop {
             {
                 Ok(outcome) => outcome,
                 Err(e) => {
-                    trace.record(TraceEvent::Error {
-                        message: e.to_string(),
+                    let error_message = e.to_string();
+                    TurnApiFailureController::record(TurnApiFailureContext {
+                        conversation: self,
+                        trace: &trace,
+                        route: &route,
+                        code_workflow: &code_workflow,
+                        runtime_diet: &mut turn_state.runtime_diet,
+                        error_message: &error_message,
                     });
-                    turn_state.runtime_diet.validation_evidence = "api_error".to_string();
-                    trace_runtime_diet_report(
-                        &trace,
-                        &route,
-                        &code_workflow,
-                        &turn_state.runtime_diet,
-                    );
-                    self.finish_trace(trace.clone(), TurnStatus::Failed);
                     return Err(e);
                 }
             };

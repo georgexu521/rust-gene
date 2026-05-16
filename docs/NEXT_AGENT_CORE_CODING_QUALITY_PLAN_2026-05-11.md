@@ -777,6 +777,17 @@
   `cargo clippy --all-features -- -D warnings` passed.
 - Full validation after the turn-loop bootstrap slice:
   `cargo test -q` passed (`1408 passed; 0 failed`).
+- 2026-05-16: Phase A API failure closeout cleanup continued. Added
+  `turn_api_failure_controller.rs`; provider/API request failure trace
+  recording, runtime-diet failure evidence, runtime-diet report tracing, and
+  failed trace finalization now live outside `run_inner`. The main loop now
+  only records the controller decision path and returns the original error.
+- Validation after the API failure closeout slice: `cargo fmt --check`,
+  `git diff --check`, targeted `turn_api_failure_controller` and
+  `api_request_controller` tests, `cargo check -q`, and
+  `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the API failure closeout slice:
+  `cargo test -q` passed (`1409 passed; 0 failed`).
 - 2026-05-11: Phase 1 Batch 1.1 started. Added
   `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` as the current
   `ConversationLoop::run_inner` responsibility map and extraction boundary.
