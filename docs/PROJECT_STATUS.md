@@ -423,7 +423,7 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
-- `cargo test -q` is clean as of 2026-05-12 with `1226 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-16 with `1428 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry
@@ -472,14 +472,12 @@ Latest maintenance note:
   fixtures were refreshed for the extracted repair controller and learning
   slash-handler modules, and skill-promotion evidence detection was widened so
   `skill-promotion-gate` is counted as a skill-specific task.
-- `conversation_loop/mod.rs` is down to 6013 lines after moving patch synthesis,
-  deterministic patch recovery, synthesized patch validation, required
-  validation commands, validation command classification, verification source
-  context, guided validation debugging, acceptance repair review, and final
-  closeout appending, route-scoped tool exposure, and action repair tool
-  filtering into dedicated conversation-loop modules.
-- `cargo clippy --all-features -- -D warnings` was last recorded clean in the
-  post-recovery baseline before this docs-only reset.
+- `conversation_loop/mod.rs` is down to 3566 lines after moving turn setup,
+  entry gates, loop bootstrap, iteration sequencing, tool-round sequencing,
+  post-change closeout, retrieval helpers, workflow-runtime helpers, and
+  tool-context helpers into dedicated conversation-loop modules.
+- `cargo clippy --all-features -- -D warnings` was last recorded clean on
+  2026-05-16 after the tool-context helper split.
 - `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command
   constants, then passed all required docs, all-features build, and the
   workflow-enabled full test suite.
