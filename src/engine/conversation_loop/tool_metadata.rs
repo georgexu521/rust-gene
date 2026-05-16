@@ -148,6 +148,8 @@ pub(super) fn build_tool_execution_summary(
         _ => {}
     }
 
+    attach_terminal_task_summary(object, result);
+
     if let Some(error) = result.error.as_deref() {
         object.insert(
             "error_preview".to_string(),
@@ -156,6 +158,71 @@ pub(super) fn build_tool_execution_summary(
     }
 
     summary
+}
+
+fn attach_terminal_task_summary(
+    summary: &mut serde_json::Map<String, serde_json::Value>,
+    result: &ToolResult,
+) {
+    let Some(data) = result.data.as_ref() else {
+        return;
+    };
+    if let Some(task) = data
+        .get("terminal_task")
+        .and_then(serde_json::Value::as_object)
+    {
+        summary.insert(
+            "terminal_task".to_string(),
+            terminal_task_summary_object(task),
+        );
+    }
+    if let Some(tasks) = data
+        .get("terminal_tasks")
+        .and_then(serde_json::Value::as_array)
+    {
+        summary.insert(
+            "terminal_tasks_count".to_string(),
+            serde_json::Value::Number((tasks.len() as u64).into()),
+        );
+        let task_summaries = tasks
+            .iter()
+            .filter_map(serde_json::Value::as_object)
+            .map(terminal_task_summary_object)
+            .collect();
+        summary.insert(
+            "terminal_tasks".to_string(),
+            serde_json::Value::Array(task_summaries),
+        );
+    }
+}
+
+fn terminal_task_summary_object(
+    task: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    let mut summary = serde_json::Map::new();
+    for key in [
+        "task_id",
+        "handle",
+        "status",
+        "terminal_kind",
+        "pty",
+        "read_tool",
+        "cancel_handle",
+        "output_path",
+        "duration_ms",
+        "exit_code",
+    ] {
+        if let Some(value) = task.get(key).filter(|value| !value.is_null()) {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+    if let Some(command) = task.get("command").and_then(serde_json::Value::as_str) {
+        summary.insert(
+            "command".to_string(),
+            serde_json::Value::String(safe_prefix_by_bytes(command, 240).to_string()),
+        );
+    }
+    serde_json::Value::Object(summary)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -466,6 +533,66 @@ mod tests {
         assert_eq!(record.machine_metadata["tool"], "bash");
         assert_eq!(record.machine_metadata["command_kind"], "validation");
         assert_eq!(record.machine_metadata["command_category"], "test_run");
+    }
+
+    #[test]
+    fn tool_execution_summary_includes_terminal_task_metadata() {
+        let result = ToolResult::success_with_data(
+            "ok",
+            serde_json::json!({
+                "terminal_task": {
+                    "task_id": "shell_foreground_123",
+                    "handle": null,
+                    "command": "cargo test -q",
+                    "status": "completed",
+                    "terminal_kind": "foreground_shell",
+                    "pty": false,
+                    "read_tool": null,
+                    "cancel_handle": null,
+                    "duration_ms": 42,
+                    "exit_code": 0
+                }
+            }),
+        );
+
+        let summary = build_tool_execution_summary(&tool_call("bash"), &result);
+
+        assert_eq!(summary["terminal_task"]["task_id"], "shell_foreground_123");
+        assert_eq!(summary["terminal_task"]["status"], "completed");
+        assert_eq!(
+            summary["terminal_task"]["terminal_kind"],
+            "foreground_shell"
+        );
+        assert_eq!(summary["terminal_task"]["pty"], false);
+        assert_eq!(summary["terminal_task"]["duration_ms"], 42);
+    }
+
+    #[test]
+    fn tool_execution_summary_includes_terminal_tasks_metadata() {
+        let result = ToolResult::success_with_data(
+            "tasks",
+            serde_json::json!({
+                "terminal_tasks": [
+                    {
+                        "task_id": "shell_bg_1",
+                        "handle": "shell_bg_1",
+                        "command": "npm run dev",
+                        "status": "running",
+                        "terminal_kind": "background_shell",
+                        "read_tool": "bash_output",
+                        "cancel_handle": "shell_bg_1"
+                    }
+                ]
+            }),
+        );
+
+        let summary = build_tool_execution_summary(&tool_call("bash_tasks"), &result);
+
+        assert_eq!(summary["terminal_tasks_count"], 1);
+        assert_eq!(summary["terminal_tasks"][0]["task_id"], "shell_bg_1");
+        assert_eq!(summary["terminal_tasks"][0]["status"], "running");
+        assert_eq!(summary["terminal_tasks"][0]["read_tool"], "bash_output");
+        assert_eq!(summary["terminal_tasks"][0]["cancel_handle"], "shell_bg_1");
     }
 
     #[test]

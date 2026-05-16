@@ -1303,6 +1303,19 @@
   passed.
 - Full validation after the foreground/PTY terminal-task data slice:
   `cargo test -q` passed (`1428 passed; 0 failed`).
+- 2026-05-16: Phase 2 terminal task data cleanup continued into tool execution
+  summaries. `tool_summary` now carries compact `terminal_task` /
+  `terminal_tasks` status metadata from shell results, so traces and machine
+  metadata can reason about terminal task state without relying on provider
+  text or full output.
+- Validation after the terminal-task summary slice: `cargo fmt --check`,
+  `git diff --check`, targeted
+  `tool_execution_summary_includes_terminal_task_metadata`,
+  `tool_execution_summary_includes_terminal_tasks_metadata`,
+  `attach_tool_execution_metadata_fills_shell_result_duration`,
+  `cargo check -q`, and `cargo clippy --all-features -- -D warnings` passed.
+- Full validation after the terminal-task summary slice:
+  `cargo test -q` passed (`1430 passed; 0 failed`).
 - 2026-05-12: Phase 3 Batch 3.0 started. `file_read` now returns structured
   raw/display boundary metadata for file reads: resolved path, displayed line
   range, total/displayed line counts, truncation, full/selected content hashes,
