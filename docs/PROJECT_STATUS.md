@@ -73,6 +73,18 @@ required_command_status=ok for every case
 real code-change pass=3, audit/no-diff pass=5
 ```
 
+Latest memory/skill product-maturity behavior baseline:
+
+```text
+product-maturity-memory-skill-20260517-102935: 5/6 passed
+behavior_assertions=6, behavior_assertions_passed=5
+real code-change pass=2, seeded no-diff failure=1
+failure_owner=agent_flow for persistent-memory-planning-context
+root cause=persistent memory fixture entered the agent run, but workflow
+reflection stopped before tools after workflow judgment skipped a non-JSON
+response; required prefetch/merge/trace assertions were not restored
+```
+
 Current terminal slice: `bash mode=background` returns a shell handle,
 `bash_output` reads bounded output from that handle, `bash_cancel` stops the
 process group, foreground timeout results now carry structured
@@ -437,9 +449,11 @@ The remaining work is now product maturity, not missing foundations:
    tool-exposure diagnostics. Batch 6 report-layer memory/skill evidence is
    now landed in live summary and aggregate reporting, and has a first
    six-case live baseline. Behavior-level memory/skill assertion metadata is
-   now part of the live-eval report layer; next is rerunning the affected
-   recommended memory/skill cases and using those assertions to separate real
-   behavior coverage from indirect activity signals.
+   now part of the live-eval report layer, and the affected recommended
+   memory/skill cases have been rerun. The next product-maturity fix should
+   target the `persistent-memory-planning-context` agent-flow failure where
+   pre-tool reflection can stop a seeded code-change task before any repair
+   attempt.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -459,6 +473,15 @@ Latest maintenance note:
   required commands were `ok` for every case, failure owner was `none` for every
   case, `3` seeded code-change tasks produced real diffs, and `5` audit/no-diff
   tasks passed as expected.
+- `product-maturity-memory-skill-20260517-102935` refreshed the affected
+  recommended memory/skill behavior-assertion baseline on 2026-05-17: `5/6`
+  passed, `5/6` behavior assertion tasks passed, and
+  `persistent-memory-planning-context` failed with `failure_owner=agent_flow`.
+  The stale fixture path was updated from the old main loop to
+  `TurnRetrievalContextController`; the remaining failure is a real runtime
+  flow issue where reflection permission stopped the seeded code-change task
+  before tools, leaving the required memory prefetch, merge, and trace
+  assertions unrestored.
 - Live-eval summaries now carry explicit `behavior_assertions` and
   `behavior_assertion_status` fields. The first product-maturity slice tags the
   memory and skill recommended tasks so summary and aggregate reports can show
