@@ -11,14 +11,61 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 const PREVIEW_CHARS: usize = 240;
+const HASH_PREVIEW_CHARS: usize = 16;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvidenceLedger {
     changed_files: BTreeSet<String>,
+    tool_execution_records: Vec<ToolExecutionRecord>,
     file_facts: Vec<FileEvidence>,
     command_facts: Vec<CommandEvidence>,
     validation_facts: Vec<ValidationEvidence>,
     permission_facts: Vec<PermissionEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolExecutionRecord {
+    pub call_id: String,
+    pub tool: String,
+    pub status: ToolExecutionStatus,
+    pub arguments_hash: String,
+    pub duration_ms: Option<u64>,
+    pub output_chars: usize,
+    pub error_code: Option<String>,
+    pub error_preview: Option<String>,
+    pub permission: Option<ToolPermissionRecord>,
+    pub command: Option<String>,
+    pub command_kind: Option<String>,
+    pub command_category: Option<String>,
+    pub validation_family: Option<String>,
+    pub safe_for_closeout: Option<bool>,
+    pub terminal_task: Option<TerminalTaskRecord>,
+    pub changed_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecutionStatus {
+    Completed,
+    Failed,
+    Denied,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPermissionRecord {
+    pub kind: Option<String>,
+    pub approved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TerminalTaskRecord {
+    pub task_id: Option<String>,
+    pub status: Option<String>,
+    pub terminal_kind: Option<String>,
+    pub handle: Option<String>,
+    pub output_path: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub exit_code: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +113,7 @@ pub struct PermissionEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvidenceSnapshot {
     pub changed_files: Vec<String>,
+    pub tool_execution_records: usize,
     pub file_facts: usize,
     pub command_facts: usize,
     pub validation_facts: usize,
@@ -145,6 +193,7 @@ impl EvidenceLedger {
     }
 
     pub fn record_tool_result(&mut self, tool_call: &ToolCall, result: &ToolResult) {
+        self.record_tool_execution_record(tool_call, result);
         self.record_permission_tool_result(tool_call, result);
         match tool_call.name.as_str() {
             "bash" => self.record_bash_tool_result(tool_call, result),
@@ -191,6 +240,7 @@ impl EvidenceLedger {
             .count();
         EvidenceSnapshot {
             changed_files: self.changed_files.iter().cloned().collect(),
+            tool_execution_records: self.tool_execution_records.len(),
             file_facts: self.file_facts.len(),
             command_facts: self.command_facts.len(),
             validation_facts: self.validation_facts.len(),
@@ -336,6 +386,10 @@ impl EvidenceLedger {
         self.changed_files.iter().cloned().collect()
     }
 
+    pub fn tool_execution_records(&self) -> &[ToolExecutionRecord] {
+        &self.tool_execution_records
+    }
+
     pub fn validation_facts(&self) -> &[ValidationEvidence] {
         &self.validation_facts
     }
@@ -448,6 +502,56 @@ impl EvidenceLedger {
         }
     }
 
+    fn record_tool_execution_record(&mut self, tool_call: &ToolCall, result: &ToolResult) {
+        let summary = tool_summary(result);
+        let command = tool_call
+            .arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                summary
+                    .and_then(|summary| summary.get("command"))
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(preview);
+        let command_kind = summary_string(summary, "command_kind");
+        let command_category = summary_string(summary, "command_category");
+        let validation_family = summary_string(summary, "validation_family");
+        let safe_for_closeout = summary
+            .and_then(|summary| summary.get("safe_for_closeout"))
+            .and_then(serde_json::Value::as_bool);
+        let permission = tool_permission_record(result);
+        let status = if permission.as_ref().is_some_and(|record| !record.approved) {
+            ToolExecutionStatus::Denied
+        } else if result.success {
+            ToolExecutionStatus::Completed
+        } else {
+            ToolExecutionStatus::Failed
+        };
+        self.tool_execution_records.push(ToolExecutionRecord {
+            call_id: tool_call.id.clone(),
+            tool: tool_call.name.clone(),
+            status,
+            arguments_hash: tool_arguments_hash(&tool_call.arguments),
+            duration_ms: result.duration_ms,
+            output_chars: result.content.chars().count(),
+            error_code: result.error_code.as_ref().and_then(|code| {
+                serde_json::to_value(code)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_string))
+            }),
+            error_preview: result.error.as_deref().map(preview),
+            permission,
+            command,
+            command_kind,
+            command_category,
+            validation_family,
+            safe_for_closeout,
+            terminal_task: terminal_task_record(result),
+            changed_paths: changed_paths_for_tool_result(tool_call, result),
+        });
+    }
+
     fn record_file_tool_result(&mut self, tool_call: &ToolCall, result: &ToolResult) {
         let path = tool_call
             .arguments
@@ -545,6 +649,93 @@ impl EvidenceLedger {
             summary: preview(&summary),
         });
     }
+}
+
+fn tool_arguments_hash(arguments: &serde_json::Value) -> String {
+    let rendered = serde_json::to_string(arguments).unwrap_or_else(|_| arguments.to_string());
+    let digest = format!("{:x}", md5::compute(rendered));
+    digest.chars().take(HASH_PREVIEW_CHARS).collect()
+}
+
+fn tool_summary(result: &ToolResult) -> Option<&serde_json::Value> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_summary"))
+}
+
+fn summary_string(summary: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    summary
+        .and_then(|summary| summary.get(key))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn tool_permission_record(result: &ToolResult) -> Option<ToolPermissionRecord> {
+    let permission_request = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("permission_request"))?;
+    Some(ToolPermissionRecord {
+        kind: permission_request
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        approved: result.success,
+    })
+}
+
+fn terminal_task_record(result: &ToolResult) -> Option<TerminalTaskRecord> {
+    let data = result.data.as_ref()?;
+    let task = data
+        .get("tool_summary")
+        .and_then(|summary| summary.get("terminal_task"))
+        .or_else(|| data.get("terminal_task"))?;
+    Some(TerminalTaskRecord {
+        task_id: task_string(task, "task_id"),
+        status: task_string(task, "status"),
+        terminal_kind: task_string(task, "terminal_kind"),
+        handle: task_string(task, "handle"),
+        output_path: task_string(task, "output_path"),
+        duration_ms: task.get("duration_ms").and_then(serde_json::Value::as_u64),
+        exit_code: task.get("exit_code").and_then(serde_json::Value::as_i64),
+    })
+}
+
+fn task_string(task: &serde_json::Value, key: &str) -> Option<String> {
+    task.get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn changed_paths_for_tool_result(tool_call: &ToolCall, result: &ToolResult) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    if result.success && matches!(tool_call.name.as_str(), "file_write" | "file_edit") {
+        if let Some(path) = tool_call.arguments["path"].as_str() {
+            paths.insert(path.to_string());
+        }
+    }
+    if tool_call.name == "file_patch" && result.success {
+        if let Some(files) = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("files"))
+            .and_then(serde_json::Value::as_array)
+        {
+            for file in files {
+                if let Some(path) = file
+                    .get("path")
+                    .or_else(|| file.get("resolved_path"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    paths.insert(path.to_string());
+                }
+            }
+        }
+    }
+    paths.into_iter().collect()
 }
 
 fn bash_result_command(result: &ToolResult) -> Option<&str> {
@@ -816,6 +1007,7 @@ mod tests {
 
         let snapshot = ledger.snapshot();
         assert_eq!(snapshot.changed_files, vec!["src/app.py".to_string()]);
+        assert_eq!(snapshot.tool_execution_records, 1);
         assert_eq!(snapshot.file_facts, 1);
         assert_eq!(snapshot.command_facts, 0);
     }
@@ -976,6 +1168,93 @@ mod tests {
             ledger.runtime_validation_label().as_deref(),
             Some("passed:1/1")
         );
+    }
+
+    #[test]
+    fn records_tool_execution_record_with_command_and_terminal_metadata() {
+        let mut ledger = EvidenceLedger::new();
+        let mut result = ToolResult::success_with_data(
+            "test result: ok",
+            serde_json::json!({
+                "terminal_task": {
+                    "task_id": "shell_foreground_123",
+                    "status": "completed",
+                    "terminal_kind": "foreground_shell",
+                    "duration_ms": 42,
+                    "exit_code": 0
+                },
+                "tool_summary": {
+                    "tool": "bash",
+                    "call_id": "call_1",
+                    "success": true,
+                    "duration_ms": 42,
+                    "output_chars": 15,
+                    "command": "cargo test -q",
+                    "command_kind": "validation",
+                    "command_category": "test_run",
+                    "validation_family": "cargo_test",
+                    "safe_for_closeout": true,
+                    "terminal_task": {
+                        "task_id": "shell_foreground_123",
+                        "status": "completed",
+                        "terminal_kind": "foreground_shell",
+                        "duration_ms": 42,
+                        "exit_code": 0
+                    }
+                }
+            }),
+        );
+        result.duration_ms = Some(42);
+
+        ledger.record_tool_result(
+            &tool_call("bash", serde_json::json!({"command": "cargo test -q"})),
+            &result,
+        );
+
+        let records = ledger.tool_execution_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool, "bash");
+        assert_eq!(records[0].status, ToolExecutionStatus::Completed);
+        assert_eq!(records[0].arguments_hash.len(), HASH_PREVIEW_CHARS);
+        assert_eq!(records[0].command.as_deref(), Some("cargo test -q"));
+        assert_eq!(records[0].command_kind.as_deref(), Some("validation"));
+        assert_eq!(records[0].validation_family.as_deref(), Some("cargo_test"));
+        assert_eq!(records[0].safe_for_closeout, Some(true));
+        assert_eq!(
+            records[0]
+                .terminal_task
+                .as_ref()
+                .and_then(|task| task.task_id.as_deref()),
+            Some("shell_foreground_123")
+        );
+    }
+
+    #[test]
+    fn records_denied_permission_execution_record() {
+        let mut ledger = EvidenceLedger::new();
+        let mut result = ToolResult::error("permission denied");
+        result.data = Some(serde_json::json!({
+            "permission_request": {
+                "kind": "write",
+                "rejection_feedback": "Denied by policy"
+            }
+        }));
+
+        ledger.record_tool_result(
+            &tool_call("file_write", serde_json::json!({"path": "src/lib.rs"})),
+            &result,
+        );
+
+        let record = &ledger.tool_execution_records()[0];
+        assert_eq!(record.status, ToolExecutionStatus::Denied);
+        assert_eq!(
+            record
+                .permission
+                .as_ref()
+                .and_then(|permission| permission.kind.as_deref()),
+            Some("write")
+        );
+        assert_eq!(ledger.snapshot().denied_permission_facts, 1);
     }
 
     #[test]

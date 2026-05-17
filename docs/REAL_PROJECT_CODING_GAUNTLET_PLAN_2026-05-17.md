@@ -29,8 +29,8 @@ Non-goals for this phase:
 Use `docs/PROJECT_STATUS.md` as the canonical status source. As of this plan,
 the relevant baseline is:
 
-- deterministic local tests after memory and repair-planner closure:
-  `1450 passed; 0 failed`;
+- deterministic local tests after memory, repair-planner, and the first
+  ToolExecutionRecord persistence slice: `1452 passed; 0 failed`;
 - `core-quality-real-rerun-20260517-091952`: `8/8 passed`;
 - `product-maturity-seeded-fixes-20260517-143047`: `3/3 passed`;
 - `real-project-coding-20260517-192347`: `15/15 passed`;
@@ -231,19 +231,31 @@ and successful.
 Goal: make tool execution evidence a durable runtime object instead of a set of
 partially overlapping traces and rendered strings.
 
-Status: not started as a full persistence layer. A small prerequisite is now in
-place: final closeout can prefer exact required-command evidence over broader
-exploratory validation facts, so no-diff audit tasks can close out when their
-required commands passed even if earlier environment probes failed as expected.
+Status: in progress. A small prerequisite is in place: final closeout can prefer
+exact required-command evidence over broader exploratory validation facts, so
+no-diff audit tasks can close out when their required commands passed even if
+earlier environment probes failed as expected. The first durable record slice is
+also in place: `EvidenceLedger` now stores a structured `ToolExecutionRecord`
+for each tool result.
+
+Current record coverage:
+
+- tool call id, tool name, status, arguments hash, duration, output size, error
+  code, and error preview;
+- permission decision when a permission request is present;
+- shell command, command category, validation family, and closeout-safety
+  classification;
+- terminal task id/status/kind/handle/output path/duration/exit code when
+  available;
+- changed paths for successful file write/edit/patch tools.
 
 The record should cover:
 
-- tool call id, name, arguments hash, and route;
-- permission decision and source;
-- start/end time, success, error code;
-- structured output metadata;
-- diff/file evidence for write tools;
-- command category, validation family, and terminal task id for shell tools;
+- route and execution policy context;
+- permission source and approval provenance;
+- start/end timestamps;
+- richer structured output metadata;
+- diff/file evidence links for write tools;
 - repair/closeout relevance flags.
 
 Consumers:
