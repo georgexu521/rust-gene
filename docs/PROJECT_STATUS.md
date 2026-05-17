@@ -29,7 +29,9 @@ Current stage:
   `docs/REAL_PROJECT_CODING_GAUNTLET_PLAN_2026-05-17.md`. The live-eval runner
   supports `--case real-project-coding`, and live summaries now include a
   coding-gauntlet evidence section for agent-run tasks without changing the
-  existing task matrix format.
+  existing task matrix format. The first 15-task gauntlet run exposed two
+  memory/product-maturity failures, and both have passing targeted reruns with
+  behavior assertions and required validation now green.
 - The first provider-protocol regression matrix slice is complete:
   OpenAI-compatible, MiniMax, and Kimi request conversion now share provider
   message normalization; pure assistant `tool_calls` omit empty content,
@@ -68,7 +70,7 @@ live-eval unscored-report classification fix, deterministic patch-rule
 priority, and required-validation acceptance closeout fallback:
 
 ```text
-1444 passed; 0 failed
+1446 passed; 0 failed
 ```
 
 Latest live product baseline:
@@ -78,6 +80,24 @@ core-quality-real-rerun-20260517-091952: 8/8 passed
 failure_owner=none for every case
 required_command_status=ok for every case
 real code-change pass=3, audit/no-diff pass=5
+```
+
+Latest real-project coding gauntlet checkpoint:
+
+```text
+real-project-coding-20260517-153331: 13/15 passed
+coding-gauntlet evidence: likely clean passes=7, repaired passes=2,
+required-validation passes=13/15, first-write observed=10/15
+failures:
+- memory-save-quality-gate: failure_owner=llm_reasoning
+- persistent-memory-planning-context: failure_owner=agent_flow
+targeted repair reruns:
+- memory-save-rerun-20260517-170500: status=ok, failure_owner=none,
+  behavior_assertions=passed, required_command_status=ok
+- persistent-memory-rerun-20260517-172000: status=ok, failure_owner=none,
+  behavior_assertions=passed, required_command_status=ok
+note=persistent-memory-rerun-20260517-171000 exposed the intermediate
+build_memory_context borrow repair path before the final passing rerun
 ```
 
 Latest memory/skill product-maturity behavior baseline:

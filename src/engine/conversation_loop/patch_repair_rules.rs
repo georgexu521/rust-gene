@@ -113,9 +113,17 @@ fn persistent_memory_planning_rule(
     lower_evidence: &str,
     cwd: &std::path::Path,
 ) -> Vec<PatchSynthesisAction> {
-    ConversationLoop::deterministic_persistent_memory_planning_action(lower_evidence, cwd)
-        .into_iter()
-        .collect()
+    let mut actions = Vec::new();
+    actions.extend(
+        ConversationLoop::deterministic_persistent_memory_planning_action(lower_evidence, cwd),
+    );
+    actions.extend(
+        ConversationLoop::deterministic_persistent_memory_context_borrow_action(
+            lower_evidence,
+            cwd,
+        ),
+    );
+    actions
 }
 
 fn live_eval_dashboard_summary_rule(
@@ -230,6 +238,25 @@ fn memory_quality_gate_rule(
                 "let status = if score >= 0.65 { MemoryStatus::Accepted } else { write_decision.status };"
                     .to_string(),
             ),
+            new_string: "let status = write_decision.status;".to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        });
+    }
+    let explicit_proposed_status = r#"let status = if score >= 0.65 {
+        MemoryStatus::Accepted
+    } else if explicit && score >= 0.45 {
+        // Explicit override lowers threshold but still respects hard limits from score_memory_write
+        MemoryStatus::Proposed
+    } else {
+        write_decision.status
+    };"#;
+    if ConversationLoop::file_contains(&quality, explicit_proposed_status) {
+        actions.push(PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/memory/quality.rs".to_string(),
+            old_string: Some(explicit_proposed_status.to_string()),
             new_string: "let status = write_decision.status;".to_string(),
             line_start: None,
             line_end: None,

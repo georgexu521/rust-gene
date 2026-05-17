@@ -41,7 +41,7 @@ observable rather than hiding them behind a single pass/fail number.
 
 ## Phase 1: Gauntlet And Report Format
 
-Status: in progress.
+Status: complete for the first measurable slice.
 
 Deliverables:
 
@@ -87,6 +87,28 @@ python3 -m py_compile scripts/live_eval_report_parser.py
 bash scripts/live-eval-summary-smoke.sh
 scripts/run_live_eval.sh --list --case real-project-coding
 ```
+
+Validated checkpoint:
+
+```text
+real-project-coding-20260517-153331: 13/15 passed
+failed tasks:
+- memory-save-quality-gate: failure_owner=llm_reasoning
+- persistent-memory-planning-context: failure_owner=agent_flow
+```
+
+Targeted closure after the first gauntlet:
+
+```text
+memory-save-rerun-20260517-170500: status=ok, failure_owner=none
+persistent-memory-rerun-20260517-172000: status=ok, failure_owner=none
+```
+
+The failed persistent-memory rerun
+`persistent-memory-rerun-20260517-171000` is kept as repair evidence: it
+converted the original missing-context failure into a concrete
+`build_memory_context(context)` borrow error, which is now covered by a
+deterministic repair rule.
 
 ## Phase 2: Real Task Expansion
 
@@ -181,15 +203,16 @@ Consumers:
 
 ## Next Concrete Step
 
-Finish Phase 1 first:
+Rerun the full gauntlet from the repaired commit, then move into the generic
+repair and durable tool-record phases:
 
 ```bash
-scripts/run_live_eval.sh --list --case real-project-coding
 scripts/run_live_eval.sh --case real-project-coding --mode agent-run --run-tests --label real-project-coding
 scripts/run_live_eval.sh --mode summary --run-id <run-id>
 ```
 
-After the first real gauntlet run, choose the highest-frequency failure class:
+After the next full gauntlet run, choose the highest-frequency remaining
+failure class:
 
 - no diff after enough inspection -> improve action/repair planner;
 - validation failure after diff -> improve generic repair planner;

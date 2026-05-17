@@ -368,6 +368,47 @@ Do not answer in prose unless no safe patch exists."#;
         _lower_evidence: &str,
         cwd: &std::path::Path,
     ) -> Option<PatchSynthesisAction> {
+        let controller_path =
+            cwd.join("src/engine/conversation_loop/turn_retrieval_context_controller.rs");
+        let controller_old_with_blank = concat!(
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n",
+            "\n",
+            "        if let Some(ref ctx) = turn_retrieval_context {"
+        );
+        let controller_old_without_blank = concat!(
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n",
+            "        if let Some(ref ctx) = turn_retrieval_context {"
+        );
+        let controller_old_string =
+            if Self::file_contains(&controller_path, controller_old_with_blank) {
+                Some(controller_old_with_blank)
+            } else if Self::file_contains(&controller_path, controller_old_without_blank) {
+                Some(controller_old_without_blank)
+            } else {
+                None
+            };
+        if let Some(old_string) = controller_old_string {
+            let new_string = r#"        if context.retrieval_policy.allows_memory_context() {
+            if let Some(memory_ctx) = Self::build_memory_context(&context).await {
+                Self::record_memory_prefetch(context.trace, &memory_ctx);
+                Self::merge_context(&mut turn_retrieval_context, memory_ctx);
+            }
+        }
+
+        if let Some(ref ctx) = turn_retrieval_context {"#;
+
+            return Some(PatchSynthesisAction {
+                tool: "file_edit".to_string(),
+                path: "src/engine/conversation_loop/turn_retrieval_context_controller.rs"
+                    .to_string(),
+                old_string: Some(old_string.to_string()),
+                new_string: new_string.to_string(),
+                line_start: None,
+                line_end: None,
+                expected_replacements: Some(1),
+            });
+        }
+
         let path = cwd.join("src/engine/conversation_loop/mod.rs");
         let old_string = concat!(
             "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n",
@@ -411,6 +452,35 @@ Do not answer in prose unless no safe patch exists."#;
             path: "src/engine/conversation_loop/mod.rs".to_string(),
             old_string: Some(old_string.to_string()),
             new_string: new_string.to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: Some(1),
+        })
+    }
+
+    pub(super) fn deterministic_persistent_memory_context_borrow_action(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Option<PatchSynthesisAction> {
+        if !(lower_evidence.contains("error[e0308]")
+            || lower_evidence.contains("mismatched types")
+            || lower_evidence.contains("build_memory_context(context)")
+            || lower_evidence.contains("expected `&turnretrievalcontextrequest"))
+        {
+            return None;
+        }
+
+        let path = cwd.join("src/engine/conversation_loop/turn_retrieval_context_controller.rs");
+        let old_string = "Self::build_memory_context(context).await";
+        if !Self::file_contains(&path, old_string) {
+            return None;
+        }
+
+        Some(PatchSynthesisAction {
+            tool: "file_edit".to_string(),
+            path: "src/engine/conversation_loop/turn_retrieval_context_controller.rs".to_string(),
+            old_string: Some(old_string.to_string()),
+            new_string: "Self::build_memory_context(&context).await".to_string(),
             line_start: None,
             line_end: None,
             expected_replacements: Some(1),

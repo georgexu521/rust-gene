@@ -1546,8 +1546,9 @@ PY
         std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
             .expect("create module dir");
         std::fs::write(
-            tmp.path().join("src/engine/conversation_loop/mod.rs"),
-            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n        if let Some(ref ctx) = turn_retrieval_context {\n",
+            tmp.path()
+                .join("src/engine/conversation_loop/turn_retrieval_context_controller.rs"),
+            "        // Regression fixture: persistent memory prefetch was missing before workflow judgment.\n\n        if let Some(ref ctx) = turn_retrieval_context {\n",
         )
         .expect("write module file");
 
@@ -1557,26 +1558,69 @@ PY
         );
 
         assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments["path"],
+            "src/engine/conversation_loop/turn_retrieval_context_controller.rs"
+        );
         assert!(calls[0].arguments["new_string"]
             .as_str()
             .unwrap()
-            .contains("prefetch_retrieval_context_with_llm_rerank"));
+            .contains("Self::build_memory_context(&context).await"));
         assert!(calls[0].arguments["new_string"]
             .as_str()
             .unwrap()
-            .contains("if let Some(ref mem_mutex) = self.memory_manager"));
+            .contains("Self::merge_context(&mut turn_retrieval_context, memory_ctx)"));
         assert!(calls[0].arguments["new_string"]
             .as_str()
             .unwrap()
-            .contains(".lock().await"));
+            .contains("Self::record_memory_prefetch(context.trace, &memory_ctx)"));
         assert!(calls[0].arguments["new_string"]
             .as_str()
             .unwrap()
-            .contains("&self.model"));
+            .contains("if let Some(ref ctx) = turn_retrieval_context"));
         assert!(!calls[0].arguments["new_string"]
             .as_str()
             .unwrap()
             .contains("futures::executor::block_on"));
+    }
+
+    #[test]
+    fn test_deterministic_patch_synthesis_repairs_persistent_memory_context_borrow() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/engine/conversation_loop"))
+            .expect("create module dir");
+        std::fs::write(
+            tmp.path()
+                .join("src/engine/conversation_loop/turn_retrieval_context_controller.rs"),
+            "if let Some(memory_ctx) = Self::build_memory_context(context).await {}\n",
+        )
+        .expect("write module file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "error[E0308]: mismatched types expected `&TurnRetrievalContextRequest<'_>`, found `TurnRetrievalContextRequest<'_>` at build_memory_context(context)",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments["path"],
+            "src/engine/conversation_loop/turn_retrieval_context_controller.rs"
+        );
+        assert_eq!(
+            calls[0].arguments["new_string"],
+            "Self::build_memory_context(&context).await"
+        );
     }
 
     #[test]
@@ -1866,6 +1910,48 @@ fn handle_apply() {
         assert_eq!(
             calls[0].arguments["new_string"],
             "assess_memory_candidate(content, category, &existing, false)"
+        );
+    }
+
+    #[test]
+    fn test_deterministic_patch_synthesis_repairs_explicit_proposed_memory_status() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/memory")).expect("create memory dir");
+        std::fs::write(
+            tmp.path().join("src/memory/quality.rs"),
+            r#"let status = if score >= 0.65 {
+        MemoryStatus::Accepted
+    } else if explicit && score >= 0.45 {
+        // Explicit override lowers threshold but still respects hard limits from score_memory_write
+        MemoryStatus::Proposed
+    } else {
+        write_decision.status
+    };
+"#,
+        )
+        .expect("write fixture file");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "memory-save-quality-gate still allows explicit save to bypass the quality gate",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "src/memory/quality.rs");
+        assert_eq!(
+            calls[0].arguments["new_string"],
+            "let status = write_decision.status;"
         );
     }
 
