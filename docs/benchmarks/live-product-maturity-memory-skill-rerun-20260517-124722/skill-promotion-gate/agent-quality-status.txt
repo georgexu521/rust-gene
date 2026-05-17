@@ -1,0 +1,6 @@
+status=failed
+failure_owner=agent_flow
+failure=required_commands_not_passing
+failure=behavior_assertions_not_passing
+warning=earlier_verification_failed_before_repair
+warning=earlier_stage_validation_failed_before_repair

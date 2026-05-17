@@ -58,10 +58,11 @@ permission risk, shell-command category classifier, terminal provider-schema
 exposure diagnostic, explicit patch-synthesis fallback boundary,
 focused-repair proposal boundary, provider-protocol matrix,
 permission-controller, context-budget, tool-result-budget, schema-gate, and
-tool-result normalizer work:
+tool-result normalizer work, plus the file-patch write-mode guard and
+live-eval unscored-report classification fix:
 
 ```text
-1437 passed; 0 failed
+1440 passed; 0 failed
 ```
 
 Latest live product baseline:
@@ -76,16 +77,16 @@ real code-change pass=3, audit/no-diff pass=5
 Latest memory/skill product-maturity behavior baseline:
 
 ```text
-product-maturity-memory-skill-20260517-102935: 5/6 passed
-behavior_assertions=6, behavior_assertions_passed=5
-real code-change pass=2, seeded no-diff failure=1
-failure_owner=agent_flow for persistent-memory-planning-context
-root cause=persistent memory fixture entered the agent run, but workflow
-reflection stopped before tools after workflow judgment skipped a non-JSON
-response; required prefetch/merge/trace assertions were not restored
-persistent-reflection-fix-20260517-113556: targeted rerun passed
-required_command_status=ok, behavior_assertion_status=passed
-failure_owner=none, real code-change pass=1
+product-maturity-memory-skill-rerun-20260517-124722: 3/6 passed
+behavior_assertions=6, behavior_assertions_passed=4
+status_counts=failed=3, passed=3
+failure_owner=agent_flow for memory-save-quality-gate and skill-promotion-gate
+failure_owner=llm_reasoning for persistent-memory-planning-context
+audit/no-diff passes=3, seeded code-change passes=0
+targeted persistent-reflection-fix passed, but did not generalize to the
+broader recommended memory/skill slice
+next focus=product-maturity stabilization for seeded memory/skill code-change
+tasks, not more default run_inner extraction
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -453,10 +454,13 @@ The remaining work is now product maturity, not missing foundations:
    now landed in live summary and aggregate reporting, and has a first
    six-case live baseline. Behavior-level memory/skill assertion metadata is
    now part of the live-eval report layer, and the affected recommended
-   memory/skill cases have been rerun. The next product-maturity fix should
-   target the `persistent-memory-planning-context` agent-flow failure where
-   pre-tool reflection can stop a seeded code-change task before any repair
-   attempt.
+   memory/skill cases have been rerun. The current rerun shows the audit/no-diff
+   memory cases passing, but the seeded memory/skill code-change cases still
+   need product-maturity work: `persistent-memory-planning-context` fails with
+   `failure_owner=llm_reasoning`, `skill-promotion-gate` fails required
+   commands and behavior assertions, and `memory-save-quality-gate` fails
+   closeout verification despite passing required commands and behavior
+   assertions.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -490,12 +494,28 @@ Latest maintenance note:
   commands as acceptance checks before the reflection gate runs. The targeted
   rerun passed with `required_command_status=ok`,
   `behavior_assertion_status=passed`, `failure_owner=none`, one real code diff,
-  and isolated full-suite evidence of `1438 passed; 0 failed`.
+  and isolated full-suite evidence of `1438 passed; 0 failed`. The later
+  recommended memory/skill rerun is the current broader baseline and shows that
+  the targeted fix did not fully generalize.
+- `product-maturity-memory-skill-rerun-20260517-124722` reran the six affected
+  recommended memory/skill cases after the file-patch write guard and
+  live-eval scoring fixes: `3/6` passed, all three audit/no-diff memory cases
+  passed, and all three seeded code-change cases failed. The failures are
+  `memory-save-quality-gate` (`failure_owner=agent_flow`,
+  `closeout_not_successful`), `skill-promotion-gate`
+  (`failure_owner=agent_flow`, required commands and behavior assertions
+  failing), and `persistent-memory-planning-context`
+  (`failure_owner=llm_reasoning`, required commands, behavior assertions,
+  stage validation, verification, acceptance, and closeout failing).
 - Live-eval summaries now carry explicit `behavior_assertions` and
   `behavior_assertion_status` fields. The first product-maturity slice tags the
   memory and skill recommended tasks so summary and aggregate reports can show
   memory/skill behavior coverage separately from memory/skill activity signals.
-- `cargo test -q` is clean as of 2026-05-16 with `1437 passed; 0 failed`.
+- `file_patch` write-mode operations now honor the same existing-file
+  read-before-edit and stale-read checks as targeted patch operations, and the
+  live-eval report parser now marks unverified collect-only reports as
+  `skipped` instead of counting them as passed.
+- `cargo test -q` is clean as of 2026-05-17 with `1440 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry
