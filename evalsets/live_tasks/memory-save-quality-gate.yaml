@@ -76,6 +76,10 @@ expected_behavior:
   - /save 能展示 accepted/proposed/rejected/blocked/duplicate 等结果。
   - 新增或更新覆盖质量门控的测试。
 
+behavior_assertions:
+  - memory_quality_gate
+  - memory_save_outcome_visibility
+
 acceptance:
   required_commands:
     - cargo test -q memory -- --test-threads=1

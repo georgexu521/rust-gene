@@ -69,6 +69,10 @@ expected_behavior:
   - 失败 gate 时不会写入用户 skill。
   - 新增或更新 skill proposal / fitness / gate 测试。
 
+behavior_assertions:
+  - skill_promotion_gate
+  - skill_evolution_cooldown
+
 acceptance:
   required_commands:
     - cargo test -q skill_evolution -- --test-threads=1

@@ -35,6 +35,10 @@ expected_behavior:
   - 不同 namespace/scope 的相关记忆不会被误判为重复。
   - MemoryWriteScore 的 novelty / redundancy 因子参与决策。
 
+behavior_assertions:
+  - memory_duplicate_demotion
+  - memory_namespace_precision
+
 acceptance:
   required_commands:
     - cargo test -q memory -- --test-threads=1

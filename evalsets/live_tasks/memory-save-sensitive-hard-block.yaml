@@ -36,6 +36,10 @@ expected_behavior:
   - 用户可见反馈包含 blocked/status/reason。
   - 测试覆盖模型工具保存和用户显式保存两条路径。
 
+behavior_assertions:
+  - memory_sensitive_hard_block
+  - memory_save_outcome_visibility
+
 acceptance:
   required_commands:
     - cargo test -q memory -- --test-threads=1

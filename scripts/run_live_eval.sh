@@ -1361,6 +1361,26 @@ stage_validation_passed = (
 accepted = latest_acceptance.get("accepted")
 if accepted is None and closeout_status == "passed" and positive_count(latest_closeout.get("acceptance_items")):
     accepted = True
+
+def normalized_behavior_assertions(sample):
+    raw = sample.get("behavior_assertions")
+    if raw is None:
+        raw = (sample.get("quality_assertions") or {}).get("behavior")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if isinstance(raw, dict):
+        raw = [f"{key}:{value}" for key, value in raw.items()]
+    if not isinstance(raw, list):
+        raw = [raw]
+    result = []
+    for item in raw:
+        value = str(item).strip()
+        if value and value not in result:
+            result.append(value)
+    return result
+
 print(f"output_chars: {len(output)}")
 print(f"diff_chars: {len(diff)}")
 print(f"diff_files_changed: {len(diff_files)}")
@@ -1414,6 +1434,16 @@ base_ref = str(repo.get("base_ref", "HEAD")).strip()
 prepare_commands = repo.get("prepare_commands") or []
 task_type = str(sample.get("type", "")).strip()
 eval_intent = str(sample.get("eval_intent", "seeded_code_change")).strip() or "seeded_code_change"
+behavior_assertions = normalized_behavior_assertions(sample)
+if behavior_assertions:
+    if validation_commands and test_status == "ok":
+        behavior_assertion_status = "passed"
+    elif validation_commands:
+        behavior_assertion_status = "failed"
+    else:
+        behavior_assertion_status = "missing"
+else:
+    behavior_assertion_status = "none"
 code_change_types = {"bug_fix", "feature", "refactor", "ux"}
 current_head_without_fixture = (
     task_type in code_change_types
@@ -1424,6 +1454,8 @@ seeded_code_change = eval_intent == "seeded_code_change"
 audit_or_regression_check = eval_intent == "audit_or_regression_check"
 stale_or_already_satisfied = eval_intent == "stale_or_already_satisfied"
 print(f"eval_intent: {eval_intent}")
+print(f"behavior_assertions: {','.join(behavior_assertions) if behavior_assertions else 'none'}")
+print(f"behavior_assertion_status: {behavior_assertion_status}")
 if not output.strip():
     print("warning: empty_agent_output")
     failures.append("empty_agent_output")
@@ -1478,6 +1510,12 @@ if not trace:
 if validation_commands and test_status != "ok":
     print("warning: required_commands_not_passing")
     failures.append("required_commands_not_passing")
+if behavior_assertion_status == "failed":
+    print("warning: behavior_assertions_not_passing")
+    failures.append("behavior_assertions_not_passing")
+elif behavior_assertion_status == "missing":
+    print("warning: behavior_assertions_missing_checks")
+    failures.append("behavior_assertions_missing_checks")
 if closeout_status in {"failed", "not_verified", "blocked", "missing"}:
     print("warning: closeout_not_successful")
     failures.append("closeout_not_successful")
@@ -1831,6 +1869,14 @@ memory_recalled_items = sum(int(row["memory_recalled_items"]) for row in rows)
 memory_conflicts = sum(int(row["memory_conflicts"]) for row in rows)
 skill_active_tasks = sum(1 for row in rows if row["skill_active"] == "true")
 skill_promotion_tasks = sum(1 for row in rows if row["skill_promotion_evidence"] == "true")
+behavior_assertion_tasks = sum(1 for row in rows if row["behavior_assertions"] != "none")
+behavior_assertion_passed = sum(1 for row in rows if row["behavior_assertion_status"] == "passed")
+memory_behavior_assertion_tasks = sum(
+    1 for row in rows if "memory" in row["behavior_assertions"].lower()
+)
+skill_behavior_assertion_tasks = sum(
+    1 for row in rows if "skill" in row["behavior_assertions"].lower()
+)
 
 lines = [
     f"# Live Eval Summary: {run_id}",
@@ -1848,6 +1894,8 @@ lines = [
     f"- Memory conflicts: `{memory_conflicts}`",
     f"- Skill active tasks: `{skill_active_tasks}`",
     f"- Skill promotion-evidence tasks: `{skill_promotion_tasks}`",
+    f"- Behavior assertion tasks: `{behavior_assertion_tasks}`",
+    f"- Behavior assertions passed: `{behavior_assertion_passed}`",
     "- Status counts: "
     + (", ".join(f"{key}={value}" for key, value in sorted(totals.items())) if totals else "none"),
     "- Failure owners: "
@@ -1877,6 +1925,10 @@ lines.extend([
     f"| memory_conflicts | {memory_conflicts} | Retrieval-context conflict count from memory-backed context. |",
     f"| skill_active_tasks | {skill_active_tasks} | Tasks where skill tools or skill-specific signals were active. |",
     f"| skill_promotion_evidence_tasks | {skill_promotion_tasks} | Tasks with promotion-related skill evidence. |",
+    f"| behavior_assertion_tasks | {behavior_assertion_tasks} | Tasks with explicit behavior assertions in the live-eval sample. |",
+    f"| behavior_assertions_passed | {behavior_assertion_passed} | Explicit behavior-assertion tasks whose required checks passed. |",
+    f"| memory_behavior_assertion_tasks | {memory_behavior_assertion_tasks} | Behavior assertions covering memory semantics rather than only memory activity signals. |",
+    f"| skill_behavior_assertion_tasks | {skill_behavior_assertion_tasks} | Behavior assertions covering skill semantics rather than only skill activity signals. |",
     "",
     "## Outcome Classes",
     "",
@@ -1888,19 +1940,19 @@ lines.extend([
     "",
     "## Task Matrix",
     "",
-    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | triggers | first_write | diff | memory | skill | warnings |",
-    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|----------|-------------|------|--------|-------|----------|",
+    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |",
+    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|",
 ])
 
 if rows:
     for row in rows:
         lines.append(
-            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
+            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {behavior_assertions} | {behavior_assertion_status} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | none | missing | none | no | none | none | none |")
+    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | none | none | none | missing | none | no | none | none | none |")
 
 lines.extend([
     "",
@@ -1911,6 +1963,7 @@ lines.extend([
     "- `verification_status` combines closeout and required-command evidence; it is not a human-quality score.",
     "- `real_code_change_passed` requires an agent-run report with a non-empty diff; plan-only success is tracked separately.",
     "- `memory` and `skill` summarize evidence signals; they do not by themselves mean the task succeeded.",
+    "- `behavior_assertions` are explicit sample-level checks; memory/skill behavior assertions are stronger evidence than activity signals alone.",
 ])
 
 summary_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

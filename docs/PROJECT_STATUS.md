@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-12
+Last updated: 2026-05-17
 
 ## Summary
 
@@ -8,27 +8,23 @@ Priority Agent is now an interactive coding CLI with a stateful runtime spine:
 intent routing, turn traces, session goals, memory, permissions, recovery plans,
 MCP health, CLI observability panels, and required validation closeout.
 
-Active next-stage direction:
+Current stage:
 
-- `docs/NEXT_AGENT_PRODUCTIZATION_PLAN_2026-05-10.md` defines the next phase as
-  reference-first productization: learn from local Claude Code and opencode,
-  then implement the Rust runtime equivalents without adding another heavy
-  workflow framework.
-- `docs/NEXT_AGENT_CORE_CODING_QUALITY_PLAN_2026-05-11.md` narrows the next
-  execution order to core coding quality: split the main loop first, productize
-  shell/terminal next, then finish file-edit quality. It also records the
-  second-pass Claude/opencode gaps for context budget, permission ask/reply,
-  provider protocol transforms, and a core coding quality regression set.
-- `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` is the first
-  Batch 1.1 artifact for the current main-loop split. It records current
-  responsibility ownership and the initial `TurnRuntimeState` boundary.
-- `docs/AGENT_PRODUCTIZATION_REFERENCE_AUDIT_2026-05-10.md` is the Batch 1
-  artifact. It records the Claude/opencode reference map, current
-  `ConversationLoop` architecture map, current product capability table, and
-  the recommended Batch 2-5 order.
-- Current implementation focus is Phase 3 file-quality and Phase 3.6
-  file-patch evidence/history alignment after the Phase 2 terminal/bash
-  productization pass.
+- `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
+  follow-up implementation phases. Future runtime-diet work should come from
+  live-use gaps, release-hardening gates, or a newly reviewed plan.
+- `docs/NEXT_AGENT_CORE_CODING_QUALITY_PLAN_2026-05-11.md` is complete for its
+  current Phase 1-4 scope: main-loop splitting reached the first line-count
+  target, terminal and file-quality contracts are in place, and the real
+  `core-coding-quality` rerun is current.
+- `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md` remains the
+  ownership map for future loop work, but the next step is no longer more
+  low-level `run_inner` extraction by default.
+- `docs/AGENT_PRODUCTIZATION_REFERENCE_AUDIT_2026-05-10.md` remains the
+  reference map for product maturity work against Claude Code and opencode.
+- Current implementation focus has moved to product maturity: broader
+  trace-backed evaluation, behavior-level memory/skill assertions, long-running
+  terminal UX, CLI polish, and external baseline data.
 - The first provider-protocol regression matrix slice is complete:
   OpenAI-compatible, MiniMax, and Kimi request conversion now share provider
   message normalization; pure assistant `tool_calls` omit empty content,
@@ -47,9 +43,10 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic local test baseline observed during the 2026-05-16
-file-patch evidence integration, file-patch encoded bytes history accuracy,
-terminal-task `/status` visibility, terminal-task summary metadata,
+Latest deterministic local test baseline observed during the 2026-05-16 and
+2026-05-17 core-coding-quality closure, file-patch evidence integration,
+file-patch encoded bytes history accuracy, terminal-task `/status` visibility,
+terminal-task summary metadata,
 foreground/PTY terminal-task data, background-shell terminal-task data,
 route-scoped tool-test move, file-edit LSP document sync/diagnostics summary,
 file-edit diff metadata, file-mutation lock, file text codec,
@@ -65,6 +62,15 @@ tool-result normalizer work:
 
 ```text
 1437 passed; 0 failed
+```
+
+Latest live product baseline:
+
+```text
+core-quality-real-rerun-20260517-091952: 8/8 passed
+failure_owner=none for every case
+required_command_status=ok for every case
+real code-change pass=3, audit/no-diff pass=5
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -430,8 +436,10 @@ The remaining work is now product maturity, not missing foundations:
    explicit coding agent modes, mode-visible status, and stronger `/doctor`
    tool-exposure diagnostics. Batch 6 report-layer memory/skill evidence is
    now landed in live summary and aggregate reporting, and has a first
-   six-case live baseline; next is reducing recovered failure noise and adding
-   behavior-level memory/skill assertions where the evidence is still indirect.
+   six-case live baseline. Behavior-level memory/skill assertion metadata is
+   now part of the live-eval report layer; next is rerunning the affected
+   recommended memory/skill cases and using those assertions to separate real
+   behavior coverage from indirect activity signals.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -451,6 +459,10 @@ Latest maintenance note:
   required commands were `ok` for every case, failure owner was `none` for every
   case, `3` seeded code-change tasks produced real diffs, and `5` audit/no-diff
   tasks passed as expected.
+- Live-eval summaries now carry explicit `behavior_assertions` and
+  `behavior_assertion_status` fields. The first product-maturity slice tags the
+  memory and skill recommended tasks so summary and aggregate reports can show
+  memory/skill behavior coverage separately from memory/skill activity signals.
 - `cargo test -q` is clean as of 2026-05-16 with `1437 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`

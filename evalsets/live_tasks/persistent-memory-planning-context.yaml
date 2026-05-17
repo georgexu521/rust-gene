@@ -52,6 +52,10 @@ expected_behavior:
   - 无关 memory 不应泛化提升所有步骤权重。
   - 新增或更新 planning/memory 相关测试。
 
+behavior_assertions:
+  - memory_planning_context
+  - memory_retrieval_before_workflow_judgment
+
 acceptance:
   required_commands:
     - cargo test -q learning_planning -- --test-threads=1

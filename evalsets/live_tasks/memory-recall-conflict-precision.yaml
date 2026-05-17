@@ -35,6 +35,10 @@ expected_behavior:
   - 真实冲突记忆即使命中关键词也无法进入 inject range。
   - recall reason 中能看出 conflict/demotion 原因。
 
+behavior_assertions:
+  - memory_conflict_precision
+  - memory_recall_demotion
+
 acceptance:
   required_commands:
     - cargo test -q retrieval_context -- --test-threads=1

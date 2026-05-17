@@ -42,20 +42,24 @@ def table_rows(text):
             if not line.startswith("|"):
                 break
             cells = [cell.strip() for cell in line.strip("|").split("|")]
-            if len(cells) >= 16:
-                rows.append(cells[:16])
+            if len(cells) >= 18:
+                rows.append(cells[:18])
+            elif len(cells) >= 16:
+                rows.append(cells[:10] + ["none", "none"] + cells[10:16])
             elif len(cells) >= 14:
-                rows.append(cells[:13] + [
+                legacy = cells[:13] + [
                     "active=false, recalled=0, conflicts=0, changed_plan=false",
                     "active=false, tool_calls=0, usage_events=0, promotion=false",
                     cells[13],
-                ])
+                ]
+                rows.append(legacy[:10] + ["none", "none"] + legacy[10:16])
             elif len(cells) >= 12:
-                rows.append(cells[:9] + ["none"] + cells[9:12] + [
+                legacy = cells[:9] + ["none"] + cells[9:12] + [
                     "active=false, recalled=0, conflicts=0, changed_plan=false",
                     "active=false, tool_calls=0, usage_events=0, promotion=false",
                     cells[12] if len(cells) > 12 else "none",
-                ])
+                ]
+                rows.append(legacy[:10] + ["none", "none"] + legacy[10:16])
     return rows
 
 def specialty_flag(summary, key):
@@ -128,6 +132,8 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
                 "verification": verification,
                 "closeout": closeout,
                 "runtime_diet": runtime_diet,
+                "behavior_assertions": behavior_assertions,
+                "behavior_assertion_status": behavior_assertion_status,
                 "triggers": triggers,
                 "first_write": first_write,
                 "diff": diff,
@@ -136,7 +142,7 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
                 "warnings": warnings,
                 "failures": [],
             }
-            for task, status, intent, owner, required, plan, boundary, verification, closeout, runtime_diet, triggers, first_write, diff, memory, skill, warnings
+            for task, status, intent, owner, required, plan, boundary, verification, closeout, runtime_diet, behavior_assertions, behavior_assertion_status, triggers, first_write, diff, memory, skill, warnings
             in table_rows(text)
         ]
     if not rows:
@@ -192,6 +198,8 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
             "boundary": row["boundary"],
             "verification": row["verification"],
             "closeout": row["closeout"],
+            "behavior_assertions": row.get("behavior_assertions", "none"),
+            "behavior_assertion_status": row.get("behavior_assertion_status", "none"),
             "triggers": row["triggers"],
             "first_write": row["first_write"],
             "diff": row["diff"],
@@ -235,6 +243,14 @@ skill_active_tasks = sum(1 for record in task_records if record["skill_active"] 
 skill_tool_calls = sum(record["skill_tool_calls"] for record in task_records)
 skill_usage_events = sum(record["skill_usage_events"] for record in task_records)
 skill_promotion_tasks = sum(1 for record in task_records if record["skill_promotion_evidence"] == "true")
+behavior_assertion_tasks = sum(1 for record in task_records if record["behavior_assertions"] != "none")
+behavior_assertion_passed = sum(1 for record in task_records if record["behavior_assertion_status"] == "passed")
+memory_behavior_assertion_tasks = sum(
+    1 for record in task_records if "memory" in record["behavior_assertions"].lower()
+)
+skill_behavior_assertion_tasks = sum(
+    1 for record in task_records if "skill" in record["behavior_assertions"].lower()
+)
 closeout_not_successful = failure_modes["closeout_not_successful"]
 owner_metadata_missing = owners["missing"]
 recovered_validation_failures = (
@@ -371,6 +387,11 @@ lines.extend(md_table(
             len(instrumented_records),
             pct(len(instrumented_records), total_tasks),
         ],
+        [
+            "behavior_assertion_metadata",
+            behavior_assertion_tasks,
+            pct(behavior_assertion_tasks, total_tasks),
+        ],
     ],
 ))
 
@@ -386,6 +407,10 @@ lines.extend(md_table(
         ["skill_tool_calls", skill_tool_calls, "n/a"],
         ["skill_usage_events", skill_usage_events, "n/a"],
         ["skill_promotion_evidence_tasks", skill_promotion_tasks, pct(skill_promotion_tasks, total_tasks)],
+        ["behavior_assertion_tasks", behavior_assertion_tasks, pct(behavior_assertion_tasks, total_tasks)],
+        ["behavior_assertions_passed", behavior_assertion_passed, pct(behavior_assertion_passed, behavior_assertion_tasks)],
+        ["memory_behavior_assertion_tasks", memory_behavior_assertion_tasks, pct(memory_behavior_assertion_tasks, total_tasks)],
+        ["skill_behavior_assertion_tasks", skill_behavior_assertion_tasks, pct(skill_behavior_assertion_tasks, total_tasks)],
     ],
 ))
 
@@ -472,7 +497,7 @@ lines.extend(md_table(
 
 lines.extend(["", "## Recent Failed Tasks", ""])
 lines.extend(md_table(
-    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "memory", "skill", "triggers", "warnings"],
+    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "behavior", "behavior_status", "memory", "skill", "triggers", "warnings"],
     [
         [
             record["run"],
@@ -483,18 +508,20 @@ lines.extend(md_table(
             record["required"],
             record["verification"],
             record["diff"],
+            record["behavior_assertions"],
+            record["behavior_assertion_status"],
             record["memory"],
             record["skill"],
             record["triggers"],
             record["warnings"],
         ]
         for record in recent_failures
-    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
 lines.extend(["", "## Recent Passed Tasks", ""])
 lines.extend(md_table(
-    ["run", "task", "intent", "owner", "required", "verification", "diff", "memory", "skill", "triggers", "warnings"],
+    ["run", "task", "intent", "owner", "required", "verification", "diff", "behavior", "behavior_status", "memory", "skill", "triggers", "warnings"],
     [
         [
             record["run"],
@@ -504,13 +531,15 @@ lines.extend(md_table(
             record["required"],
             record["verification"],
             record["diff"],
+            record["behavior_assertions"],
+            record["behavior_assertion_status"],
             record["memory"],
             record["skill"],
             record["triggers"],
             record["warnings"],
         ]
         for record in recent_passes
-    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
 lines.extend([
@@ -524,6 +553,7 @@ lines.extend([
     "- `owner_metadata_missing` tracks that historical evidence gap separately from inferred product failures.",
     "- `instrumented_task_reports` is the cleaner current slice because it excludes reports with no structured owner, intent, or trigger metadata.",
     "- `memory` and `skill` columns show evidence signals only; they are not success labels.",
+    "- `behavior_assertions` are sample-level checks that turn memory/skill semantics into explicit pass/fail evidence.",
 ])
 
 output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

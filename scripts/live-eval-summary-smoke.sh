@@ -29,6 +29,8 @@ memory_active: true
 memory_recalled_items: 2
 memory_conflicts: 1
 memory_changed_plan: true
+behavior_assertions: memory_quality_gate,memory_conflict_precision
+behavior_assertion_status: passed
 ```
 EOF
 cat >"$RUN_DIR/task-code-pass/agent-quality-status.txt" <<'EOF'
@@ -53,6 +55,8 @@ skill_active: true
 skill_tool_calls: 1
 skill_usage_events: 2
 skill_promotion_evidence: true
+behavior_assertions: skill_promotion_gate
+behavior_assertion_status: passed
 ```
 EOF
 echo "skipped" >"$RUN_DIR/task-plan-pass/test-status.txt"
@@ -72,6 +76,8 @@ adaptive_triggers: repeated_no_code_progress
 first_write_tool_index: none
 action_checkpoint_no_patch: true
 warning: action_checkpoint_no_patch
+behavior_assertions: memory_write_safety
+behavior_assertion_status: failed
 ```
 EOF
 cat >"$RUN_DIR/task-seeded-fail/agent-quality-status.txt" <<'EOF'
@@ -94,6 +100,8 @@ grep -q 'Memory changed-plan tasks: `1`' "$summary_path"
 grep -q 'Memory recalled items: `2`' "$summary_path"
 grep -q 'Skill active tasks: `1`' "$summary_path"
 grep -q 'Skill promotion-evidence tasks: `1`' "$summary_path"
+grep -q 'Behavior assertion tasks: `3`' "$summary_path"
+grep -q 'Behavior assertions passed: `2`' "$summary_path"
 grep -q '`expected_code_diff_missing`: `1`' "$summary_path"
 grep -q '`warning:no_code_diff`: `1`' "$summary_path"
 grep -q '`warning:action_checkpoint_no_patch`: `1`' "$summary_path"
@@ -102,9 +110,13 @@ grep -q '| plan_only_passed | 1 |' "$summary_path"
 grep -q '| seeded_no_diff_failed | 1 |' "$summary_path"
 grep -q '| memory_active_tasks | 1 | Tasks where retrieval, sync, or memory tools were active. |' "$summary_path"
 grep -q '| skill_promotion_evidence_tasks | 1 | Tasks with promotion-related skill evidence. |' "$summary_path"
-grep -q '| task-code-pass | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | missing | required_validation,first_code_change | 2 | yes | active=true, recalled=2, conflicts=1, changed_plan=true | active=false, tool_calls=0, usage_events=0, promotion=false | none |' "$summary_path"
-grep -q '| task-plan-pass | passed | audit_or_regression_check | missing | skipped | ok | plan-only | unknown | missing | missing | none | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=true, tool_calls=1, usage_events=2, promotion=true | none |' "$summary_path"
-grep -q '| task-seeded-fail | failed | seeded_code_change | agent_flow | failed | none | agent-run | failed | not_verified | missing | repeated_no_code_progress | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
+grep -q '| behavior_assertion_tasks | 3 | Tasks with explicit behavior assertions in the live-eval sample. |' "$summary_path"
+grep -q '| behavior_assertions_passed | 2 | Explicit behavior-assertion tasks whose required checks passed. |' "$summary_path"
+grep -q '| memory_behavior_assertion_tasks | 2 | Behavior assertions covering memory semantics rather than only memory activity signals. |' "$summary_path"
+grep -q '| skill_behavior_assertion_tasks | 1 | Behavior assertions covering skill semantics rather than only skill activity signals. |' "$summary_path"
+grep -q '| task-code-pass | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | missing | memory_quality_gate,memory_conflict_precision | passed | required_validation,first_code_change | 2 | yes | active=true, recalled=2, conflicts=1, changed_plan=true | active=false, tool_calls=0, usage_events=0, promotion=false | none |' "$summary_path"
+grep -q '| task-plan-pass | passed | audit_or_regression_check | missing | skipped | ok | plan-only | unknown | missing | missing | skill_promotion_gate | passed | none | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=true, tool_calls=1, usage_events=2, promotion=true | none |' "$summary_path"
+grep -q '| task-seeded-fail | failed | seeded_code_change | agent_flow | failed | none | agent-run | failed | not_verified | missing | memory_write_safety | failed | repeated_no_code_progress | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
 
 aggregate_path="$RUN_DIR/aggregate-summary.md"
 LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES=0 \
@@ -124,6 +136,10 @@ grep -q '| memory_active_tasks | 1 | 33.3% |' "$aggregate_path"
 grep -q '| memory_recalled_items | 2 | n/a |' "$aggregate_path"
 grep -q '| skill_active_tasks | 1 | 33.3% |' "$aggregate_path"
 grep -q '| skill_promotion_evidence_tasks | 1 | 33.3% |' "$aggregate_path"
-grep -q '| task-seeded-fail | seeded_code_change | agent_flow | agent_flow | failed | failed | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | repeated_no_code_progress | no_code_diff,action_checkpoint_no_patch |' "$aggregate_path"
+grep -q '| behavior_assertion_tasks | 3 | 100.0% |' "$aggregate_path"
+grep -q '| behavior_assertions_passed | 2 | 66.7% |' "$aggregate_path"
+grep -q '| memory_behavior_assertion_tasks | 2 | 66.7% |' "$aggregate_path"
+grep -q '| skill_behavior_assertion_tasks | 1 | 33.3% |' "$aggregate_path"
+grep -q '| task-seeded-fail | seeded_code_change | agent_flow | agent_flow | failed | failed | no | memory_write_safety | failed | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | repeated_no_code_progress | no_code_diff,action_checkpoint_no_patch |' "$aggregate_path"
 
 echo "live eval summary smoke passed: $summary_path"
