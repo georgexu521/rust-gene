@@ -531,6 +531,7 @@ impl ConversationLoop {
             route: &route,
             code_workflow: &code_workflow,
             task_bundle: &task_bundle,
+            required_validation_commands: &required_validation_commands,
             runtime_diet: &mut turn_state.runtime_diet,
             final_content: &mut loop_state.final_content,
             final_tool_calls: &loop_state.final_tool_calls,
@@ -2460,6 +2461,7 @@ mod tests {
 - `! rg '&format!\("retry: \{\}", verification_command\)' src/engine/conversation_loop/mod.rs`
 - `rg 'good_pattern' src/lib.rs`
 - `rg '^cleanup = skipped by user request$' fixtures/core_quality/permission_rejection/manifest.txt`
+- `. .venv/bin/activate && python -m core_terminal_demo --self-test | rg '^core-terminal-demo-ok$'`
 - `rm -rf /tmp/nope`
 - `(none)`
 "#;
@@ -2478,6 +2480,7 @@ mod tests {
                 "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/mod.rs".to_string(),
                 "rg 'good_pattern' src/lib.rs".to_string(),
                 "rg '^cleanup = skipped by user request$' fixtures/core_quality/permission_rejection/manifest.txt".to_string(),
+                ". .venv/bin/activate && python -m core_terminal_demo --self-test | rg '^core-terminal-demo-ok$'".to_string(),
             ]
         );
     }

@@ -317,6 +317,7 @@ impl RequiredValidationController {
         Self::is_safe_validation_command(command)
             || command.starts_with("python3 -c ")
             || command.starts_with("python -c ")
+            || is_safe_required_python_module_search_assertion(command)
             || is_safe_required_search_assertion(command)
     }
 
@@ -636,6 +637,39 @@ fn is_safe_required_search_assertion(command: &str) -> bool {
         .filter(|token| !token.starts_with('-'))
         .collect::<Vec<_>>();
     positional.len() >= 2
+}
+
+fn is_safe_required_python_module_search_assertion(command: &str) -> bool {
+    let normalized =
+        crate::tools::bash_tool::command_classifier::normalize_command_for_match(command);
+    if normalized.is_empty()
+        || normalized.contains('\n')
+        || normalized.contains(';')
+        || normalized.contains("||")
+        || normalized.ends_with('&')
+        || normalized.contains(" & ")
+        || normalized.contains('`')
+        || normalized.contains("$(")
+        || normalized.contains('>')
+        || normalized.contains('<')
+    {
+        return false;
+    }
+
+    let Some((left, right)) = normalized.split_once('|') else {
+        return false;
+    };
+    let right = right.trim_start();
+    if !(right.starts_with("rg ") || right.starts_with("grep ")) {
+        return false;
+    }
+    let left = left.trim();
+    let python = left
+        .strip_prefix(". .venv/bin/activate && ")
+        .or_else(|| left.strip_prefix("source .venv/bin/activate && "))
+        .unwrap_or(left)
+        .trim_start();
+    python.starts_with("python -m ") || python.starts_with("python3 -m ")
 }
 
 #[cfg(test)]

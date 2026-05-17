@@ -7,8 +7,7 @@
 use crate::services::api::ToolCall;
 use crate::tools::ToolResult;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 const PREVIEW_CHARS: usize = 240;
@@ -213,6 +212,76 @@ impl EvidenceLedger {
         let mut label = format!("passed:{}/{}", rollup.current_passed, rollup.current_total);
         if rollup.recovered_failed > 0 {
             label.push_str(&format!(" recovered_failed:{}", rollup.recovered_failed));
+        }
+        Some(label)
+    }
+
+    pub fn runtime_required_validation_label(
+        &self,
+        required_commands: &[String],
+    ) -> Option<String> {
+        let required = required_commands
+            .iter()
+            .map(|command| normalize_command_identity(command))
+            .filter(|command| !command.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if required.is_empty() {
+            return None;
+        }
+
+        let mut current = BTreeMap::<String, bool>::new();
+        let mut failed_identities = BTreeSet::<String>::new();
+        for fact in &self.command_facts {
+            for required_command in &required {
+                if command_fact_satisfies_required(fact, required_command) {
+                    if !fact.success {
+                        failed_identities.insert(required_command.clone());
+                    }
+                    current.insert(required_command.clone(), fact.success);
+                }
+            }
+        }
+        for fact in &self.validation_facts {
+            let Some(command) = fact.command.as_deref() else {
+                continue;
+            };
+            let command = normalize_command_identity(command);
+            if required.contains(&command) {
+                if !fact.passed {
+                    failed_identities.insert(command.clone());
+                }
+                current.insert(command, fact.passed);
+            }
+        }
+
+        if required
+            .iter()
+            .any(|command| !current.contains_key(command))
+        {
+            return None;
+        }
+
+        let current_total = required.len();
+        let current_passed = required
+            .iter()
+            .filter(|command| current.get(*command).copied().unwrap_or(false))
+            .count();
+        let current_failed = current_total.saturating_sub(current_passed);
+        if current_failed > 0 {
+            return Some(format!("failed:{current_failed}/{current_total}"));
+        }
+        let recovered_failed = required
+            .iter()
+            .filter(|command| {
+                failed_identities.contains(*command)
+                    && current.get(*command).copied().unwrap_or(false)
+            })
+            .count();
+        let mut label = format!("passed:{current_passed}/{current_total}");
+        if recovered_failed > 0 {
+            label.push_str(&format!(" recovered_failed:{recovered_failed}"));
         }
         Some(label)
     }
@@ -693,12 +762,36 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 
 fn validation_identity(fact: &ValidationEvidence) -> String {
     if let Some(command) = fact.command.as_deref() {
-        let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized = normalize_command_identity(command);
         if !normalized.is_empty() {
             return format!("command:{normalized}");
         }
     }
     format!("source:{}", fact.source.trim())
+}
+
+fn normalize_command_identity(command: &str) -> String {
+    command.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn command_fact_satisfies_required(fact: &CommandEvidence, required_command: &str) -> bool {
+    let executed = normalize_command_identity(&fact.command);
+    executed == required_command
+        || (fact.safe_for_closeout && shell_assertion_covers_required(&executed, required_command))
+}
+
+fn shell_assertion_covers_required(executed: &str, required_command: &str) -> bool {
+    if !(required_command.starts_with("test ")
+        || required_command.starts_with("[ ")
+        || required_command.starts_with("[[ "))
+    {
+        return false;
+    }
+    let Some(rest) = executed.strip_prefix(required_command) else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    rest.starts_with("&& ")
 }
 
 #[cfg(test)]
@@ -905,6 +998,53 @@ mod tests {
         assert_eq!(
             ledger.runtime_validation_label().as_deref(),
             Some("passed:1/1")
+        );
+    }
+
+    #[test]
+    fn required_validation_label_uses_required_commands_over_exploratory_failures() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call(
+                "bash",
+                serde_json::json!({
+                    "command": "python3 -c \"import core_terminal_demo; print('import ok')\""
+                }),
+            ),
+            &ToolResult::error("ModuleNotFoundError: No module named 'core_terminal_demo'"),
+        );
+        ledger.record_tool_result(
+            &tool_call(
+                "bash",
+                serde_json::json!({
+                    "command": "test -x .venv/bin/python && echo \"PASS: .venv/bin/python exists\""
+                }),
+            ),
+            &ToolResult::success("PASS: .venv/bin/python exists"),
+        );
+        ledger.record_tool_result(
+            &tool_call(
+                "bash",
+                serde_json::json!({
+                    "command": ". .venv/bin/activate && python -m core_terminal_demo --self-test | rg '^core-terminal-demo-ok$'"
+                }),
+            ),
+            &ToolResult::success("core-terminal-demo-ok"),
+        );
+        let required = vec![
+            "test -x .venv/bin/python".to_string(),
+            ". .venv/bin/activate && python -m core_terminal_demo --self-test | rg '^core-terminal-demo-ok$'".to_string(),
+        ];
+
+        assert_eq!(
+            ledger.runtime_validation_label().as_deref(),
+            Some("failed:1/2")
+        );
+        assert_eq!(
+            ledger
+                .runtime_required_validation_label(&required)
+                .as_deref(),
+            Some("passed:2/2")
         );
     }
 

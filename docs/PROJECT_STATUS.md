@@ -69,10 +69,11 @@ focused-repair proposal boundary, provider-protocol matrix,
 permission-controller, context-budget, tool-result-budget, schema-gate, and
 tool-result normalizer work, the file-patch write-mode guard,
 live-eval unscored-report classification fix, deterministic patch-rule
-priority, and required-validation acceptance closeout fallback:
+priority, required-validation acceptance closeout fallback, and required-command
+closeout evidence for no-diff audit tasks:
 
 ```text
-1448 passed; 0 failed
+1450 passed; 0 failed
 ```
 
 Latest live product baseline:
@@ -87,19 +88,20 @@ real code-change pass=3, audit/no-diff pass=5
 Latest real-project coding gauntlet checkpoint:
 
 ```text
-post-repair full rerun:
-real-project-coding-20260517-171819: 12/15 passed
+latest full rerun after repair-planner source context:
+real-project-coding-20260517-183221: 14/15 passed
 behavior_assertions=3, behavior_assertions_passed=3
+required-validation passes=15/15
+backend-todo-api-crud: status=ok, failure_owner=none
+frontend-book-notes-localstorage: status=ok, failure_owner=none
+core-provider-roundtrip: status=ok, failure_owner=none
 memory-save-quality-gate: status=ok, failure_owner=none
 persistent-memory-planning-context: status=ok, failure_owner=none
 skill-promotion-gate: status=ok, failure_owner=none
-remaining failures:
-- backend-todo-api-crud: failure_owner=llm_reasoning,
-  required command failed because GET /todos/{id} still returned 404
-- frontend-book-notes-localstorage: failure_owner=llm_reasoning,
-  required command failed with a JavaScript syntax error after repair
-- core-provider-roundtrip: failure_owner=agent_flow,
-  required command passed but closeout stayed not_verified
+remaining full-run failure:
+- core-terminal-install-run: failure_owner=agent_flow,
+  required_command_status=ok but closeout stayed not_verified after an
+  exploratory pre-install import check polluted runtime validation evidence
 targeted Phase 3 repair reruns after required-validation source context:
 - repair-planner-frontend-20260517-181652: status=ok, failure_owner=none,
   required_command_status=ok, closeout_status=passed
@@ -107,9 +109,16 @@ targeted Phase 3 repair reruns after required-validation source context:
   required_command_status=ok, closeout_status=passed,
   warnings=earlier_verification_failed_before_repair,
   earlier_stage_validation_failed_before_repair
-full gauntlet has not yet been refreshed after these targeted repair reruns
-next focus=full gauntlet refresh or closeout/tool-record evidence for the
-core-provider-roundtrip provider audit case
+targeted closeout-evidence rerun:
+- terminal-closeout-20260517-191432: status=ok, failure_owner=none,
+  required_command_status=ok, closeout_status=passed,
+  runtime validation=passed:2/2
+full gauntlet has not yet been refreshed after the terminal closeout targeted
+fix; next focus=full gauntlet 15/15 refresh or Phase 4 durable
+ToolExecutionRecord work
+
+previous post-repair full rerun:
+real-project-coding-20260517-171819: 12/15 passed
 
 first gauntlet baseline before targeted repair:
 real-project-coding-20260517-153331: 13/15 passed

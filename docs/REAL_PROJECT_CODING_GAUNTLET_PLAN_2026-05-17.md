@@ -30,7 +30,7 @@ Use `docs/PROJECT_STATUS.md` as the canonical status source. As of this plan,
 the relevant baseline is:
 
 - deterministic local tests after memory and repair-planner closure:
-  `1448 passed; 0 failed`;
+  `1450 passed; 0 failed`;
 - `core-quality-real-rerun-20260517-091952`: `8/8 passed`;
 - `product-maturity-seeded-fixes-20260517-143047`: `3/3 passed`;
 - active live-eval runner: `scripts/run_live_eval.sh`;
@@ -125,6 +125,25 @@ remaining failures:
 - core-provider-roundtrip: required command passed, but closeout stayed not_verified
 ```
 
+Phase 3/closeout evidence rerun:
+
+```text
+real-project-coding-20260517-183221: 14/15 passed
+behavior_assertions_passed=3/3
+required-validation passes=15/15
+backend-todo-api-crud: status=ok, failure_owner=none
+frontend-book-notes-localstorage: status=ok, failure_owner=none
+core-provider-roundtrip: status=ok, failure_owner=none
+remaining failure:
+- core-terminal-install-run: required command passed, but closeout stayed
+  not_verified because an exploratory pre-install import check remained in
+  runtime validation evidence
+targeted closure:
+- terminal-closeout-20260517-191432: status=ok, failure_owner=none,
+  required_command_status=ok, closeout_status=passed,
+  runtime validation=passed:2/2
+```
+
 ## Phase 2: Real Task Expansion
 
 Goal: grow the gauntlet to 20-30 tasks across several project shapes.
@@ -194,6 +213,11 @@ and successful.
 Goal: make tool execution evidence a durable runtime object instead of a set of
 partially overlapping traces and rendered strings.
 
+Status: not started as a full persistence layer. A small prerequisite is now in
+place: final closeout can prefer exact required-command evidence over broader
+exploratory validation facts, so no-diff audit tasks can close out when their
+required commands passed even if earlier environment probes failed as expected.
+
 The record should cover:
 
 - tool call id, name, arguments hash, and route;
@@ -233,10 +257,16 @@ backend warnings=earlier_verification_failed_before_repair,
 earlier_stage_validation_failed_before_repair
 ```
 
-Next, either refresh the full real-project coding gauntlet to measure whether
-the targeted backend/frontend gains hold in the 15-task suite, or move into the
-lower-frequency provider audit closeout gap if the goal is to start Phase 4
-ToolExecutionRecord work first.
+That refresh is now done:
+
+```text
+real-project-coding-20260517-183221: 14/15 passed
+terminal-closeout-20260517-191432: status=ok, failure_owner=none
+```
+
+Next, either run one more full gauntlet refresh to confirm the terminal closeout
+targeted fix lifts the suite to 15/15, or continue into the broader Phase 4
+ToolExecutionRecord persistence work.
 
 After that, address the lower-frequency provider audit closeout gap:
 

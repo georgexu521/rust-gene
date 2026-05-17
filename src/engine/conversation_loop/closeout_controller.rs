@@ -10,6 +10,7 @@ pub(super) struct FinalCloseoutContext<'a> {
     pub(super) trace: &'a TraceCollector,
     pub(super) code_workflow: &'a CodeChangeWorkflowRunner,
     pub(super) task_bundle: &'a TaskContextBundle,
+    pub(super) required_validation_commands: &'a [String],
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
     pub(super) final_content: &'a mut String,
     pub(super) final_tool_calls: &'a [ToolCall],
@@ -31,8 +32,11 @@ impl CloseoutEvaluator {
         code_workflow: &CodeChangeWorkflowRunner,
         task_bundle: &TaskContextBundle,
         evidence_ledger: &EvidenceLedger,
+        required_validation_commands: &[String],
     ) -> CloseoutEvaluation {
-        let runtime_validation_label = evidence_ledger.runtime_validation_label();
+        let runtime_validation_label = evidence_ledger
+            .runtime_required_validation_label(required_validation_commands)
+            .or_else(|| evidence_ledger.runtime_validation_label());
         let closeout = code_workflow.build_closeout_with_runtime_validation(
             task_bundle,
             runtime_validation_label.as_deref(),
@@ -73,6 +77,7 @@ impl FinalCloseoutController {
             context.code_workflow,
             context.task_bundle,
             context.evidence_ledger,
+            context.required_validation_commands,
         );
         if let Some(closeout) = evaluation.closeout {
             context.trace.record(TraceEvent::FinalCloseoutPrepared {
@@ -162,7 +167,13 @@ mod tests {
             "cargo test -q memory passed",
         );
 
-        let evaluation = CloseoutEvaluator::evaluate(&code_workflow, &bundle, &evidence_ledger);
+        let required_commands = vec!["cargo test -q memory".to_string()];
+        let evaluation = CloseoutEvaluator::evaluate(
+            &code_workflow,
+            &bundle,
+            &evidence_ledger,
+            &required_commands,
+        );
         let closeout = evaluation.closeout.expect("closeout");
 
         assert_eq!(
@@ -175,6 +186,64 @@ mod tests {
             .validation
             .iter()
             .any(|item| item == "required validation: passed (passed:1/1)"));
+    }
+
+    #[test]
+    fn evaluator_prefers_required_command_success_over_exploratory_validation_failure() {
+        let mut bundle = TaskContextBundle::new("检查 Python 包安装", ".", audit_route(), None);
+        bundle.add_acceptance_check("test -x .venv/bin/python returns success");
+        bundle.add_acceptance_check(
+            "python -m core_terminal_demo --self-test outputs core-terminal-demo-ok",
+        );
+        let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+        let mut evidence_ledger = EvidenceLedger::new();
+        evidence_ledger.record_validation_result(
+            "bash",
+            Some("python3 -c \"import core_terminal_demo\""),
+            false,
+            "ModuleNotFoundError",
+        );
+        evidence_ledger.record_tool_result(
+            &ToolCall {
+                id: "call_1".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({
+                    "command": "test -x .venv/bin/python && echo PASS"
+                }),
+            },
+            &crate::tools::ToolResult::success("PASS"),
+        );
+        evidence_ledger.record_tool_result(
+            &ToolCall {
+                id: "call_2".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({
+                    "command": ". .venv/bin/activate && python -m core_terminal_demo --self-test | rg '^core-terminal-demo-ok$'"
+                }),
+            },
+            &crate::tools::ToolResult::success("core-terminal-demo-ok"),
+        );
+        let required_commands = vec![
+            "test -x .venv/bin/python".to_string(),
+            ". .venv/bin/activate && python -m core_terminal_demo --self-test | rg '^core-terminal-demo-ok$'".to_string(),
+        ];
+
+        let evaluation = CloseoutEvaluator::evaluate(
+            &code_workflow,
+            &bundle,
+            &evidence_ledger,
+            &required_commands,
+        );
+        let closeout = evaluation.closeout.expect("closeout");
+
+        assert_eq!(
+            evaluation.runtime_validation_label.as_deref(),
+            Some("passed:2/2")
+        );
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert!(closeout.acceptance.iter().any(|item| {
+            item.contains("accepted=true") && item.contains("required validation passed")
+        }));
     }
 
     #[test]
