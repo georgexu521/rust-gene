@@ -30,7 +30,8 @@ Use `docs/PROJECT_STATUS.md` as the canonical status source. As of this plan,
 the relevant baseline is:
 
 - deterministic local tests after memory, repair-planner, and the first
-  ToolExecutionRecord persistence slice: `1452 passed; 0 failed`;
+  ToolExecutionRecord persistence/trace-visibility slices:
+  `1453 passed; 0 failed`;
 - `core-quality-real-rerun-20260517-091952`: `8/8 passed`;
 - `product-maturity-seeded-fixes-20260517-143047`: `3/3 passed`;
 - `real-project-coding-20260517-192347`: `15/15 passed`;
@@ -248,7 +249,8 @@ Current record coverage:
   classification;
 - terminal task id/status/kind/handle/output path/duration/exit code when
   available;
-- changed paths for successful file write/edit/patch tools.
+- changed paths for successful file write/edit/patch tools;
+- validation, closeout, and repair relevance flags.
 
 The record should cover:
 
@@ -257,7 +259,7 @@ The record should cover:
 - start/end timestamps;
 - richer structured output metadata;
 - diff/file evidence links for write tools;
-- repair/closeout relevance flags.
+- route-level repair/closeout relevance policy.
 
 Consumers:
 

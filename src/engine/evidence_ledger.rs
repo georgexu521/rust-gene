@@ -41,6 +41,7 @@ pub struct ToolExecutionRecord {
     pub safe_for_closeout: Option<bool>,
     pub terminal_task: Option<TerminalTaskRecord>,
     pub changed_paths: Vec<String>,
+    pub relevance: ToolExecutionRelevance,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +67,13 @@ pub struct TerminalTaskRecord {
     pub output_path: Option<String>,
     pub duration_ms: Option<u64>,
     pub exit_code: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolExecutionRelevance {
+    pub validation: bool,
+    pub closeout: bool,
+    pub repair: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -528,6 +536,14 @@ impl EvidenceLedger {
         } else {
             ToolExecutionStatus::Failed
         };
+        let changed_paths = changed_paths_for_tool_result(tool_call, result);
+        let relevance = tool_execution_relevance(
+            result,
+            safe_for_closeout,
+            validation_family.as_deref(),
+            &changed_paths,
+            permission.as_ref(),
+        );
         self.tool_execution_records.push(ToolExecutionRecord {
             call_id: tool_call.id.clone(),
             tool: tool_call.name.clone(),
@@ -548,7 +564,8 @@ impl EvidenceLedger {
             validation_family,
             safe_for_closeout,
             terminal_task: terminal_task_record(result),
-            changed_paths: changed_paths_for_tool_result(tool_call, result),
+            changed_paths,
+            relevance,
         });
     }
 
@@ -736,6 +753,21 @@ fn changed_paths_for_tool_result(tool_call: &ToolCall, result: &ToolResult) -> V
         }
     }
     paths.into_iter().collect()
+}
+
+fn tool_execution_relevance(
+    result: &ToolResult,
+    safe_for_closeout: Option<bool>,
+    validation_family: Option<&str>,
+    changed_paths: &[String],
+    permission: Option<&ToolPermissionRecord>,
+) -> ToolExecutionRelevance {
+    let validation = safe_for_closeout.unwrap_or(false) || validation_family.is_some();
+    ToolExecutionRelevance {
+        validation,
+        closeout: validation || !changed_paths.is_empty() || permission.is_some(),
+        repair: !result.success || !changed_paths.is_empty(),
+    }
 }
 
 fn bash_result_command(result: &ToolResult) -> Option<&str> {
@@ -1221,6 +1253,14 @@ mod tests {
         assert_eq!(records[0].validation_family.as_deref(), Some("cargo_test"));
         assert_eq!(records[0].safe_for_closeout, Some(true));
         assert_eq!(
+            records[0].relevance,
+            ToolExecutionRelevance {
+                validation: true,
+                closeout: true,
+                repair: false,
+            }
+        );
+        assert_eq!(
             records[0]
                 .terminal_task
                 .as_ref()
@@ -1247,6 +1287,14 @@ mod tests {
 
         let record = &ledger.tool_execution_records()[0];
         assert_eq!(record.status, ToolExecutionStatus::Denied);
+        assert_eq!(
+            record.relevance,
+            ToolExecutionRelevance {
+                validation: false,
+                closeout: true,
+                repair: true,
+            }
+        );
         assert_eq!(
             record
                 .permission
