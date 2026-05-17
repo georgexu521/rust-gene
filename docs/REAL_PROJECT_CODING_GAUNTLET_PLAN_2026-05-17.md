@@ -110,6 +110,20 @@ converted the original missing-context failure into a concrete
 `build_memory_context(context)` borrow error, which is now covered by a
 deterministic repair rule.
 
+Post-repair full rerun:
+
+```text
+real-project-coding-20260517-171819: 12/15 passed
+behavior_assertions_passed=3/3
+memory-save-quality-gate: status=ok, failure_owner=none
+persistent-memory-planning-context: status=ok, failure_owner=none
+skill-promotion-gate: status=ok, failure_owner=none
+remaining failures:
+- backend-todo-api-crud: validation failed after diff; GET /todos/{id} returned 404
+- frontend-book-notes-localstorage: validation failed after diff; generated JS had an extra brace
+- core-provider-roundtrip: required command passed, but closeout stayed not_verified
+```
+
 ## Phase 2: Real Task Expansion
 
 Goal: grow the gauntlet to 20-30 tasks across several project shapes.
@@ -203,16 +217,21 @@ Consumers:
 
 ## Next Concrete Step
 
-Rerun the full gauntlet from the repaired commit, then move into the generic
-repair and durable tool-record phases:
+Move into Phase 3 before broadening the task set:
 
 ```bash
-scripts/run_live_eval.sh --case real-project-coding --mode agent-run --run-tests --label real-project-coding
-scripts/run_live_eval.sh --mode summary --run-id <run-id>
+cargo test -q deterministic_patch_synthesis_repairs -- --test-threads=1
+scripts/run_live_eval.sh --case frontend-book-notes-localstorage --mode agent-run --run-tests --label repair-planner
+scripts/run_live_eval.sh --case backend-todo-api-crud --mode agent-run --run-tests --label repair-planner
 ```
 
-After the next full gauntlet run, choose the highest-frequency remaining
-failure class:
+The first Phase 3 target is the highest-frequency remaining class from
+`real-project-coding-20260517-171819`: validation failed after a real diff.
+The generic repair planner should make the agent reread the changed source and
+construct a bounded repair from the failed command output instead of repeatedly
+running the same command or relying on inexact patch synthesis.
+
+After that, address the lower-frequency provider audit closeout gap:
 
 - no diff after enough inspection -> improve action/repair planner;
 - validation failure after diff -> improve generic repair planner;

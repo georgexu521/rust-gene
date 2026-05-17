@@ -85,6 +85,23 @@ real code-change pass=3, audit/no-diff pass=5
 Latest real-project coding gauntlet checkpoint:
 
 ```text
+post-repair full rerun:
+real-project-coding-20260517-171819: 12/15 passed
+behavior_assertions=3, behavior_assertions_passed=3
+memory-save-quality-gate: status=ok, failure_owner=none
+persistent-memory-planning-context: status=ok, failure_owner=none
+skill-promotion-gate: status=ok, failure_owner=none
+remaining failures:
+- backend-todo-api-crud: failure_owner=llm_reasoning,
+  required command failed because GET /todos/{id} still returned 404
+- frontend-book-notes-localstorage: failure_owner=llm_reasoning,
+  required command failed with a JavaScript syntax error after repair
+- core-provider-roundtrip: failure_owner=agent_flow,
+  required command passed but closeout stayed not_verified
+next focus=generic repair planner for validation-failed-after-diff cases,
+then closeout/tool-record evidence for audit/no-diff provider cases
+
+first gauntlet baseline before targeted repair:
 real-project-coding-20260517-153331: 13/15 passed
 coding-gauntlet evidence: likely clean passes=7, repaired passes=2,
 required-validation passes=13/15, first-write observed=10/15
