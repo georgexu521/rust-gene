@@ -446,6 +446,11 @@ The remaining work is now product maturity, not missing foundations:
 
 Latest maintenance note:
 
+- `core-quality-real-rerun-20260517-091952` refreshed the real
+  `core-coding-quality` agent-run baseline on 2026-05-17: `8/8` passed,
+  required commands were `ok` for every case, failure owner was `none` for every
+  case, `3` seeded code-change tasks produced real diffs, and `5` audit/no-diff
+  tasks passed as expected.
 - `cargo test -q` is clean as of 2026-05-16 with `1437 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`

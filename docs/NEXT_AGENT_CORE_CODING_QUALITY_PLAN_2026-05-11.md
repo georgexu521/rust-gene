@@ -2375,6 +2375,13 @@ scripts/run_live_eval.sh --case core-coding-quality --mode agent-run --run-tests
   `scripts/run_live_eval.sh --list --case core-coding-quality` 均通过。这个
   验证只覆盖 summary/report/list/parser 回归入口，不代表重新跑真实 provider
   agent-run。
+- 2026-05-17 真实 Phase 4 `core-coding-quality` agent-run 已刷新：
+  `core-quality-real-rerun-20260517-091952` 最终 `8/8` 通过，failure owner
+  全部为 `none`，required commands 全部 `ok`，real code-change pass 为 `3`，
+  audit/no-diff pass 为 `5`。初次整组运行在第 6 个 case 附近被本机磁盘
+  `ENOSPC` 打断；清理 `target/live-evals` 临时 worktree 后，用同一 run-id
+  补跑 `core-provider-roundtrip`、`core-permission-rejection-recovery` 和
+  `core-rollback-product-path`，再生成 summary。
 
 任务：
 

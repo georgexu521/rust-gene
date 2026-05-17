@@ -68,6 +68,7 @@ evidence run, and 2026-05-11 provider-reconnect reruns:
 | Latest Batch 6 reconnect reruns | `batch6-reconnect-20260511-132912`, `batch6-reconnect-20260511-133851`, and `batch6-reconnect-20260511-135823`: recommended cases 8, 9, and 10 passed as audit/no-diff checks with required commands ok, full `1195 passed; 0 failed`, `closeout_status=passed`, and `failure_owner=none`. All three runs exercised MiniMax reconnect retry logs. |
 | Latest resume-session rerun | `batch6-harnesssplit-20260511-155208` passed after splitting agent-visible focused commands from harness-only full-suite validation: real `/resume` diff, agent required commands ok, harness full `911 passed; 0 failed`, `acceptance_accepted=True`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest CLI scrollback rerun | `batch6-evidencefix2-20260511-173535` passed after evidence-label and live-eval env alignment: default scrollback CLI evidence was verified with no diff, agent-visible shell/TUI commands and harness full suite passed, `tool_errors=0`, `runtime_diet.validation=passed:2/2`, `closeout_status=passed`, and `failure_owner=none`. The failed precursor `batch6-evidencefix-20260511-171653` showed that empty Moonshot/OpenAI env vars could make agent-run validation diverge from harness validation. |
+| Latest core coding quality full rerun | `core-quality-real-rerun-20260517-091952`: all `8/8` `core-coding-quality` agent-run cases passed, required commands were ok, failure owner was `none` for every case, `3` seeded code-change tasks produced real diffs, and `5` audit/no-diff tasks passed with expected no-diff warnings. |
 | Latest core coding quality smoke | `core-quality-smoke-20260513-133437` passed `core-inspection-grounding` after shell assertion evidence was recorded from bash result metadata: no diff expected, required commands ok, `runtime_diet.validation=passed:4/4`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest terminal install/run smoke | `core-quality-terminal-fix-20260513-141842` passed `core-terminal-install-run` after generated runtime artifacts stopped counting as code changes and prompt-forbidden write tools were kept out of patch synthesis: required commands ok, `first_write_tool_index=none`, `forbidden_tool_uses=none`, empty diff, `runtime_diet.validation=passed:2/2`, `closeout_status=passed`, and `failure_owner=none`. |
 | Latest stale-edit smoke | `core-quality-stale-fix-20260513-150307` passed `core-simple-stale-edit` after non-Rust fixture edits stopped triggering full Rust auto-verify: first write was tool call 3 after two file reads, one-line diff, required commands ok, `runtime_diet.validation=passed:3/3`, `closeout_status=passed`, and `failure_owner=none`. |
@@ -247,6 +248,13 @@ ordinary programming tasks.
 
 Current evidence:
 
+- `core-quality-real-rerun-20260517-091952` passed the full
+  `core-coding-quality` agent-run suite: `8/8` passed, required commands ok for
+  all cases, failure owner `none` for all cases, `3` real code-change passes,
+  `5` audit/no-diff passes, memory active in all tasks, and
+  `core-permission-rejection-recovery` showed one failed verification/acceptance
+  stage before successful repair (`runtime_diet.validation=passed:6/6
+  recovered_failed:1`).
 - `core-quality-smoke-20260513-133437` passed `core-inspection-grounding`
   with no diff, required commands ok, `runtime_diet.validation=passed:4/4`,
   `closeout_status=passed`, and `failure_owner=none`.
