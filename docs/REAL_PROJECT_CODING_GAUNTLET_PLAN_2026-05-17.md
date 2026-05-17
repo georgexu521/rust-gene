@@ -33,6 +33,7 @@ the relevant baseline is:
   `1450 passed; 0 failed`;
 - `core-quality-real-rerun-20260517-091952`: `8/8 passed`;
 - `product-maturity-seeded-fixes-20260517-143047`: `3/3 passed`;
+- `real-project-coding-20260517-192347`: `15/15 passed`;
 - active live-eval runner: `scripts/run_live_eval.sh`;
 - shared report parser: `scripts/live_eval_report_parser.py`.
 
@@ -65,6 +66,7 @@ Initial suite composition should reuse the strongest existing real coding tasks:
 - `backend-todo-api-crud`
 - `frontend-book-notes-localstorage`
 - `code-change-verification-repair-loop`
+- `core-inspection-grounding`
 - `core-simple-stale-edit`
 - `core-multi-file-edit`
 - `core-terminal-install-run`
@@ -142,6 +144,22 @@ targeted closure:
 - terminal-closeout-20260517-191432: status=ok, failure_owner=none,
   required_command_status=ok, closeout_status=passed,
   runtime validation=passed:2/2
+```
+
+Full gauntlet refresh after closeout evidence:
+
+```text
+real-project-coding-20260517-192347: 15/15 passed
+behavior_assertions_passed=3/3
+required-validation passes=15/15
+coding-gauntlet likely clean passes=7, repaired passes=4
+real code-change passes=10, audit/no-diff passes=5
+failure_owner=none for every case
+closeout_status=passed for every case
+memory-save-quality-gate: status=ok, behavior_assertions=passed
+persistent-memory-planning-context: status=ok, behavior_assertions=passed
+skill-promotion-gate: status=ok, behavior_assertions=passed
+core-terminal-install-run: status=ok, failure_owner=none
 ```
 
 ## Phase 2: Real Task Expansion
@@ -260,15 +278,18 @@ earlier_stage_validation_failed_before_repair
 That refresh is now done:
 
 ```text
-real-project-coding-20260517-183221: 14/15 passed
-terminal-closeout-20260517-191432: status=ok, failure_owner=none
+real-project-coding-20260517-192347: 15/15 passed
+behavior_assertions_passed=3/3
+required-validation passes=15/15
+failure_owner=none for every case
 ```
 
-Next, either run one more full gauntlet refresh to confirm the terminal closeout
-targeted fix lifts the suite to 15/15, or continue into the broader Phase 4
-ToolExecutionRecord persistence work.
+Next, continue into the broader Phase 4 ToolExecutionRecord persistence work.
+The immediate 15-task product loop is green; Phase 4 should make the same tool
+execution and closeout evidence durable instead of relying on overlapping trace
+and rendered-string paths.
 
-After that, address the lower-frequency provider audit closeout gap:
+Use future failures to classify the next repair slice:
 
 - no diff after enough inspection -> improve action/repair planner;
 - validation failure after diff -> improve generic repair planner;

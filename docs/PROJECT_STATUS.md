@@ -88,20 +88,24 @@ real code-change pass=3, audit/no-diff pass=5
 Latest real-project coding gauntlet checkpoint:
 
 ```text
-latest full rerun after repair-planner source context:
-real-project-coding-20260517-183221: 14/15 passed
+latest full rerun after terminal closeout evidence:
+real-project-coding-20260517-192347: 15/15 passed
 behavior_assertions=3, behavior_assertions_passed=3
 required-validation passes=15/15
+coding-gauntlet likely clean passes=7, repaired passes=4
+real code-change passes=10, audit/no-diff passes=5
+failure_owner=none for every case
+closeout_status=passed for every case
 backend-todo-api-crud: status=ok, failure_owner=none
 frontend-book-notes-localstorage: status=ok, failure_owner=none
+core-terminal-install-run: status=ok, failure_owner=none
 core-provider-roundtrip: status=ok, failure_owner=none
 memory-save-quality-gate: status=ok, failure_owner=none
 persistent-memory-planning-context: status=ok, failure_owner=none
 skill-promotion-gate: status=ok, failure_owner=none
-remaining full-run failure:
-- core-terminal-install-run: failure_owner=agent_flow,
-  required_command_status=ok but closeout stayed not_verified after an
-  exploratory pre-install import check polluted runtime validation evidence
+warnings observed but non-failing:
+- audit/no-diff warnings on audit/regression-check tasks
+- tool_errors_seen in repaired/probe tasks with passing required commands
 targeted Phase 3 repair reruns after required-validation source context:
 - repair-planner-frontend-20260517-181652: status=ok, failure_owner=none,
   required_command_status=ok, closeout_status=passed
@@ -113,9 +117,8 @@ targeted closeout-evidence rerun:
 - terminal-closeout-20260517-191432: status=ok, failure_owner=none,
   required_command_status=ok, closeout_status=passed,
   runtime validation=passed:2/2
-full gauntlet has not yet been refreshed after the terminal closeout targeted
-fix; next focus=full gauntlet 15/15 refresh or Phase 4 durable
-ToolExecutionRecord work
+previous full rerun before terminal closeout evidence:
+real-project-coding-20260517-183221: 14/15 passed
 
 previous post-repair full rerun:
 real-project-coding-20260517-171819: 12/15 passed
