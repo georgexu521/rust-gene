@@ -62,6 +62,11 @@ impl TurnEntryGateController {
         })
         .await;
 
+        Self::attach_required_validation_acceptance(
+            context.task_bundle,
+            context.required_validation_commands,
+        );
+
         TaskContextTraceController::record(TaskContextTraceContext {
             task_bundle: context.task_bundle,
             route_workflow: context.route.workflow,
@@ -117,6 +122,18 @@ impl TurnEntryGateController {
                 content,
                 status: TurnStatus::Completed,
             },
+        }
+    }
+
+    fn attach_required_validation_acceptance(
+        task_bundle: &mut TaskContextBundle,
+        required_validation_commands: &[String],
+    ) {
+        for command in required_validation_commands {
+            let command = command.trim();
+            if !command.is_empty() {
+                task_bundle.add_acceptance_check(format!("required validation command: {command}"));
+            }
         }
     }
 }
@@ -262,5 +279,62 @@ mod tests {
             .events
             .iter()
             .any(|event| matches!(event, TraceEvent::WorkflowRouted { .. })));
+    }
+
+    #[tokio::test]
+    async fn required_validation_commands_satisfy_pre_tool_reflection_acceptance() {
+        let approval_channel = Arc::new(ToolApprovalChannel::new());
+        let conversation = conversation().with_approval_channel(approval_channel);
+        let route = IntentRouter::new().route("修改 src/main.rs");
+        let mut task_bundle = TaskContextBundle::new("修改 src/main.rs", ".", route.clone(), None);
+        let mut code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        code_workflow.policy.reflection_blocks = true;
+        let mut messages = vec![Message::user("修改 src/main.rs")];
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "修改 src/main.rs"));
+        let working_dir = std::env::current_dir().expect("current dir");
+        let (tx, mut rx) = mpsc::channel(4);
+        let required = vec!["cargo test -q".to_string()];
+
+        let flow = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            TurnEntryGateController::run(TurnEntryGateContext {
+                conversation: &conversation,
+                last_user_preview: "修改 src/main.rs",
+                route: &route,
+                working_dir: &working_dir,
+                learning_events: &[],
+                retrieval_context: None,
+                task_bundle: &mut task_bundle,
+                code_workflow: &mut code_workflow,
+                required_validation_commands: &required,
+                messages: &mut messages,
+                trace: &trace,
+                tx: Some(&tx),
+            }),
+        )
+        .await
+        .expect("reflection gate should not wait for approval when required validation exists");
+
+        assert!(matches!(flow, TurnEntryGateFlow::Continue));
+        assert!(task_bundle
+            .acceptance_checks
+            .iter()
+            .any(|check| check == "required validation command: cargo test -q"));
+        assert!(
+            rx.try_recv().is_err(),
+            "no reflection permission request expected"
+        );
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::TaskContextBuilt {
+                acceptance_checks: 1,
+                ..
+            }
+        )));
+        assert!(!finished
+            .events
+            .iter()
+            .any(|event| matches!(event, TraceEvent::PermissionRequested { .. })));
     }
 }

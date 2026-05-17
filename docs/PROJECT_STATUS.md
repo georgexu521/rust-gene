@@ -83,6 +83,9 @@ failure_owner=agent_flow for persistent-memory-planning-context
 root cause=persistent memory fixture entered the agent run, but workflow
 reflection stopped before tools after workflow judgment skipped a non-JSON
 response; required prefetch/merge/trace assertions were not restored
+persistent-reflection-fix-20260517-113556: targeted rerun passed
+required_command_status=ok, behavior_assertion_status=passed
+failure_owner=none, real code-change pass=1
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -482,6 +485,12 @@ Latest maintenance note:
   flow issue where reflection permission stopped the seeded code-change task
   before tools, leaving the required memory prefetch, merge, and trace
   assertions unrestored.
+- `persistent-reflection-fix-20260517-113556` fixes that pre-tool reflection
+  stop path: entry-gate task context now treats extracted required validation
+  commands as acceptance checks before the reflection gate runs. The targeted
+  rerun passed with `required_command_status=ok`,
+  `behavior_assertion_status=passed`, `failure_owner=none`, one real code diff,
+  and isolated full-suite evidence of `1438 passed; 0 failed`.
 - Live-eval summaries now carry explicit `behavior_assertions` and
   `behavior_assertion_status` fields. The first product-maturity slice tags the
   memory and skill recommended tasks so summary and aggregate reports can show
