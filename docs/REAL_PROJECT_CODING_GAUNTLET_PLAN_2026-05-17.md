@@ -236,7 +236,8 @@ exact required-command evidence over broader exploratory validation facts, so
 no-diff audit tasks can close out when their required commands passed even if
 earlier environment probes failed as expected. The first durable record slice is
 also in place: `EvidenceLedger` now stores a structured `ToolExecutionRecord`
-for each tool result.
+for each tool result, and final closeout trace events expose the current tool
+record count for report/debug consumers.
 
 Current record coverage:
 

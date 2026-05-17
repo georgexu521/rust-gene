@@ -351,6 +351,8 @@ pub enum TraceEvent {
         status: String,
         changed_files: usize,
         validation_items: usize,
+        #[serde(default)]
+        tool_records: usize,
         acceptance_items: usize,
         residual_risks: usize,
     },
@@ -942,11 +944,12 @@ impl TraceEvent {
                 status,
                 changed_files,
                 validation_items,
+                tool_records,
                 acceptance_items,
                 residual_risks,
             } => format!(
-                "final closeout status={} files={} validation={} acceptance={} risks={}",
-                status, changed_files, validation_items, acceptance_items, residual_risks
+                "final closeout status={} files={} validation={} tool_records={} acceptance={} risks={}",
+                status, changed_files, validation_items, tool_records, acceptance_items, residual_risks
             ),
             TraceEvent::Error { message } => format!("error: {}", preview(message)),
         }
@@ -1149,6 +1152,23 @@ mod tests {
         assert!(summary.contains("mcp.resource"));
         assert!(summary.contains("filesystem"));
         assert!(summary.contains("file:///tmp/a.txt"));
+    }
+
+    #[test]
+    fn trace_summary_includes_closeout_tool_record_count() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "finish task"));
+        collector.record(TraceEvent::FinalCloseoutPrepared {
+            status: "passed".to_string(),
+            changed_files: 1,
+            validation_items: 2,
+            tool_records: 3,
+            acceptance_items: 1,
+            residual_risks: 0,
+        });
+
+        let trace = collector.finish(TurnStatus::Completed);
+        let summary = format_trace_summary(&trace, 10);
+        assert!(summary.contains("tool_records=3"));
     }
 
     #[test]

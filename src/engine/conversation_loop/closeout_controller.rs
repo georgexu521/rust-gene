@@ -80,10 +80,12 @@ impl FinalCloseoutController {
             context.required_validation_commands,
         );
         if let Some(closeout) = evaluation.closeout {
+            let evidence_snapshot = context.evidence_ledger.snapshot();
             context.trace.record(TraceEvent::FinalCloseoutPrepared {
                 status: closeout.status.label().to_string(),
                 changed_files: closeout.changed_files.len(),
                 validation_items: closeout.validation.len(),
+                tool_records: evidence_snapshot.tool_execution_records,
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
             });
