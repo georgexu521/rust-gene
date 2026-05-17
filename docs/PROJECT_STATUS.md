@@ -58,11 +58,12 @@ permission risk, shell-command category classifier, terminal provider-schema
 exposure diagnostic, explicit patch-synthesis fallback boundary,
 focused-repair proposal boundary, provider-protocol matrix,
 permission-controller, context-budget, tool-result-budget, schema-gate, and
-tool-result normalizer work, plus the file-patch write-mode guard and
-live-eval unscored-report classification fix:
+tool-result normalizer work, the file-patch write-mode guard,
+live-eval unscored-report classification fix, deterministic patch-rule
+priority, and required-validation acceptance closeout fallback:
 
 ```text
-1440 passed; 0 failed
+1444 passed; 0 failed
 ```
 
 Latest live product baseline:
@@ -77,16 +78,16 @@ real code-change pass=3, audit/no-diff pass=5
 Latest memory/skill product-maturity behavior baseline:
 
 ```text
-product-maturity-memory-skill-rerun-20260517-124722: 3/6 passed
-behavior_assertions=6, behavior_assertions_passed=4
-status_counts=failed=3, passed=3
-failure_owner=agent_flow for memory-save-quality-gate and skill-promotion-gate
-failure_owner=llm_reasoning for persistent-memory-planning-context
-audit/no-diff passes=3, seeded code-change passes=0
-targeted persistent-reflection-fix passed, but did not generalize to the
-broader recommended memory/skill slice
-next focus=product-maturity stabilization for seeded memory/skill code-change
-tasks, not more default run_inner extraction
+product-maturity-seeded-fixes-20260517-143047: 3/3 passed
+behavior_assertions=3, behavior_assertions_passed=3
+status_counts=passed=3
+failure_owner=none for memory-save-quality-gate, skill-promotion-gate, and
+persistent-memory-planning-context
+real code-change pass=3
+deterministic patch repair rules now run before model patch synthesis when a
+high-confidence rule matches current evidence
+required validation acceptance can close out deterministically even when
+workflow judgment was skipped after a non-JSON response
 ```
 
 Current terminal slice: `bash mode=background` returns a shell handle,
@@ -455,12 +456,11 @@ The remaining work is now product maturity, not missing foundations:
    six-case live baseline. Behavior-level memory/skill assertion metadata is
    now part of the live-eval report layer, and the affected recommended
    memory/skill cases have been rerun. The current rerun shows the audit/no-diff
-   memory cases passing, but the seeded memory/skill code-change cases still
-   need product-maturity work: `persistent-memory-planning-context` fails with
-   `failure_owner=llm_reasoning`, `skill-promotion-gate` fails required
-   commands and behavior assertions, and `memory-save-quality-gate` fails
-   closeout verification despite passing required commands and behavior
-   assertions.
+   memory cases passing, and the three previously failing seeded memory/skill
+   code-change cases now have a targeted `3/3` rerun with required commands,
+   behavior assertions, and closeout passing. A full six-case rerun can refresh
+   the combined recommended baseline, but the previous blockers are no longer
+   active.
 3. Continue hardening long-running command progress around cancellation,
    timeout, and streamed partial output.
 4. Expand rendered command-level smoke tests beyond core panels into broader
@@ -507,6 +507,20 @@ Latest maintenance note:
   failing), and `persistent-memory-planning-context`
   (`failure_owner=llm_reasoning`, required commands, behavior assertions,
   stage validation, verification, acceptance, and closeout failing).
+- `product-maturity-seeded-fixes-20260517-143047` reran the three previously
+  failing seeded memory/skill code-change cases after the closeout and
+  deterministic patch-rule priority fixes: `3/3` passed, all three produced
+  real diffs, all required commands were `ok`, all behavior assertions passed,
+  closeout passed, and `failure_owner=none` for every case.
+- Patch synthesis now gives high-confidence deterministic repair rules first
+  refusal when they match current evidence. This prevents a valid-but-wrong
+  model JSON patch from overriding known regression repairs such as
+  `memory-save-quality-gate` and `skill-promotion-gate`.
+- Required-validation acceptance can now produce a deterministic accepted
+  review from task-bundle acceptance checks when all required validation
+  commands pass but workflow judgment was skipped after a non-JSON model
+  response. This keeps closeout from leaving required-command checks pending
+  after successful validation.
 - Live-eval summaries now carry explicit `behavior_assertions` and
   `behavior_assertion_status` fields. The first product-maturity slice tags the
   memory and skill recommended tasks so summary and aggregate reports can show
@@ -515,7 +529,7 @@ Latest maintenance note:
   read-before-edit and stale-read checks as targeted patch operations, and the
   live-eval report parser now marks unverified collect-only reports as
   `skipped` instead of counting them as passed.
-- `cargo test -q` is clean as of 2026-05-17 with `1440 passed; 0 failed`.
+- `cargo test -q` is clean as of 2026-05-17 with `1444 passed; 0 failed`.
 - Provider API calls now use a bounded reconnect policy for transient transport
   failures. `PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS` defaults to `5`
   reconnect opportunities, with exponential backoff, and does not retry
@@ -621,10 +635,10 @@ Latest maintenance note:
   This gives the model a structured repair target without writing the product
   patch for it.
 - Action-checkpoint patch repair now records patch synthesis `source` plus
-  owner/reason in traces. When usable evidence exists, model JSON/tool-call
-  synthesis runs before deterministic repair; deterministic patch synthesis is
-  reserved for no-evidence cases, model synthesis failures, or explicit
-  patch-synthesis opt-out.
+  owner/reason in traces. When a high-confidence deterministic repair rule
+  matches current evidence, deterministic patch synthesis runs before model
+  JSON/tool-call synthesis. Model synthesis remains the fallback for evidence
+  without a matching deterministic rule.
 - `/status` and `/doctor` terminal diagnostics now include bash provider-schema
   compatibility (`schema=ok` or a concrete schema failure reason) alongside
   registry, availability, permission, and route exposure checks.

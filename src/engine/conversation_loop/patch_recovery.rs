@@ -100,14 +100,19 @@ impl ConversationLoop {
         }
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let deterministic_reason = if evidence.trim().is_empty() {
+            "model patch synthesis skipped: no usable evidence"
+        } else {
+            "deterministic patch repair rule matched before model synthesis"
+        };
+        if let Some(outcome) =
+            self.deterministic_patch_fallback(&deterministic_seed, &cwd, deterministic_reason)
+        {
+            return Ok(outcome);
+        }
+
         if evidence.trim().is_empty() {
-            let reason = "model patch synthesis skipped: no usable evidence";
-            if let Some(outcome) =
-                self.deterministic_patch_fallback(&deterministic_seed, &cwd, reason)
-            {
-                return Ok(outcome);
-            }
-            return Err(anyhow::anyhow!(reason));
+            return Err(anyhow::anyhow!(deterministic_reason));
         }
 
         let system = r#"You are a controlled patch synthesis engine for a coding agent.

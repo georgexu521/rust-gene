@@ -556,7 +556,7 @@ mod tests {
     use crate::tools::{BashTool, FileEditTool, FileReadTool, FileWriteTool, GitTool};
     use async_openai::types::ChatCompletionResponseStream;
     use std::collections::{HashSet, VecDeque};
-    use std::sync::Mutex as StdMutex;
+    use std::sync::{Mutex as StdMutex, OnceLock};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -1866,6 +1866,65 @@ fn handle_apply() {
         assert_eq!(
             calls[0].arguments["new_string"],
             "assess_memory_candidate(content, category, &existing, false)"
+        );
+    }
+
+    #[test]
+    fn test_patch_synthesis_prefers_deterministic_rule_before_model_json() {
+        static CWD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        let _cwd_guard = CWD_LOCK.get_or_init(|| StdMutex::new(())).lock().unwrap();
+        let original_cwd = std::env::current_dir().expect("read current dir");
+        struct CurrentDirGuard(std::path::PathBuf);
+        impl Drop for CurrentDirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _restore = CurrentDirGuard(original_cwd);
+
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileEditTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("src/tools/memory_tool"))
+            .expect("create memory tool dir");
+        std::fs::write(
+            tmp.path().join("src/tools/memory_tool/mod.rs"),
+            "let assessment = assess_memory_candidate(content, category, &existing, true);\n",
+        )
+        .expect("write fixture file");
+        std::env::set_current_dir(tmp.path()).expect("switch current dir");
+
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        let outcome = runtime
+            .block_on(loop_instance.synthesize_patch_tool_calls(
+                &[Message::user(
+                    "memory-save-quality-gate found that explicit memory_save bypasses the quality gate",
+                )],
+                "memory-save-quality-gate",
+            ))
+            .expect("deterministic patch synthesis outcome");
+
+        assert_eq!(
+            outcome.source,
+            super::patch_recovery::PatchSynthesisSource::DeterministicFallback
+        );
+        assert_eq!(
+            outcome.fallback_reason.as_deref(),
+            Some("deterministic patch repair rule matched before model synthesis")
+        );
+        assert_eq!(outcome.tool_calls.len(), 1);
+        assert_eq!(
+            outcome.tool_calls[0].arguments["path"],
+            "src/tools/memory_tool/mod.rs"
         );
     }
 

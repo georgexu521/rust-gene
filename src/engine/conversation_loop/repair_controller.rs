@@ -8,6 +8,10 @@ use crate::engine::intent_router::IntentRoute;
 use crate::engine::reflection_pass::ReflectionPass;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::engine::workflow_contract::{
+    AcceptanceConfidence, AcceptanceCriterion, AcceptanceNextAction, AcceptanceReview,
+    AcceptanceStatus, ProgrammingWorkflowJudgment,
+};
 use crate::services::api::Message;
 use tracing::warn;
 
@@ -193,34 +197,14 @@ impl ConversationLoop {
             break_loop: false,
         };
 
-        let Some(judgment) = context.task_bundle.workflow_judgment.as_ref() else {
-            return outcome;
-        };
+        let judgment = context.task_bundle.workflow_judgment.as_ref();
 
-        if context.verify_passed && !context.required_validation_commands.is_empty() {
-            let evidence = format!(
-                "Required validation commands passed: {}",
-                context.required_validation_commands.join("; ")
-            );
-            let criteria = judgment
-                .acceptance
-                .criteria
-                .iter()
-                .map(|criterion| {
-                    let mut passed = criterion.clone();
-                    passed.status = crate::engine::workflow_contract::AcceptanceStatus::Passed;
-                    passed.evidence = Some(evidence.clone());
-                    passed
-                })
-                .collect::<Vec<_>>();
-            let review = crate::engine::workflow_contract::AcceptanceReview {
-                accepted: true,
-                confidence: crate::engine::workflow_contract::AcceptanceConfidence::High,
-                criteria,
-                unresolved_items: Vec::new(),
-                residual_risks: Vec::new(),
-                next_action: crate::engine::workflow_contract::AcceptanceNextAction::Finish,
-            };
+        if let Some(review) = Self::required_validation_acceptance_review(
+            context.task_bundle,
+            judgment,
+            context.verify_passed,
+            context.required_validation_commands,
+        ) {
             context.trace.record(TraceEvent::AcceptanceReviewCompleted {
                 accepted: true,
                 confidence: "High".to_string(),
@@ -230,18 +214,24 @@ impl ConversationLoop {
             });
             context.code_workflow.record_acceptance_review(review);
             outcome.should_closeout_after_verified_change = true;
-            context.trace.record(TraceEvent::WorkflowPlanProgress {
-                total_steps: judgment.plan.len(),
-                completed_steps: judgment.plan.len(),
-                active_step: None,
-                top_priority: None,
-                top_importance_score: None,
-                top_weight_share: None,
-                weight_source: None,
-                reweighted: true,
-            });
+            if let Some(judgment) = judgment {
+                context.trace.record(TraceEvent::WorkflowPlanProgress {
+                    total_steps: judgment.plan.len(),
+                    completed_steps: judgment.plan.len(),
+                    active_step: None,
+                    top_priority: None,
+                    top_importance_score: None,
+                    top_weight_share: None,
+                    weight_source: None,
+                    reweighted: true,
+                });
+            }
             return outcome;
         }
+
+        let Some(judgment) = judgment else {
+            return outcome;
+        };
 
         if !context.code_workflow.should_run_acceptance_review(
             context.verify_passed,
@@ -444,5 +434,161 @@ impl ConversationLoop {
         }
 
         outcome
+    }
+
+    fn required_validation_acceptance_review(
+        task_bundle: &TaskContextBundle,
+        judgment: Option<&ProgrammingWorkflowJudgment>,
+        verify_passed: bool,
+        required_validation_commands: &[String],
+    ) -> Option<AcceptanceReview> {
+        if !verify_passed || required_validation_commands.is_empty() {
+            return None;
+        }
+
+        let evidence = format!(
+            "Required validation commands passed: {}",
+            required_validation_commands.join("; ")
+        );
+        let criteria = judgment
+            .map(|judgment| {
+                judgment
+                    .acceptance
+                    .criteria
+                    .iter()
+                    .map(|criterion| {
+                        let mut passed = criterion.clone();
+                        passed.status = AcceptanceStatus::Passed;
+                        passed.evidence = Some(evidence.clone());
+                        passed
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|criteria| !criteria.is_empty())
+            .unwrap_or_else(|| {
+                task_bundle
+                    .acceptance_checks
+                    .iter()
+                    .map(|criterion| AcceptanceCriterion {
+                        criterion: criterion.clone(),
+                        status: AcceptanceStatus::Passed,
+                        evidence: Some(evidence.clone()),
+                    })
+                    .collect()
+            });
+
+        Some(AcceptanceReview {
+            accepted: true,
+            confidence: AcceptanceConfidence::High,
+            criteria,
+            unresolved_items: Vec::new(),
+            residual_risks: Vec::new(),
+            next_action: AcceptanceNextAction::Finish,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::intent_router::{
+        IntentKind, ReasoningPolicy, RetrievalPolicy, RiskLevel, WorkflowKind,
+    };
+    use crate::engine::workflow_contract::{AcceptanceContract, TaskComplexity, WorkflowPlanStep};
+
+    fn code_change_bundle() -> TaskContextBundle {
+        TaskContextBundle::new(
+            "修复 memory save",
+            ".",
+            IntentRoute {
+                intent: IntentKind::CodeChange,
+                confidence: 0.9,
+                workflow: WorkflowKind::CodeChange,
+                retrieval: RetrievalPolicy::Project,
+                reasoning: ReasoningPolicy::High,
+                risk: RiskLevel::High,
+                recommended_tools: Vec::new(),
+                reason: "test".to_string(),
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn required_validation_acceptance_uses_bundle_checks_without_workflow_judgment() {
+        let mut bundle = code_change_bundle();
+        bundle.add_acceptance_check("required validation command: cargo test -q memory");
+        bundle.add_acceptance_check("required validation command: cargo test -q");
+        let commands = vec![
+            "cargo test -q memory".to_string(),
+            "cargo test -q".to_string(),
+        ];
+
+        let review =
+            ConversationLoop::required_validation_acceptance_review(&bundle, None, true, &commands)
+                .expect("deterministic review");
+
+        assert!(review.accepted);
+        assert_eq!(review.confidence, AcceptanceConfidence::High);
+        assert_eq!(review.criteria.len(), 2);
+        assert!(review
+            .criteria
+            .iter()
+            .all(|criterion| criterion.status == AcceptanceStatus::Passed));
+        assert!(review.criteria.iter().all(|criterion| criterion
+            .evidence
+            .as_deref()
+            .is_some_and(|evidence| evidence.contains("cargo test -q"))));
+        assert_eq!(review.next_action, AcceptanceNextAction::Finish);
+    }
+
+    #[test]
+    fn required_validation_acceptance_prefers_judgment_criteria() {
+        let mut bundle = code_change_bundle();
+        bundle.add_acceptance_check("fallback check");
+        let judgment = ProgrammingWorkflowJudgment {
+            task_type: "bug_fix".to_string(),
+            complexity: TaskComplexity::Medium,
+            risk: RiskLevel::High,
+            requirement_complete_enough: true,
+            needs_user_questions: false,
+            question_reason: None,
+            questions: Vec::new(),
+            assumptions: Vec::new(),
+            guided_reasoning_required: false,
+            guided_reasoning_triggers: Vec::new(),
+            plan: Vec::<WorkflowPlanStep>::new(),
+            acceptance: AcceptanceContract::pending(
+                "修复 memory save",
+                vec!["judged criterion".to_string()],
+                Vec::new(),
+            ),
+        };
+        let commands = vec!["cargo test -q".to_string()];
+
+        let review = ConversationLoop::required_validation_acceptance_review(
+            &bundle,
+            Some(&judgment),
+            true,
+            &commands,
+        )
+        .expect("deterministic review");
+
+        assert_eq!(review.criteria.len(), 1);
+        assert_eq!(review.criteria[0].criterion, "judged criterion");
+        assert_eq!(review.criteria[0].status, AcceptanceStatus::Passed);
+    }
+
+    #[test]
+    fn required_validation_acceptance_requires_passing_verification() {
+        let mut bundle = code_change_bundle();
+        bundle.add_acceptance_check("required validation command: cargo test -q");
+        let commands = vec!["cargo test -q".to_string()];
+
+        let review = ConversationLoop::required_validation_acceptance_review(
+            &bundle, None, false, &commands,
+        );
+
+        assert!(review.is_none());
     }
 }
