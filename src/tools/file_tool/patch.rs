@@ -3,7 +3,7 @@ use super::history::{
 };
 use super::text_codec::{
     detect_line_ending, read_text_file, split_leading_text_bom, text_write_format_json,
-    write_text_file, TextFileEncoding,
+    write_text_file, TextFileEncoding, TextFileSnapshot,
 };
 use super::{
     acquire_file_mutation_lock, check_file_size_limit, edit_diff_summary, edit_diff_summary_json,
@@ -429,67 +429,54 @@ async fn preflight_operation(
         None
     };
 
-    let (before_content, after_content, encoding, has_bom, line_ending, replacements) = match (
-        mode,
-        before_snapshot.as_ref(),
-    ) {
-        (PatchMode::Write, snapshot) => {
-            let content = params["content"]
-                .as_str()
-                .ok_or_else(|| "file_patch write operation requires content".to_string())?;
-            let (content_has_bom, content_body) = split_leading_text_bom(content);
-            let encoding = snapshot
-                .map(|snapshot| snapshot.encoding)
-                .unwrap_or(TextFileEncoding::Utf8);
-            let has_bom =
-                snapshot.map(|snapshot| snapshot.has_bom).unwrap_or(false) || content_has_bom;
-            let line_ending = snapshot
-                .map(|snapshot| snapshot.line_ending)
-                .unwrap_or_else(|| detect_line_ending(content_body));
-            (
-                snapshot.map(|snapshot| snapshot.content.clone()),
-                content_body.to_string(),
-                encoding,
-                has_bom,
-                line_ending,
-                1,
-            )
-        }
-        (_, None) => {
-            return Err(format!(
-                "file_patch {} operation requires an existing file: {}",
-                mode.as_str(),
-                spec.path_arg
-            ));
-        }
-        (mode, Some(snapshot)) => {
-            ensure_read_state(spec, context, mode)?;
-            let current_mtime = std::fs::metadata(&spec.path)
-                .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            if is_file_modified_since_read(
-                &context.session_id,
-                &spec.identity.state_key,
-                &snapshot.content,
-                current_mtime,
-            ) {
-                return Err(format!(
-                        "Refusing file_patch for '{}': file changed since this session last read it. Re-read the file and retry.",
-                        spec.path_arg
-                    ));
+    let (before_content, after_content, encoding, has_bom, line_ending, replacements) =
+        match (mode, before_snapshot.as_ref()) {
+            (PatchMode::Write, snapshot) => {
+                let content = params["content"]
+                    .as_str()
+                    .ok_or_else(|| "file_patch write operation requires content".to_string())?;
+                if let Some(snapshot) = snapshot {
+                    ensure_existing_file_read_is_fresh(spec, context, PatchMode::Write, snapshot)?;
+                }
+                let (content_has_bom, content_body) = split_leading_text_bom(content);
+                let encoding = snapshot
+                    .map(|snapshot| snapshot.encoding)
+                    .unwrap_or(TextFileEncoding::Utf8);
+                let has_bom =
+                    snapshot.map(|snapshot| snapshot.has_bom).unwrap_or(false) || content_has_bom;
+                let line_ending = snapshot
+                    .map(|snapshot| snapshot.line_ending)
+                    .unwrap_or_else(|| detect_line_ending(content_body));
+                (
+                    snapshot.map(|snapshot| snapshot.content.clone()),
+                    content_body.to_string(),
+                    encoding,
+                    has_bom,
+                    line_ending,
+                    1,
+                )
             }
-            let (new_content, replacements) =
-                apply_existing_file_operation(mode, params, snapshot.content.clone())?;
-            (
-                Some(snapshot.content.clone()),
-                new_content,
-                snapshot.encoding,
-                snapshot.has_bom,
-                snapshot.line_ending,
-                replacements,
-            )
-        }
-    };
+            (_, None) => {
+                return Err(format!(
+                    "file_patch {} operation requires an existing file: {}",
+                    mode.as_str(),
+                    spec.path_arg
+                ));
+            }
+            (mode, Some(snapshot)) => {
+                ensure_existing_file_read_is_fresh(spec, context, mode, snapshot)?;
+                let (new_content, replacements) =
+                    apply_existing_file_operation(mode, params, snapshot.content.clone())?;
+                (
+                    Some(snapshot.content.clone()),
+                    new_content,
+                    snapshot.encoding,
+                    snapshot.has_bom,
+                    snapshot.line_ending,
+                    replacements,
+                )
+            }
+        };
 
     if after_content.len() as u64 > MAX_EDITABLE_FILE_SIZE_BYTES {
         return Err(format!(
@@ -517,6 +504,30 @@ async fn preflight_operation(
         diff,
         replacements,
     })
+}
+
+fn ensure_existing_file_read_is_fresh(
+    spec: &PatchSpec,
+    context: &ToolContext,
+    mode: PatchMode,
+    snapshot: &TextFileSnapshot,
+) -> Result<(), String> {
+    ensure_read_state(spec, context, mode)?;
+    let current_mtime = std::fs::metadata(&spec.path)
+        .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    if is_file_modified_since_read(
+        &context.session_id,
+        &spec.identity.state_key,
+        &snapshot.content,
+        current_mtime,
+    ) {
+        return Err(format!(
+            "Refusing file_patch for '{}': file changed since this session last read it. Re-read the file and retry.",
+            spec.path_arg
+        ));
+    }
+    Ok(())
 }
 
 fn ensure_read_state(

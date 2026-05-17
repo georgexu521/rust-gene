@@ -2504,6 +2504,90 @@ mod tests {
         assert!(error.contains("has not been read"), "{error}");
     }
 
+    #[tokio::test]
+    async fn file_patch_write_rejects_unread_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), "alpha\nold-a\n")
+            .await
+            .unwrap();
+        let session_id = format!(
+            "test-session-file-patch-write-unread-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let patch_tool = FilePatchTool;
+        let result = patch_tool
+            .execute(
+                json!({
+                    "operations": [
+                        {
+                            "path": "a.txt",
+                            "mode": "write",
+                            "content": "replacement\n"
+                        }
+                    ]
+                }),
+                ToolContext::new(dir.path(), session_id),
+            )
+            .await;
+
+        assert!(!result.success);
+        let error = result.error.unwrap_or_default();
+        assert!(error.contains("has not been read"), "{error}");
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("a.txt"))
+                .await
+                .unwrap(),
+            "alpha\nold-a\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_patch_write_rejects_stale_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        tokio::fs::write(&path, "alpha\nold-a\n").await.unwrap();
+        let session_id = format!(
+            "test-session-file-patch-write-stale-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let context = ToolContext::new(dir.path(), &session_id);
+        let read_tool = FileReadTool;
+        assert!(
+            read_tool
+                .execute(json!({ "path": "a.txt" }), context.clone())
+                .await
+                .success
+        );
+        tokio::fs::write(&path, "external\nchange\n").await.unwrap();
+
+        let patch_tool = FilePatchTool;
+        let result = patch_tool
+            .execute(
+                json!({
+                    "operations": [
+                        {
+                            "path": "a.txt",
+                            "mode": "write",
+                            "content": "replacement\n"
+                        }
+                    ]
+                }),
+                context,
+            )
+            .await;
+
+        assert!(!result.success);
+        let error = result.error.unwrap_or_default();
+        assert!(
+            error.contains("changed since this session last read"),
+            "{error}"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(path).await.unwrap(),
+            "external\nchange\n"
+        );
+    }
+
     #[test]
     fn test_resolve_path() {
         let working_dir = std::path::Path::new("/home/user/project");

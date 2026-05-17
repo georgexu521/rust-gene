@@ -1846,6 +1846,8 @@ for row in rows:
 task_count = len(rows)
 passed_count = totals.get("passed", 0)
 failed_count = totals.get("failed", 0)
+scored_count = passed_count + failed_count
+skipped_count = task_count - scored_count
 real_code_change_passed = sum(
     1
     for row in rows
@@ -1883,8 +1885,9 @@ lines = [
     "",
     f"- Run directory: `{run_dir}`",
     f"- Tasks found: `{task_count}`",
-    f"- Pass rate: `{passed_count}/{task_count}` ({pct(passed_count, task_count)})",
-    f"- Failure rate: `{failed_count}/{task_count}` ({pct(failed_count, task_count)})",
+    f"- Pass rate: `{passed_count}/{scored_count}` ({pct(passed_count, scored_count)})",
+    f"- Failure rate: `{failed_count}/{scored_count}` ({pct(failed_count, scored_count)})",
+    f"- Skipped/unscored tasks: `{skipped_count}`",
     f"- Real code-change passes: `{real_code_change_passed}`",
     f"- Plan-only passes: `{plan_only_passed}`",
     f"- Seeded no-diff failures: `{seeded_no_diff_failures}`",
@@ -1961,6 +1964,7 @@ lines.extend([
     "- `plan_quality` describes plan-only/API artifacts when present.",
     "- `tool_boundary` separates plan-only, collect-only, and real agent-run reports.",
     "- `verification_status` combines closeout and required-command evidence; it is not a human-quality score.",
+    "- `skipped` reports are excluded from pass/fail rate denominators; collect-only reports need passing required commands to be scored.",
     "- `real_code_change_passed` requires an agent-run report with a non-empty diff; plan-only success is tracked separately.",
     "- `memory` and `skill` summarize evidence signals; they do not by themselves mean the task succeeded.",
     "- `behavior_assertions` are explicit sample-level checks; memory/skill behavior assertions are stronger evidence than activity signals alone.",

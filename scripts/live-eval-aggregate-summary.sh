@@ -150,6 +150,8 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
     passed = sum(1 for row in rows if row["status"] == "passed")
     failed = sum(1 for row in rows if row["status"] == "failed")
     total = len(rows)
+    scored = passed + failed
+    skipped = total - scored
     real_code_passes = sum(
         1
         for row in rows
@@ -174,6 +176,8 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
         "run": run_id,
         "passed": passed,
         "failed": failed,
+        "scored": scored,
+        "skipped": skipped,
         "total": total,
         "real_code_passes": real_code_passes,
         "plan_only_passes": plan_only_passes,
@@ -230,6 +234,8 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
 total_tasks = len(task_records)
 passed_tasks = status_counts["passed"]
 failed_tasks = status_counts["failed"]
+scored_tasks = passed_tasks + failed_tasks
+skipped_tasks = total_tasks - scored_tasks
 real_code_passes = sum(record["real_code_passes"] for record in run_records)
 plan_only_passes = sum(record["plan_only_passes"] for record in run_records)
 seeded_no_diff = sum(record["seeded_no_diff"] for record in run_records)
@@ -327,8 +333,10 @@ lines = [
     f"- Generated: `{dt.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %z')}`",
     f"- Runs scanned: `{len(run_records)}`",
     f"- Task reports scanned: `{total_tasks}`",
-    f"- Pass rate: `{passed_tasks}/{total_tasks}` ({pct(passed_tasks, total_tasks)})",
-    f"- Failure rate: `{failed_tasks}/{total_tasks}` ({pct(failed_tasks, total_tasks)})",
+    f"- Scored task reports: `{scored_tasks}`",
+    f"- Pass rate: `{passed_tasks}/{scored_tasks}` ({pct(passed_tasks, scored_tasks)})",
+    f"- Failure rate: `{failed_tasks}/{scored_tasks}` ({pct(failed_tasks, scored_tasks)})",
+    f"- Skipped/unscored task reports: `{skipped_tasks}`",
     f"- Real code-change passes: `{real_code_passes}`",
     f"- Plan-only passes: `{plan_only_passes}`",
     f"- Seeded no-diff failures: `{seeded_no_diff}`",
@@ -343,6 +351,7 @@ lines.extend(md_table(
     ["dimension", "count", "share"],
     [
         ["failed_tasks", failed_tasks, pct(failed_tasks, total_tasks)],
+        ["skipped_unscored_tasks", skipped_tasks, pct(skipped_tasks, total_tasks)],
         ["required_command_failed", required_failed, pct(required_failed, total_tasks)],
         ["verification_failed", verification_failed, pct(verification_failed, total_tasks)],
         ["closeout_not_successful", closeout_not_successful, pct(closeout_not_successful, total_tasks)],
@@ -548,6 +557,7 @@ lines.extend([
     "",
     "- `real_code_change_passed` requires an agent-run report with a non-empty diff.",
     "- `plan_only_passed` is tracked separately so planning success is not counted as code-change success.",
+    "- `skipped` reports are excluded from pass/fail rate denominators; collect-only reports need passing required commands to be scored.",
     "- `seeded_no_diff_failed` is the strongest signal for agents that inspect but do not patch.",
     "- `inferred_owner` is a conservative backfill for older reports that predate structured `failure_owner` fields.",
     "- `owner_metadata_missing` tracks that historical evidence gap separately from inferred product failures.",

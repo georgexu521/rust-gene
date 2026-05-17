@@ -89,6 +89,20 @@ def int_text(value, default=0):
         return str(default)
 
 
+def report_run_status(tool_boundary, quality_status, test_status, plan_quality):
+    if quality_status == "failed" or test_status == "failed" or plan_quality == "failed":
+        return "failed"
+    if tool_boundary == "plan-only":
+        return "passed" if plan_quality in {"ok", "api_response"} else "skipped"
+    if tool_boundary == "collect-only":
+        return "passed" if test_status == "ok" else "skipped"
+    if tool_boundary == "agent-run":
+        if quality_status == "ok" and test_status in {"ok", "skipped"}:
+            return "passed"
+        return "skipped"
+    return "skipped"
+
+
 def specialty_metrics(task_dir, report_text):
     events = jsonl_events(task_dir / "agent-events.jsonl")
     task_name = task_dir.name.lower()
@@ -236,11 +250,11 @@ def report_rows(run_dir):
             verification_status = "failed"
         else:
             verification_status = "unknown"
-        run_status = (
-            "passed"
-            if quality_status in {"ok", "missing"}
-            and test_status in {"ok", "skipped", "missing"}
-            else "failed"
+        run_status = report_run_status(
+            tool_boundary,
+            quality_status,
+            test_status,
+            plan_quality,
         )
         warnings = []
         output_warning_markers = {
