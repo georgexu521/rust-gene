@@ -45,11 +45,29 @@ CORE_CODING_QUALITY_CASES=(
   core-rollback-product-path
 )
 
+REAL_PROJECT_CODING_GAUNTLET_CASES=(
+  backend-todo-api-crud
+  frontend-book-notes-localstorage
+  code-change-verification-repair-loop
+  core-inspection-grounding
+  core-simple-stale-edit
+  core-multi-file-edit
+  core-terminal-install-run
+  core-long-output-artifact
+  core-provider-roundtrip
+  core-permission-rejection-recovery
+  core-rollback-product-path
+  live-eval-dashboard-summary
+  memory-save-quality-gate
+  skill-promotion-gate
+  persistent-memory-planning-context
+)
+
 usage() {
   cat <<'EOF'
 Usage:
   scripts/run_live_eval.sh --list
-  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
+  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
   scripts/run_live_eval.sh --mode summary --run-id <id>
 
 Modes:
@@ -62,7 +80,8 @@ Modes:
   summary   Generate docs/benchmarks/live-<run-id>/summary.md.
 
 Options:
-  --case ID          Live task id, "recommended", "core-coding-quality", or "all".
+  --case ID          Live task id, "recommended", "core-coding-quality",
+                     "real-project-coding", or "all".
                      With --list, a suite name lists only that suite.
   --mode MODE        list, prepare, api-plan, agent-run, collect, or full.
   --workdir DIR      Existing task worktree for collect mode.
@@ -380,6 +399,19 @@ core_coding_quality_task_files() {
   return "$missing"
 }
 
+real_project_coding_gauntlet_task_files() {
+  local id file missing=0
+  for id in "${REAL_PROJECT_CODING_GAUNTLET_CASES[@]}"; do
+    if file="$(find_task_file "$id")"; then
+      echo "$file"
+    else
+      echo "Real-project coding gauntlet live task missing: $id" >&2
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
 task_group_files() {
   local group="$1"
   case "$group" in
@@ -388,6 +420,9 @@ task_group_files() {
       ;;
     core-coding-quality)
       core_coding_quality_task_files
+      ;;
+    real-project-coding)
+      real_project_coding_gauntlet_task_files
       ;;
     *)
       return 1
@@ -1823,6 +1858,12 @@ def pct(part, whole):
         return "0.0%"
     return f"{(part / whole) * 100:.1f}%"
 
+def as_int(value):
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
 rows = report_rows(run_dir)
 
 totals = {}
@@ -1879,6 +1920,25 @@ memory_behavior_assertion_tasks = sum(
 skill_behavior_assertion_tasks = sum(
     1 for row in rows if "skill" in row["behavior_assertions"].lower()
 )
+coding_rows = [row for row in rows if row["boundary"] == "agent-run"]
+coding_task_count = len(coding_rows)
+coding_passed = sum(1 for row in coding_rows if row["coding_gauntlet_status"] == "passed")
+coding_failed = sum(1 for row in coding_rows if row["coding_gauntlet_status"] == "failed")
+coding_clean_likely_passed = sum(
+    1 for row in coding_rows if row["first_pass_signal"] == "likely_clean"
+)
+coding_repaired_passed = sum(
+    1
+    for row in coding_rows
+    if row["coding_gauntlet_status"] == "passed"
+    and row["first_pass_signal"] == "repaired"
+)
+coding_required_passed = sum(1 for row in coding_rows if row["required"] == "ok")
+coding_first_write_observed = sum(
+    1 for row in coding_rows if row["first_write"] not in {"none", "missing"}
+)
+coding_repair_signals = sum(as_int(row["repair_signals"]) for row in coding_rows)
+coding_diff_files_changed = sum(as_int(row["diff_files_changed"]) for row in coding_rows)
 
 lines = [
     f"# Live Eval Summary: {run_id}",
@@ -1899,6 +1959,15 @@ lines = [
     f"- Skill promotion-evidence tasks: `{skill_promotion_tasks}`",
     f"- Behavior assertion tasks: `{behavior_assertion_tasks}`",
     f"- Behavior assertions passed: `{behavior_assertion_passed}`",
+    f"- Coding gauntlet agent-run tasks: `{coding_task_count}`",
+    f"- Coding gauntlet passes: `{coding_passed}`",
+    f"- Coding gauntlet failures: `{coding_failed}`",
+    f"- Coding gauntlet likely clean passes: `{coding_clean_likely_passed}`",
+    f"- Coding gauntlet repaired passes: `{coding_repaired_passed}`",
+    f"- Coding gauntlet required-validation passes: `{coding_required_passed}/{coding_task_count}`",
+    f"- Coding gauntlet first-write observed: `{coding_first_write_observed}/{coding_task_count}`",
+    f"- Coding gauntlet repair signals: `{coding_repair_signals}`",
+    f"- Coding gauntlet changed files: `{coding_diff_files_changed}`",
     "- Status counts: "
     + (", ".join(f"{key}={value}" for key, value in sorted(totals.items())) if totals else "none"),
     "- Failure owners: "
@@ -1940,6 +2009,24 @@ lines.extend([
     f"| real_code_change_passed | {real_code_change_passed} | Agent-run tasks with passing status and a real diff. |",
     f"| plan_only_passed | {plan_only_passed} | Planning/API-only artifacts that passed their available checks. |",
     f"| seeded_no_diff_failed | {seeded_no_diff_failures} | Seeded code-change tasks where the agent did not produce a diff. |",
+    "",
+    "## Coding Gauntlet Evidence",
+    "",
+    "| task | gauntlet_status | first_pass_signal | coding | required | closeout | first_write | diff | warnings |",
+    "|------|-----------------|-------------------|--------|----------|----------|-------------|------|----------|",
+])
+
+if coding_rows:
+    for row in coding_rows:
+        lines.append(
+            "| {task} | {coding_gauntlet_status} | {first_pass_signal} | {coding} | {required} | {closeout} | {first_write} | {diff} | {warnings} |".format(
+                **{key: md_cell(value) for key, value in row.items()}
+            )
+        )
+else:
+    lines.append("| none | not_applicable | unknown | tools=0, validations=0, repair=0, files=0 | missing | missing | missing | no | none |")
+
+lines.extend([
     "",
     "## Task Matrix",
     "",
@@ -2037,7 +2124,7 @@ run_one() {
 
 main() {
   if [[ "$MODE" == "list" ]]; then
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" ]]; then
       need_yaml
       list_task_group "$CASE_ID"
     else
@@ -2062,9 +2149,9 @@ main() {
 
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
 
-  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" ]]; then
+  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" ]]; then
     local file files failures=0
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" ]]; then
       if ! files="$(task_group_files "$CASE_ID")"; then
         exit 1
       fi

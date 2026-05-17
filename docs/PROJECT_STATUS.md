@@ -25,6 +25,11 @@ Current stage:
 - Current implementation focus has moved to product maturity: broader
   trace-backed evaluation, behavior-level memory/skill assertions, long-running
   terminal UX, CLI polish, and external baseline data.
+- The next product-maturity slice is now the real-project coding gauntlet:
+  `docs/REAL_PROJECT_CODING_GAUNTLET_PLAN_2026-05-17.md`. The live-eval runner
+  supports `--case real-project-coding`, and live summaries now include a
+  coding-gauntlet evidence section for agent-run tasks without changing the
+  existing task matrix format.
 - The first provider-protocol regression matrix slice is complete:
   OpenAI-compatible, MiniMax, and Kimi request conversion now share provider
   message normalization; pure assistant `tool_calls` omit empty content,

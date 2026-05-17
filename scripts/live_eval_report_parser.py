@@ -89,6 +89,13 @@ def int_text(value, default=0):
         return str(default)
 
 
+def int_value(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
 def report_run_status(tool_boundary, quality_status, test_status, plan_quality):
     if quality_status == "failed" or test_status == "failed" or plan_quality == "failed":
         return "failed"
@@ -286,6 +293,48 @@ def report_rows(run_dir):
             ]
         )
         specialty = specialty_metrics(task_dir, report_text)
+        tool_executions = int_value(report_value(report_text, "tool_executions", 0))
+        diff_files_changed = int_value(report_value(report_text, "diff_files_changed", 0))
+        validation_events = int_value(report_value(report_text, "validation_events", 0))
+        stage_validation_events = int_value(
+            report_value(report_text, "stage_validation_events", 0)
+        )
+        tool_failures = int_value(report_value(report_text, "tool_failures", 0))
+        repair_signals = tool_failures
+        for warning in warnings:
+            if warning.startswith("earlier_") or warning.startswith("recovered_"):
+                repair_signals += 1
+        if (
+            "required_validation" in adaptive_triggers
+            and required == "ok"
+            and (tool_failures > 0 or "tool_errors_seen" in warnings)
+        ):
+            repair_signals += 1
+        if run_status == "passed" and required == "ok":
+            if repair_signals > 0:
+                first_pass_signal = "repaired"
+            elif first_write not in {"none", "missing"}:
+                first_pass_signal = "likely_clean"
+            else:
+                first_pass_signal = "no_write"
+        elif run_status == "failed":
+            first_pass_signal = "failed"
+        else:
+            first_pass_signal = "unknown"
+        if tool_boundary == "agent-run":
+            if run_status == "passed" and required == "ok":
+                coding_gauntlet_status = "passed"
+            elif run_status == "failed":
+                coding_gauntlet_status = "failed"
+            else:
+                coding_gauntlet_status = "unscored"
+        else:
+            coding_gauntlet_status = "not_applicable"
+        coding_summary = (
+            f"tools={tool_executions}, "
+            f"validations={validation_events + stage_validation_events}, "
+            f"repair={repair_signals}, files={diff_files_changed}"
+        )
         rows.append(
             {
                 "task": task_id,
@@ -306,6 +355,14 @@ def report_rows(run_dir):
                 "warnings": ",".join(warnings) if warnings else "none",
                 "failures": failures,
                 "has_output": bool(agent_output.strip()),
+                "coding_gauntlet_status": coding_gauntlet_status,
+                "first_pass_signal": first_pass_signal,
+                "tool_executions": str(tool_executions),
+                "validation_events": str(validation_events),
+                "stage_validation_events": str(stage_validation_events),
+                "repair_signals": str(repair_signals),
+                "diff_files_changed": str(diff_files_changed),
+                "coding": coding_summary,
                 **specialty,
             }
         )

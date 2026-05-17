@@ -25,6 +25,10 @@ required_command_status: ok
 closeout_status: passed
 adaptive_triggers: required_validation,first_code_change
 first_write_tool_index: 2
+tool_executions: 5
+diff_files_changed: 1
+validation_events: 1
+stage_validation_events: 1
 memory_active: true
 memory_recalled_items: 2
 memory_conflicts: 1
@@ -74,6 +78,8 @@ required_command_status: failed
 closeout_status: not_verified
 adaptive_triggers: repeated_no_code_progress
 first_write_tool_index: none
+tool_executions: 4
+diff_files_changed: 0
 action_checkpoint_no_patch: true
 warning: action_checkpoint_no_patch
 behavior_assertions: memory_write_safety
@@ -116,12 +122,23 @@ grep -q 'Skill active tasks: `1`' "$summary_path"
 grep -q 'Skill promotion-evidence tasks: `1`' "$summary_path"
 grep -q 'Behavior assertion tasks: `3`' "$summary_path"
 grep -q 'Behavior assertions passed: `2`' "$summary_path"
+grep -q 'Coding gauntlet agent-run tasks: `2`' "$summary_path"
+grep -q 'Coding gauntlet passes: `1`' "$summary_path"
+grep -q 'Coding gauntlet failures: `1`' "$summary_path"
+grep -q 'Coding gauntlet likely clean passes: `1`' "$summary_path"
+grep -q 'Coding gauntlet repaired passes: `0`' "$summary_path"
+grep -q 'Coding gauntlet required-validation passes: `1/2`' "$summary_path"
+grep -q 'Coding gauntlet first-write observed: `1/2`' "$summary_path"
+grep -q 'Coding gauntlet repair signals: `0`' "$summary_path"
+grep -q 'Coding gauntlet changed files: `1`' "$summary_path"
 grep -q '`expected_code_diff_missing`: `1`' "$summary_path"
 grep -q '`warning:no_code_diff`: `1`' "$summary_path"
 grep -q '`warning:action_checkpoint_no_patch`: `1`' "$summary_path"
 grep -q '| real_code_change_passed | 1 |' "$summary_path"
 grep -q '| plan_only_passed | 1 |' "$summary_path"
 grep -q '| seeded_no_diff_failed | 1 |' "$summary_path"
+grep -q '| task-code-pass | passed | likely_clean | tools=5, validations=2, repair=0, files=1 | ok | passed | 2 | yes | none |' "$summary_path"
+grep -q '| task-seeded-fail | failed | failed | tools=4, validations=0, repair=0, files=0 | failed | not_verified | none | no | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
 grep -q '| memory_active_tasks | 1 | Tasks where retrieval, sync, or memory tools were active. |' "$summary_path"
 grep -q '| skill_promotion_evidence_tasks | 1 | Tasks with promotion-related skill evidence. |' "$summary_path"
 grep -q '| behavior_assertion_tasks | 3 | Tasks with explicit behavior assertions in the live-eval sample. |' "$summary_path"
