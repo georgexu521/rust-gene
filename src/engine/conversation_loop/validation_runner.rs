@@ -410,6 +410,26 @@ impl RequiredValidationController {
         application
     }
 
+    pub(super) fn source_context_from_evidence(
+        working_dir: &std::path::Path,
+        evidence: &[String],
+    ) -> Option<String> {
+        let issues = extract_required_validation_source_issues(working_dir, evidence);
+        if issues.is_empty() {
+            return None;
+        }
+
+        let result = VerificationResult {
+            language: "required".to_string(),
+            command: "required validation".to_string(),
+            success: false,
+            issues,
+            raw_output: evidence.join("\n"),
+            summary: "required validation source context".to_string(),
+        };
+        verification_source_context(working_dir, &[result])
+    }
+
     pub(super) async fn run_commands(
         working_dir: &std::path::Path,
         commands: &[String],
@@ -477,6 +497,112 @@ impl RequiredValidationController {
         }
         results
     }
+}
+
+fn extract_required_validation_source_issues(
+    working_dir: &std::path::Path,
+    evidence: &[String],
+) -> Vec<VerificationIssue> {
+    let mut issues = Vec::new();
+    let mut seen = HashSet::new();
+    for text in evidence {
+        for line in text.lines() {
+            if let Some((file, line_number, message)) =
+                parse_python_traceback_source_line(working_dir, line)
+                    .or_else(|| parse_colon_source_line(working_dir, line))
+            {
+                let key = (file.clone(), line_number);
+                if !seen.insert(key) {
+                    continue;
+                }
+                issues.push(VerificationIssue {
+                    severity: "error".to_string(),
+                    file: Some(file),
+                    line: Some(line_number as u32),
+                    message,
+                });
+            }
+            if issues.len() >= 12 {
+                return issues;
+            }
+        }
+    }
+    issues
+}
+
+fn parse_python_traceback_source_line(
+    working_dir: &std::path::Path,
+    line: &str,
+) -> Option<(String, usize, String)> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("File \"")?;
+    let (file, rest) = rest.split_once("\", line ")?;
+    let line_digits = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    let line_number = line_digits.parse::<usize>().ok()?;
+    normalize_source_file_for_issue(working_dir, file).map(|file| {
+        (
+            file,
+            line_number,
+            "required validation traceback frame".to_string(),
+        )
+    })
+}
+
+fn parse_colon_source_line(
+    working_dir: &std::path::Path,
+    line: &str,
+) -> Option<(String, usize, String)> {
+    for token in line.split_whitespace() {
+        let token = token
+            .trim_matches(|ch: char| matches!(ch, '(' | ')' | '"' | '\'' | ',' | ';' | '[' | ']'));
+        if let Some((file, line_number)) = parse_colon_source_token(token) {
+            if let Some(file) = normalize_source_file_for_issue(working_dir, &file) {
+                return Some((
+                    file,
+                    line_number,
+                    "required validation output location".to_string(),
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn parse_colon_source_token(token: &str) -> Option<(String, usize)> {
+    let mut parts = token.rsplitn(3, ':');
+    let last = parts.next()?;
+    let second = parts.next()?;
+    if second.chars().all(|ch| ch.is_ascii_digit()) {
+        let file = parts.next()?;
+        let line_number = second.parse::<usize>().ok()?;
+        return Some((file.to_string(), line_number));
+    }
+    let line_number = last.parse::<usize>().ok()?;
+    Some((second.to_string(), line_number))
+}
+
+fn normalize_source_file_for_issue(working_dir: &std::path::Path, file: &str) -> Option<String> {
+    let raw_path = std::path::Path::new(file);
+    let candidate = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        working_dir.join(raw_path)
+    };
+    let canonical_cwd = working_dir
+        .canonicalize()
+        .unwrap_or_else(|_| working_dir.to_path_buf());
+    let canonical_file = candidate.canonicalize().ok()?;
+    if !canonical_file.starts_with(&canonical_cwd) || !canonical_file.is_file() {
+        return None;
+    }
+    canonical_file
+        .strip_prefix(&canonical_cwd)
+        .ok()
+        .map(|path| path.display().to_string())
+        .or_else(|| Some(canonical_file.display().to_string()))
 }
 
 fn is_safe_required_search_assertion(command: &str) -> bool {
@@ -603,5 +729,49 @@ mod tests {
             TraceEvent::WorkflowFallback { error }
                 if error.contains("required_validation")
         )));
+    }
+
+    #[test]
+    fn required_validation_source_context_extracts_node_error_line() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("fixtures/app")).expect("create fixture dir");
+        let source = tmp.path().join("fixtures/app/app.js");
+        std::fs::write(&source, "function demo() {\n  return 1;\n}\n}\n").expect("write source");
+        let evidence = vec![format!(
+            "$ node fixtures/app/test.cjs\n{}:4\n}}\n^\nSyntaxError: Unexpected token '}}'",
+            source.display()
+        )];
+
+        let context =
+            RequiredValidationController::source_context_from_evidence(tmp.path(), &evidence)
+                .expect("node source context");
+
+        assert!(context.contains("fixtures/app/app.js:4"));
+        assert!(context.contains(">    4 | }"));
+        assert!(context.contains("required validation output location"));
+    }
+
+    #[test]
+    fn required_validation_source_context_extracts_python_traceback_line() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("tests")).expect("create tests dir");
+        let source = tmp.path().join("tests/test_api.py");
+        std::fs::write(
+            &source,
+            "def test_route():\n    status = 404\n    assert status == 200\n",
+        )
+        .expect("write source");
+        let evidence = vec![format!(
+            "Traceback (most recent call last):\n  File \"{}\", line 3, in test_route\n    assert status == 200\nAssertionError: 404 != 200",
+            source.display()
+        )];
+
+        let context =
+            RequiredValidationController::source_context_from_evidence(tmp.path(), &evidence)
+                .expect("python source context");
+
+        assert!(context.contains("tests/test_api.py:3"));
+        assert!(context.contains(">    3 |     assert status == 200"));
+        assert!(context.contains("required validation traceback frame"));
     }
 }

@@ -98,6 +98,14 @@ impl PostEditVerificationController {
             let required_application =
                 RequiredValidationController::application_for_run(required_run);
             required_validation_passed = required_application.passed;
+            let required_source_context = if required_validation_passed {
+                None
+            } else {
+                RequiredValidationController::source_context_from_evidence(
+                    context.working_dir,
+                    &required_application.post_edit_evidence,
+                )
+            };
             acceptance_evidence.extend(required_application.acceptance_evidence);
             post_edit_evidence.extend(required_application.post_edit_evidence.clone());
             failed_commands.extend(required_application.failed_commands);
@@ -122,6 +130,14 @@ impl PostEditVerificationController {
                     &mut *context.tool_results_text,
                     &mut *context.messages,
                     text,
+                );
+            }
+            if let Some(source_context) = required_source_context {
+                post_edit_evidence.push(source_context.clone());
+                Self::append_system_text(
+                    &mut *context.tool_results_text,
+                    &mut *context.messages,
+                    source_context,
                 );
             }
         }

@@ -31,7 +31,9 @@ Current stage:
   coding-gauntlet evidence section for agent-run tasks without changing the
   existing task matrix format. The first 15-task gauntlet run exposed two
   memory/product-maturity failures, and both have passing targeted reruns with
-  behavior assertions and required validation now green.
+  behavior assertions and required validation now green. The first generic
+  repair-planner slice now appends source snippets from failed required
+  validation output, with targeted backend and frontend repair reruns passing.
 - The first provider-protocol regression matrix slice is complete:
   OpenAI-compatible, MiniMax, and Kimi request conversion now share provider
   message normalization; pure assistant `tool_calls` omit empty content,
@@ -70,7 +72,7 @@ live-eval unscored-report classification fix, deterministic patch-rule
 priority, and required-validation acceptance closeout fallback:
 
 ```text
-1446 passed; 0 failed
+1448 passed; 0 failed
 ```
 
 Latest live product baseline:
@@ -98,8 +100,16 @@ remaining failures:
   required command failed with a JavaScript syntax error after repair
 - core-provider-roundtrip: failure_owner=agent_flow,
   required command passed but closeout stayed not_verified
-next focus=generic repair planner for validation-failed-after-diff cases,
-then closeout/tool-record evidence for audit/no-diff provider cases
+targeted Phase 3 repair reruns after required-validation source context:
+- repair-planner-frontend-20260517-181652: status=ok, failure_owner=none,
+  required_command_status=ok, closeout_status=passed
+- repair-planner-backend-20260517-182004: status=ok, failure_owner=none,
+  required_command_status=ok, closeout_status=passed,
+  warnings=earlier_verification_failed_before_repair,
+  earlier_stage_validation_failed_before_repair
+full gauntlet has not yet been refreshed after these targeted repair reruns
+next focus=full gauntlet refresh or closeout/tool-record evidence for the
+core-provider-roundtrip provider audit case
 
 first gauntlet baseline before targeted repair:
 real-project-coding-20260517-153331: 13/15 passed

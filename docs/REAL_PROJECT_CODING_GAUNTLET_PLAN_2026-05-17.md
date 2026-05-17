@@ -29,7 +29,8 @@ Non-goals for this phase:
 Use `docs/PROJECT_STATUS.md` as the canonical status source. As of this plan,
 the relevant baseline is:
 
-- deterministic local tests: `1444 passed; 0 failed`;
+- deterministic local tests after memory and repair-planner closure:
+  `1448 passed; 0 failed`;
 - `core-quality-real-rerun-20260517-091952`: `8/8 passed`;
 - `product-maturity-seeded-fixes-20260517-143047`: `3/3 passed`;
 - active live-eval runner: `scripts/run_live_eval.sh`;
@@ -160,6 +161,11 @@ Target mix:
 Goal: move from fixture-specific deterministic patch rules to generic repair
 planning.
 
+Status: in progress. The first generic slice is complete: failed required
+validation output is parsed for source locations, current source snippets are
+fed back into post-edit repair context, and the targeted backend/frontend
+validation-failed-after-diff reruns now pass.
+
 The repair planner should accept structured evidence and produce bounded patch
 candidates:
 
@@ -174,7 +180,8 @@ Initial repair classes:
 
 - Rust compiler arity/type/borrow errors with exact source context;
 - missing imports and stale symbol names;
-- failed unit tests with assertion message and nearby implementation;
+- failed unit tests with assertion message and nearby implementation
+  (first required-validation source-context slice complete);
 - no-diff seeded code-change failures after enough inspection;
 - stale read/edit failures that require reread before patching.
 
@@ -217,19 +224,19 @@ Consumers:
 
 ## Next Concrete Step
 
-Move into Phase 3 before broadening the task set:
+The first Phase 3 validation-failed-after-diff slice has targeted evidence:
 
-```bash
-cargo test -q deterministic_patch_synthesis_repairs -- --test-threads=1
-scripts/run_live_eval.sh --case frontend-book-notes-localstorage --mode agent-run --run-tests --label repair-planner
-scripts/run_live_eval.sh --case backend-todo-api-crud --mode agent-run --run-tests --label repair-planner
+```text
+repair-planner-frontend-20260517-181652: status=ok, failure_owner=none
+repair-planner-backend-20260517-182004: status=ok, failure_owner=none
+backend warnings=earlier_verification_failed_before_repair,
+earlier_stage_validation_failed_before_repair
 ```
 
-The first Phase 3 target is the highest-frequency remaining class from
-`real-project-coding-20260517-171819`: validation failed after a real diff.
-The generic repair planner should make the agent reread the changed source and
-construct a bounded repair from the failed command output instead of repeatedly
-running the same command or relying on inexact patch synthesis.
+Next, either refresh the full real-project coding gauntlet to measure whether
+the targeted backend/frontend gains hold in the 15-task suite, or move into the
+lower-frequency provider audit closeout gap if the goal is to start Phase 4
+ToolExecutionRecord work first.
 
 After that, address the lower-frequency provider audit closeout gap:
 
