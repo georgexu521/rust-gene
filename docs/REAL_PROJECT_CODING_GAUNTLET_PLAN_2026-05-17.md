@@ -281,8 +281,11 @@ Consumers:
 - repair planner: first consumer slice complete; post-change repair specs and
   guided validation debugging now receive repair-relevant durable tool-record
   evidence from `EvidenceLedger`;
-- session replay/debugging: next consumer target;
-- future user-visible trace views: pending.
+- session replay/debugging: first consumer slice complete; `/trace last` now has
+  a dedicated tool-record evidence section and `/trace recent` marks traces with
+  their durable tool-record count;
+- future user-visible trace views: pending beyond the first `/trace` surfacing
+  slice.
 
 ## Operating Rules
 
@@ -314,12 +317,13 @@ required-validation passes=15/15
 failure_owner=none for every case
 ```
 
-Next, continue Phase 4 consumer integration into replay/debug views. The
-immediate 15-task product loop is green; closeout, live-eval reporting, and the
-first repair-planner path now consume durable tool records. The next useful work
-is exposing the same structured evidence in replay/debug views so failures can be
-explained without reconstructing state from overlapping trace and rendered-string
-paths.
+Next, continue Phase 4 consumer integration from replay/debug views toward the
+next durable-record consumer. The immediate 15-task product loop is green;
+closeout, live-eval reporting, the first repair-planner path, and the first
+`/trace` debug/replay surface now consume durable tool records. The next useful
+work is to use future real-project failures to decide whether the next consumer
+should be deeper replay tooling, closeout UX polish, or another repair-planner
+path.
 
 Use future failures to classify the next repair slice:
 

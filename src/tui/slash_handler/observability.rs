@@ -186,14 +186,7 @@ pub fn handle_trace(app: &mut TuiApp, args: &str) -> String {
             if !traces.is_empty() {
                 let mut lines = vec!["Recent traces:".to_string()];
                 for trace in traces {
-                    lines.push(format!(
-                        "- {} turn {} {:?} events={} prompt={}",
-                        trace.trace_id.chars().take(8).collect::<String>(),
-                        trace.turn_index,
-                        trace.status,
-                        trace.events.len(),
-                        trace.user_message_preview
-                    ));
+                    lines.push(crate::engine::trace::format_trace_recent_line(&trace));
                 }
                 return lines.join("\n");
             }

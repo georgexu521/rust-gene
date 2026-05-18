@@ -1062,6 +1062,9 @@ pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
     if let Some(diet) = latest_runtime_diet_summary(trace) {
         lines.push(format!("\nRuntime Diet: {}", diet));
     }
+    if let Some(tool_record_evidence) = latest_tool_record_evidence_summary(trace) {
+        lines.push(format!("\nTool Record Evidence: {}", tool_record_evidence));
+    }
 
     lines.push("\nEvents:".to_string());
     for (idx, event) in trace.events.iter().take(max_events).enumerate() {
@@ -1082,6 +1085,18 @@ pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
     lines.join("\n")
 }
 
+pub fn format_trace_recent_line(trace: &TurnTrace) -> String {
+    format!(
+        "- {} turn {} {:?} events={} tool_records={} prompt={}",
+        short_id(&trace.trace_id),
+        trace.turn_index,
+        trace.status,
+        trace.events.len(),
+        latest_tool_record_count(trace).unwrap_or(0),
+        trace.user_message_preview
+    )
+}
+
 pub fn latest_runtime_diet_summary(trace: &TurnTrace) -> Option<String> {
     trace.events.iter().rev().find_map(|event| {
         if matches!(event, TraceEvent::RuntimeDietReport { .. }) {
@@ -1089,6 +1104,39 @@ pub fn latest_runtime_diet_summary(trace: &TurnTrace) -> Option<String> {
         } else {
             None
         }
+    })
+}
+
+pub fn latest_tool_record_count(trace: &TurnTrace) -> Option<usize> {
+    trace.events.iter().rev().find_map(|event| match event {
+        TraceEvent::FinalCloseoutPrepared { tool_records, .. } => Some(*tool_records),
+        _ => None,
+    })
+}
+
+pub fn latest_tool_record_evidence_summary(trace: &TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| match event {
+        TraceEvent::FinalCloseoutPrepared {
+            status,
+            changed_files,
+            validation_items,
+            tool_records,
+            tool_evidence,
+            acceptance_items,
+            residual_risks,
+        } if *tool_records > 0 || tool_evidence.as_ref().is_some_and(|s| !s.trim().is_empty()) => {
+            Some(format!(
+                "status={} records={} files={} validation={} acceptance={} risks={} evidence={}",
+                status,
+                tool_records,
+                changed_files,
+                validation_items,
+                acceptance_items,
+                residual_risks,
+                tool_evidence.as_deref().unwrap_or("none")
+            ))
+        }
+        _ => None,
     })
 }
 
@@ -1180,6 +1228,20 @@ mod tests {
         let summary = format_trace_summary(&trace, 10);
         assert!(summary.contains("tool_records=3"));
         assert!(summary.contains("tool_evidence=tool evidence: records=3"));
+        assert!(summary.contains("Tool Record Evidence: status=passed records=3"));
+        assert!(summary.contains("evidence=tool evidence: records=3"));
+        assert_eq!(latest_tool_record_count(&trace), Some(3));
+        assert!(format_trace_recent_line(&trace).contains("tool_records=3"));
+    }
+
+    #[test]
+    fn trace_recent_line_marks_missing_tool_records_zero() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "inspect task"));
+        let trace = collector.finish(TurnStatus::Completed);
+
+        assert_eq!(latest_tool_record_count(&trace), None);
+        assert_eq!(latest_tool_record_evidence_summary(&trace), None);
+        assert!(format_trace_recent_line(&trace).contains("tool_records=0"));
     }
 
     #[test]
