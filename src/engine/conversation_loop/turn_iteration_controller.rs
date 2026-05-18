@@ -118,6 +118,7 @@ impl TurnIterationController {
             tx: context.tx,
             pre_executed,
             trace: context.trace,
+            route: context.route,
             resource_policy: context.resource_policy,
             exposed_tool_names: &exposed_tool_names,
             turn_state: &mut *context.turn_state,

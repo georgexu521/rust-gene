@@ -2766,6 +2766,7 @@ mod tests {
                     tx: None,
                     pre_executed: Default::default(),
                     trace: None,
+                    route: Some(&route),
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
                     action_checkpoint_active: false,
@@ -2830,6 +2831,7 @@ mod tests {
                     tx: None,
                     pre_executed: Default::default(),
                     trace: None,
+                    route: Some(&route),
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
                     action_checkpoint_active: false,
@@ -2849,6 +2851,22 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("was not exposed"));
+        let runtime = &results[0].1.data.as_ref().unwrap()["tool_runtime"];
+        assert!(runtime["route"]["intent"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert_eq!(
+            runtime["policy"]["max_tool_calls"].as_u64(),
+            Some(policy.max_tool_calls as u64)
+        );
+        assert_eq!(
+            runtime["execution"]["exposed_tools_count"].as_u64(),
+            Some(exposed_tool_names.len() as u64)
+        );
+        assert_eq!(
+            runtime["execution"]["action_checkpoint_active"].as_bool(),
+            Some(false)
+        );
     }
 
     #[tokio::test]
@@ -2886,6 +2904,7 @@ mod tests {
                     tx: None,
                     pre_executed: Default::default(),
                     trace: None,
+                    route: Some(&route),
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
                     action_checkpoint_active: false,
@@ -2950,6 +2969,7 @@ mod tests {
                     tx: None,
                     pre_executed: Default::default(),
                     trace: None,
+                    route: Some(&route),
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
                     action_checkpoint_active: false,

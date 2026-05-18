@@ -9,6 +9,7 @@ use super::turn_runtime_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
+use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
@@ -26,6 +27,7 @@ pub(super) struct ToolRoundContext<'a> {
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) pre_executed: HashMap<usize, ToolResult>,
     pub(super) trace: &'a TraceCollector,
+    pub(super) route: &'a IntentRoute,
     pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) exposed_tool_names: &'a HashSet<String>,
     pub(super) turn_state: &'a mut TurnRuntimeState,
@@ -53,6 +55,7 @@ impl ToolRoundController {
             tx,
             pre_executed,
             trace,
+            route,
             resource_policy,
             exposed_tool_names,
             turn_state,
@@ -84,6 +87,7 @@ impl ToolRoundController {
                     tx,
                     pre_executed,
                     trace: Some(trace.clone()),
+                    route: Some(route),
                     resource_policy,
                     exposed_tool_names,
                     action_checkpoint_active,

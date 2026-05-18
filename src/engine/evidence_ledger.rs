@@ -42,6 +42,7 @@ pub struct ToolExecutionRecord {
     pub terminal_task: Option<TerminalTaskRecord>,
     pub changed_paths: Vec<String>,
     pub relevance: ToolExecutionRelevance,
+    pub execution: ToolExecutionContextRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,6 +75,36 @@ pub struct ToolExecutionRelevance {
     pub validation: bool,
     pub closeout: bool,
     pub repair: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolExecutionContextRecord {
+    pub route: Option<ToolRouteRecord>,
+    pub policy: Option<ToolExecutionPolicyRecord>,
+    pub parallel: bool,
+    pub pre_executed: bool,
+    pub action_checkpoint_active: bool,
+    pub has_changes_before_tools: bool,
+    pub exposed_tools_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolRouteRecord {
+    pub intent: Option<String>,
+    pub workflow: Option<String>,
+    pub retrieval: Option<String>,
+    pub reasoning: Option<String>,
+    pub risk: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolExecutionPolicyRecord {
+    pub latency: Option<String>,
+    pub parallelism_limit: Option<usize>,
+    pub max_tool_calls: Option<usize>,
+    pub context_budget_tokens: Option<usize>,
+    pub allow_fallback_model: Option<bool>,
+    pub cost_ceiling_usd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -566,6 +597,7 @@ impl EvidenceLedger {
             terminal_task: terminal_task_record(result),
             changed_paths,
             relevance,
+            execution: tool_execution_context_record(result),
         });
     }
 
@@ -770,6 +802,52 @@ fn tool_execution_relevance(
     }
 }
 
+fn tool_execution_context_record(result: &ToolResult) -> ToolExecutionContextRecord {
+    let Some(runtime) = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_runtime"))
+    else {
+        return ToolExecutionContextRecord::default();
+    };
+    let execution = runtime.get("execution");
+    ToolExecutionContextRecord {
+        route: runtime
+            .get("route")
+            .filter(|value| value.is_object())
+            .map(tool_route_record),
+        policy: runtime.get("policy").map(tool_execution_policy_record),
+        parallel: nested_bool(execution, "parallel").unwrap_or(false),
+        pre_executed: nested_bool(execution, "pre_executed").unwrap_or(false),
+        action_checkpoint_active: nested_bool(execution, "action_checkpoint_active")
+            .unwrap_or(false),
+        has_changes_before_tools: nested_bool(execution, "has_changes_before_tools")
+            .unwrap_or(false),
+        exposed_tools_count: nested_usize(execution, "exposed_tools_count"),
+    }
+}
+
+fn tool_route_record(value: &serde_json::Value) -> ToolRouteRecord {
+    ToolRouteRecord {
+        intent: nested_string(Some(value), "intent"),
+        workflow: nested_string(Some(value), "workflow"),
+        retrieval: nested_string(Some(value), "retrieval"),
+        reasoning: nested_string(Some(value), "reasoning"),
+        risk: nested_string(Some(value), "risk"),
+    }
+}
+
+fn tool_execution_policy_record(value: &serde_json::Value) -> ToolExecutionPolicyRecord {
+    ToolExecutionPolicyRecord {
+        latency: nested_string(Some(value), "latency"),
+        parallelism_limit: nested_usize(Some(value), "parallelism_limit"),
+        max_tool_calls: nested_usize(Some(value), "max_tool_calls"),
+        context_budget_tokens: nested_usize(Some(value), "context_budget_tokens"),
+        allow_fallback_model: nested_bool(Some(value), "allow_fallback_model"),
+        cost_ceiling_usd: nested_string(Some(value), "cost_ceiling_usd"),
+    }
+}
+
 fn bash_result_command(result: &ToolResult) -> Option<&str> {
     result
         .data
@@ -939,10 +1017,22 @@ fn nested_u64(value: Option<&serde_json::Value>, key: &str) -> Option<u64> {
         .and_then(serde_json::Value::as_u64)
 }
 
+fn nested_usize(value: Option<&serde_json::Value>, key: &str) -> Option<usize> {
+    nested_u64(value, key).and_then(|value| usize::try_from(value).ok())
+}
+
 fn nested_bool(value: Option<&serde_json::Value>, key: &str) -> Option<bool> {
     value
         .and_then(|value| value.get(key))
         .and_then(serde_json::Value::as_bool)
+}
+
+fn nested_string(value: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn result_data_string(result: &ToolResult, key: &str) -> Option<String> {
@@ -1233,6 +1323,30 @@ mod tests {
                         "duration_ms": 42,
                         "exit_code": 0
                     }
+                },
+                "tool_runtime": {
+                    "route": {
+                        "intent": "code_change",
+                        "workflow": "code_change",
+                        "retrieval": "project",
+                        "reasoning": "high",
+                        "risk": "medium"
+                    },
+                    "policy": {
+                        "latency": "deep",
+                        "parallelism_limit": 4,
+                        "max_tool_calls": 30,
+                        "context_budget_tokens": 64000,
+                        "allow_fallback_model": true,
+                        "cost_ceiling_usd": "0.2500"
+                    },
+                    "execution": {
+                        "parallel": false,
+                        "pre_executed": false,
+                        "action_checkpoint_active": true,
+                        "has_changes_before_tools": true,
+                        "exposed_tools_count": 15
+                    }
                 }
             }),
         );
@@ -1267,6 +1381,25 @@ mod tests {
                 .and_then(|task| task.task_id.as_deref()),
             Some("shell_foreground_123")
         );
+        assert_eq!(
+            records[0]
+                .execution
+                .route
+                .as_ref()
+                .and_then(|route| route.workflow.as_deref()),
+            Some("code_change")
+        );
+        assert_eq!(
+            records[0]
+                .execution
+                .policy
+                .as_ref()
+                .and_then(|policy| policy.max_tool_calls),
+            Some(30)
+        );
+        assert!(records[0].execution.action_checkpoint_active);
+        assert!(records[0].execution.has_changes_before_tools);
+        assert_eq!(records[0].execution.exposed_tools_count, Some(15));
     }
 
     #[test]

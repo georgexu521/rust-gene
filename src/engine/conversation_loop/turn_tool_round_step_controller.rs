@@ -6,6 +6,7 @@ use super::turn_tool_round_outcome_controller::{
 };
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
+use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
@@ -22,6 +23,7 @@ pub(super) struct TurnToolRoundStepContext<'a> {
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) pre_executed: HashMap<usize, ToolResult>,
     pub(super) trace: &'a TraceCollector,
+    pub(super) route: &'a IntentRoute,
     pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) exposed_tool_names: &'a HashSet<String>,
     pub(super) turn_state: &'a mut TurnRuntimeState,
@@ -46,6 +48,7 @@ impl TurnToolRoundStepController {
             tx: context.tx,
             pre_executed: context.pre_executed,
             trace: context.trace,
+            route: context.route,
             resource_policy: context.resource_policy,
             exposed_tool_names: context.exposed_tool_names,
             turn_state: context.turn_state,
@@ -135,6 +138,7 @@ mod tests {
             tx: None,
             pre_executed: HashMap::new(),
             trace: &trace,
+            route: &route,
             resource_policy: &resource_policy,
             exposed_tool_names: &exposed_tool_names,
             turn_state: &mut turn_state,

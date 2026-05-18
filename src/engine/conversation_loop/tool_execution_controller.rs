@@ -3,8 +3,8 @@ use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, Too
 use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
 use super::tool_execution::{is_read_only, read_only_tool_concurrency};
 use super::tool_metadata::{
-    attach_tool_execution_metadata, persist_tool_outcome_learning_event,
-    tool_execution_start_progress,
+    attach_tool_execution_metadata, merge_tool_result_metadata,
+    persist_tool_outcome_learning_event, tool_execution_start_progress,
 };
 use super::tool_result_controller::{invalid_tool_params_result, ToolResultNormalizer};
 use super::turn_recording::{
@@ -14,6 +14,7 @@ use super::turn_recording::{
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::hooks::HookDecision;
+use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
@@ -94,6 +95,7 @@ pub(super) struct ToolExecutionRequest<'a> {
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) pre_executed: HashMap<usize, ToolResult>,
     pub(super) trace: Option<TraceCollector>,
+    pub(super) route: Option<&'a IntentRoute>,
     pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) exposed_tool_names: &'a HashSet<String>,
     pub(super) action_checkpoint_active: bool,
@@ -153,6 +155,109 @@ enum ToolExecutionGateOutcome {
     Deny(ToolResult),
 }
 
+#[derive(Debug, Clone)]
+struct ToolRuntimeContext {
+    has_route: bool,
+    route_intent: String,
+    route_workflow: String,
+    route_retrieval: String,
+    route_reasoning: String,
+    route_risk: String,
+    policy_latency: String,
+    policy_parallelism_limit: usize,
+    policy_max_tool_calls: usize,
+    policy_context_budget_tokens: usize,
+    policy_allow_fallback_model: bool,
+    policy_cost_ceiling_usd: String,
+    action_checkpoint_active: bool,
+    has_changes_before_tools: bool,
+    exposed_tools_count: usize,
+}
+
+impl ToolRuntimeContext {
+    fn new(
+        route: Option<&IntentRoute>,
+        policy: &ResourcePolicy,
+        action_checkpoint_active: bool,
+        has_changes_before_tools: bool,
+        exposed_tools_count: usize,
+    ) -> Self {
+        Self {
+            has_route: route.is_some(),
+            route_intent: route
+                .map(|route| serde_label(&route.intent))
+                .unwrap_or_default(),
+            route_workflow: route
+                .map(|route| serde_label(&route.workflow))
+                .unwrap_or_default(),
+            route_retrieval: route
+                .map(|route| serde_label(&route.retrieval))
+                .unwrap_or_default(),
+            route_reasoning: route
+                .map(|route| serde_label(&route.reasoning))
+                .unwrap_or_default(),
+            route_risk: route
+                .map(|route| serde_label(&route.risk))
+                .unwrap_or_default(),
+            policy_latency: serde_label(&policy.latency),
+            policy_parallelism_limit: policy.parallelism_limit,
+            policy_max_tool_calls: policy.max_tool_calls,
+            policy_context_budget_tokens: policy.context_budget_tokens,
+            policy_allow_fallback_model: policy.allow_fallback_model,
+            policy_cost_ceiling_usd: format!("{:.4}", policy.cost_ceiling_usd),
+            action_checkpoint_active,
+            has_changes_before_tools,
+            exposed_tools_count,
+        }
+    }
+
+    fn attach(&self, result: &mut ToolResult, parallel: bool, pre_executed: bool) {
+        let route = if self.has_route {
+            serde_json::json!({
+                "intent": self.route_intent,
+                "workflow": self.route_workflow,
+                "retrieval": self.route_retrieval,
+                "reasoning": self.route_reasoning,
+                "risk": self.route_risk,
+            })
+        } else {
+            serde_json::Value::Null
+        };
+        merge_tool_result_metadata(
+            result,
+            "tool_runtime",
+            serde_json::json!({
+                "route": route,
+                "policy": {
+                    "latency": self.policy_latency,
+                    "parallelism_limit": self.policy_parallelism_limit,
+                    "max_tool_calls": self.policy_max_tool_calls,
+                    "context_budget_tokens": self.policy_context_budget_tokens,
+                    "allow_fallback_model": self.policy_allow_fallback_model,
+                    "cost_ceiling_usd": self.policy_cost_ceiling_usd,
+                },
+                "execution": {
+                    "parallel": parallel,
+                    "pre_executed": pre_executed,
+                    "action_checkpoint_active": self.action_checkpoint_active,
+                    "has_changes_before_tools": self.has_changes_before_tools,
+                    "exposed_tools_count": self.exposed_tools_count,
+                },
+            }),
+        );
+    }
+}
+
+fn serde_label<T>(value: &T) -> String
+where
+    T: serde::Serialize + std::fmt::Debug,
+{
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{value:?}"))
+}
+
 struct ToolExecutionGate<'a> {
     tool_registry: &'a ToolRegistry,
     active_goal: Option<&'a crate::engine::session_goal::SessionGoal>,
@@ -164,6 +269,7 @@ struct ToolExecutionGate<'a> {
     has_changes_before_tools: bool,
     destructive_scope: &'a DestructiveScopeContract,
     trace: &'a Option<TraceCollector>,
+    runtime_context: &'a ToolRuntimeContext,
 }
 
 impl<'a> ToolExecutionGate<'a> {
@@ -263,6 +369,7 @@ impl<'a> ToolExecutionGate<'a> {
         mut result: ToolResult,
     ) -> ToolExecutionGateOutcome {
         attach_tool_execution_metadata(tool_call, &mut result);
+        self.runtime_context.attach(&mut result, false, false);
         if let Some(ref trace) = self.trace {
             trace.record(TraceEvent::ToolStarted {
                 tool: tool_call.name.clone(),
@@ -294,6 +401,7 @@ impl ToolExecutionController {
     fn read_only_job(
         &self,
         trace: &Option<TraceCollector>,
+        runtime_context: &ToolRuntimeContext,
         tool_call: &ToolCall,
     ) -> impl Future<Output = (ToolCall, ToolResult)> + 'static {
         let execution = &self.context;
@@ -306,6 +414,7 @@ impl ToolExecutionController {
         let cost_tracker = execution.cost_tracker.clone();
         let hook_manager = execution.hook_manager.clone();
         let trace = trace.clone();
+        let runtime_context = runtime_context.clone();
         async move {
             let started_at = std::time::Instant::now();
             if let Some(ref trace) = trace {
@@ -353,6 +462,7 @@ impl ToolExecutionController {
                 record_hook_traces(&trace, &hook_records);
             };
             attach_tool_execution_metadata(&tc_clone, &mut result);
+            runtime_context.attach(&mut result, true, false);
             {
                 let mut tracker = cost_tracker.lock().await;
                 tracker.record_tool_execution(
@@ -421,6 +531,7 @@ impl ToolExecutionController {
         read_write_calls: Vec<ToolCall>,
         tx: Option<&mpsc::Sender<StreamEvent>>,
         trace: &Option<TraceCollector>,
+        runtime_context: &ToolRuntimeContext,
         lifecycle: &mut ToolCallLifecycle,
     ) -> Vec<(ToolCall, ToolResult)> {
         let execution = &self.context;
@@ -430,7 +541,8 @@ impl ToolExecutionController {
             let tool_id = tc.id.clone();
             let tool_name = tc.name.clone();
             if !tool_allowed_by_context(&execution.allowed_tools, &tool_name) {
-                let result = tool_not_allowed_result(&tc);
+                let mut result = tool_not_allowed_result(&tc);
+                runtime_context.attach(&mut result, false, false);
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -547,6 +659,7 @@ impl ToolExecutionController {
                     result.duration_ms = Some(duration_ms);
                 }
                 attach_tool_execution_metadata(&tc, &mut result);
+                runtime_context.attach(&mut result, false, false);
 
                 // ── Security Audit & Denial Tracking ──────────────────────
                 let params_summary = if let Some(tool) = execution.tool_registry.get(&tool_name) {
@@ -602,6 +715,7 @@ impl ToolExecutionController {
             } else {
                 let mut result = ToolResult::error(format!("Tool '{}' not found", tool_name));
                 attach_tool_execution_metadata(&tc, &mut result);
+                runtime_context.attach(&mut result, false, false);
                 (result, None)
             };
 
@@ -659,6 +773,7 @@ impl ToolExecutionController {
             tx,
             pre_executed,
             trace,
+            route,
             resource_policy,
             exposed_tool_names,
             action_checkpoint_active,
@@ -673,6 +788,13 @@ impl ToolExecutionController {
         let mut denied_results = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
         lifecycle.pending_batch(tool_calls);
+        let runtime_context = ToolRuntimeContext::new(
+            route,
+            resource_policy,
+            action_checkpoint_active,
+            has_changes_before_tools,
+            exposed_tool_names.len(),
+        );
         let gate = ToolExecutionGate {
             tool_registry: execution.tool_registry.as_ref(),
             active_goal: execution.active_goal.as_ref(),
@@ -684,6 +806,7 @@ impl ToolExecutionController {
             has_changes_before_tools,
             destructive_scope,
             trace: &trace,
+            runtime_context: &runtime_context,
         };
 
         for (i, tc) in tool_calls.iter().enumerate() {
@@ -709,6 +832,7 @@ impl ToolExecutionController {
             if let Some(pre_result) = pre_executed.get(&i) {
                 let mut pre_result = pre_result.clone();
                 attach_tool_execution_metadata(tc, &mut pre_result);
+                runtime_context.attach(&mut pre_result, true, true);
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -762,7 +886,7 @@ impl ToolExecutionController {
                         })
                         .await;
                 }
-                read_only_jobs.push(self.read_only_job(&trace, tc));
+                read_only_jobs.push(self.read_only_job(&trace, &runtime_context, tc));
             } else {
                 read_write_calls.push(tc.clone());
             }
@@ -778,7 +902,7 @@ impl ToolExecutionController {
         results.extend(read_only_results);
 
         let read_write_results = self
-            .execute_read_write_calls(read_write_calls, tx, &trace, lifecycle)
+            .execute_read_write_calls(read_write_calls, tx, &trace, &runtime_context, lifecycle)
             .await;
         results.extend(read_write_results);
 

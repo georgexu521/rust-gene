@@ -235,10 +235,11 @@ partially overlapping traces and rendered strings.
 Status: in progress. A small prerequisite is in place: final closeout can prefer
 exact required-command evidence over broader exploratory validation facts, so
 no-diff audit tasks can close out when their required commands passed even if
-earlier environment probes failed as expected. The first durable record slice is
-also in place: `EvidenceLedger` now stores a structured `ToolExecutionRecord`
-for each tool result, and final closeout trace events expose the current tool
-record count for report/debug consumers.
+earlier environment probes failed as expected. The durable record spine is also
+in place: `EvidenceLedger` now stores a structured `ToolExecutionRecord` for
+each tool result, final closeout trace events expose the current tool record
+count for report/debug consumers, and records retain the route/resource-policy
+context that shaped tool execution.
 
 Current record coverage:
 
@@ -250,11 +251,15 @@ Current record coverage:
 - terminal task id/status/kind/handle/output path/duration/exit code when
   available;
 - changed paths for successful file write/edit/patch tools;
-- validation, closeout, and repair relevance flags.
+- validation, closeout, and repair relevance flags;
+- route intent/workflow/retrieval/reasoning/risk context;
+- resource-policy latency, parallelism, tool-call, context-budget, fallback, and
+  cost ceilings;
+- execution-mode flags for parallel, pre-executed, action-checkpoint, prior
+  change, and exposed-tool-count state.
 
 The record should cover:
 
-- route and execution policy context;
 - permission source and approval provenance;
 - start/end timestamps;
 - richer structured output metadata;

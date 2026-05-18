@@ -70,8 +70,9 @@ permission-controller, context-budget, tool-result-budget, schema-gate, and
 tool-result normalizer work, the file-patch write-mode guard,
 live-eval unscored-report classification fix, deterministic patch-rule
 priority, required-validation acceptance closeout fallback, and required-command
-closeout evidence for no-diff audit tasks, plus the first Phase 4
-ToolExecutionRecord evidence-ledger persistence slice:
+closeout evidence for no-diff audit tasks, plus Phase 4 ToolExecutionRecord
+evidence-ledger persistence slices, including durable route/resource-policy and
+execution-mode context:
 
 ```text
 1453 passed; 0 failed

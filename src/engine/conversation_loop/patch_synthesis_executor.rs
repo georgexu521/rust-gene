@@ -77,6 +77,7 @@ impl PatchSynthesisExecutor {
             tx: context.tx,
             pre_executed: HashMap::new(),
             trace: Some(context.trace.clone()),
+            route: None,
             resource_policy: context.resource_policy,
             exposed_tool_names: &exposed_synth_tools,
             // Synthesized edits have already passed patch-synthesis
