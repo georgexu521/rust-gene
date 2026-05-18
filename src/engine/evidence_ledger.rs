@@ -127,6 +127,14 @@ pub struct ToolExecutionRelevance {
     pub validation: bool,
     pub closeout: bool,
     pub repair: bool,
+    pub policy: ToolExecutionRelevancePolicyRecord,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolExecutionRelevancePolicyRecord {
+    pub route_workflow: Option<String>,
+    pub closeout_reasons: Vec<String>,
+    pub repair_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -647,12 +655,14 @@ impl EvidenceLedger {
             ToolExecutionStatus::Failed
         };
         let changed_paths = changed_paths_for_tool_result(tool_call, result);
+        let execution = tool_execution_context_record(result);
         let relevance = tool_execution_relevance(
             result,
             safe_for_closeout,
             validation_family.as_deref(),
             &changed_paths,
             permission.as_ref(),
+            execution.route.as_ref(),
         );
         self.tool_execution_records.push(ToolExecutionRecord {
             call_id: tool_call.id.clone(),
@@ -678,7 +688,7 @@ impl EvidenceLedger {
             changed_paths,
             file_evidence,
             relevance,
-            execution: tool_execution_context_record(result),
+            execution,
         });
     }
 
@@ -936,12 +946,37 @@ fn tool_execution_relevance(
     validation_family: Option<&str>,
     changed_paths: &[String],
     permission: Option<&ToolPermissionRecord>,
+    route: Option<&ToolRouteRecord>,
 ) -> ToolExecutionRelevance {
     let validation = safe_for_closeout.unwrap_or(false) || validation_family.is_some();
+    let closeout = validation || !changed_paths.is_empty() || permission.is_some();
+    let repair = !result.success || !changed_paths.is_empty();
+    let mut closeout_reasons = Vec::new();
+    if validation {
+        closeout_reasons.push("validation".to_string());
+    }
+    if !changed_paths.is_empty() {
+        closeout_reasons.push("changed_paths".to_string());
+    }
+    if permission.is_some() {
+        closeout_reasons.push("permission".to_string());
+    }
+    let mut repair_reasons = Vec::new();
+    if !result.success {
+        repair_reasons.push("tool_failed".to_string());
+    }
+    if !changed_paths.is_empty() {
+        repair_reasons.push("changed_paths".to_string());
+    }
     ToolExecutionRelevance {
         validation,
-        closeout: validation || !changed_paths.is_empty() || permission.is_some(),
-        repair: !result.success || !changed_paths.is_empty(),
+        closeout,
+        repair,
+        policy: ToolExecutionRelevancePolicyRecord {
+            route_workflow: route.and_then(|route| route.workflow.clone()),
+            closeout_reasons,
+            repair_reasons,
+        },
     }
 }
 
@@ -1585,6 +1620,11 @@ mod tests {
                 validation: true,
                 closeout: true,
                 repair: false,
+                policy: ToolExecutionRelevancePolicyRecord {
+                    route_workflow: Some("code_change".to_string()),
+                    closeout_reasons: vec!["validation".to_string()],
+                    repair_reasons: Vec::new(),
+                },
             }
         );
         assert_eq!(
@@ -1661,6 +1701,11 @@ mod tests {
                 validation: false,
                 closeout: true,
                 repair: true,
+                policy: ToolExecutionRelevancePolicyRecord {
+                    route_workflow: None,
+                    closeout_reasons: vec!["permission".to_string()],
+                    repair_reasons: vec!["tool_failed".to_string()],
+                },
             }
         );
         assert_eq!(

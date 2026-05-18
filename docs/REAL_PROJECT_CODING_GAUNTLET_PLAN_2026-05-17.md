@@ -232,14 +232,14 @@ and successful.
 Goal: make tool execution evidence a durable runtime object instead of a set of
 partially overlapping traces and rendered strings.
 
-Status: in progress. A small prerequisite is in place: final closeout can prefer
-exact required-command evidence over broader exploratory validation facts, so
-no-diff audit tasks can close out when their required commands passed even if
-earlier environment probes failed as expected. The durable record spine is also
-in place: `EvidenceLedger` now stores a structured `ToolExecutionRecord` for
-each tool result, final closeout trace events expose the current tool record
-count for report/debug consumers, and records retain the route/resource-policy
-context that shaped tool execution.
+Status: complete for the planned persistence slice. A small prerequisite is in
+place: final closeout can prefer exact required-command evidence over broader
+exploratory validation facts, so no-diff audit tasks can close out when their
+required commands passed even if earlier environment probes failed as expected.
+The durable record spine is also in place: `EvidenceLedger` now stores a
+structured `ToolExecutionRecord` for each tool result, final closeout trace
+events expose the current tool record count for report/debug consumers, and
+records retain the route/resource-policy context that shaped tool execution.
 
 Current record coverage:
 
@@ -264,11 +264,12 @@ Current record coverage:
   by the same write/read/patch tool result;
 - structured output metadata keys, display/truncation hints, file counts,
   diagnostics summaries, and shell status/evidence fields;
-- execution start and finish timestamps when the runtime owns the tool call.
+- execution start and finish timestamps when the runtime owns the tool call;
+- route-aware closeout/repair relevance policy reasons.
 
-The record should cover:
-
-- route-level repair/closeout relevance policy.
+The planned record coverage for this phase is now complete. Further Phase 4 work
+should focus on consumers: closeout evidence, live-eval reporting, repair
+planning, and replay/debug views.
 
 Consumers:
 

@@ -73,7 +73,7 @@ priority, required-validation acceptance closeout fallback, and required-command
 closeout evidence for no-diff audit tasks, plus Phase 4 ToolExecutionRecord
 evidence-ledger persistence slices, including durable route/resource-policy and
 execution-mode context, permission approval provenance, file-evidence links, and
-structured output/timing metadata:
+structured output/timing metadata plus route-aware relevance policy reasons:
 
 ```text
 1454 passed; 0 failed
