@@ -236,6 +236,9 @@ def report_rows(run_dir):
             report_text, "closeout_tool_evidence", "missing"
         )
         runtime_diet = report_value(report_text, "runtime_diet", "missing")
+        workflow_contract_activation = report_value(
+            report_text, "workflow_contract_activation", "missing"
+        )
         behavior_assertions = report_value(
             report_text, "behavior_assertions", "none"
         )
@@ -356,6 +359,7 @@ def report_rows(run_dir):
                 "closeout_tool_records": closeout_tool_records,
                 "closeout_tool_evidence": closeout_tool_evidence,
                 "runtime_diet": runtime_diet,
+                "workflow_contract_activation": workflow_contract_activation,
                 "behavior_assertions": behavior_assertions,
                 "behavior_assertion_status": behavior_assertion_status,
                 "triggers": adaptive_triggers,

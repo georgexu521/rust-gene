@@ -57,6 +57,7 @@ impl TurnEntryGateController {
             retrieval_context: context.retrieval_context,
             task_bundle: context.task_bundle,
             code_workflow: context.code_workflow,
+            required_validation_commands: context.required_validation_commands,
             messages: context.messages,
             trace: context.trace,
         })

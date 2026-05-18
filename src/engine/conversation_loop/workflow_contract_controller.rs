@@ -1,4 +1,6 @@
-use super::workflow_runtime::{persist_workflow_learning_event, workflow_contract_enabled};
+use super::workflow_runtime::{
+    persist_workflow_learning_event, turn_entry_workflow_contract_activation,
+};
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::retrieval_context::RetrievalContext;
@@ -25,6 +27,7 @@ pub(super) struct WorkflowContractJudgmentContext<'a> {
     pub(super) retrieval_context: Option<&'a RetrievalContext>,
     pub(super) task_bundle: &'a mut TaskContextBundle,
     pub(super) code_workflow: &'a mut CodeChangeWorkflowRunner,
+    pub(super) required_validation_commands: &'a [String],
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) trace: &'a TraceCollector,
 }
@@ -49,10 +52,27 @@ impl WorkflowContractController {
             context.route.clone(),
             context.working_dir.display().to_string(),
         );
-        if !context.code_workflow.should_request_workflow_judgment()
-            || !prompt.should_ask_model()
-            || !workflow_contract_enabled(context.provider)
-        {
+        let mut activation = turn_entry_workflow_contract_activation(
+            context.provider,
+            context.route,
+            context.required_validation_commands,
+        );
+        if !context.code_workflow.should_request_workflow_judgment() {
+            activation.active = false;
+            activation.reason = "workflow runner did not request entry judgment".to_string();
+        } else if !prompt.should_ask_model() {
+            activation.active = false;
+            activation.reason = "route is not eligible for entry workflow judgment".to_string();
+        }
+        context
+            .trace
+            .record(TraceEvent::WorkflowContractActivation {
+                mode: activation.mode.label().to_string(),
+                phase: activation.phase.to_string(),
+                active: activation.active,
+                reason: activation.reason.clone(),
+            });
+        if !activation.active {
             return;
         }
 

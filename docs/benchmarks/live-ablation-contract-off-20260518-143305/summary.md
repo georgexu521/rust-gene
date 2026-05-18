@@ -64,21 +64,21 @@
 
 ## Coding Gauntlet Evidence
 
-| task | gauntlet_status | first_pass_signal | coding | required | closeout | first_write | diff | warnings |
-|------|-----------------|-------------------|--------|----------|----------|-------------|------|----------|
-| backend-todo-api-crud | passed | likely_clean | tools=10, tool_records=10, validations=16, repair=0, files=1 | ok | passed | 3 | yes | none |
-| code-change-verification-repair-loop | failed | failed | tools=14, tool_records=13, validations=14, repair=1, files=1 | failed | failed | 7 | yes | tool_errors_seen |
-| core-permission-rejection-recovery | passed | likely_clean | tools=2, tool_records=2, validations=2, repair=0, files=1 | ok | passed | 2 | yes | none |
-| frontend-book-notes-localstorage | passed | likely_clean | tools=6, tool_records=6, validations=2, repair=0, files=1 | ok | passed | 6 | yes | none |
+| task | gauntlet_status | first_pass_signal | coding | required | closeout | contract | first_write | diff | warnings |
+|------|-----------------|-------------------|--------|----------|----------|----------|-------------|------|----------|
+| backend-todo-api-crud | passed | likely_clean | tools=10, tool_records=10, validations=16, repair=0, files=1 | ok | passed | missing | 3 | yes | none |
+| code-change-verification-repair-loop | failed | failed | tools=14, tool_records=13, validations=14, repair=1, files=1 | failed | failed | missing | 7 | yes | tool_errors_seen |
+| core-permission-rejection-recovery | passed | likely_clean | tools=2, tool_records=2, validations=2, repair=0, files=1 | ok | passed | missing | 2 | yes | none |
+| frontend-book-notes-localstorage | passed | likely_clean | tools=6, tool_records=6, validations=2, repair=0, files=1 | ok | passed | missing | 6 | yes | none |
 
 ## Task Matrix
 
-| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |
-|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|
-| backend-todo-api-crud | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | prompt=24726 tool_schema=3186 tools=15 workflow=strict closeout=full validation=passed:2/2 recovered_failed:2 | none | none | required_validation,first_code_change,verification_failed | 3 | yes | active=true, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | none |
-| code-change-verification-repair-loop | failed | seeded_code_change | llm_reasoning | failed | none | agent-run | failed | failed | prompt=26049 tool_schema=3186 tools=15 workflow=strict closeout=full validation=failed:1/5 | none | none | required_validation,repeated_no_code_progress,first_code_change,verification_failed | 7 | yes | active=true, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | tool_errors_seen |
-| core-permission-rejection-recovery | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | prompt=1683 tool_schema=3186 tools=15 workflow=strict closeout=full validation=passed:3/3 | none | none | required_validation,first_code_change | 2 | yes | active=true, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | none |
-| frontend-book-notes-localstorage | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | prompt=4705 tool_schema=3186 tools=15 workflow=guarded closeout=full validation=passed:2/2 | none | none | required_validation,first_code_change | 6 | yes | active=true, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | none |
+| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | contract | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |
+|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|----------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|
+| backend-todo-api-crud | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | prompt=24726 tool_schema=3186 tools=15 workflow=strict closeout=full validation=passed:2/2 recovered_failed:2 | missing | none | none | required_validation,first_code_change,verification_failed | 3 | yes | active=true, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | none |
+| code-change-verification-repair-loop | failed | seeded_code_change | llm_reasoning | failed | none | agent-run | failed | failed | prompt=26049 tool_schema=3186 tools=15 workflow=strict closeout=full validation=failed:1/5 | missing | none | none | required_validation,repeated_no_code_progress,first_code_change,verification_failed | 7 | yes | active=true, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | tool_errors_seen |
+| core-permission-rejection-recovery | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | prompt=1683 tool_schema=3186 tools=15 workflow=strict closeout=full validation=passed:3/3 | missing | none | none | required_validation,first_code_change | 2 | yes | active=true, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | none |
+| frontend-book-notes-localstorage | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | prompt=4705 tool_schema=3186 tools=15 workflow=guarded closeout=full validation=passed:2/2 | missing | none | none | required_validation,first_code_change | 6 | yes | active=true, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | none |
 
 ## Notes
 

@@ -47,6 +47,12 @@ Current stage:
   keeps system-message merging, and provider 400s that mention tool-result
   ordering are classified as `provider_protocol` instead of generic unknown
   failures.
+- Workflow contract targeting is now implemented. `PRIORITY_AGENT_WORKFLOW_CONTRACT`
+  supports `off`, `auto`, and `force`; unset defaults to `auto`. Entry workflow
+  judgment is skipped for ordinary medium feature work, but remains active for
+  high-risk/bug-fix/complex-validation turns, and guided debugging still runs
+  after validation or tool failures. See
+  `docs/WORKFLOW_CONTRACT_TARGETING_PLAN_2026-05-18.md`.
 
 The recent closure plan is complete:
 
@@ -85,10 +91,11 @@ live-eval coding-gauntlet report surfacing, plus first repair-planner consumer
 integration that injects repair-relevant tool-record evidence into `RepairSpec`
 and guided validation debugging, and first `/trace` replay/debug surfacing of
 durable tool-record evidence, including persisted current-session recent-trace
-replay merged with in-memory traces:
+replay merged with in-memory traces, plus workflow-contract auto targeting and
+activation trace/report surfacing:
 
 ```text
-1461 passed; 0 failed
+1462 passed; 0 failed
 ```
 
 Latest live product baseline:
@@ -128,6 +135,20 @@ targeted Phase 3 repair reruns after required-validation source context:
   required_command_status=ok, closeout_status=passed,
   warnings=earlier_verification_failed_before_repair,
   earlier_stage_validation_failed_before_repair
+
+Latest workflow-contract targeting checkpoint:
+
+```text
+workflow-contract-auto-targeting-20260518-154252: 3/4 passed
+backend-todo-api-crud: failed, failure_owner=llm_reasoning,
+  contract=entry=skipped:auto repair=active_after_failure
+frontend-book-notes-localstorage: status=ok,
+  contract=entry=skipped:auto repair=none
+code-change-verification-repair-loop: status=ok,
+  contract=entry=active:auto repair=active_after_failure
+core-permission-rejection-recovery: status=ok,
+  contract=entry=active:auto repair=not_needed
+```
 targeted closeout-evidence rerun:
 - terminal-closeout-20260517-191432: status=ok, failure_owner=none,
   required_command_status=ok, closeout_status=passed,

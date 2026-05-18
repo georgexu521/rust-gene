@@ -176,6 +176,12 @@ pub enum TraceEvent {
     WorkflowFallback {
         error: String,
     },
+    WorkflowContractActivation {
+        mode: String,
+        phase: String,
+        active: bool,
+        reason: String,
+    },
     AdaptiveWorkflowTriggered {
         trigger: String,
         depth: String,
@@ -382,6 +388,7 @@ impl TraceEvent {
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
+            TraceEvent::WorkflowContractActivation { .. } => "workflow.contract",
             TraceEvent::AdaptiveWorkflowTriggered { .. } => "workflow.trigger",
             TraceEvent::MemorySnapshotInjected { .. } => "memory.snapshot",
             TraceEvent::MemoryPrefetch { .. } => "memory.prefetch",
@@ -633,6 +640,18 @@ impl TraceEvent {
             TraceEvent::WorkflowFallback { error } => {
                 format!("workflow fallback: {}", preview(error))
             }
+            TraceEvent::WorkflowContractActivation {
+                mode,
+                phase,
+                active,
+                reason,
+            } => format!(
+                "workflow contract {} phase={} active={} reason={}",
+                mode,
+                phase,
+                active,
+                preview(reason)
+            ),
             TraceEvent::AdaptiveWorkflowTriggered {
                 trigger,
                 depth,
