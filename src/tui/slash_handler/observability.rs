@@ -184,15 +184,15 @@ pub fn handle_trace(app: &mut TuiApp, args: &str) -> String {
         if let Some(engine) = &app.streaming_engine {
             let traces = engine.trace_store().recent(10);
             if !traces.is_empty() {
-                let mut lines = vec!["Recent traces:".to_string()];
-                for trace in traces {
-                    lines.push(crate::engine::trace::format_trace_recent_line(&trace));
-                }
-                return lines.join("\n");
+                return format_trace_recent_lines(traces);
             }
         }
-        return "No recent traces in memory. Use /trace last for the persisted latest trace."
-            .to_string();
+        match app.session_manager.recent_traces(10) {
+            Ok(traces) if !traces.is_empty() => return format_trace_recent_lines(traces),
+            Err(e) => return format!("Failed to load recent traces: {}", e),
+            _ => {}
+        }
+        return "No recent traces recorded.".to_string();
     } else if arg == "status" {
         return format!(
             "Log tracing: {}\nRuntime traces: {}",
@@ -227,6 +227,14 @@ pub fn handle_trace(app: &mut TuiApp, args: &str) -> String {
         "Tracing {}.",
         if prefs.trace { "enabled" } else { "disabled" }
     )
+}
+
+fn format_trace_recent_lines(traces: Vec<crate::engine::trace::TurnTrace>) -> String {
+    let mut lines = vec!["Recent traces:".to_string()];
+    for trace in traces {
+        lines.push(crate::engine::trace::format_trace_recent_line(&trace));
+    }
+    lines.join("\n")
 }
 
 /// /eval - Deterministic behavior evalsets

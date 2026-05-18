@@ -504,6 +504,34 @@ impl SessionStore {
         }
     }
 
+    /// Load recent traces for a session, newest first.
+    pub fn recent_turn_traces(
+        &self,
+        session_id: &str,
+        limit: i64,
+    ) -> SqlResult<Vec<crate::engine::trace::TurnTrace>> {
+        let limit = limit.max(1);
+        let trace_ids: Vec<String> = {
+            let conn = self.conn();
+            let mut stmt = conn.prepare(
+                "SELECT trace_id FROM turn_traces
+                 WHERE session_id = ?1
+                 ORDER BY turn_index DESC, started_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![session_id, limit], |row| row.get(0))?;
+            rows.collect::<SqlResult<Vec<_>>>()?
+        };
+
+        let mut traces = Vec::with_capacity(trace_ids.len());
+        for trace_id in trace_ids {
+            if let Some(trace) = self.get_turn_trace(&trace_id)? {
+                traces.push(trace);
+            }
+        }
+        Ok(traces)
+    }
+
     /// Load one trace by ID.
     pub fn get_turn_trace(
         &self,
@@ -833,6 +861,44 @@ mod tests {
         assert_eq!(loaded.status, crate::engine::trace::TurnStatus::Completed);
         assert_eq!(loaded.events.len(), trace.events.len());
         assert_eq!(loaded.events[1].label(), "tool.done");
+    }
+
+    #[test]
+    fn test_recent_turn_traces_are_session_scoped_newest_first() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s2", "Other", "model").unwrap();
+
+        for turn_index in 1..=3 {
+            let mut trace = crate::engine::trace::TurnTrace::new("s1", turn_index, "session one");
+            trace
+                .events
+                .push(crate::engine::trace::TraceEvent::FinalCloseoutPrepared {
+                    status: "passed".to_string(),
+                    changed_files: 1,
+                    validation_items: 1,
+                    tool_records: turn_index as usize,
+                    tool_evidence: Some(format!("tool evidence: records={}", turn_index)),
+                    acceptance_items: 1,
+                    residual_risks: 0,
+                });
+            trace.finish(crate::engine::trace::TurnStatus::Completed);
+            store.add_turn_trace(&trace).unwrap();
+        }
+
+        let mut other_trace = crate::engine::trace::TurnTrace::new("s2", 10, "session two");
+        other_trace.finish(crate::engine::trace::TurnStatus::Completed);
+        store.add_turn_trace(&other_trace).unwrap();
+
+        let traces = store.recent_turn_traces("s1", 2).unwrap();
+
+        assert_eq!(traces.len(), 2);
+        assert_eq!(traces[0].session_id, "s1");
+        assert_eq!(traces[0].turn_index, 3);
+        assert_eq!(traces[1].turn_index, 2);
+        assert!(
+            crate::engine::trace::format_trace_recent_line(&traces[0]).contains("tool_records=3")
+        );
     }
 
     #[test]

@@ -384,6 +384,17 @@ impl TuiSessionManager {
         Ok(self.store.latest_turn_trace(session_id)?)
     }
 
+    /// 获取当前会话的最近运行轨迹，按新到旧排序。
+    pub fn recent_traces(
+        &self,
+        limit: i64,
+    ) -> anyhow::Result<Vec<crate::engine::trace::TurnTrace>> {
+        let Some(session_id) = self.current_session_id.as_deref() else {
+            return Ok(Vec::new());
+        };
+        Ok(self.store.recent_turn_traces(session_id, limit)?)
+    }
+
     /// 获取当前会话的最近学习事件。
     pub fn recent_learning_events(
         &self,
@@ -1152,5 +1163,38 @@ mod tests {
         assert!(manager.is_current_session("shared-session"));
         manager.add_message(MessageRole::User, "hello").unwrap();
         assert_eq!(store.get_messages("shared-session").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_recent_traces_use_current_session_scope() {
+        let store = Arc::new(SessionStore::in_memory().unwrap());
+        store
+            .create_session("shared-session", "Shared", "mock-model")
+            .unwrap();
+        store
+            .create_session("other-session", "Other", "mock-model")
+            .unwrap();
+
+        for turn_index in 1..=2 {
+            let mut trace =
+                crate::engine::trace::TurnTrace::new("shared-session", turn_index, "shared trace");
+            trace.finish(crate::engine::trace::TurnStatus::Completed);
+            store.add_turn_trace(&trace).unwrap();
+        }
+        let mut other_trace =
+            crate::engine::trace::TurnTrace::new("other-session", 9, "other trace");
+        other_trace.finish(crate::engine::trace::TurnStatus::Completed);
+        store.add_turn_trace(&other_trace).unwrap();
+
+        let manager =
+            TuiSessionManager::from_store(store, "shared-session", "Shared", "mock-model").unwrap();
+        let traces = manager.recent_traces(10).unwrap();
+
+        assert_eq!(traces.len(), 2);
+        assert!(traces
+            .iter()
+            .all(|trace| trace.session_id == "shared-session"));
+        assert_eq!(traces[0].turn_index, 2);
+        assert_eq!(traces[1].turn_index, 1);
     }
 }
