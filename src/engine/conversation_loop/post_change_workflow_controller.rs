@@ -79,6 +79,10 @@ impl PostChangeWorkflowController {
         );
         let should_closeout_after_verified_change =
             verification_trace.should_closeout_after_verified_change;
+        let repair_tool_record_evidence = context
+            .turn_state
+            .evidence_ledger
+            .repair_tool_record_evidence(&verification.failed_commands);
 
         let post_edit_repair_outcome = PostEditRepairController::run(
             context.conversation,
@@ -90,6 +94,7 @@ impl PostChangeWorkflowController {
                 changed_files: context.changed_files,
                 verification: &verification,
                 required_validation_commands: context.required_validation_commands,
+                repair_tool_record_evidence,
                 runtime: PostEditRepairRuntimeContext::from_turn_state(context.turn_state),
                 max_iterations: context.conversation.max_iterations,
                 should_closeout_after_verified_change,

@@ -20,6 +20,7 @@ pub(super) struct GuidedValidationDebuggingContext<'a> {
     pub(super) last_user_preview: &'a str,
     pub(super) task_bundle: &'a TaskContextBundle,
     pub(super) post_edit_evidence: &'a [String],
+    pub(super) repair_tool_record_evidence: &'a [String],
     pub(super) tool_results_text: &'a mut String,
     pub(super) messages: &'a mut Vec<Message>,
 }
@@ -35,6 +36,7 @@ pub(super) struct AcceptanceRepairContext<'a> {
     pub(super) required_validation_commands: &'a [String],
     pub(super) failed_commands: &'a [String],
     pub(super) post_edit_evidence: &'a [String],
+    pub(super) repair_tool_record_evidence: &'a [String],
     pub(super) acceptance_evidence: &'a [String],
     pub(super) required_validation_passed: bool,
     pub(super) check_passed: bool,
@@ -57,6 +59,7 @@ pub(super) struct VerificationRepairContext<'a> {
     pub(super) changed_files: &'a [std::path::PathBuf],
     pub(super) verify_passed: bool,
     pub(super) post_edit_evidence: &'a [String],
+    pub(super) repair_tool_record_evidence: &'a [String],
     pub(super) failed_commands: &'a [String],
     pub(super) acceptance_repair_attempts: usize,
     pub(super) tool_results_text: &'a mut String,
@@ -107,11 +110,13 @@ impl ConversationLoop {
                     .map(|path| path.display().to_string()),
                 verification_command,
             );
-            let repair_spec = crate::engine::repair_spec::RepairSpec::from_failure(
-                context.failed_commands,
-                context.post_edit_evidence,
-                None,
-            );
+            let repair_spec =
+                crate::engine::repair_spec::RepairSpec::from_failure_with_tool_records(
+                    context.failed_commands,
+                    context.post_edit_evidence,
+                    context.repair_tool_record_evidence,
+                    None,
+                );
             let repair_spec_text = repair_spec.format_for_prompt();
             context.tool_results_text.push('\n');
             context.tool_results_text.push_str(&repair_spec_text);
@@ -133,6 +138,8 @@ impl ConversationLoop {
             self.provider.as_ref(),
             self.model.clone(),
         );
+        let mut evidence = context.post_edit_evidence.to_vec();
+        evidence.extend(context.repair_tool_record_evidence.iter().cloned());
         let prompt = crate::engine::workflow_contract::GuidedDebuggingPrompt::new(
             context.last_user_preview,
             context
@@ -141,7 +148,7 @@ impl ConversationLoop {
                 .as_ref()
                 .map(|judgment| judgment.to_turn_context()),
             vec!["stage_validation".to_string()],
-            context.post_edit_evidence.to_vec(),
+            evidence,
         );
         match analyzer.analyze_debugging(prompt).await {
             Ok(debugging) => {
@@ -351,11 +358,13 @@ impl ConversationLoop {
                         },
                     );
                     *context.acceptance_repair_attempts += 1;
-                    let repair_spec = crate::engine::repair_spec::RepairSpec::from_failure(
-                        context.failed_commands,
-                        context.post_edit_evidence,
-                        Some(&review),
-                    );
+                    let repair_spec =
+                        crate::engine::repair_spec::RepairSpec::from_failure_with_tool_records(
+                            context.failed_commands,
+                            context.post_edit_evidence,
+                            context.repair_tool_record_evidence,
+                            Some(&review),
+                        );
                     let repair_spec_text = repair_spec.format_for_prompt();
                     context.tool_results_text.push('\n');
                     context.tool_results_text.push_str(&repair_spec_text);

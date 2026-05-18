@@ -4,6 +4,7 @@ use crate::engine::workflow_contract::AcceptanceReview;
 pub struct RepairSpec {
     pub failed_commands: Vec<String>,
     pub failed_command_evidence: Vec<String>,
+    pub tool_record_evidence: Vec<String>,
     pub residual_command_matches: Vec<String>,
     pub failed_tests: Vec<String>,
     pub required_next_patch: Vec<String>,
@@ -17,10 +18,20 @@ impl RepairSpec {
         evidence: &[String],
         review: Option<&AcceptanceReview>,
     ) -> Self {
+        Self::from_failure_with_tool_records(failed_commands, evidence, &[], review)
+    }
+
+    pub fn from_failure_with_tool_records(
+        failed_commands: &[String],
+        evidence: &[String],
+        tool_record_evidence: &[String],
+        review: Option<&AcceptanceReview>,
+    ) -> Self {
         let failed_tests = extract_failed_tests(evidence);
         let failed_command_evidence = extract_failed_command_evidence(failed_commands, evidence);
         let residual_command_matches =
             extract_residual_command_matches(failed_commands, &failed_command_evidence);
+        let tool_record_evidence = unique_strings(tool_record_evidence.iter().cloned());
         let mut required_next_patch = Vec::new();
         let mut forbidden_fixes = Vec::new();
 
@@ -40,6 +51,12 @@ impl RepairSpec {
             push_unique(
                 &mut required_next_patch,
                 format!("Rerun and satisfy `{command}` after the next patch"),
+            );
+        }
+        if !tool_record_evidence.is_empty() {
+            push_unique(
+                &mut required_next_patch,
+                "Use tool_record_evidence to identify the latest failed/changed tool calls before choosing the next patch".to_string(),
             );
         }
         for item in &residual_command_matches {
@@ -70,6 +87,7 @@ impl RepairSpec {
         Self {
             failed_commands: unique_strings(failed_commands.iter().cloned()),
             failed_command_evidence,
+            tool_record_evidence,
             residual_command_matches,
             failed_tests,
             required_next_patch,
@@ -87,6 +105,7 @@ impl RepairSpec {
             "failed_command_evidence",
             &self.failed_command_evidence,
         );
+        push_section(&mut out, "tool_record_evidence", &self.tool_record_evidence);
         push_section(
             &mut out,
             "residual_command_matches",
@@ -97,7 +116,7 @@ impl RepairSpec {
         push_section(&mut out, "forbidden_fixes", &self.forbidden_fixes);
         push_section(&mut out, "validation_commands", &self.validation_commands);
         out.push_str(
-            "Instruction: first state the concrete mismatch shown by failed_command_evidence and residual_command_matches, then make the smallest code patch that satisfies this spec, then rerun validation. Do not close out until failed_commands pass or you name a concrete blocker.\n",
+            "Instruction: first state the concrete mismatch shown by failed_command_evidence, tool_record_evidence, and residual_command_matches, then make the smallest code patch that satisfies this spec, then rerun validation. Do not close out until failed_commands pass or you name a concrete blocker.\n",
         );
         out
     }
@@ -329,6 +348,26 @@ duplicate_project_fact expected Rejected actual Accepted
         assert!(prompt.contains("Eliminate or explicitly justify residual required-command match"));
         assert!(prompt.contains("Before editing, explain why the current diff still fails"));
         assert!(prompt.contains(command));
+    }
+
+    #[test]
+    fn repair_spec_carries_tool_record_evidence_separately() {
+        let spec = RepairSpec::from_failure_with_tool_records(
+            &["cargo test -q".to_string()],
+            &["required command failed: cargo test -q".to_string()],
+            &[
+                "tool record evidence: tool=file_edit status=completed changed_paths=src/lib.rs"
+                    .to_string(),
+                "tool record evidence: tool=bash status=failed command=cargo test -q".to_string(),
+            ],
+            None,
+        );
+        let prompt = spec.format_for_prompt();
+
+        assert_eq!(spec.tool_record_evidence.len(), 2);
+        assert!(prompt.contains("tool_record_evidence"));
+        assert!(prompt.contains("tool=file_edit"));
+        assert!(prompt.contains("Use tool_record_evidence"));
     }
 
     #[test]

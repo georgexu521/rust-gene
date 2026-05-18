@@ -31,7 +31,7 @@ the relevant baseline is:
 
 - deterministic local tests after memory, repair-planner, and the first
   ToolExecutionRecord persistence/trace-visibility slices:
-  `1454 passed; 0 failed`;
+  `1456 passed; 0 failed`;
 - `core-quality-real-rerun-20260517-091952`: `8/8 passed`;
 - `product-maturity-seeded-fixes-20260517-143047`: `3/3 passed`;
 - `real-project-coding-20260517-192347`: `15/15 passed`;
@@ -278,7 +278,9 @@ Consumers:
 
 - closeout evidence: first consumer slice complete;
 - live-eval report parser: first consumer slice complete;
-- repair planner: next consumer target;
+- repair planner: first consumer slice complete; post-change repair specs and
+  guided validation debugging now receive repair-relevant durable tool-record
+  evidence from `EvidenceLedger`;
 - session replay/debugging: next consumer target;
 - future user-visible trace views: pending.
 
@@ -312,10 +314,12 @@ required-validation passes=15/15
 failure_owner=none for every case
 ```
 
-Next, continue Phase 4 from persistence into consumer integration. The immediate
-15-task product loop is green; the next useful work is wiring durable tool
-records into repair planning and replay/debug views so failures can be explained
-from structured evidence instead of overlapping trace and rendered-string paths.
+Next, continue Phase 4 consumer integration into replay/debug views. The
+immediate 15-task product loop is green; closeout, live-eval reporting, and the
+first repair-planner path now consume durable tool records. The next useful work
+is exposing the same structured evidence in replay/debug views so failures can be
+explained without reconstructing state from overlapping trace and rendered-string
+paths.
 
 Use future failures to classify the next repair slice:
 

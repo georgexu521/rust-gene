@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 const PREVIEW_CHARS: usize = 240;
 const HASH_PREVIEW_CHARS: usize = 16;
+const MAX_REPAIR_TOOL_RECORDS: usize = 8;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvidenceLedger {
@@ -576,6 +577,30 @@ impl EvidenceLedger {
             workflow_label,
             command_label
         )))
+    }
+
+    pub fn repair_tool_record_evidence(&self, failed_commands: &[String]) -> Vec<String> {
+        if self.tool_execution_records.is_empty() {
+            return Vec::new();
+        }
+
+        let failed_command_identities = failed_commands
+            .iter()
+            .map(|command| normalize_command_identity(command))
+            .filter(|command| !command.is_empty())
+            .collect::<BTreeSet<_>>();
+
+        let mut evidence = Vec::new();
+        for record in self.tool_execution_records.iter().rev() {
+            if evidence.len() >= MAX_REPAIR_TOOL_RECORDS {
+                break;
+            }
+            if !tool_record_relevant_for_repair(record, &failed_command_identities) {
+                continue;
+            }
+            evidence.push(format_repair_tool_record(record, &self.file_facts));
+        }
+        evidence
     }
 
     pub fn validation_facts(&self) -> &[ValidationEvidence] {
@@ -1408,6 +1433,107 @@ fn shell_assertion_covers_required(executed: &str, required_command: &str) -> bo
     rest.starts_with("&& ")
 }
 
+fn tool_record_relevant_for_repair(
+    record: &ToolExecutionRecord,
+    failed_command_identities: &BTreeSet<String>,
+) -> bool {
+    matches!(
+        record.status,
+        ToolExecutionStatus::Failed | ToolExecutionStatus::Denied
+    ) || record.relevance.repair
+        || !record.changed_paths.is_empty()
+        || record.command.as_deref().is_some_and(|command| {
+            failed_command_identities.contains(&normalize_command_identity(command))
+        })
+}
+
+fn format_repair_tool_record(record: &ToolExecutionRecord, file_facts: &[FileEvidence]) -> String {
+    let terminal = record
+        .terminal_task
+        .as_ref()
+        .map(|task| {
+            format!(
+                "status={} exit={} task={}",
+                task.status.as_deref().unwrap_or("unknown"),
+                task.exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                task.task_id.as_deref().unwrap_or("none")
+            )
+        })
+        .unwrap_or_else(|| "none".to_string());
+    let file_evidence = record
+        .file_evidence
+        .iter()
+        .take(3)
+        .filter_map(|link| {
+            let fact = file_facts.get(link.fact_index)?;
+            Some(format!(
+                "{}:{}-{} kind={} success={}",
+                link.path
+                    .as_deref()
+                    .or(fact.path.as_deref())
+                    .unwrap_or("unknown"),
+                link.line_start
+                    .or(fact.line_start)
+                    .map(|line| line.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                link.line_end
+                    .or(fact.line_end)
+                    .map(|line| line.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                link.kind
+                    .as_deref()
+                    .or(fact.kind.as_deref())
+                    .unwrap_or("unknown"),
+                fact.success
+            ))
+        })
+        .collect::<Vec<_>>();
+    let changed_paths = if record.changed_paths.is_empty() {
+        "none".to_string()
+    } else {
+        record.changed_paths.join(",")
+    };
+    let file_evidence = if file_evidence.is_empty() {
+        "none".to_string()
+    } else {
+        file_evidence.join(" | ")
+    };
+    let repair_reasons = if record.relevance.policy.repair_reasons.is_empty() {
+        "none".to_string()
+    } else {
+        record.relevance.policy.repair_reasons.join(",")
+    };
+    let status = match record.status {
+        ToolExecutionStatus::Completed => "completed",
+        ToolExecutionStatus::Failed => "failed",
+        ToolExecutionStatus::Denied => "denied",
+    };
+
+    preview(&format!(
+        "tool record evidence: tool={} status={} command={} validation_family={} safe_for_closeout={} duration_ms={} output_chars={} terminal={} changed_paths={} file_evidence={} repair_reasons={} error={}",
+        record.tool,
+        status,
+        record.command.as_deref().unwrap_or("none"),
+        record.validation_family.as_deref().unwrap_or("none"),
+        record
+            .safe_for_closeout
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record
+            .duration_ms
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record.output_chars,
+        terminal,
+        changed_paths,
+        file_evidence,
+        repair_reasons,
+        record.error_preview.as_deref().unwrap_or("none")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1990,6 +2116,35 @@ mod tests {
             Some("failed:1/1")
         );
         assert_eq!(ledger.validation_facts()[0].summary, "compile error");
+    }
+
+    #[test]
+    fn repair_tool_record_evidence_uses_failed_and_changed_records() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call(
+                "grep",
+                serde_json::json!({"pattern": "ok", "path": "src/lib.rs"}),
+            ),
+            &ToolResult::success("src/lib.rs:1:ok"),
+        );
+        ledger.record_tool_result(
+            &tool_call("file_edit", serde_json::json!({"path": "src/lib.rs"})),
+            &ToolResult::success("File edited successfully: src/lib.rs"),
+        );
+        ledger.record_tool_result(
+            &tool_call("bash", serde_json::json!({"command": "cargo test -q"})),
+            &ToolResult::error_with_content("command exited 101", "test failed"),
+        );
+
+        let evidence = ledger.repair_tool_record_evidence(&["cargo test -q".to_string()]);
+
+        assert_eq!(evidence.len(), 2);
+        assert!(evidence[0].contains("tool=bash"));
+        assert!(evidence[0].contains("status=failed"));
+        assert!(evidence[0].contains("command=cargo test -q"));
+        assert!(evidence[1].contains("tool=file_edit"));
+        assert!(!evidence.iter().any(|item| item.contains("tool=grep")));
     }
 
     #[test]

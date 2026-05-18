@@ -81,10 +81,12 @@ evidence-ledger persistence and first consumer-integration slices, including
 durable route/resource-policy and execution-mode context, permission approval
 provenance, file-evidence links, structured output/timing metadata,
 route-aware relevance policy reasons, closeout tool-evidence summaries, and
-live-eval coding-gauntlet report surfacing:
+live-eval coding-gauntlet report surfacing, plus first repair-planner consumer
+integration that injects repair-relevant tool-record evidence into `RepairSpec`
+and guided validation debugging:
 
 ```text
-1454 passed; 0 failed
+1456 passed; 0 failed
 ```
 
 Latest live product baseline:
