@@ -57,6 +57,22 @@ pub enum ToolExecutionStatus {
 pub struct ToolPermissionRecord {
     pub kind: Option<String>,
     pub approved: bool,
+    pub request_id: Option<String>,
+    pub session_id: Option<String>,
+    pub patterns: Vec<String>,
+    pub allowed_always_rules: Vec<String>,
+    pub source: ToolPermissionSourceRecord,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPermissionSourceRecord {
+    pub permission_requires: Option<bool>,
+    pub tool_requires: Option<bool>,
+    pub raw_tool_requires: Option<bool>,
+    pub drift_requires_approval: Option<bool>,
+    pub permission_family: Option<String>,
+    pub permission_decision: Option<String>,
+    pub risk_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -694,7 +710,7 @@ impl EvidenceLedger {
         self.permission_facts.push(PermissionEvidence {
             tool: tool_call.name.clone(),
             kind,
-            approved: result.success,
+            approved: permission_request_approved(permission_request, result.success),
             summary: preview(&summary),
         });
     }
@@ -726,13 +742,34 @@ fn tool_permission_record(result: &ToolResult) -> Option<ToolPermissionRecord> {
         .data
         .as_ref()
         .and_then(|data| data.get("permission_request"))?;
+    let metadata = permission_request.get("metadata");
     Some(ToolPermissionRecord {
         kind: permission_request
             .get("kind")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
-        approved: result.success,
+        approved: permission_request_approved(permission_request, result.success),
+        request_id: json_string(permission_request, "id"),
+        session_id: json_string(permission_request, "session_id"),
+        patterns: json_string_array(permission_request, "patterns"),
+        allowed_always_rules: json_string_array(permission_request, "allowed_always_rules"),
+        source: ToolPermissionSourceRecord {
+            permission_requires: nested_bool(metadata, "permission_requires"),
+            tool_requires: nested_bool(metadata, "tool_requires"),
+            raw_tool_requires: nested_bool(metadata, "raw_tool_requires"),
+            drift_requires_approval: nested_bool(metadata, "drift_requires_approval"),
+            permission_family: nested_string(metadata, "permission_family"),
+            permission_decision: nested_string(metadata, "permission_decision"),
+            risk_level: nested_string(metadata, "risk_level"),
+        },
     })
+}
+
+fn permission_request_approved(permission_request: &serde_json::Value, fallback: bool) -> bool {
+    permission_request
+        .get("approved")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(fallback)
 }
 
 fn terminal_task_record(result: &ToolResult) -> Option<TerminalTaskRecord> {
@@ -1033,6 +1070,29 @@ fn nested_string(value: Option<&serde_json::Value>, key: &str) -> Option<String>
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn json_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn result_data_string(result: &ToolResult, key: &str) -> Option<String> {
@@ -1408,7 +1468,21 @@ mod tests {
         let mut result = ToolResult::error("permission denied");
         result.data = Some(serde_json::json!({
             "permission_request": {
+                "id": "git_push",
+                "session_id": "session-1",
                 "kind": "write",
+                "approved": false,
+                "patterns": ["file_write"],
+                "allowed_always_rules": ["file_read"],
+                "metadata": {
+                    "permission_requires": true,
+                    "tool_requires": false,
+                    "raw_tool_requires": false,
+                    "drift_requires_approval": false,
+                    "permission_family": "file",
+                    "permission_decision": "Ask",
+                    "risk_level": "High"
+                },
                 "rejection_feedback": "Denied by policy"
             }
         }));
@@ -1435,7 +1509,56 @@ mod tests {
                 .and_then(|permission| permission.kind.as_deref()),
             Some("write")
         );
+        let permission = record.permission.as_ref().unwrap();
+        assert!(!permission.approved);
+        assert_eq!(permission.request_id.as_deref(), Some("git_push"));
+        assert_eq!(permission.session_id.as_deref(), Some("session-1"));
+        assert_eq!(permission.patterns, vec!["file_write"]);
+        assert_eq!(permission.allowed_always_rules, vec!["file_read"]);
+        assert_eq!(permission.source.permission_requires, Some(true));
+        assert_eq!(permission.source.permission_family.as_deref(), Some("file"));
+        assert_eq!(
+            permission.source.permission_decision.as_deref(),
+            Some("Ask")
+        );
+        assert_eq!(permission.source.risk_level.as_deref(), Some("High"));
         assert_eq!(ledger.snapshot().denied_permission_facts, 1);
+    }
+
+    #[test]
+    fn approved_permission_record_keeps_failed_tool_status_failed() {
+        let mut ledger = EvidenceLedger::new();
+        let mut result = ToolResult::error("remote rejected push");
+        result.data = Some(serde_json::json!({
+            "permission_request": {
+                "id": "git_push",
+                "session_id": "session-1",
+                "kind": "runtime_rule",
+                "approved": true,
+                "patterns": ["git"],
+                "metadata": {
+                    "permission_requires": true,
+                    "tool_requires": false,
+                    "raw_tool_requires": false,
+                    "drift_requires_approval": false,
+                    "permission_family": "other",
+                    "permission_decision": "Ask",
+                    "risk_level": "High"
+                },
+                "rejection_feedback": "Permission denied: 'git' requires user confirmation."
+            }
+        }));
+
+        ledger.record_tool_result(
+            &tool_call("git", serde_json::json!({"action": "push"})),
+            &result,
+        );
+
+        let record = &ledger.tool_execution_records()[0];
+        assert_eq!(record.status, ToolExecutionStatus::Failed);
+        assert!(record.permission.as_ref().unwrap().approved);
+        assert_eq!(ledger.snapshot().permission_facts, 1);
+        assert_eq!(ledger.snapshot().denied_permission_facts, 0);
     }
 
     #[test]

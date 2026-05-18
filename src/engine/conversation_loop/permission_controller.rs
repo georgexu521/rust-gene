@@ -73,6 +73,14 @@ impl PermissionRequestRecord {
             "recovery_feedback": self.recovery_feedback,
         })
     }
+
+    pub(super) fn to_json_with_approval(&self, approved: bool) -> serde_json::Value {
+        let mut value = self.to_json();
+        if let Some(object) = value.as_object_mut() {
+            object.insert("approved".to_string(), serde_json::Value::Bool(approved));
+        }
+        value
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,7 +256,7 @@ impl PermissionController {
         result.error_code = Some(ToolErrorCode::PermissionDenied);
         if let Some(record) = record {
             result.data = Some(serde_json::json!({
-                "permission_request": record.to_json(),
+                "permission_request": record.to_json_with_approval(false),
             }));
         }
         result

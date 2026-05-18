@@ -636,7 +636,15 @@ impl ToolExecutionController {
                                 })
                                 .await;
                         }
-                        tool.execute(tc.arguments.clone(), context.clone()).await
+                        let mut result = tool.execute(tc.arguments.clone(), context.clone()).await;
+                        if let Some(record) = permission_evaluation.record.as_ref() {
+                            merge_tool_result_metadata(
+                                &mut result,
+                                "permission_request",
+                                record.to_json_with_approval(true),
+                            );
+                        }
+                        result
                     } else {
                         PermissionController::denied_result(
                             &tool_name,

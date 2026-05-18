@@ -31,7 +31,7 @@ the relevant baseline is:
 
 - deterministic local tests after memory, repair-planner, and the first
   ToolExecutionRecord persistence/trace-visibility slices:
-  `1453 passed; 0 failed`;
+  `1454 passed; 0 failed`;
 - `core-quality-real-rerun-20260517-091952`: `8/8 passed`;
 - `product-maturity-seeded-fixes-20260517-143047`: `3/3 passed`;
 - `real-project-coding-20260517-192347`: `15/15 passed`;
@@ -256,11 +256,13 @@ Current record coverage:
 - resource-policy latency, parallelism, tool-call, context-budget, fallback, and
   cost ceilings;
 - execution-mode flags for parallel, pre-executed, action-checkpoint, prior
-  change, and exposed-tool-count state.
+  change, and exposed-tool-count state;
+- permission request id/session id, approval outcome, matched patterns,
+  always-allow provenance, permission family, decision, risk, and approval-source
+  flags.
 
 The record should cover:
 
-- permission source and approval provenance;
 - start/end timestamps;
 - richer structured output metadata;
 - diff/file evidence links for write tools;

@@ -72,10 +72,10 @@ live-eval unscored-report classification fix, deterministic patch-rule
 priority, required-validation acceptance closeout fallback, and required-command
 closeout evidence for no-diff audit tasks, plus Phase 4 ToolExecutionRecord
 evidence-ledger persistence slices, including durable route/resource-policy and
-execution-mode context:
+execution-mode context plus permission approval provenance:
 
 ```text
-1453 passed; 0 failed
+1454 passed; 0 failed
 ```
 
 Latest live product baseline:
