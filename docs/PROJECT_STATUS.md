@@ -85,10 +85,10 @@ live-eval coding-gauntlet report surfacing, plus first repair-planner consumer
 integration that injects repair-relevant tool-record evidence into `RepairSpec`
 and guided validation debugging, and first `/trace` replay/debug surfacing of
 durable tool-record evidence, including persisted current-session recent-trace
-replay:
+replay merged with in-memory traces:
 
 ```text
-1459 passed; 0 failed
+1461 passed; 0 failed
 ```
 
 Latest live product baseline:

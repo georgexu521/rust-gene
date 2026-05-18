@@ -3,6 +3,9 @@
 use super::utils::*;
 
 use crate::tui::app::TuiApp;
+use std::collections::HashSet;
+
+const RECENT_TRACE_LIMIT: usize = 10;
 
 /// /hooks - Show hook configuration status
 pub fn handle_hooks(app: &TuiApp) -> String {
@@ -181,18 +184,22 @@ pub fn handle_trace(app: &mut TuiApp, args: &str) -> String {
             Err(e) => format!("Failed to load latest trace: {}", e),
         };
     } else if arg == "recent" {
+        let mut traces = Vec::new();
         if let Some(engine) = &app.streaming_engine {
-            let traces = engine.trace_store().recent(10);
-            if !traces.is_empty() {
-                return format_trace_recent_lines(traces);
-            }
+            traces = engine.trace_store().recent(RECENT_TRACE_LIMIT);
         }
-        match app.session_manager.recent_traces(10) {
-            Ok(traces) if !traces.is_empty() => return format_trace_recent_lines(traces),
-            Err(e) => return format!("Failed to load recent traces: {}", e),
+        match app.session_manager.recent_traces(RECENT_TRACE_LIMIT as i64) {
+            Ok(persisted) => {
+                traces = merge_recent_traces(traces, persisted, RECENT_TRACE_LIMIT);
+            }
+            Err(e) if traces.is_empty() => return format!("Failed to load recent traces: {}", e),
             _ => {}
         }
-        return "No recent traces recorded.".to_string();
+        if !traces.is_empty() {
+            return format_trace_recent_lines(traces);
+        } else {
+            return "No recent traces recorded.".to_string();
+        }
     } else if arg == "status" {
         return format!(
             "Log tracing: {}\nRuntime traces: {}",
@@ -235,6 +242,28 @@ fn format_trace_recent_lines(traces: Vec<crate::engine::trace::TurnTrace>) -> St
         lines.push(crate::engine::trace::format_trace_recent_line(&trace));
     }
     lines.join("\n")
+}
+
+fn merge_recent_traces(
+    memory_traces: Vec<crate::engine::trace::TurnTrace>,
+    persisted_traces: Vec<crate::engine::trace::TurnTrace>,
+    limit: usize,
+) -> Vec<crate::engine::trace::TurnTrace> {
+    let mut seen = HashSet::new();
+    let mut traces = Vec::new();
+    for trace in memory_traces.into_iter().chain(persisted_traces) {
+        if seen.insert(trace.trace_id.clone()) {
+            traces.push(trace);
+        }
+    }
+    traces.sort_by(|left, right| {
+        right
+            .turn_index
+            .cmp(&left.turn_index)
+            .then_with(|| right.started_at.cmp(&left.started_at))
+    });
+    traces.truncate(limit);
+    traces
 }
 
 /// /eval - Deterministic behavior evalsets
@@ -533,5 +562,53 @@ pub fn handle_profile(_app: &mut TuiApp, args: &str) -> String {
             }
         }
         _ => "Usage: /profile [show [key]|set <key> <value>|unset <key>]".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trace(id: &str, turn_index: u64) -> crate::engine::trace::TurnTrace {
+        let mut trace =
+            crate::engine::trace::TurnTrace::new("session", turn_index, "inspect workspace");
+        trace.trace_id = id.to_string();
+        trace.finish(crate::engine::trace::TurnStatus::Completed);
+        trace
+    }
+
+    #[test]
+    fn merge_recent_traces_keeps_persisted_history_after_memory_entries() {
+        let traces = merge_recent_traces(
+            vec![trace("trace-3", 3), trace("trace-2", 2)],
+            vec![trace("trace-3", 3), trace("trace-1", 1)],
+            10,
+        );
+
+        assert_eq!(traces.len(), 3);
+        assert_eq!(
+            traces
+                .iter()
+                .map(|trace| trace.turn_index)
+                .collect::<Vec<_>>(),
+            vec![3, 2, 1]
+        );
+    }
+
+    #[test]
+    fn merge_recent_traces_applies_recent_limit_after_deduping() {
+        let traces = merge_recent_traces(
+            vec![trace("trace-4", 4)],
+            vec![
+                trace("trace-3", 3),
+                trace("trace-2", 2),
+                trace("trace-1", 1),
+            ],
+            2,
+        );
+
+        assert_eq!(traces.len(), 2);
+        assert_eq!(traces[0].turn_index, 4);
+        assert_eq!(traces[1].turn_index, 3);
     }
 }
