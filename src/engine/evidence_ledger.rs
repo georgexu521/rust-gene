@@ -31,6 +31,7 @@ pub struct ToolExecutionRecord {
     pub arguments_hash: String,
     pub duration_ms: Option<u64>,
     pub output_chars: usize,
+    pub output: ToolOutputMetadataRecord,
     pub error_code: Option<String>,
     pub error_preview: Option<String>,
     pub permission: Option<ToolPermissionRecord>,
@@ -74,6 +75,30 @@ pub struct ToolPermissionSourceRecord {
     pub permission_family: Option<String>,
     pub permission_decision: Option<String>,
     pub risk_level: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolOutputMetadataRecord {
+    pub data_keys: Vec<String>,
+    pub summary_keys: Vec<String>,
+    pub display_format: Option<String>,
+    pub truncated: Option<bool>,
+    pub file_count: Option<usize>,
+    pub diagnostics: Option<ToolDiagnosticsMetadataRecord>,
+    pub shell_status: Option<String>,
+    pub shell_evidence_status: Option<String>,
+    pub shell_exit_code: Option<i64>,
+    pub shell_background: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolDiagnosticsMetadataRecord {
+    pub status: Option<String>,
+    pub checked: Option<bool>,
+    pub diagnostic_count: Option<u64>,
+    pub error_count: Option<u64>,
+    pub warning_count: Option<u64>,
+    pub first_error_line: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -634,6 +659,7 @@ impl EvidenceLedger {
             arguments_hash: tool_arguments_hash(&tool_call.arguments),
             duration_ms: result.duration_ms,
             output_chars: result.content.chars().count(),
+            output: tool_output_metadata_record(result),
             error_code: result.error_code.as_ref().and_then(|code| {
                 serde_json::to_value(code)
                     .ok()
@@ -807,6 +833,47 @@ fn permission_request_approved(permission_request: &serde_json::Value, fallback:
         .get("approved")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(fallback)
+}
+
+fn tool_output_metadata_record(result: &ToolResult) -> ToolOutputMetadataRecord {
+    let data = result.data.as_ref();
+    let summary = data
+        .and_then(|data| data.get("tool_summary"))
+        .filter(|value| value.is_object());
+    let diagnostics = data.and_then(|data| data.get("diagnostics"));
+    let shell = data.and_then(|data| data.get("shell_result"));
+    ToolOutputMetadataRecord {
+        data_keys: json_object_keys(data),
+        summary_keys: json_object_keys(summary),
+        display_format: nested_string(data, "display_format"),
+        truncated: nested_bool(data, "truncated"),
+        file_count: data
+            .and_then(|data| data.get("files"))
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        diagnostics: diagnostics
+            .filter(|value| value.is_object())
+            .map(tool_diagnostics_metadata_record),
+        shell_status: nested_string(shell, "status"),
+        shell_evidence_status: nested_string(shell, "evidence_status"),
+        shell_exit_code: nested_i64(shell, "exit_code"),
+        shell_background: nested_bool(shell, "background"),
+    }
+}
+
+fn tool_diagnostics_metadata_record(value: &serde_json::Value) -> ToolDiagnosticsMetadataRecord {
+    ToolDiagnosticsMetadataRecord {
+        status: nested_string(Some(value), "status"),
+        checked: nested_bool(Some(value), "checked"),
+        diagnostic_count: nested_u64(Some(value), "diagnostic_count"),
+        error_count: nested_u64(Some(value), "error_count"),
+        warning_count: nested_u64(Some(value), "warning_count"),
+        first_error_line: value
+            .get("first_error")
+            .and_then(|error| error.get("range"))
+            .and_then(|range| range.get("start_line"))
+            .and_then(serde_json::Value::as_u64),
+    }
 }
 
 fn terminal_task_record(result: &ToolResult) -> Option<TerminalTaskRecord> {
@@ -1091,6 +1158,12 @@ fn nested_u64(value: Option<&serde_json::Value>, key: &str) -> Option<u64> {
         .and_then(serde_json::Value::as_u64)
 }
 
+fn nested_i64(value: Option<&serde_json::Value>, key: &str) -> Option<i64> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_i64)
+}
+
 fn nested_usize(value: Option<&serde_json::Value>, key: &str) -> Option<usize> {
     nested_u64(value, key).and_then(|value| usize::try_from(value).ok())
 }
@@ -1130,6 +1203,15 @@ fn json_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn json_object_keys(value: Option<&serde_json::Value>) -> Vec<String> {
+    let mut keys: Vec<String> = value
+        .and_then(serde_json::Value::as_object)
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
 }
 
 fn result_data_string(result: &ToolResult, key: &str) -> Option<String> {
@@ -1266,6 +1348,13 @@ mod tests {
         assert_eq!(fact.truncated, Some(true));
         assert_eq!(fact.content_hash.as_deref(), Some("abc123"));
         assert!(fact.summary.contains("line_numbered_content"));
+        let output = &ledger.tool_execution_records()[0].output;
+        assert!(output.data_keys.iter().any(|key| key == "content_hash"));
+        assert_eq!(
+            output.display_format.as_deref(),
+            Some("line_numbered_content")
+        );
+        assert_eq!(output.truncated, Some(true));
     }
 
     #[test]
@@ -1308,6 +1397,14 @@ mod tests {
         assert!(fact.summary.contains("first_error:line:7"));
         assert!(fact.summary.contains("source:rust-analyzer"));
         assert!(fact.summary.contains("code:E0308"));
+        let diagnostics = ledger.tool_execution_records()[0]
+            .output
+            .diagnostics
+            .as_ref()
+            .expect("diagnostics metadata should be recorded");
+        assert_eq!(diagnostics.status.as_deref(), Some("diagnostics_found"));
+        assert_eq!(diagnostics.diagnostic_count, Some(2));
+        assert_eq!(diagnostics.first_error_line, Some(7));
     }
 
     #[test]
@@ -1381,6 +1478,7 @@ mod tests {
         assert_eq!(record.file_evidence[1].fact_index, 1);
         assert_eq!(record.file_evidence[1].path.as_deref(), Some("README.md"));
         assert_eq!(record.file_evidence[1].line_end, Some(8));
+        assert_eq!(record.output.file_count, Some(2));
     }
 
     #[test]

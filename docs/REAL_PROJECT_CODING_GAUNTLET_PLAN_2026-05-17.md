@@ -261,12 +261,13 @@ Current record coverage:
   always-allow provenance, permission family, decision, risk, and approval-source
   flags;
 - file evidence links from each tool execution record to the file facts created
-  by the same write/read/patch tool result.
+  by the same write/read/patch tool result;
+- structured output metadata keys, display/truncation hints, file counts,
+  diagnostics summaries, and shell status/evidence fields.
 
 The record should cover:
 
 - start/end timestamps;
-- richer structured output metadata;
 - route-level repair/closeout relevance policy.
 
 Consumers:
