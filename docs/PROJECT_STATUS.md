@@ -77,9 +77,11 @@ tool-result normalizer work, the file-patch write-mode guard,
 live-eval unscored-report classification fix, deterministic patch-rule
 priority, required-validation acceptance closeout fallback, and required-command
 closeout evidence for no-diff audit tasks, plus Phase 4 ToolExecutionRecord
-evidence-ledger persistence slices, including durable route/resource-policy and
-execution-mode context, permission approval provenance, file-evidence links, and
-structured output/timing metadata plus route-aware relevance policy reasons:
+evidence-ledger persistence and first consumer-integration slices, including
+durable route/resource-policy and execution-mode context, permission approval
+provenance, file-evidence links, structured output/timing metadata,
+route-aware relevance policy reasons, closeout tool-evidence summaries, and
+live-eval coding-gauntlet report surfacing:
 
 ```text
 1454 passed; 0 failed

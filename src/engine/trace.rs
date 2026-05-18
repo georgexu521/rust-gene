@@ -353,6 +353,8 @@ pub enum TraceEvent {
         validation_items: usize,
         #[serde(default)]
         tool_records: usize,
+        #[serde(default)]
+        tool_evidence: Option<String>,
         acceptance_items: usize,
         residual_risks: usize,
     },
@@ -945,11 +947,18 @@ impl TraceEvent {
                 changed_files,
                 validation_items,
                 tool_records,
+                tool_evidence,
                 acceptance_items,
                 residual_risks,
             } => format!(
-                "final closeout status={} files={} validation={} tool_records={} acceptance={} risks={}",
-                status, changed_files, validation_items, tool_records, acceptance_items, residual_risks
+                "final closeout status={} files={} validation={} tool_records={} tool_evidence={} acceptance={} risks={}",
+                status,
+                changed_files,
+                validation_items,
+                tool_records,
+                tool_evidence.as_deref().unwrap_or("none"),
+                acceptance_items,
+                residual_risks
             ),
             TraceEvent::Error { message } => format!("error: {}", preview(message)),
         }
@@ -1162,6 +1171,7 @@ mod tests {
             changed_files: 1,
             validation_items: 2,
             tool_records: 3,
+            tool_evidence: Some("tool evidence: records=3 completed=3".to_string()),
             acceptance_items: 1,
             residual_risks: 0,
         });
@@ -1169,6 +1179,7 @@ mod tests {
         let trace = collector.finish(TurnStatus::Completed);
         let summary = format_trace_summary(&trace, 10);
         assert!(summary.contains("tool_records=3"));
+        assert!(summary.contains("tool_evidence=tool evidence: records=3"));
     }
 
     #[test]

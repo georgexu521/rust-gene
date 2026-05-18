@@ -229,6 +229,12 @@ def report_rows(run_dir):
         )
         eval_intent = report_value(report_text, "eval_intent", "missing")
         closeout = report_value(report_text, "closeout_status", "missing")
+        closeout_tool_records = report_value(
+            report_text, "closeout_tool_records", "missing"
+        )
+        closeout_tool_evidence = report_value(
+            report_text, "closeout_tool_evidence", "missing"
+        )
         runtime_diet = report_value(report_text, "runtime_diet", "missing")
         behavior_assertions = report_value(
             report_text, "behavior_assertions", "none"
@@ -332,6 +338,7 @@ def report_rows(run_dir):
             coding_gauntlet_status = "not_applicable"
         coding_summary = (
             f"tools={tool_executions}, "
+            f"tool_records={closeout_tool_records}, "
             f"validations={validation_events + stage_validation_events}, "
             f"repair={repair_signals}, files={diff_files_changed}"
         )
@@ -346,6 +353,8 @@ def report_rows(run_dir):
                 "boundary": tool_boundary,
                 "verification": verification_status,
                 "closeout": closeout,
+                "closeout_tool_records": closeout_tool_records,
+                "closeout_tool_evidence": closeout_tool_evidence,
                 "runtime_diet": runtime_diet,
                 "behavior_assertions": behavior_assertions,
                 "behavior_assertion_status": behavior_assertion_status,

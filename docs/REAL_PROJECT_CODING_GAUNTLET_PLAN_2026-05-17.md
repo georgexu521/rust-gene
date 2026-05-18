@@ -227,7 +227,7 @@ Hard boundary: the repair planner proposes candidates; normal tool permission,
 file-state, validation, and closeout gates still decide whether they are safe
 and successful.
 
-## Phase 4: ToolExecutionRecord Persistence
+## Phase 4: ToolExecutionRecord Persistence And Consumer Integration
 
 Goal: make tool execution evidence a durable runtime object instead of a set of
 partially overlapping traces and rendered strings.
@@ -267,17 +267,20 @@ Current record coverage:
 - execution start and finish timestamps when the runtime owns the tool call;
 - route-aware closeout/repair relevance policy reasons.
 
-The planned record coverage for this phase is now complete. Further Phase 4 work
-should focus on consumers: closeout evidence, live-eval reporting, repair
-planning, and replay/debug views.
+The planned record coverage for this phase is now complete. Phase 4 has moved to
+consumer integration: closeout now folds the durable tool-record summary into
+validation evidence, final closeout trace events expose both `tool_records` and
+`tool_evidence`, `/learn` closeout labels include the same evidence, and
+live-eval reports/summaries surface `closeout_tool_records` in coding-gauntlet
+evidence.
 
 Consumers:
 
-- closeout evidence;
-- live-eval report parser;
-- repair planner;
-- session replay/debugging;
-- future user-visible trace views.
+- closeout evidence: first consumer slice complete;
+- live-eval report parser: first consumer slice complete;
+- repair planner: next consumer target;
+- session replay/debugging: next consumer target;
+- future user-visible trace views: pending.
 
 ## Operating Rules
 
@@ -309,10 +312,10 @@ required-validation passes=15/15
 failure_owner=none for every case
 ```
 
-Next, continue into the broader Phase 4 ToolExecutionRecord persistence work.
-The immediate 15-task product loop is green; Phase 4 should make the same tool
-execution and closeout evidence durable instead of relying on overlapping trace
-and rendered-string paths.
+Next, continue Phase 4 from persistence into consumer integration. The immediate
+15-task product loop is green; the next useful work is wiring durable tool
+records into repair planning and replay/debug views so failures can be explained
+from structured evidence instead of overlapping trace and rendered-string paths.
 
 Use future failures to classify the next repair slice:
 

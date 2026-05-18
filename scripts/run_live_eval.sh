@@ -1433,6 +1433,8 @@ print(f"verification_passed: {str(verification_passed).lower()}")
 print(f"stage_validation_passed: {str(stage_validation_passed).lower()}")
 print(f"acceptance_accepted: {accepted}")
 print(f"closeout_status: {closeout_status}")
+print(f"closeout_tool_records: {latest_closeout.get('tool_records', 0)}")
+print(f"closeout_tool_evidence: {latest_closeout.get('tool_evidence', 'missing')}")
 if latest_runtime_diet:
     print(
         "runtime_diet: "
@@ -1792,6 +1794,8 @@ print(f"latest_top_importance_score: {latest_plan.get('top_importance_score', 'n
 print(f"latest_top_weight_share: {latest_plan.get('top_weight_share', 'none')}")
 print(f"acceptance_accepted: {acceptance_accepted}")
 print(f"closeout_status: {latest_closeout.get('status', 'missing')}")
+print(f"closeout_tool_records: {latest_closeout.get('tool_records', 0)}")
+print(f"closeout_tool_evidence: {latest_closeout.get('tool_evidence', 'missing')}")
 if latest_runtime_diet:
     print(
         "runtime_diet: "
@@ -2024,7 +2028,7 @@ if coding_rows:
             )
         )
 else:
-    lines.append("| none | not_applicable | unknown | tools=0, validations=0, repair=0, files=0 | missing | missing | missing | no | none |")
+    lines.append("| none | not_applicable | unknown | tools=0, tool_records=0, validations=0, repair=0, files=0 | missing | missing | missing | no | none |")
 
 lines.extend([
     "",

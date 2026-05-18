@@ -23,6 +23,7 @@ pub(super) struct FinalCloseoutContext<'a> {
 pub(super) struct CloseoutEvaluation {
     pub(super) closeout: Option<WorkflowCloseout>,
     pub(super) runtime_validation_label: Option<String>,
+    pub(super) tool_evidence_summary: Option<String>,
 }
 
 pub(super) struct CloseoutEvaluator;
@@ -37,13 +38,20 @@ impl CloseoutEvaluator {
         let runtime_validation_label = evidence_ledger
             .runtime_required_validation_label(required_validation_commands)
             .or_else(|| evidence_ledger.runtime_validation_label());
-        let closeout = code_workflow.build_closeout_with_runtime_validation(
+        let mut closeout = code_workflow.build_closeout_with_runtime_validation(
             task_bundle,
             runtime_validation_label.as_deref(),
         );
+        let tool_evidence_summary = evidence_ledger.closeout_tool_evidence_summary();
+        if let (Some(closeout), Some(summary)) = (&mut closeout, tool_evidence_summary.as_ref()) {
+            if !closeout.validation.iter().any(|item| item == summary) {
+                closeout.validation.push(summary.clone());
+            }
+        }
         CloseoutEvaluation {
             closeout,
             runtime_validation_label,
+            tool_evidence_summary,
         }
     }
 }
@@ -86,6 +94,7 @@ impl FinalCloseoutController {
                 changed_files: closeout.changed_files.len(),
                 validation_items: closeout.validation.len(),
                 tool_records: evidence_snapshot.tool_execution_records,
+                tool_evidence: evaluation.tool_evidence_summary.clone(),
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
             });
@@ -242,7 +251,15 @@ mod tests {
             evaluation.runtime_validation_label.as_deref(),
             Some("passed:2/2")
         );
+        assert!(evaluation
+            .tool_evidence_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("tool evidence: records=2")));
         assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert!(closeout
+            .validation
+            .iter()
+            .any(|item| item.contains("tool evidence: records=2")));
         assert!(closeout.acceptance.iter().any(|item| {
             item.contains("accepted=true") && item.contains("required validation passed")
         }));

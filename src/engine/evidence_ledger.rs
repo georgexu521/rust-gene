@@ -495,6 +495,89 @@ impl EvidenceLedger {
         &self.tool_execution_records
     }
 
+    pub fn closeout_tool_evidence_summary(&self) -> Option<String> {
+        if self.tool_execution_records.is_empty() {
+            return None;
+        }
+
+        let completed = self
+            .tool_execution_records
+            .iter()
+            .filter(|record| record.status == ToolExecutionStatus::Completed)
+            .count();
+        let failed = self
+            .tool_execution_records
+            .iter()
+            .filter(|record| record.status == ToolExecutionStatus::Failed)
+            .count();
+        let denied = self
+            .tool_execution_records
+            .iter()
+            .filter(|record| record.status == ToolExecutionStatus::Denied)
+            .count();
+        let validation = self
+            .tool_execution_records
+            .iter()
+            .filter(|record| record.relevance.validation)
+            .count();
+        let closeout = self
+            .tool_execution_records
+            .iter()
+            .filter(|record| record.relevance.closeout)
+            .count();
+        let repair = self
+            .tool_execution_records
+            .iter()
+            .filter(|record| record.relevance.repair)
+            .count();
+        let changed = self
+            .tool_execution_records
+            .iter()
+            .filter(|record| !record.changed_paths.is_empty())
+            .count();
+        let mut workflows = BTreeSet::new();
+        let mut commands = Vec::new();
+        for record in &self.tool_execution_records {
+            if let Some(workflow) = record
+                .execution
+                .route
+                .as_ref()
+                .and_then(|route| route.workflow.as_deref())
+            {
+                workflows.insert(workflow.to_string());
+            }
+            if let Some(command) = record.command.as_deref() {
+                if commands.len() < 3 {
+                    commands.push(preview(command));
+                }
+            }
+        }
+        let workflow_label = if workflows.is_empty() {
+            "none".to_string()
+        } else {
+            workflows.into_iter().collect::<Vec<_>>().join(",")
+        };
+        let command_label = if commands.is_empty() {
+            "none".to_string()
+        } else {
+            commands.join(" | ")
+        };
+
+        Some(preview(&format!(
+            "tool evidence: records={} completed={} failed={} denied={} validation={} closeout={} repair={} changed={} workflows={} commands={}",
+            self.tool_execution_records.len(),
+            completed,
+            failed,
+            denied,
+            validation,
+            closeout,
+            repair,
+            changed,
+            workflow_label,
+            command_label
+        )))
+    }
+
     pub fn validation_facts(&self) -> &[ValidationEvidence] {
         &self.validation_facts
     }
