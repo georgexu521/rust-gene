@@ -1,12 +1,18 @@
 # Project Status
 
-Last updated: 2026-05-17
+Last updated: 2026-05-18
 
 ## Summary
 
 Priority Agent is now an interactive coding CLI with a stateful runtime spine:
 intent routing, turn traces, session goals, memory, permissions, recovery plans,
 MCP health, CLI observability panels, and required validation closeout.
+
+Product direction: Priority Agent should stay narrow, deep, personal, and
+verifiable rather than chasing broad generic-agent parity. The durable goal is
+to be the programming assistant that best understands gex's machine, projects,
+habits, validation loops, and local workflow. See
+`docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md`.
 
 Current stage:
 

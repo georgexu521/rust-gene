@@ -16,6 +16,18 @@ injection. Longer history and old product notes were archived in
   `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`.
 - Runtime simplification plan:
   `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`.
+- Product principle:
+  `docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md`.
+
+## Product Direction
+
+Priority Agent is not trying to win by becoming a broad, generic clone of
+Claude Code, Codex, opencode, or any other general-purpose coding agent.
+
+The guiding principle is: narrow, deep, personal, and verifiable. Large vendors
+will likely win generic entrypoints; this project should win by being the agent
+that best understands gex's machine, projects, habits, validation loops, and
+local coding workflow.
 
 ## Work Style
 

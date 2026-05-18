@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Product Direction
+
+Priority Agent should not be treated as a broad Claude Code clone. The project
+goal is a narrow, deep, personalized, and verifiable programming assistant for
+gex's local projects and workflows. See
+`docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md`.
+
 ## Build and Development Commands
 
 ```bash
