@@ -24,6 +24,7 @@ use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::debug;
@@ -174,6 +175,29 @@ struct ToolRuntimeContext {
     exposed_tools_count: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ToolRuntimeTiming {
+    started_at_unix_ms: Option<u64>,
+    finished_at_unix_ms: Option<u64>,
+}
+
+impl ToolRuntimeTiming {
+    fn instant() -> Self {
+        let now = unix_time_millis();
+        Self {
+            started_at_unix_ms: now,
+            finished_at_unix_ms: now,
+        }
+    }
+
+    fn finished(started_at_unix_ms: Option<u64>) -> Self {
+        Self {
+            started_at_unix_ms,
+            finished_at_unix_ms: unix_time_millis(),
+        }
+    }
+}
+
 impl ToolRuntimeContext {
     fn new(
         route: Option<&IntentRoute>,
@@ -211,7 +235,13 @@ impl ToolRuntimeContext {
         }
     }
 
-    fn attach(&self, result: &mut ToolResult, parallel: bool, pre_executed: bool) {
+    fn attach(
+        &self,
+        result: &mut ToolResult,
+        parallel: bool,
+        pre_executed: bool,
+        timing: Option<ToolRuntimeTiming>,
+    ) {
         let route = if self.has_route {
             serde_json::json!({
                 "intent": self.route_intent,
@@ -242,10 +272,19 @@ impl ToolRuntimeContext {
                     "action_checkpoint_active": self.action_checkpoint_active,
                     "has_changes_before_tools": self.has_changes_before_tools,
                     "exposed_tools_count": self.exposed_tools_count,
+                    "started_at_unix_ms": timing.and_then(|timing| timing.started_at_unix_ms),
+                    "finished_at_unix_ms": timing.and_then(|timing| timing.finished_at_unix_ms),
                 },
             }),
         );
     }
+}
+
+fn unix_time_millis() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
 fn serde_label<T>(value: &T) -> String
@@ -369,7 +408,12 @@ impl<'a> ToolExecutionGate<'a> {
         mut result: ToolResult,
     ) -> ToolExecutionGateOutcome {
         attach_tool_execution_metadata(tool_call, &mut result);
-        self.runtime_context.attach(&mut result, false, false);
+        self.runtime_context.attach(
+            &mut result,
+            false,
+            false,
+            Some(ToolRuntimeTiming::instant()),
+        );
         if let Some(ref trace) = self.trace {
             trace.record(TraceEvent::ToolStarted {
                 tool: tool_call.name.clone(),
@@ -417,6 +461,7 @@ impl ToolExecutionController {
         let runtime_context = runtime_context.clone();
         async move {
             let started_at = std::time::Instant::now();
+            let started_at_unix_ms = unix_time_millis();
             if let Some(ref trace) = trace {
                 trace.record(TraceEvent::ToolStarted {
                     tool: tool_name.clone(),
@@ -462,7 +507,12 @@ impl ToolExecutionController {
                 record_hook_traces(&trace, &hook_records);
             };
             attach_tool_execution_metadata(&tc_clone, &mut result);
-            runtime_context.attach(&mut result, true, false);
+            runtime_context.attach(
+                &mut result,
+                true,
+                false,
+                Some(ToolRuntimeTiming::finished(started_at_unix_ms)),
+            );
             {
                 let mut tracker = cost_tracker.lock().await;
                 tracker.record_tool_execution(
@@ -542,7 +592,12 @@ impl ToolExecutionController {
             let tool_name = tc.name.clone();
             if !tool_allowed_by_context(&execution.allowed_tools, &tool_name) {
                 let mut result = tool_not_allowed_result(&tc);
-                runtime_context.attach(&mut result, false, false);
+                runtime_context.attach(
+                    &mut result,
+                    false,
+                    false,
+                    Some(ToolRuntimeTiming::instant()),
+                );
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -598,6 +653,7 @@ impl ToolExecutionController {
                 };
 
                 let started_at = std::time::Instant::now();
+                let started_at_unix_ms = unix_time_millis();
                 let permission_evaluation = PermissionController::evaluate_tool_permission(
                     &execution.session_id,
                     &tc,
@@ -667,7 +723,12 @@ impl ToolExecutionController {
                     result.duration_ms = Some(duration_ms);
                 }
                 attach_tool_execution_metadata(&tc, &mut result);
-                runtime_context.attach(&mut result, false, false);
+                runtime_context.attach(
+                    &mut result,
+                    false,
+                    false,
+                    Some(ToolRuntimeTiming::finished(started_at_unix_ms)),
+                );
 
                 // ── Security Audit & Denial Tracking ──────────────────────
                 let params_summary = if let Some(tool) = execution.tool_registry.get(&tool_name) {
@@ -723,7 +784,12 @@ impl ToolExecutionController {
             } else {
                 let mut result = ToolResult::error(format!("Tool '{}' not found", tool_name));
                 attach_tool_execution_metadata(&tc, &mut result);
-                runtime_context.attach(&mut result, false, false);
+                runtime_context.attach(
+                    &mut result,
+                    false,
+                    false,
+                    Some(ToolRuntimeTiming::instant()),
+                );
                 (result, None)
             };
 
@@ -840,7 +906,7 @@ impl ToolExecutionController {
             if let Some(pre_result) = pre_executed.get(&i) {
                 let mut pre_result = pre_result.clone();
                 attach_tool_execution_metadata(tc, &mut pre_result);
-                runtime_context.attach(&mut pre_result, true, true);
+                runtime_context.attach(&mut pre_result, true, true, None);
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,

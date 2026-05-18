@@ -2867,6 +2867,13 @@ mod tests {
             runtime["execution"]["action_checkpoint_active"].as_bool(),
             Some(false)
         );
+        let started_at = runtime["execution"]["started_at_unix_ms"]
+            .as_u64()
+            .expect("tool runtime should include start timestamp");
+        let finished_at = runtime["execution"]["finished_at_unix_ms"]
+            .as_u64()
+            .expect("tool runtime should include finish timestamp");
+        assert!(started_at <= finished_at);
     }
 
     #[tokio::test]

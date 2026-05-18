@@ -138,6 +138,8 @@ pub struct ToolExecutionContextRecord {
     pub action_checkpoint_active: bool,
     pub has_changes_before_tools: bool,
     pub exposed_tools_count: Option<usize>,
+    pub started_at_unix_ms: Option<u64>,
+    pub finished_at_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -965,6 +967,8 @@ fn tool_execution_context_record(result: &ToolResult) -> ToolExecutionContextRec
         has_changes_before_tools: nested_bool(execution, "has_changes_before_tools")
             .unwrap_or(false),
         exposed_tools_count: nested_usize(execution, "exposed_tools_count"),
+        started_at_unix_ms: nested_u64(execution, "started_at_unix_ms"),
+        finished_at_unix_ms: nested_u64(execution, "finished_at_unix_ms"),
     }
 }
 
@@ -1552,7 +1556,9 @@ mod tests {
                         "pre_executed": false,
                         "action_checkpoint_active": true,
                         "has_changes_before_tools": true,
-                        "exposed_tools_count": 15
+                        "exposed_tools_count": 15,
+                        "started_at_unix_ms": 1770000000000u64,
+                        "finished_at_unix_ms": 1770000000042u64
                     }
                 }
             }),
@@ -1607,6 +1613,14 @@ mod tests {
         assert!(records[0].execution.action_checkpoint_active);
         assert!(records[0].execution.has_changes_before_tools);
         assert_eq!(records[0].execution.exposed_tools_count, Some(15));
+        assert_eq!(
+            records[0].execution.started_at_unix_ms,
+            Some(1_770_000_000_000)
+        );
+        assert_eq!(
+            records[0].execution.finished_at_unix_ms,
+            Some(1_770_000_000_042)
+        );
     }
 
     #[test]

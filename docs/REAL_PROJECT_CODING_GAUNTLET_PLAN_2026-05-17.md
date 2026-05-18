@@ -263,11 +263,11 @@ Current record coverage:
 - file evidence links from each tool execution record to the file facts created
   by the same write/read/patch tool result;
 - structured output metadata keys, display/truncation hints, file counts,
-  diagnostics summaries, and shell status/evidence fields.
+  diagnostics summaries, and shell status/evidence fields;
+- execution start and finish timestamps when the runtime owns the tool call.
 
 The record should cover:
 
-- start/end timestamps;
 - route-level repair/closeout relevance policy.
 
 Consumers:
