@@ -259,13 +259,14 @@ Current record coverage:
   change, and exposed-tool-count state;
 - permission request id/session id, approval outcome, matched patterns,
   always-allow provenance, permission family, decision, risk, and approval-source
-  flags.
+  flags;
+- file evidence links from each tool execution record to the file facts created
+  by the same write/read/patch tool result.
 
 The record should cover:
 
 - start/end timestamps;
 - richer structured output metadata;
-- diff/file evidence links for write tools;
 - route-level repair/closeout relevance policy.
 
 Consumers:

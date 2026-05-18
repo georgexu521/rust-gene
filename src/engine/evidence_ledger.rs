@@ -41,6 +41,7 @@ pub struct ToolExecutionRecord {
     pub safe_for_closeout: Option<bool>,
     pub terminal_task: Option<TerminalTaskRecord>,
     pub changed_paths: Vec<String>,
+    pub file_evidence: Vec<ToolFileEvidenceLink>,
     pub relevance: ToolExecutionRelevance,
     pub execution: ToolExecutionContextRecord,
 }
@@ -73,6 +74,16 @@ pub struct ToolPermissionSourceRecord {
     pub permission_family: Option<String>,
     pub permission_decision: Option<String>,
     pub risk_level: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolFileEvidenceLink {
+    pub fact_index: usize,
+    pub path: Option<String>,
+    pub kind: Option<String>,
+    pub line_start: Option<u64>,
+    pub line_end: Option<u64>,
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -248,15 +259,19 @@ impl EvidenceLedger {
     }
 
     pub fn record_tool_result(&mut self, tool_call: &ToolCall, result: &ToolResult) {
-        self.record_tool_execution_record(tool_call, result);
-        self.record_permission_tool_result(tool_call, result);
+        let file_fact_start = self.file_facts.len();
         match tool_call.name.as_str() {
-            "bash" => self.record_bash_tool_result(tool_call, result),
             "file_patch" => self.record_file_patch_tool_result(result),
             "file_read" | "file_write" | "file_edit" | "glob" | "grep" => {
                 self.record_file_tool_result(tool_call, result)
             }
             _ => {}
+        }
+        let file_evidence = self.file_evidence_links_since(file_fact_start);
+        self.record_tool_execution_record(tool_call, result, file_evidence);
+        self.record_permission_tool_result(tool_call, result);
+        if tool_call.name == "bash" {
+            self.record_bash_tool_result(tool_call, result);
         }
     }
 
@@ -557,7 +572,28 @@ impl EvidenceLedger {
         }
     }
 
-    fn record_tool_execution_record(&mut self, tool_call: &ToolCall, result: &ToolResult) {
+    fn file_evidence_links_since(&self, start: usize) -> Vec<ToolFileEvidenceLink> {
+        self.file_facts
+            .iter()
+            .enumerate()
+            .skip(start)
+            .map(|(fact_index, fact)| ToolFileEvidenceLink {
+                fact_index,
+                path: fact.path.clone(),
+                kind: fact.kind.clone(),
+                line_start: fact.line_start,
+                line_end: fact.line_end,
+                content_hash: fact.content_hash.clone(),
+            })
+            .collect()
+    }
+
+    fn record_tool_execution_record(
+        &mut self,
+        tool_call: &ToolCall,
+        result: &ToolResult,
+        file_evidence: Vec<ToolFileEvidenceLink>,
+    ) {
         let summary = tool_summary(result);
         let command = tool_call
             .arguments
@@ -612,6 +648,7 @@ impl EvidenceLedger {
             safe_for_closeout,
             terminal_task: terminal_task_record(result),
             changed_paths,
+            file_evidence,
             relevance,
             execution: tool_execution_context_record(result),
         });
@@ -1192,6 +1229,10 @@ mod tests {
         assert_eq!(snapshot.tool_execution_records, 1);
         assert_eq!(snapshot.file_facts, 1);
         assert_eq!(snapshot.command_facts, 0);
+        let record = &ledger.tool_execution_records()[0];
+        assert_eq!(record.file_evidence.len(), 1);
+        assert_eq!(record.file_evidence[0].fact_index, 0);
+        assert_eq!(record.file_evidence[0].path.as_deref(), Some("src/app.py"));
     }
 
     #[test]
@@ -1332,6 +1373,14 @@ mod tests {
         assert_eq!(fact.truncated, Some(false));
         assert!(fact.summary.contains("bytes_written=42"));
         assert!(fact.summary.contains("changed_line_start=3"));
+        let record = &ledger.tool_execution_records()[0];
+        assert_eq!(record.file_evidence.len(), 2);
+        assert_eq!(record.file_evidence[0].fact_index, 0);
+        assert_eq!(record.file_evidence[0].path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(record.file_evidence[0].line_start, Some(3));
+        assert_eq!(record.file_evidence[1].fact_index, 1);
+        assert_eq!(record.file_evidence[1].path.as_deref(), Some("README.md"));
+        assert_eq!(record.file_evidence[1].line_end, Some(8));
     }
 
     #[test]
