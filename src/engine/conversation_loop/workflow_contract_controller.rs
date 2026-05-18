@@ -1,3 +1,4 @@
+use super::risk_signal_controller::{RiskSignalController, RiskSignalInput};
 use super::workflow_runtime::{
     persist_workflow_learning_event, turn_entry_workflow_contract_activation,
 };
@@ -52,15 +53,20 @@ impl WorkflowContractController {
             context.route.clone(),
             context.working_dir.display().to_string(),
         );
-        let mut activation = turn_entry_workflow_contract_activation(
-            context.provider,
-            context.route,
-            context.required_validation_commands,
-        );
-        if !context.code_workflow.should_request_workflow_judgment() {
-            activation.active = false;
-            activation.reason = "workflow runner did not request entry judgment".to_string();
-        } else if !prompt.should_ask_model() {
+        let risk_signal = RiskSignalController::assess_turn_entry(RiskSignalInput {
+            route: context.route,
+            task_bundle: context.task_bundle,
+            required_validation_commands: context.required_validation_commands,
+        });
+        context.trace.record(TraceEvent::RiskSignalAssessed {
+            phase: "turn_entry".to_string(),
+            level: risk_signal.level.label().to_string(),
+            entry_contract: risk_signal.entry_contract,
+            reasons: risk_signal.reasons.clone(),
+        });
+        let mut activation =
+            turn_entry_workflow_contract_activation(context.provider, &risk_signal);
+        if !prompt.should_ask_model() && !risk_signal.entry_contract {
             activation.active = false;
             activation.reason = "route is not eligible for entry workflow judgment".to_string();
         }

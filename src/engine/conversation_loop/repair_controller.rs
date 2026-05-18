@@ -1,3 +1,4 @@
+use super::risk_signal_controller::{RiskSignalController, RuntimeRiskSignalInput};
 use super::workflow_runtime::{
     is_high_risk_workflow, persist_workflow_learning_event, workflow_contract_enabled,
 };
@@ -83,6 +84,26 @@ impl ConversationLoop {
             context.post_edit_evidence,
         );
         if !context.verify_passed {
+            let syntax_error = context.post_edit_evidence.iter().any(|item| {
+                let lower = item.to_ascii_lowercase();
+                lower.contains("syntaxerror")
+                    || lower.contains("indentationerror")
+                    || lower.contains("parse error")
+            });
+            if let Some(assessment) =
+                RiskSignalController::assess_runtime_failure(RuntimeRiskSignalInput {
+                    failed_validation_commands: context.failed_commands,
+                    failed_tool_evidence: &[],
+                    syntax_error,
+                })
+            {
+                context.trace.record(TraceEvent::RiskSignalAssessed {
+                    phase: "runtime".to_string(),
+                    level: assessment.level.label().to_string(),
+                    entry_contract: assessment.entry_contract,
+                    reasons: assessment.reasons,
+                });
+            }
             if context
                 .code_workflow
                 .activate_trigger(AdaptiveWorkflowTrigger::VerificationFailed)

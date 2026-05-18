@@ -1,4 +1,5 @@
-use crate::engine::intent_router::{IntentRoute, RiskLevel, WorkflowKind};
+use super::risk_signal_controller::RiskSignalAssessment;
+use crate::engine::intent_router::{IntentRoute, RiskLevel};
 use crate::engine::workflow_contract::ProgrammingWorkflowJudgment;
 use crate::services::api::LlmProvider;
 use crate::session_store::SessionStore;
@@ -58,8 +59,7 @@ fn workflow_contract_env_mode(value: &str) -> WorkflowContractMode {
 
 pub(super) fn turn_entry_workflow_contract_activation(
     provider: &dyn LlmProvider,
-    route: &IntentRoute,
-    required_validation_commands: &[String],
+    risk_signal: &RiskSignalAssessment,
 ) -> WorkflowContractActivation {
     let mode = workflow_contract_mode(provider);
     match mode {
@@ -75,40 +75,28 @@ pub(super) fn turn_entry_workflow_contract_activation(
             active: true,
             reason: "workflow contract mode is force".to_string(),
         },
-        WorkflowContractMode::Auto => {
-            match auto_turn_entry_reason(route, required_validation_commands) {
-                Some(reason) => WorkflowContractActivation {
-                    mode,
-                    phase: "turn_entry",
-                    active: true,
-                    reason: reason.to_string(),
-                },
-                None => WorkflowContractActivation {
-                    mode,
-                    phase: "turn_entry",
-                    active: false,
-                    reason: "auto mode skipped entry judgment for ordinary programming turn"
-                        .to_string(),
-                },
-            }
-        }
+        WorkflowContractMode::Auto => match auto_turn_entry_reason(risk_signal) {
+            Some(reason) => WorkflowContractActivation {
+                mode,
+                phase: "turn_entry",
+                active: true,
+                reason,
+            },
+            None => WorkflowContractActivation {
+                mode,
+                phase: "turn_entry",
+                active: false,
+                reason: "auto mode skipped entry judgment for ordinary programming turn"
+                    .to_string(),
+            },
+        },
     }
 }
 
-fn auto_turn_entry_reason(
-    route: &IntentRoute,
-    required_validation_commands: &[String],
-) -> Option<&'static str> {
-    if matches!(route.risk, RiskLevel::High) {
-        return Some("route risk is high");
-    }
-    if matches!(route.workflow, WorkflowKind::BugFix) {
-        return Some("bug-fix workflow benefits from explicit acceptance judgment");
-    }
-    if required_validation_commands.len() >= 4 {
-        return Some("complex required-validation surface");
-    }
-    None
+fn auto_turn_entry_reason(risk_signal: &RiskSignalAssessment) -> Option<String> {
+    risk_signal
+        .entry_contract
+        .then(|| risk_signal.contract_reason())
 }
 
 pub(super) fn persist_workflow_learning_event(
@@ -146,6 +134,7 @@ pub(super) fn is_high_risk_workflow(
 
 #[cfg(test)]
 mod tests {
+    use super::super::risk_signal_controller::RiskSignalLevel;
     use super::*;
     use crate::engine::intent_router::{
         IntentKind, ReasoningPolicy, RetrievalPolicy, WorkflowKind,
@@ -190,6 +179,18 @@ mod tests {
         }
     }
 
+    fn risk_signal(entry_contract: bool, reason: &str) -> RiskSignalAssessment {
+        RiskSignalAssessment {
+            level: if entry_contract {
+                RiskSignalLevel::High
+            } else {
+                RiskSignalLevel::Ordinary
+            },
+            reasons: vec![reason.to_string()],
+            entry_contract,
+        }
+    }
+
     #[test]
     fn workflow_contract_env_false_values_disable_contract() {
         for value in ["0", "false", "off", "no", " FALSE "] {
@@ -218,30 +219,15 @@ mod tests {
     }
 
     #[test]
-    fn auto_turn_entry_targets_high_risk_bugfix_or_complex_validation() {
+    fn auto_turn_entry_uses_risk_signal_assessment() {
         assert_eq!(
-            auto_turn_entry_reason(&route(RiskLevel::High), &[]),
-            Some("route risk is high")
+            auto_turn_entry_reason(&risk_signal(true, "core runtime path referenced")),
+            Some("core runtime path referenced".to_string())
         );
 
-        let mut bugfix = route(RiskLevel::Medium);
-        bugfix.workflow = WorkflowKind::BugFix;
         assert_eq!(
-            auto_turn_entry_reason(&bugfix, &[]),
-            Some("bug-fix workflow benefits from explicit acceptance judgment")
+            auto_turn_entry_reason(&risk_signal(false, "ordinary")),
+            None
         );
-
-        let commands = vec![
-            "cargo test a".to_string(),
-            "cargo test b".to_string(),
-            "rg c".to_string(),
-            "cargo test".to_string(),
-        ];
-        assert_eq!(
-            auto_turn_entry_reason(&route(RiskLevel::Medium), &commands),
-            Some("complex required-validation surface")
-        );
-
-        assert_eq!(auto_turn_entry_reason(&route(RiskLevel::Medium), &[]), None);
     }
 }

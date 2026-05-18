@@ -175,7 +175,7 @@ mod tests {
 
         assert_eq!(
             bootstrap.code_workflow.adaptive_trigger_labels(),
-            vec!["required_validation"]
+            vec!["risk_signal_high", "required_validation"]
         );
         let finished = trace.finish(TurnStatus::Completed);
         assert!(finished.events.iter().any(|event| matches!(

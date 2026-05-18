@@ -36,6 +36,7 @@ mod repair_controller;
 mod request_preparation_controller;
 mod retrieval_context_builder;
 mod retrieval_prompt_controller;
+mod risk_signal_controller;
 #[cfg(test)]
 mod route_scoped_tools_tests;
 mod runtime_diet;

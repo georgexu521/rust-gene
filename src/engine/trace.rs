@@ -182,6 +182,12 @@ pub enum TraceEvent {
         active: bool,
         reason: String,
     },
+    RiskSignalAssessed {
+        phase: String,
+        level: String,
+        entry_contract: bool,
+        reasons: Vec<String>,
+    },
     AdaptiveWorkflowTriggered {
         trigger: String,
         depth: String,
@@ -389,6 +395,7 @@ impl TraceEvent {
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
             TraceEvent::WorkflowContractActivation { .. } => "workflow.contract",
+            TraceEvent::RiskSignalAssessed { .. } => "risk.signal",
             TraceEvent::AdaptiveWorkflowTriggered { .. } => "workflow.trigger",
             TraceEvent::MemorySnapshotInjected { .. } => "memory.snapshot",
             TraceEvent::MemoryPrefetch { .. } => "memory.prefetch",
@@ -651,6 +658,18 @@ impl TraceEvent {
                 phase,
                 active,
                 preview(reason)
+            ),
+            TraceEvent::RiskSignalAssessed {
+                phase,
+                level,
+                entry_contract,
+                reasons,
+            } => format!(
+                "risk signal phase={} level={} entry_contract={} reasons={}",
+                phase,
+                level,
+                entry_contract,
+                preview(&reasons.join("; "))
             ),
             TraceEvent::AdaptiveWorkflowTriggered {
                 trigger,

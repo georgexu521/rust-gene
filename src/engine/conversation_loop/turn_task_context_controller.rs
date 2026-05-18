@@ -1,6 +1,10 @@
+use super::risk_signal_controller::{RiskSignalController, RiskSignalInput};
 use super::turn_runtime_state::TurnRuntimeState;
 use super::validation_runner::{RequiredValidationController, RequiredValidationTriggerContext};
-use crate::engine::code_change_workflow::{is_programming_workflow, CodeChangeWorkflowRunner};
+use super::workflow_trace::trace_adaptive_workflow_trigger;
+use crate::engine::code_change_workflow::{
+    is_programming_workflow, AdaptiveWorkflowTrigger, CodeChangeWorkflowRunner,
+};
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
@@ -42,9 +46,24 @@ impl TurnTaskContextSetupController {
         }
         Self::apply_resource_policy_constraint(&mut task_bundle, context.resource_policy);
         Self::apply_programming_workflow_risk(&mut task_bundle);
+        let risk_signal = RiskSignalController::assess_turn_entry(RiskSignalInput {
+            route: context.route,
+            task_bundle: &task_bundle,
+            required_validation_commands: context.required_validation_commands,
+        });
+        RiskSignalController::apply_to_task_bundle(&risk_signal, &mut task_bundle);
 
         let mut code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
         let turn_state = TurnRuntimeState::new(context.route_scoped_tools_enabled);
+        if risk_signal.entry_contract
+            && code_workflow.activate_trigger(AdaptiveWorkflowTrigger::RiskSignalHigh)
+        {
+            trace_adaptive_workflow_trigger(
+                context.trace,
+                AdaptiveWorkflowTrigger::RiskSignalHigh,
+                &code_workflow,
+            );
+        }
         RequiredValidationController::record_initial_trigger(RequiredValidationTriggerContext {
             commands: context.required_validation_commands,
             code_workflow: &mut code_workflow,
@@ -146,7 +165,7 @@ mod tests {
 
         assert_eq!(
             setup.code_workflow.adaptive_trigger_labels(),
-            vec!["required_validation"]
+            vec!["risk_signal_high", "required_validation"]
         );
         assert!(!setup.turn_state.runtime_diet.route_scoped_tools);
         let finished = trace.finish(TurnStatus::Completed);

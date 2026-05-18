@@ -1,3 +1,4 @@
+use super::risk_signal_controller::{RiskSignalController, RuntimeRiskSignalInput};
 use super::workflow_runtime::{persist_workflow_learning_event, workflow_contract_enabled};
 use super::workflow_trace::apply_workflow_feedback_and_trace;
 use crate::engine::task_context::TaskContextBundle;
@@ -30,9 +31,24 @@ pub(super) struct GuidedToolFailureDebuggingController;
 
 impl GuidedToolFailureDebuggingController {
     pub(super) async fn run(context: GuidedToolFailureDebuggingContext<'_>) {
-        if !Self::should_run(context.any_tool_success, context.failed_tool_evidence)
-            || !workflow_contract_enabled(context.provider)
-        {
+        let should_run = Self::should_run(context.any_tool_success, context.failed_tool_evidence);
+        if should_run {
+            if let Some(assessment) =
+                RiskSignalController::assess_runtime_failure(RuntimeRiskSignalInput {
+                    failed_validation_commands: &[],
+                    failed_tool_evidence: context.failed_tool_evidence,
+                    syntax_error: false,
+                })
+            {
+                context.trace.record(TraceEvent::RiskSignalAssessed {
+                    phase: "runtime".to_string(),
+                    level: assessment.level.label().to_string(),
+                    entry_contract: assessment.entry_contract,
+                    reasons: assessment.reasons,
+                });
+            }
+        }
+        if !should_run || !workflow_contract_enabled(context.provider) {
             return;
         }
 

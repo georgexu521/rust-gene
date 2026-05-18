@@ -49,10 +49,12 @@ Current stage:
   failures.
 - Workflow contract targeting is now implemented. `PRIORITY_AGENT_WORKFLOW_CONTRACT`
   supports `off`, `auto`, and `force`; unset defaults to `auto`. Entry workflow
-  judgment is skipped for ordinary medium feature work, but remains active for
-  high-risk/bug-fix/complex-validation turns, and guided debugging still runs
-  after validation or tool failures. See
-  `docs/WORKFLOW_CONTRACT_TARGETING_PLAN_2026-05-18.md`.
+  judgment is skipped for ordinary medium feature work, but remains active when
+  `RiskSignalController` sees concrete high-risk runtime, provider, memory,
+  tool-execution, permission, config/schema, required-validation, or acceptance
+  signals; dynamic validation/tool failures now record `risk.signal` trace
+  events. See `docs/WORKFLOW_CONTRACT_TARGETING_PLAN_2026-05-18.md` and
+  `docs/RISK_SIGNAL_CONTROLLER_PLAN_2026-05-18.md`.
 
 The recent closure plan is complete:
 
@@ -92,10 +94,12 @@ integration that injects repair-relevant tool-record evidence into `RepairSpec`
 and guided validation debugging, and first `/trace` replay/debug surfacing of
 durable tool-record evidence, including persisted current-session recent-trace
 replay merged with in-memory traces, plus workflow-contract auto targeting and
-activation trace/report surfacing:
+activation trace/report surfacing, plus
+risk-signal controller targeting for high-risk runtime/provider/memory/tool/
+permission/config/schema/validation surfaces:
 
 ```text
-1462 passed; 0 failed
+1468 passed; 0 failed
 ```
 
 Latest live product baseline:
@@ -149,6 +153,12 @@ code-change-verification-repair-loop: status=ok,
 core-permission-rejection-recovery: status=ok,
   contract=entry=active:auto repair=not_needed
 ```
+Latest risk-signal controller checkpoint:
+- deterministic local tests: 1468 passed; 0 failed
+- `risk_signal_high` now upgrades workflow policy for concrete high-risk
+  surfaces before editing
+- live-eval reports now include `risk_signal: entry=<level> runtime=<level>`
+  and a `risk` summary column
 targeted closeout-evidence rerun:
 - terminal-closeout-20260517-191432: status=ok, failure_owner=none,
   required_command_status=ok, closeout_status=passed,

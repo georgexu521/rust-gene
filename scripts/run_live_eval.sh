@@ -1356,6 +1356,7 @@ acceptance_events = [event for event in trace_events if event.get("type") == "ac
 closeout_events = [event for event in trace_events if event.get("type") == "final_closeout_prepared"]
 adaptive_trigger_events = [event for event in trace_events if event.get("type") == "adaptive_workflow_triggered"]
 runtime_diet_events = [event for event in trace_events if event.get("type") == "runtime_diet_report"]
+risk_signal_events = [event for event in trace_events if event.get("type") == "risk_signal_assessed"]
 adaptive_triggers = []
 for event in adaptive_trigger_events:
     trigger = str(event.get("trigger", "")).strip()
@@ -1366,6 +1367,8 @@ latest_stage_validation = stage_validation_events[-1] if stage_validation_events
 latest_closeout = closeout_events[-1] if closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
 latest_runtime_diet = runtime_diet_events[-1] if runtime_diet_events else {}
+entry_risk_signal = next((event for event in reversed(risk_signal_events) if event.get("phase") == "turn_entry"), {})
+runtime_risk_signal = next((event for event in reversed(risk_signal_events) if event.get("phase") == "runtime"), {})
 closeout_status = str(latest_closeout.get("status", "missing")).lower()
 runtime_validation = str(latest_runtime_diet.get("validation_evidence", "")).lower()
 
@@ -1448,6 +1451,11 @@ if latest_runtime_diet:
 else:
     print("runtime_diet: missing")
 print(f"adaptive_triggers: {','.join(adaptive_triggers) if adaptive_triggers else 'none'}")
+risk_entry = entry_risk_signal.get("level", "missing") if entry_risk_signal else "missing"
+risk_runtime = runtime_risk_signal.get("level", "none") if runtime_risk_signal else "none"
+print(f"risk_signal: entry={risk_entry} runtime={risk_runtime}")
+if entry_risk_signal:
+    print("risk_signal_reasons: " + "; ".join(str(item) for item in (entry_risk_signal.get("reasons") or [])))
 if trace_types:
     print("trace_event_types: " + ",".join(trace_types[-12:]))
 stale_edit_warnings = stderr_text.count("was modified since it was read")
@@ -1714,6 +1722,7 @@ closeout_events = trace_events_of("final_closeout_prepared")
 adaptive_trigger_events = trace_events_of("adaptive_workflow_triggered")
 runtime_diet_events = trace_events_of("runtime_diet_report")
 workflow_contract_events = trace_events_of("workflow_contract_activation")
+risk_signal_events = trace_events_of("risk_signal_assessed")
 progress_events = [event for event in events if event.get("event") == "tool_execution_progress"]
 memory_tools = [
     event
@@ -1762,6 +1771,8 @@ latest_plan = weighted_plan_events[-1] if weighted_plan_events else {}
 latest_closeout = closeout_events[-1] if closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
 latest_runtime_diet = runtime_diet_events[-1] if runtime_diet_events else {}
+entry_risk_signal = next((event for event in reversed(risk_signal_events) if event.get("phase") == "turn_entry"), {})
+runtime_risk_signal = next((event for event in reversed(risk_signal_events) if event.get("phase") == "runtime"), {})
 entry_contract_events = [
     event for event in workflow_contract_events if event.get("phase") == "turn_entry"
 ]
@@ -1794,6 +1805,11 @@ for key, value in signals.items():
 print(f"active_specialty_signals: {active_count}/{len(signals)}")
 print(f"workflow_contract_activation: entry={entry_label} repair={repair_label}")
 print(f"workflow_contract_events: {len(workflow_contract_events)}")
+risk_entry = entry_risk_signal.get("level", "missing") if entry_risk_signal else "missing"
+risk_runtime = runtime_risk_signal.get("level", "none") if runtime_risk_signal else "none"
+print(f"risk_signal: entry={risk_entry} runtime={risk_runtime}")
+if entry_risk_signal:
+    print("risk_signal_reasons: " + "; ".join(str(item) for item in (entry_risk_signal.get("reasons") or [])))
 print(f"memory_sync_events: {trace_count('memory.sync')}")
 print(f"memory_tool_calls: {len(memory_tools)}")
 print(f"retrieval_sources: {','.join(memory_sources) if memory_sources else 'none'}")
@@ -2038,37 +2054,37 @@ lines.extend([
     "",
     "## Coding Gauntlet Evidence",
     "",
-    "| task | gauntlet_status | first_pass_signal | coding | required | closeout | contract | first_write | diff | warnings |",
-    "|------|-----------------|-------------------|--------|----------|----------|----------|-------------|------|----------|",
+    "| task | gauntlet_status | first_pass_signal | coding | required | closeout | contract | risk | first_write | diff | warnings |",
+    "|------|-----------------|-------------------|--------|----------|----------|----------|------|-------------|------|----------|",
 ])
 
 if coding_rows:
     for row in coding_rows:
         lines.append(
-            "| {task} | {coding_gauntlet_status} | {first_pass_signal} | {coding} | {required} | {closeout} | {workflow_contract_activation} | {first_write} | {diff} | {warnings} |".format(
+            "| {task} | {coding_gauntlet_status} | {first_pass_signal} | {coding} | {required} | {closeout} | {workflow_contract_activation} | {risk_signal} | {first_write} | {diff} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | not_applicable | unknown | tools=0, tool_records=0, validations=0, repair=0, files=0 | missing | missing | missing | missing | no | none |")
+    lines.append("| none | not_applicable | unknown | tools=0, tool_records=0, validations=0, repair=0, files=0 | missing | missing | missing | missing | missing | no | none |")
 
 lines.extend([
     "",
     "## Task Matrix",
     "",
-    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | contract | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |",
-    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|----------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|",
+    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | contract | risk | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |",
+    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|----------|------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|",
 ])
 
 if rows:
     for row in rows:
         lines.append(
-            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {workflow_contract_activation} | {behavior_assertions} | {behavior_assertion_status} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
+            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {workflow_contract_activation} | {risk_signal} | {behavior_assertions} | {behavior_assertion_status} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | missing | none | none | none | missing | none | no | none | none | none |")
+    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | missing | none | missing | none | none | missing | none | no | none | none | none |")
 
 lines.extend([
     "",

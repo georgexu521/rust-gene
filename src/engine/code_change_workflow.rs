@@ -42,6 +42,7 @@ pub enum StageValidationStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdaptiveWorkflowTrigger {
+    RiskSignalHigh,
     RequiredValidation,
     FirstCodeChange,
     VerificationFailed,
@@ -52,6 +53,7 @@ pub enum AdaptiveWorkflowTrigger {
 impl AdaptiveWorkflowTrigger {
     pub fn label(self) -> &'static str {
         match self {
+            Self::RiskSignalHigh => "risk_signal_high",
             Self::RequiredValidation => "required_validation",
             Self::FirstCodeChange => "first_code_change",
             Self::VerificationFailed => "verification_failed",
@@ -466,6 +468,17 @@ impl CodeChangeWorkflowRunner {
 
     fn apply_trigger_to_policy(&mut self, trigger: AdaptiveWorkflowTrigger) {
         match trigger {
+            AdaptiveWorkflowTrigger::RiskSignalHigh => {
+                self.policy.require_workflow_judgment = true;
+                self.policy.require_stage_validation = true;
+                self.policy.require_final_closeout = true;
+                self.policy.max_repair_attempts = self.policy.max_repair_attempts.max(2);
+                self.policy.visibility = WorkflowVisibility::Normal;
+                self.policy.reason = append_reason(
+                    &self.policy.reason,
+                    "high runtime risk signal activated workflow judgment and validation",
+                );
+            }
             AdaptiveWorkflowTrigger::RequiredValidation => {
                 self.policy.require_workflow_judgment = true;
                 self.policy.require_stage_validation = true;
@@ -1279,6 +1292,22 @@ mod tests {
             runner.adaptive_trigger_labels(),
             vec!["required_validation"]
         );
+    }
+
+    #[test]
+    fn high_risk_signal_trigger_requests_workflow_judgment() {
+        let route = code_change_route(RiskLevel::Medium);
+        let bundle = TaskContextBundle::new("修改 provider runtime", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        assert!(!runner.should_request_workflow_judgment());
+        assert!(runner.activate_trigger(AdaptiveWorkflowTrigger::RiskSignalHigh));
+
+        assert!(runner.should_request_workflow_judgment());
+        assert!(runner.policy.require_stage_validation);
+        assert!(runner.policy.require_final_closeout);
+        assert_eq!(runner.policy.max_repair_attempts, 2);
+        assert_eq!(runner.adaptive_trigger_labels(), vec!["risk_signal_high"]);
     }
 
     #[test]

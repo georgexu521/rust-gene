@@ -24,9 +24,9 @@ Add explicit workflow contract modes through `PRIORITY_AGENT_WORKFLOW_CONTRACT`:
   eligible programming route.
 - `auto`: default. Run entry workflow judgment only when the turn is likely to
   need it:
-  - high-risk route;
+  - high-risk route or high-risk runtime surface;
   - bug-fix/debugging route;
-  - complex required-validation surface.
+  - required-validation, broad validation, or acceptance-assertion surface.
 
 Failure-time guided debugging and repair review should remain available in
 `auto` mode after validation failure, acceptance rejection, or tool-failure
@@ -49,8 +49,9 @@ feature work through extra model judgment.
 - Existing `1/true/on/yes` values preserve force-on behavior for compatibility.
 - Unset environment defaults to `auto`.
 - Medium ordinary code-change routes skip entry workflow judgment in `auto`.
-- High-risk, bug-fix, or complex validation routes run entry workflow judgment in
-  `auto`.
+- High-risk runtime surfaces, bug-fix/debugging turns, required-validation
+  commands, broad validation, and acceptance assertions run entry workflow
+  judgment in `auto`.
 - Guided debugging still runs after validation/tool failures in `auto`.
 - Live-eval report output shows whether workflow contract was skipped, active at
   turn entry, or active during repair.
@@ -63,12 +64,27 @@ feature work through extra model judgment.
   - `1`, `true`, `on`, `yes` preserve force-on behavior.
   - unset now defaults to `auto`.
 - Entry workflow judgment now records a `workflow_contract_activation` trace
-  event and only runs in `auto` for high-risk routes, bug-fix routes, or complex
-  required-validation surfaces.
+  event and only runs in `auto` when the risk-signal assessment asks for an
+  entry contract.
 - Guided debugging after tool/validation failure remains available in `auto`.
 - Live-eval reports and summaries now include a `contract` column such as
   `entry=skipped:auto repair=none` or
   `entry=active:auto repair=active_after_failure`.
+
+Follow-up risk-signal refinement:
+
+- Added `RiskSignalController` to evaluate concrete task signals before
+  workflow-contract activation. See
+  `docs/RISK_SIGNAL_CONTROLLER_PLAN_2026-05-18.md`.
+- Entry activation in `auto` now reads the risk-signal assessment instead of the
+  older coarse helper.
+- High-risk signals also activate `risk_signal_high`, which asks the workflow
+  policy for judgment, stage validation, final closeout, and at least two repair
+  attempts.
+- Runtime validation/tool failures record dynamic `risk.signal` trace events so
+  report consumers can see when the task became heavier after failure.
+- Live-eval reports and summaries now include a `risk` column such as
+  `entry=high runtime=none` or `entry=ordinary runtime=high`.
 
 Validation:
 
