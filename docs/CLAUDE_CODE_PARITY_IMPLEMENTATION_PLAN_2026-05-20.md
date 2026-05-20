@@ -1251,6 +1251,14 @@ Progress, 2026-05-20:
 - Done: wired forked/background LLM memory extraction through
   `MemorySyncController` when `PRIORITY_AGENT_LLM_MEMORY_FORKED=1`, while the
   non-forked LLM path now marks extraction attempts for throttle and telemetry.
+- Done: added explicit retained-context metadata to `ToolContext`, carrying
+  per-turn retrieval provenance and skill triggers into tools, hooks,
+  permissions, and future subagent context builders without injecting large
+  prompt bodies into tools.
+- Done: `TurnContextBootstrapController` now builds the retained context from
+  retrieval results and `SkillRuntime` search, `TurnRuntimeContext` carries it
+  through the tool round, and tool-result runtime metadata records retained
+  retrieval/skill counts plus provenance.
 - Validation: `cargo test -q test_compact_boundary_embedded_in_compression`,
   `cargo test -q records_preflight_budget_when_compressor_is_available`, and
   `cargo check -q` all passed.
@@ -1261,8 +1269,15 @@ Progress, 2026-05-20:
   `cargo test -q context_compressor`, `cargo test -q memory_sync_controller`,
   `cargo test -q test_extraction_stats`, and `cargo check -q` all passed after
   the `context_collapse`/background-memory slice.
-- Remaining: deeper project/skill memory retention in `ToolUseContext` can
-  stay as the next Phase 7 slice.
+- Validation: `cargo test -q retained_context`,
+  `cargo test -q test_unexposed_tool_call_is_denied_before_execution`,
+  `cargo test -q turn_runtime_context`,
+  `cargo test -q empty_round_returns_empty_round_state`,
+  `cargo test -q plain_model_response_breaks_iteration`, and `cargo check -q`
+  all passed after the retained-context slice.
+- Phase 7 code status: complete enough to move into Phase 8. Remaining work is
+  product hardening and real-task validation rather than another Phase 7 code
+  prerequisite.
 
 ### Phase 8: Subagent And Task Runtime
 

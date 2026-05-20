@@ -559,6 +559,97 @@ pub trait Tool: Send + Sync {
 }
 
 /// 工具执行上下文
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolContextRetentionItem {
+    pub source: String,
+    pub title: String,
+    pub provenance: String,
+    pub reason: String,
+    pub trust: String,
+    pub conflict: bool,
+    pub token_estimate: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolContextSkillTrigger {
+    pub name: String,
+    pub description: String,
+    pub triggers: Vec<String>,
+    pub allowed_tools: Vec<String>,
+    pub disallowed_tools: Vec<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub context: Option<String>,
+    pub provenance: String,
+}
+
+/// Per-turn context retained for tools, hooks, permissions, and subagents.
+///
+/// This is intentionally metadata-only: prompt-sized memory/skill bodies stay
+/// in prompt assembly, while tools get stable provenance about what was kept.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolContextRetainedContext {
+    pub query: String,
+    pub retrieval_policy: Option<String>,
+    pub retrieval_items: Vec<ToolContextRetentionItem>,
+    pub skill_triggers: Vec<ToolContextSkillTrigger>,
+    pub token_estimate: usize,
+    pub provenance: Vec<String>,
+}
+
+impl ToolContextRetainedContext {
+    pub fn from_retrieval_context(
+        query: impl Into<String>,
+        context: Option<&crate::engine::retrieval_context::RetrievalContext>,
+    ) -> Self {
+        let query = query.into();
+        let Some(context) = context else {
+            return Self {
+                query,
+                ..Self::default()
+            };
+        };
+
+        let retrieval_items = context
+            .items
+            .iter()
+            .map(|item| ToolContextRetentionItem {
+                source: format!("{:?}", item.source),
+                title: item.title.clone(),
+                provenance: item.provenance.clone(),
+                reason: item.reason.clone(),
+                trust: format!("{:?}", item.trust),
+                conflict: item.conflict,
+                token_estimate: item.token_estimate,
+            })
+            .collect::<Vec<_>>();
+        let mut provenance = context.provenance_summaries();
+        provenance.push(format!("retrieval_items={}", retrieval_items.len()));
+
+        Self {
+            query,
+            retrieval_policy: Some(format!("{:?}", context.policy)),
+            retrieval_items,
+            skill_triggers: Vec::new(),
+            token_estimate: context.token_estimate,
+            provenance,
+        }
+    }
+
+    pub fn with_skill_triggers(mut self, skill_triggers: Vec<ToolContextSkillTrigger>) -> Self {
+        if !skill_triggers.is_empty() {
+            self.provenance
+                .push(format!("skill_triggers={}", skill_triggers.len()));
+        }
+        self.skill_triggers = skill_triggers;
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.retrieval_items.is_empty() && self.skill_triggers.is_empty()
+    }
+}
+
 #[derive(Clone)]
 pub struct ToolContext {
     // ── 核心字段 ──
@@ -578,6 +669,8 @@ pub struct ToolContext {
     // ── 额外数据 ──
     /// 额外上下文数据
     pub metadata: HashMap<String, String>,
+    /// Per-turn retained memory/skill context visible to tools and hooks.
+    pub retained_context: ToolContextRetainedContext,
 
     // ── 子系统管理器（按需注入） ──
     /// LLM Provider（socratic_analyze、swarm 等需要调用 LLM 的工具）
@@ -615,6 +708,7 @@ impl std::fmt::Debug for ToolContext {
             .field("model", &self.model)
             .field("permissions", &self.permissions)
             .field("metadata", &self.metadata)
+            .field("retained_context", &self.retained_context)
             .field(
                 "llm_provider",
                 &self.llm_provider.as_ref().map(|_| "<LlmProvider>"),
@@ -665,6 +759,7 @@ impl ToolContext {
             model: String::new(),
             permissions: ToolPermissions::default(),
             metadata: HashMap::new(),
+            retained_context: ToolContextRetainedContext::default(),
             llm_provider: None,
             agent_manager: None,
             trace_collector: None,
@@ -794,6 +889,12 @@ impl ToolContext {
         manager: std::sync::Arc<tokio::sync::Mutex<crate::engine::checkpoint::CheckpointManager>>,
     ) -> Self {
         self.checkpoint_manager = Some(manager);
+        self
+    }
+
+    /// Attach per-turn retained memory/skill context to downstream tools.
+    pub fn with_retained_context(mut self, retained: ToolContextRetainedContext) -> Self {
+        self.retained_context = retained;
         self
     }
 
@@ -1267,6 +1368,47 @@ mod tests {
             err.is_none(),
             "integer JSON number should pass schema validation"
         );
+    }
+
+    #[test]
+    fn retained_context_keeps_retrieval_and_skill_provenance() {
+        let mut retrieval = crate::engine::retrieval_context::RetrievalContext::new(
+            "fix tests",
+            crate::engine::intent_router::RetrievalPolicy::Project,
+        );
+        retrieval.add_item(crate::engine::retrieval_context::RetrievalItem::new(
+            crate::engine::retrieval_context::RetrievalSource::Memory,
+            "Memory note",
+            "Use cargo check before broad tests",
+            0.9,
+            "memory.prefetch",
+            crate::engine::retrieval_context::TrustLevel::Medium,
+        ));
+
+        let retained =
+            ToolContextRetainedContext::from_retrieval_context("fix tests", Some(&retrieval))
+                .with_skill_triggers(vec![ToolContextSkillTrigger {
+                    name: "rust-agent".to_string(),
+                    description: "Repo workflow".to_string(),
+                    triggers: vec!["rust".to_string()],
+                    allowed_tools: vec!["grep".to_string()],
+                    disallowed_tools: Vec::new(),
+                    model: None,
+                    effort: None,
+                    context: Some("inherit".to_string()),
+                    provenance: "skills.search:/repo/skills/rust-agent".to_string(),
+                }]);
+
+        assert_eq!(retained.retrieval_items.len(), 1);
+        assert_eq!(retained.skill_triggers.len(), 1);
+        assert!(retained
+            .provenance
+            .iter()
+            .any(|item| item.contains("memory.prefetch")));
+        assert!(retained
+            .provenance
+            .iter()
+            .any(|item| item == "skill_triggers=1"));
     }
 
     #[test]

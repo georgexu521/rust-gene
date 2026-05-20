@@ -19,7 +19,7 @@ use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
-use crate::tools::{ToolContext, ToolRegistry, ToolResult};
+use crate::tools::{ToolContext, ToolContextRetainedContext, ToolRegistry, ToolResult};
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -99,6 +99,7 @@ pub(super) struct ToolExecutionRequest<'a> {
     pub(super) route: Option<&'a IntentRoute>,
     pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) exposed_tool_names: &'a HashSet<String>,
+    pub(super) retained_context: &'a ToolContextRetainedContext,
     pub(super) action_checkpoint_active: bool,
     pub(super) action_checkpoint_lookup_count: usize,
     pub(super) has_changes_before_tools: bool,
@@ -140,14 +141,19 @@ impl ToolExecutionContext {
         }
     }
 
-    fn tool_context(&self, trace: &Option<TraceCollector>) -> ToolContext {
-        match trace {
+    fn tool_context(
+        &self,
+        trace: &Option<TraceCollector>,
+        retained_context: &ToolContextRetainedContext,
+    ) -> ToolContext {
+        let context = match trace {
             Some(trace) => self
                 .base_tool_context
                 .clone()
                 .with_trace_collector(trace.clone()),
             None => self.base_tool_context.clone(),
-        }
+        };
+        context.with_retained_context(retained_context.clone())
     }
 }
 
@@ -173,6 +179,10 @@ struct ToolRuntimeContext {
     action_checkpoint_active: bool,
     has_changes_before_tools: bool,
     exposed_tools_count: usize,
+    retained_retrieval_items: usize,
+    retained_skill_triggers: usize,
+    retained_context_tokens: usize,
+    retained_context_provenance: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -205,6 +215,7 @@ impl ToolRuntimeContext {
         action_checkpoint_active: bool,
         has_changes_before_tools: bool,
         exposed_tools_count: usize,
+        retained_context: &ToolContextRetainedContext,
     ) -> Self {
         Self {
             has_route: route.is_some(),
@@ -232,6 +243,10 @@ impl ToolRuntimeContext {
             action_checkpoint_active,
             has_changes_before_tools,
             exposed_tools_count,
+            retained_retrieval_items: retained_context.retrieval_items.len(),
+            retained_skill_triggers: retained_context.skill_triggers.len(),
+            retained_context_tokens: retained_context.token_estimate,
+            retained_context_provenance: retained_context.provenance.clone(),
         }
     }
 
@@ -274,6 +289,12 @@ impl ToolRuntimeContext {
                     "exposed_tools_count": self.exposed_tools_count,
                     "started_at_unix_ms": timing.and_then(|timing| timing.started_at_unix_ms),
                     "finished_at_unix_ms": timing.and_then(|timing| timing.finished_at_unix_ms),
+                },
+                "retained_context": {
+                    "retrieval_items": self.retained_retrieval_items,
+                    "skill_triggers": self.retained_skill_triggers,
+                    "token_estimate": self.retained_context_tokens,
+                    "provenance": self.retained_context_provenance,
                 },
             }),
         );
@@ -449,6 +470,7 @@ impl ToolExecutionController {
         &self,
         trace: &Option<TraceCollector>,
         runtime_context: &ToolRuntimeContext,
+        retained_context: &ToolContextRetainedContext,
         tool_call: &ToolCall,
     ) -> impl Future<Output = (ToolCall, ToolResult)> + 'static {
         let execution = &self.context;
@@ -456,7 +478,7 @@ impl ToolExecutionController {
         let tc_clone = tool_call.clone();
         let tool_name = tool_call.name.clone();
         let context = execution
-            .tool_context(trace)
+            .tool_context(trace, retained_context)
             .with_tool_call_metadata(tool_name.clone(), tc_clone.id.clone());
         let cost_tracker = execution.cost_tracker.clone();
         let hook_manager = execution.hook_manager.clone();
@@ -589,6 +611,7 @@ impl ToolExecutionController {
         tx: Option<&mpsc::Sender<StreamEvent>>,
         trace: &Option<TraceCollector>,
         runtime_context: &ToolRuntimeContext,
+        retained_context: &ToolContextRetainedContext,
         lifecycle: &mut ToolCallLifecycle,
     ) -> Vec<(ToolCall, ToolResult)> {
         let execution = &self.context;
@@ -637,7 +660,7 @@ impl ToolExecutionController {
             let (result, hook_context) = if let Some(tool) = execution.tool_registry.get(&tool_name)
             {
                 let mut context = execution
-                    .tool_context(trace)
+                    .tool_context(trace, retained_context)
                     .with_tool_call_metadata(tool_name.clone(), tool_id.clone());
                 let drift_check = execution
                     .active_goal
@@ -862,6 +885,7 @@ impl ToolExecutionController {
             route,
             resource_policy,
             exposed_tool_names,
+            retained_context,
             action_checkpoint_active,
             action_checkpoint_lookup_count,
             has_changes_before_tools,
@@ -880,6 +904,7 @@ impl ToolExecutionController {
             action_checkpoint_active,
             has_changes_before_tools,
             exposed_tool_names.len(),
+            retained_context,
         );
         let gate = ToolExecutionGate {
             tool_registry: execution.tool_registry.as_ref(),
@@ -980,7 +1005,12 @@ impl ToolExecutionController {
                         })
                         .await;
                 }
-                read_only_jobs.push(self.read_only_job(&trace, &runtime_context, tc));
+                read_only_jobs.push(self.read_only_job(
+                    &trace,
+                    &runtime_context,
+                    retained_context,
+                    tc,
+                ));
             } else {
                 read_write_calls.push(tc.clone());
             }
@@ -996,7 +1026,14 @@ impl ToolExecutionController {
         results.extend(read_only_results);
 
         let read_write_results = self
-            .execute_read_write_calls(read_write_calls, tx, &trace, &runtime_context, lifecycle)
+            .execute_read_write_calls(
+                read_write_calls,
+                tx,
+                &trace,
+                &runtime_context,
+                retained_context,
+                lifecycle,
+            )
             .await;
         results.extend(read_write_results);
 

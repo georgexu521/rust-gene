@@ -3,6 +3,7 @@ use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
+use crate::tools::ToolContextRetainedContext;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
@@ -19,6 +20,7 @@ pub(super) struct TurnRuntimeContext<'a> {
     pub(super) required_validation_commands: &'a [String],
     pub(super) destructive_scope: &'a DestructiveScopeContract,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
+    pub(super) retained_context: &'a ToolContextRetainedContext,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -75,6 +77,7 @@ mod tests {
         let exposed = HashSet::from(["grep".to_string()]);
         let baseline = HashSet::new();
         let required = vec!["cargo check -q".to_string()];
+        let retained_context = ToolContextRetainedContext::default();
         let context = TurnRuntimeContext {
             tx: None,
             trace: &trace,
@@ -86,10 +89,12 @@ mod tests {
             required_validation_commands: &required,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
+            retained_context: &retained_context,
         };
 
         assert_eq!(context.exposed_tool_names.len(), 1);
         assert_eq!(context.required_validation_commands[0], "cargo check -q");
         assert_eq!(context.last_user_preview, "inspect files");
+        assert!(context.retained_context.is_empty());
     }
 }

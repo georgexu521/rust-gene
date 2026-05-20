@@ -12,6 +12,8 @@ use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::TraceCollector;
+use crate::skills::SkillRuntime;
+use crate::tools::{ToolContextRetainedContext, ToolContextSkillTrigger};
 use std::path::Path;
 
 pub(super) struct TurnContextBootstrapContext<'a> {
@@ -26,6 +28,7 @@ pub(super) struct TurnContextBootstrapContext<'a> {
 
 pub(super) struct TurnContextBootstrap {
     pub(super) retrieval_context: Option<RetrievalContext>,
+    pub(super) retained_context: ToolContextRetainedContext,
     pub(super) task_bundle: TaskContextBundle,
     pub(super) code_workflow: CodeChangeWorkflowRunner,
     pub(super) turn_state: TurnRuntimeState,
@@ -47,6 +50,11 @@ impl TurnContextBootstrapController {
                 trace: context.trace,
             })
             .await;
+        let retained_context = Self::build_retained_context(
+            context.last_user_preview,
+            context.working_dir,
+            retrieval_context.as_ref(),
+        );
 
         let task_context_setup =
             TurnTaskContextSetupController::prepare(TurnTaskContextSetupContext {
@@ -67,10 +75,37 @@ impl TurnContextBootstrapController {
 
         TurnContextBootstrap {
             retrieval_context,
+            retained_context,
             task_bundle: task_context_setup.task_bundle,
             code_workflow: task_context_setup.code_workflow,
             turn_state: task_context_setup.turn_state,
         }
+    }
+
+    fn build_retained_context(
+        query: &str,
+        working_dir: &Path,
+        retrieval_context: Option<&RetrievalContext>,
+    ) -> ToolContextRetainedContext {
+        let skill_triggers = SkillRuntime::load(working_dir)
+            .search(query)
+            .into_iter()
+            .take(5)
+            .map(|skill| ToolContextSkillTrigger {
+                name: skill.meta.name.clone(),
+                description: skill.meta.description.clone(),
+                triggers: skill.meta.triggers.clone(),
+                allowed_tools: skill.meta.allowed_tools.clone(),
+                disallowed_tools: skill.meta.disallowed_tools.clone(),
+                model: skill.meta.model.clone(),
+                effort: skill.meta.effort.clone(),
+                context: skill.meta.context.clone(),
+                provenance: format!("skills.search:{}", skill.skill_dir.display()),
+            })
+            .collect();
+
+        ToolContextRetainedContext::from_retrieval_context(query, retrieval_context)
+            .with_skill_triggers(skill_triggers)
     }
 }
 

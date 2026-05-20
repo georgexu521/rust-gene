@@ -29,6 +29,7 @@ use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::TraceCollector;
 use crate::services::api::{Message, Tool};
+use crate::tools::ToolContextRetainedContext;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
@@ -40,6 +41,7 @@ pub(super) struct TurnIterationContext<'a> {
     pub(super) code_workflow: &'a mut CodeChangeWorkflowRunner,
     pub(super) task_bundle: &'a mut TaskContextBundle,
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
+    pub(super) retained_context: &'a ToolContextRetainedContext,
     pub(super) base_tools: &'a [Tool],
     pub(super) loop_state: &'a mut TurnLoopState,
     pub(super) turn_state: &'a mut TurnRuntimeState,
@@ -128,6 +130,7 @@ impl TurnIterationController {
                 required_validation_commands: context.required_validation_commands,
                 destructive_scope: context.destructive_scope,
                 baseline_git_status_files: context.baseline_git_status_files,
+                retained_context: context.retained_context,
             },
             turn_state: &mut *context.turn_state,
             messages: &mut *context.messages,
@@ -284,6 +287,7 @@ mod tests {
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "hello"));
         let base_tools = Vec::new();
         let baseline_git_status_files = HashSet::new();
+        let retained_context = crate::tools::ToolContextRetainedContext::default();
 
         let flow = TurnIterationController::run(TurnIterationContext {
             conversation: &conversation,
@@ -292,6 +296,7 @@ mod tests {
             code_workflow: &mut code_workflow,
             task_bundle: &mut task_bundle,
             turn_retrieval_context: None,
+            retained_context: &retained_context,
             base_tools: &base_tools,
             loop_state: &mut loop_state,
             turn_state: &mut turn_state,

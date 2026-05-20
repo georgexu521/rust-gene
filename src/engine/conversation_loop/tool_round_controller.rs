@@ -66,6 +66,7 @@ impl ToolRoundController {
                     route: Some(runtime.route),
                     resource_policy: runtime.resource_policy,
                     exposed_tool_names: runtime.exposed_tool_names,
+                    retained_context: runtime.retained_context,
                     action_checkpoint_active,
                     action_checkpoint_lookup_count,
                     has_changes_before_tools,

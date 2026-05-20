@@ -80,6 +80,7 @@ impl PatchSynthesisExecutor {
             route: None,
             resource_policy: context.resource_policy,
             exposed_tool_names: &exposed_synth_tools,
+            retained_context: &crate::tools::ToolContextRetainedContext::default(),
             // Synthesized edits have already passed patch-synthesis
             // validation. Avoid applying the direct action-checkpoint guard
             // again, or safe recovered patches can be rejected without giving

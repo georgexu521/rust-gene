@@ -460,6 +460,7 @@ impl ConversationLoop {
             })
             .await;
         let turn_retrieval_context = turn_context_bootstrap.retrieval_context;
+        let retained_context = turn_context_bootstrap.retained_context;
         let mut task_bundle = turn_context_bootstrap.task_bundle;
         let mut code_workflow = turn_context_bootstrap.code_workflow;
         let mut turn_state = turn_context_bootstrap.turn_state;
@@ -512,6 +513,7 @@ impl ConversationLoop {
             code_workflow: &mut code_workflow,
             task_bundle: &mut task_bundle,
             turn_retrieval_context: turn_retrieval_context.as_ref(),
+            retained_context: &retained_context,
             base_tools: &base_tools,
             loop_state: &mut loop_state,
             turn_state: &mut turn_state,
@@ -2771,6 +2773,7 @@ mod tests {
                     route: Some(&route),
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
+                    retained_context: &crate::tools::ToolContextRetainedContext::default(),
                     action_checkpoint_active: false,
                     action_checkpoint_lookup_count: 0,
                     has_changes_before_tools: false,
@@ -2825,6 +2828,18 @@ mod tests {
         }];
         let exposed_tool_names = HashSet::from(["file_edit".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
+        let retained_context = crate::tools::ToolContextRetainedContext::default()
+            .with_skill_triggers(vec![crate::tools::ToolContextSkillTrigger {
+                name: "repo-review".to_string(),
+                description: "Review repo changes".to_string(),
+                triggers: vec!["push".to_string()],
+                allowed_tools: vec!["git".to_string()],
+                disallowed_tools: Vec::new(),
+                model: None,
+                effort: None,
+                context: Some("inherit".to_string()),
+                provenance: "test.skill".to_string(),
+            }]);
 
         let batch =
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
@@ -2836,6 +2851,7 @@ mod tests {
                     route: Some(&route),
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
+                    retained_context: &retained_context,
                     action_checkpoint_active: false,
                     action_checkpoint_lookup_count: 0,
                     has_changes_before_tools: false,
@@ -2868,6 +2884,14 @@ mod tests {
         assert_eq!(
             runtime["execution"]["action_checkpoint_active"].as_bool(),
             Some(false)
+        );
+        assert_eq!(
+            runtime["retained_context"]["skill_triggers"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            runtime["retained_context"]["retrieval_items"].as_u64(),
+            Some(0)
         );
         let started_at = runtime["execution"]["started_at_unix_ms"]
             .as_u64()
@@ -2916,6 +2940,7 @@ mod tests {
                     route: Some(&route),
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
+                    retained_context: &crate::tools::ToolContextRetainedContext::default(),
                     action_checkpoint_active: false,
                     action_checkpoint_lookup_count: 0,
                     has_changes_before_tools: false,
@@ -2981,6 +3006,7 @@ mod tests {
                     route: Some(&route),
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
+                    retained_context: &crate::tools::ToolContextRetainedContext::default(),
                     action_checkpoint_active: false,
                     action_checkpoint_lookup_count: 0,
                     has_changes_before_tools: false,

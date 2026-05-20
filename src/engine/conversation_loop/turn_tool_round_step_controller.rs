@@ -109,6 +109,7 @@ mod tests {
         let mut messages = vec![Message::user("hello")];
         let exposed_tool_names = HashSet::new();
         let baseline_git_status_files = HashSet::new();
+        let retained_context = crate::tools::ToolContextRetainedContext::default();
 
         let round_state = TurnToolRoundStepController::run(TurnToolRoundStepContext {
             conversation: &conversation,
@@ -126,6 +127,7 @@ mod tests {
                 required_validation_commands: &[],
                 destructive_scope: &destructive_scope,
                 baseline_git_status_files: &baseline_git_status_files,
+                retained_context: &retained_context,
             },
             turn_state: &mut turn_state,
             messages: &mut messages,
