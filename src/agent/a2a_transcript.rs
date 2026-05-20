@@ -67,7 +67,7 @@ pub fn read_recent(limit: usize) -> std::io::Result<Vec<A2aTranscriptRecord>> {
     Ok(records)
 }
 
-fn transcript_path() -> PathBuf {
+pub fn transcript_path() -> PathBuf {
     if let Ok(path) = std::env::var("PRIORITY_AGENT_A2A_TRANSCRIPT_PATH") {
         return PathBuf::from(path);
     }

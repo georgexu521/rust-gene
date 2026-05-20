@@ -1317,8 +1317,15 @@ Expected files:
   profile labels, and tool result JSON.
 - `/agents` and resource inventory now surface normalized agent definitions
   instead of only raw profile names.
+- Durable subagent task state now has a session DB table and API for task id,
+  agent id, status, transcript path, in-progress tool ids, permission request
+  placeholders, result artifact id, cleanup hooks, and structured payload.
+- The `agent` tool writes durable task state on subagent start and completion,
+  and completion rows link back to persisted agent artifacts when available.
+- `/agents` now shows durable task states alongside live agent handles and
+  completed artifacts.
 - Validated with `cargo test -q profiles`, `cargo test -q agent_tool`,
-  `cargo fmt --check`, and `cargo check -q`.
+  `cargo test -q session_store`, `cargo fmt --check`, and `cargo check -q`.
 
 ### Phase 9: TUI Product Surface Pass
 

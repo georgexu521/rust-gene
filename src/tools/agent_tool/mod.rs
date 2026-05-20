@@ -217,11 +217,10 @@ async fn spawn_single_agent(
     role: AgentRole,
     template: Option<AgentTemplate>,
     definition: Option<&AgentDefinition>,
-    working_dir: &Path,
-    trace: Option<&crate::engine::trace::TraceCollector>,
+    context: &ToolContext,
 ) -> anyhow::Result<ManagerAgentResult> {
     let started_at = std::time::Instant::now();
-    let file_context = load_file_context(files, working_dir).await;
+    let file_context = load_file_context(files, &context.working_dir).await;
     let mut system_prompt = build_system_prompt(template, role, description, prompt, &file_context);
     if let Some(definition) = definition {
         if !definition.system_prompt.trim().is_empty() {
@@ -256,7 +255,21 @@ async fn spawn_single_agent(
 
     let agent_id = agent_manager.spawn(agent_config, None).await?;
     info!("Sub-agent spawned: {}", agent_id);
-    if let Some(trace) = trace {
+    persist_agent_task_state(
+        context,
+        &agent_id,
+        description,
+        role,
+        definition,
+        "running",
+        None,
+        json!({
+            "timeout_secs": timeout_secs,
+            "max_turns": max_turns,
+            "allowed_tools": allowed_tools,
+        }),
+    );
+    if let Some(trace) = context.trace_collector.as_ref() {
         trace.record(crate::engine::trace::TraceEvent::SubagentStarted {
             agent_id: agent_id.to_string(),
             profile: definition.map(|definition| definition.name.clone()),
@@ -316,7 +329,7 @@ async fn spawn_single_agent(
     );
 
     let result = agent_manager.wait_for_result(&agent_id, timeout_secs).await;
-    if let Some(trace) = trace {
+    if let Some(trace) = context.trace_collector.as_ref() {
         match &result {
             Ok(result) => trace.record(crate::engine::trace::TraceEvent::SubagentCompleted {
                 agent_id: result.agent_id.to_string(),
@@ -397,6 +410,65 @@ fn synthesize_results(
     ToolResult::success_with_data(output, data)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn persist_agent_task_state(
+    context: &ToolContext,
+    agent_id: &AgentId,
+    description: &str,
+    role: AgentRole,
+    definition: Option<&AgentDefinition>,
+    status: &str,
+    result_artifact_id: Option<i64>,
+    payload: serde_json::Value,
+) {
+    let Some(store) = context.session_store.as_ref() else {
+        return;
+    };
+    let cleanup_hooks = definition
+        .filter(|definition| definition.context_mode.requires_isolated_worktree())
+        .map(|_| vec!["worktree_cleanup".to_string()])
+        .unwrap_or_default();
+    let mut payload = payload;
+    if let Some(definition) = definition {
+        payload["agent_definition"] = json!({
+            "name": definition.name.clone(),
+            "agent_type": definition.agent_type.clone(),
+            "context_mode": definition.context_mode.to_string(),
+            "permission_mode": definition.permission_mode.to_string(),
+            "risk_policy": definition.risk_policy.to_string(),
+            "output_contract": definition.output_contract.to_string(),
+            "memory_policy": definition.memory_policy.to_string(),
+            "model": definition.model_policy.model.clone(),
+            "mcp_servers": definition.mcp_servers.clone(),
+        });
+    }
+    let state = crate::session_store::AgentTaskStateUpsert {
+        session_id: context.session_id.clone(),
+        task_id: agent_id.to_string(),
+        agent_id: agent_id.to_string(),
+        profile: definition.map(|definition| definition.name.clone()),
+        role: role.display_name().to_string(),
+        status: status.to_string(),
+        description: description.to_string(),
+        transcript_path: Some(
+            crate::agent::a2a_transcript::transcript_path()
+                .to_string_lossy()
+                .to_string(),
+        ),
+        tool_ids_in_progress: Vec::new(),
+        permission_requests: Vec::new(),
+        result_artifact_id,
+        cleanup_hooks,
+        payload,
+    };
+    if let Err(err) = store.upsert_agent_task_state(&state) {
+        warn!(
+            "Failed to persist sub-agent task state for {}: {}",
+            agent_id, err
+        );
+    }
+}
+
 fn persist_agent_artifact(
     context: &ToolContext,
     description: &str,
@@ -413,7 +485,7 @@ fn persist_agent_artifact(
         "confidence": result.confidence,
         "has_conflict": result.has_conflict,
     });
-    if let Err(err) = store.add_agent_artifact(
+    let artifact_id = match store.add_agent_artifact(
         &context.session_id,
         &result.agent_id.to_string(),
         definition.map(|definition| definition.name.as_str()),
@@ -423,11 +495,25 @@ fn persist_agent_artifact(
         &result.content,
         &payload,
     ) {
-        warn!(
-            "Failed to persist sub-agent artifact for {}: {}",
-            result.agent_id, err
-        );
-    }
+        Ok(id) => Some(id),
+        Err(err) => {
+            warn!(
+                "Failed to persist sub-agent artifact for {}: {}",
+                result.agent_id, err
+            );
+            None
+        }
+    };
+    persist_agent_task_state(
+        context,
+        &result.agent_id,
+        description,
+        role,
+        definition,
+        &status,
+        artifact_id,
+        payload,
+    );
 }
 
 /// 执行上下文参数
@@ -589,8 +675,7 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
             ctx.role,
             ctx.template,
             ctx.definition.as_ref(),
-            &ctx.context.working_dir,
-            ctx.context.trace_collector.as_ref(),
+            ctx.context,
         )
         .await
         {
@@ -717,8 +802,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     ctx.role,
                     ctx.template,
                     ctx.definition.as_ref(),
-                    &ctx.context.working_dir,
-                    ctx.context.trace_collector.as_ref(),
+                    ctx.context,
                 )
             })
             .collect();
@@ -751,8 +835,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             ctx.role,
             ctx.template,
             ctx.definition.as_ref(),
-            &ctx.context.working_dir,
-            ctx.context.trace_collector.as_ref(),
+            ctx.context,
         )
         .await
         {
@@ -816,8 +899,7 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
         ctx.role,
         ctx.template,
         ctx.definition.as_ref(),
-        &ctx.context.working_dir,
-        ctx.context.trace_collector.as_ref(),
+        ctx.context,
     )
     .await
     {

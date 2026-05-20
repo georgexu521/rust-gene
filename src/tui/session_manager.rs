@@ -417,6 +417,17 @@ impl TuiSessionManager {
         Ok(self.store.recent_agent_artifacts(session_id, limit)?)
     }
 
+    /// 获取当前会话最近的 durable subagent task state。
+    pub fn recent_agent_task_states(
+        &self,
+        limit: i64,
+    ) -> anyhow::Result<Vec<crate::session_store::AgentTaskStateRecord>> {
+        let Some(session_id) = self.current_session_id.as_deref() else {
+            return Ok(Vec::new());
+        };
+        Ok(self.store.recent_agent_task_states(session_id, limit)?)
+    }
+
     /// 获取当前会话的指定学习事件。
     pub fn learning_event(
         &self,

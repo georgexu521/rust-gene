@@ -66,6 +66,45 @@ pub struct AgentArtifactRecord {
     pub created_at: String,
 }
 
+/// Durable subagent task state for background/runtime panels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskStateRecord {
+    pub id: i64,
+    pub session_id: String,
+    pub task_id: String,
+    pub agent_id: String,
+    pub profile: Option<String>,
+    pub role: String,
+    pub status: String,
+    pub description: String,
+    pub transcript_path: Option<String>,
+    pub tool_ids_in_progress: Vec<String>,
+    pub permission_requests: Vec<String>,
+    pub result_artifact_id: Option<i64>,
+    pub cleanup_hooks: Vec<String>,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Upsert payload for durable subagent task state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskStateUpsert {
+    pub session_id: String,
+    pub task_id: String,
+    pub agent_id: String,
+    pub profile: Option<String>,
+    pub role: String,
+    pub status: String,
+    pub description: String,
+    pub transcript_path: Option<String>,
+    pub tool_ids_in_progress: Vec<String>,
+    pub permission_requests: Vec<String>,
+    pub result_artifact_id: Option<i64>,
+    pub cleanup_hooks: Vec<String>,
+    pub payload: serde_json::Value,
+}
+
 /// 会话存储
 #[derive(Clone)]
 pub struct SessionStore {
@@ -120,6 +159,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v5_add_agent_artifacts::V5AddAgentArtifacts,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v6_add_agent_task_states::V6AddAgentTaskStates,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -151,6 +193,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v5_add_agent_artifacts::V5AddAgentArtifacts,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v6_add_agent_task_states::V6AddAgentTaskStates,
         ));
         runner.run(&conn)?;
 
@@ -747,6 +792,96 @@ impl SessionStore {
         })?;
         rows.collect()
     }
+
+    // ==================== Agent Task State 操作 ====================
+
+    pub fn upsert_agent_task_state(&self, state: &AgentTaskStateUpsert) -> SqlResult<()> {
+        let conn = self.conn();
+        let tool_ids =
+            serde_json::to_string(&state.tool_ids_in_progress).unwrap_or_else(|_| "[]".to_string());
+        let permission_requests =
+            serde_json::to_string(&state.permission_requests).unwrap_or_else(|_| "[]".to_string());
+        let cleanup_hooks =
+            serde_json::to_string(&state.cleanup_hooks).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "INSERT INTO agent_task_states
+             (session_id, task_id, agent_id, profile, role, status, description, transcript_path,
+              tool_ids_in_progress, permission_requests, result_artifact_id, cleanup_hooks, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             ON CONFLICT(session_id, task_id) DO UPDATE SET
+                agent_id = excluded.agent_id,
+                profile = excluded.profile,
+                role = excluded.role,
+                status = excluded.status,
+                description = excluded.description,
+                transcript_path = excluded.transcript_path,
+                tool_ids_in_progress = excluded.tool_ids_in_progress,
+                permission_requests = excluded.permission_requests,
+                result_artifact_id = excluded.result_artifact_id,
+                cleanup_hooks = excluded.cleanup_hooks,
+                payload = excluded.payload,
+                updated_at = datetime('now')",
+            params![
+                &state.session_id,
+                &state.task_id,
+                &state.agent_id,
+                state.profile.as_deref(),
+                &state.role,
+                &state.status,
+                &state.description,
+                state.transcript_path.as_deref(),
+                tool_ids,
+                permission_requests,
+                state.result_artifact_id,
+                cleanup_hooks,
+                state.payload.to_string()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn recent_agent_task_states(
+        &self,
+        session_id: &str,
+        limit: i64,
+    ) -> SqlResult<Vec<AgentTaskStateRecord>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, task_id, agent_id, profile, role, status, description,
+                    transcript_path, tool_ids_in_progress, permission_requests,
+                    result_artifact_id, cleanup_hooks, payload, created_at, updated_at
+             FROM agent_task_states
+             WHERE session_id = ?1
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit], |row| {
+            let tool_ids: String = row.get(9)?;
+            let permission_requests: String = row.get(10)?;
+            let cleanup_hooks: String = row.get(12)?;
+            let payload_text: String = row.get(13)?;
+            Ok(AgentTaskStateRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                task_id: row.get(2)?,
+                agent_id: row.get(3)?,
+                profile: row.get(4)?,
+                role: row.get(5)?,
+                status: row.get(6)?,
+                description: row.get(7)?,
+                transcript_path: row.get(8)?,
+                tool_ids_in_progress: serde_json::from_str(&tool_ids).unwrap_or_default(),
+                permission_requests: serde_json::from_str(&permission_requests).unwrap_or_default(),
+                result_artifact_id: row.get(11)?,
+                cleanup_hooks: serde_json::from_str(&cleanup_hooks).unwrap_or_default(),
+                payload: serde_json::from_str(&payload_text)
+                    .unwrap_or_else(|_| serde_json::json!({})),
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
+            })
+        })?;
+        rows.collect()
+    }
 }
 
 /// 数据库统计
@@ -949,6 +1084,55 @@ mod tests {
         assert_eq!(artifacts[0].agent_id, "agent_123");
         assert_eq!(artifacts[0].profile.as_deref(), Some("verifier"));
         assert_eq!(artifacts[0].payload["confidence"], 0.9);
+    }
+
+    #[test]
+    fn test_agent_task_state_upsert() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+
+        let state = AgentTaskStateUpsert {
+            session_id: "s1".to_string(),
+            task_id: "agent_123".to_string(),
+            agent_id: "agent_123".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "running".to_string(),
+            description: "edit focused files".to_string(),
+            transcript_path: Some("/tmp/a2a.jsonl".to_string()),
+            tool_ids_in_progress: vec!["bash_1".to_string()],
+            permission_requests: vec!["file_write".to_string()],
+            result_artifact_id: None,
+            cleanup_hooks: vec!["worktree_cleanup".to_string()],
+            payload: serde_json::json!({"context_mode": "full_fork"}),
+        };
+        store.upsert_agent_task_state(&state).unwrap();
+
+        let artifact_id = store
+            .add_agent_artifact(
+                "s1",
+                "agent_123",
+                Some("implementer"),
+                "specialist",
+                "completed",
+                "edit focused files",
+                "done",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        let mut completed = state.clone();
+        completed.status = "completed".to_string();
+        completed.tool_ids_in_progress = Vec::new();
+        completed.result_artifact_id = Some(artifact_id);
+        store.upsert_agent_task_state(&completed).unwrap();
+
+        let states = store.recent_agent_task_states("s1", 10).unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].status, "completed");
+        assert_eq!(states[0].profile.as_deref(), Some("implementer"));
+        assert_eq!(states[0].result_artifact_id, Some(artifact_id));
+        assert_eq!(states[0].cleanup_hooks, vec!["worktree_cleanup"]);
+        assert_eq!(states[0].payload["context_mode"], "full_fork");
     }
 
     #[test]

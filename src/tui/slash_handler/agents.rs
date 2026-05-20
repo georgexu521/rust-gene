@@ -415,6 +415,33 @@ pub async fn handle_agents(app: &TuiApp) -> String {
         .session_manager
         .recent_agent_artifacts(8)
         .unwrap_or_default();
+    let recent_task_states = app
+        .session_manager
+        .recent_agent_task_states(8)
+        .unwrap_or_default();
+    let task_state_lines = if recent_task_states.is_empty() {
+        vec!["Durable task states: none for current session".to_string()]
+    } else {
+        let mut lines = vec![format!(
+            "Durable task states ({}):",
+            recent_task_states.len()
+        )];
+        for state in recent_task_states {
+            lines.push(format!(
+                "- {} [{}] profile={} role={} artifact={} {}",
+                state.agent_id,
+                state.status,
+                state.profile.as_deref().unwrap_or("none"),
+                state.role,
+                state
+                    .result_artifact_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                state.description
+            ));
+        }
+        lines
+    };
     let artifact_lines = if recent_artifacts.is_empty() {
         vec!["Recent artifacts: none for current session".to_string()]
     } else {
@@ -453,6 +480,8 @@ pub async fn handle_agents(app: &TuiApp) -> String {
         if agents.is_empty() {
             let mut lines = vec!["No running agents found.".to_string(), profile_line];
             lines.push(String::new());
+            lines.extend(task_state_lines);
+            lines.push(String::new());
             lines.extend(artifact_lines);
             lines.join("\n")
         } else {
@@ -470,6 +499,8 @@ pub async fn handle_agents(app: &TuiApp) -> String {
             lines.push(String::new());
             lines.push(profile_line);
             lines.push(String::new());
+            lines.extend(task_state_lines);
+            lines.push(String::new());
             lines.extend(artifact_lines);
             lines.join("\n")
         }
@@ -479,6 +510,8 @@ pub async fn handle_agents(app: &TuiApp) -> String {
             profile_line,
             String::new(),
         ];
+        lines.extend(task_state_lines);
+        lines.push(String::new());
         lines.extend(artifact_lines);
         lines.join("\n")
     }
