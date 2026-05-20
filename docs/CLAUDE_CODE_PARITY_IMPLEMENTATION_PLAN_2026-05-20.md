@@ -1324,8 +1324,25 @@ Expected files:
   and completion rows link back to persisted agent artifacts when available.
 - `/agents` now shows durable task states alongside live agent handles and
   completed artifacts.
+- `agent::forked_context` now implements the Claude-like fork prefix builder:
+  parent assistant tool calls are preserved, each parent tool call receives the
+  same placeholder tool result, the child directive is wrapped in a
+  `fork-boilerplate` guard, and recursive fork attempts are rejected when that
+  guard is already present.
+- Tool execution now attaches the parent assistant tool-call round to
+  `ToolContext`; `AgentConfig` can carry inherited context messages; and the
+  `agent` tool uses those messages for `full_fork` definitions and explicit
+  `fork_branches`.
 - Validated with `cargo test -q profiles`, `cargo test -q agent_tool`,
-  `cargo test -q session_store`, `cargo fmt --check`, and `cargo check -q`.
+  `cargo test -q session_store`, `cargo test -q forked_context`,
+  `cargo fmt --check`, and `cargo check -q`.
+
+Remaining Phase 8 work:
+
+- Build the isolated worktree execution path for `isolated_worktree_fork`.
+- Add agent-specific MCP/tool resolution beyond static definition metadata.
+- Teach the visible panel richer permission/tool-in-progress state once runtime
+  producers exist.
 
 ### Phase 9: TUI Product Surface Pass
 

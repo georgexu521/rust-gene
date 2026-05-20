@@ -93,6 +93,7 @@ impl ToolExecutionBatch {
 
 pub(super) struct ToolExecutionRequest<'a> {
     pub(super) tool_calls: &'a [ToolCall],
+    pub(super) parent_assistant_content: &'a str,
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) pre_executed: HashMap<usize, ToolResult>,
     pub(super) trace: Option<TraceCollector>,
@@ -472,6 +473,8 @@ impl ToolExecutionController {
         runtime_context: &ToolRuntimeContext,
         retained_context: &ToolContextRetainedContext,
         tool_call: &ToolCall,
+        parent_tool_calls: Vec<ToolCall>,
+        parent_assistant_content: String,
     ) -> impl Future<Output = (ToolCall, ToolResult)> + 'static {
         let execution = &self.context;
         let registry = execution.tool_registry.clone();
@@ -479,7 +482,8 @@ impl ToolExecutionController {
         let tool_name = tool_call.name.clone();
         let context = execution
             .tool_context(trace, retained_context)
-            .with_tool_call_metadata(tool_name.clone(), tc_clone.id.clone());
+            .with_tool_call_metadata(tool_name.clone(), tc_clone.id.clone())
+            .with_parent_assistant_tool_calls(parent_tool_calls, parent_assistant_content);
         let cost_tracker = execution.cost_tracker.clone();
         let hook_manager = execution.hook_manager.clone();
         let trace = trace.clone();
@@ -612,6 +616,8 @@ impl ToolExecutionController {
         trace: &Option<TraceCollector>,
         runtime_context: &ToolRuntimeContext,
         retained_context: &ToolContextRetainedContext,
+        parent_tool_calls: &[ToolCall],
+        parent_assistant_content: &str,
         lifecycle: &mut ToolCallLifecycle,
     ) -> Vec<(ToolCall, ToolResult)> {
         let execution = &self.context;
@@ -661,7 +667,11 @@ impl ToolExecutionController {
             {
                 let mut context = execution
                     .tool_context(trace, retained_context)
-                    .with_tool_call_metadata(tool_name.clone(), tool_id.clone());
+                    .with_tool_call_metadata(tool_name.clone(), tool_id.clone())
+                    .with_parent_assistant_tool_calls(
+                        parent_tool_calls.to_vec(),
+                        parent_assistant_content.to_string(),
+                    );
                 let drift_check = execution
                     .active_goal
                     .as_ref()
@@ -879,6 +889,7 @@ impl ToolExecutionController {
     ) -> ToolExecutionBatch {
         let ToolExecutionRequest {
             tool_calls,
+            parent_assistant_content,
             tx,
             pre_executed,
             trace,
@@ -1010,6 +1021,8 @@ impl ToolExecutionController {
                     &runtime_context,
                     retained_context,
                     tc,
+                    tool_calls.to_vec(),
+                    parent_assistant_content.to_string(),
                 ));
             } else {
                 read_write_calls.push(tc.clone());
@@ -1032,6 +1045,8 @@ impl ToolExecutionController {
                 &trace,
                 &runtime_context,
                 retained_context,
+                tool_calls,
+                parent_assistant_content,
                 lifecycle,
             )
             .await;

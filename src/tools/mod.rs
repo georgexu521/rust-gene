@@ -112,6 +112,7 @@ pub use web_tools::{WebFetchTool, WebSearchTool};
 pub use workbench_tool::WorkbenchTool;
 pub use worktree_tool::WorktreeTool;
 
+use crate::services::api::ToolCall;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -671,6 +672,10 @@ pub struct ToolContext {
     pub metadata: HashMap<String, String>,
     /// Per-turn retained memory/skill context visible to tools and hooks.
     pub retained_context: ToolContextRetainedContext,
+    /// Tool calls from the parent assistant message that produced this tool round.
+    pub parent_assistant_tool_calls: Vec<ToolCall>,
+    /// Text content from that parent assistant message, when available.
+    pub parent_assistant_content: String,
 
     // ── 子系统管理器（按需注入） ──
     /// LLM Provider（socratic_analyze、swarm 等需要调用 LLM 的工具）
@@ -709,6 +714,10 @@ impl std::fmt::Debug for ToolContext {
             .field("permissions", &self.permissions)
             .field("metadata", &self.metadata)
             .field("retained_context", &self.retained_context)
+            .field(
+                "parent_assistant_tool_calls",
+                &self.parent_assistant_tool_calls.len(),
+            )
             .field(
                 "llm_provider",
                 &self.llm_provider.as_ref().map(|_| "<LlmProvider>"),
@@ -760,6 +769,8 @@ impl ToolContext {
             permissions: ToolPermissions::default(),
             metadata: HashMap::new(),
             retained_context: ToolContextRetainedContext::default(),
+            parent_assistant_tool_calls: Vec::new(),
+            parent_assistant_content: String::new(),
             llm_provider: None,
             agent_manager: None,
             trace_collector: None,
@@ -907,6 +918,17 @@ impl ToolContext {
         self.metadata.insert("tool_name".into(), tool_name.into());
         self.metadata
             .insert("tool_call_id".into(), tool_call_id.into());
+        self
+    }
+
+    /// Attach the parent assistant tool-use round for forked subagent context.
+    pub fn with_parent_assistant_tool_calls(
+        mut self,
+        tool_calls: Vec<ToolCall>,
+        assistant_content: impl Into<String>,
+    ) -> Self {
+        self.parent_assistant_tool_calls = tool_calls;
+        self.parent_assistant_content = assistant_content.into();
         self
     }
 }

@@ -2767,6 +2767,7 @@ mod tests {
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
                 .execute_tools_parallel(ToolExecutionRequest {
                     tool_calls: &tool_calls,
+                    parent_assistant_content: "",
                     tx: None,
                     pre_executed: Default::default(),
                     trace: None,
@@ -2845,6 +2846,7 @@ mod tests {
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
                 .execute_tools_parallel(ToolExecutionRequest {
                     tool_calls: &tool_calls,
+                    parent_assistant_content: "",
                     tx: None,
                     pre_executed: Default::default(),
                     trace: None,
@@ -2934,6 +2936,7 @@ mod tests {
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
                 .execute_tools_parallel(ToolExecutionRequest {
                     tool_calls: &tool_calls,
+                    parent_assistant_content: "",
                     tx: None,
                     pre_executed: Default::default(),
                     trace: None,
@@ -3000,6 +3003,7 @@ mod tests {
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
                 .execute_tools_parallel(ToolExecutionRequest {
                     tool_calls: &tool_calls,
+                    parent_assistant_content: "",
                     tx: None,
                     pre_executed: Default::default(),
                     trace: None,

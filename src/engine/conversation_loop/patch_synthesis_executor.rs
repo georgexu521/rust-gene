@@ -74,6 +74,7 @@ impl PatchSynthesisExecutor {
         ))
         .execute_tools_parallel(ToolExecutionRequest {
             tool_calls: context.tool_calls,
+            parent_assistant_content: "patch synthesis",
             tx: context.tx,
             pre_executed: HashMap::new(),
             trace: Some(context.trace.clone()),

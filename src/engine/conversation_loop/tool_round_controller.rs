@@ -60,6 +60,7 @@ impl ToolRoundController {
             ToolExecutionController::new(ToolExecutionContext::from_conversation(conversation))
                 .execute_tools_parallel(ToolExecutionRequest {
                     tool_calls,
+                    parent_assistant_content: content,
                     tx: runtime.tx,
                     pre_executed,
                     trace: Some(runtime.trace.clone()),

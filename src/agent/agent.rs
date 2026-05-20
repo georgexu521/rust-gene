@@ -5,6 +5,7 @@ use crate::agent::manager::AgentResult;
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType, AgentStatus};
 use crate::engine::QueryEngine;
+use crate::services::api::Message;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
@@ -32,6 +33,8 @@ pub struct AgentConfig {
     pub role: AgentRole,
     /// 允许的工具白名单（None 表示不限制）
     pub allowed_tools: Option<Vec<String>>,
+    /// Initial context inherited by forked subagents.
+    pub context_messages: Vec<Message>,
 }
 
 impl Default for AgentConfig {
@@ -47,6 +50,7 @@ impl Default for AgentConfig {
             max_cost_usd: None,
             role: AgentRole::default(),
             allowed_tools: None,
+            context_messages: Vec::new(),
         }
     }
 }
@@ -102,6 +106,11 @@ impl AgentConfig {
         if !tools.is_empty() {
             self.allowed_tools = Some(tools);
         }
+        self
+    }
+
+    pub fn with_context_messages(mut self, messages: Vec<Message>) -> Self {
+        self.context_messages = messages;
         self
     }
 
@@ -304,16 +313,23 @@ impl Agent {
         if let Some(ref allowed) = self.config.allowed_tools {
             options = options.with_allowed_tools(allowed.clone());
         }
+        let fork_context_active = crate::agent::forked_context::messages_contain_fork_boilerplate(
+            &self.config.context_messages,
+        );
+        if !self.config.context_messages.is_empty() {
+            options = options.with_context(self.config.context_messages.clone());
+        }
         let agent_system_prompt = self.config.build_system_prompt();
         let cost_before = self.query_engine.estimated_cost_usd().await;
+        let user_task = if fork_context_active {
+            "Execute the fork directive above. Do not spawn additional sub-agents.".to_string()
+        } else {
+            executable_task.clone()
+        };
 
         let result = self
             .query_engine
-            .query_with_tools_with_system_prompt(
-                &executable_task,
-                options,
-                Some(&agent_system_prompt),
-            )
+            .query_with_tools_with_system_prompt(&user_task, options, Some(&agent_system_prompt))
             .await;
         let cost_after = self.query_engine.estimated_cost_usd().await;
         let cost_delta = (cost_after - cost_before).max(0.0);

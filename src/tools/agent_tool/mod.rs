@@ -217,6 +217,7 @@ async fn spawn_single_agent(
     role: AgentRole,
     template: Option<AgentTemplate>,
     definition: Option<&AgentDefinition>,
+    force_fork_context: bool,
     context: &ToolContext,
 ) -> anyhow::Result<ManagerAgentResult> {
     let started_at = std::time::Instant::now();
@@ -238,12 +239,51 @@ async fn spawn_single_agent(
             );
         }
     }
+    let should_build_fork_context = force_fork_context
+        || definition
+            .map(|definition| definition.context_mode.copies_full_history())
+            .unwrap_or(false);
+    let forked_context = if should_build_fork_context {
+        if crate::agent::forked_context::text_contains_fork_boilerplate(description)
+            || crate::agent::forked_context::text_contains_fork_boilerplate(prompt)
+        {
+            return Err(anyhow::anyhow!(
+                "recursive fork blocked: task already contains fork boilerplate"
+            ));
+        }
+        let request = crate::agent::forked_context::ForkedContextBuildRequest::new(
+            prompt,
+            context.parent_assistant_tool_calls.clone(),
+        )
+        .with_parent_assistant_content(context.parent_assistant_content.clone());
+        let built = crate::agent::forked_context::build_forked_context(request)
+            .map_err(|err| anyhow::anyhow!(err))?;
+        system_prompt = format!(
+            "Forked context contract:\nplaceholder_tool_results={}\nparent_tool_call_ids={}\n\n{}",
+            built.placeholder_result,
+            if built.tool_call_ids.is_empty() {
+                "none".to_string()
+            } else {
+                built.tool_call_ids.join(",")
+            },
+            system_prompt
+        );
+        Some(built)
+    } else {
+        None
+    };
 
     let agent_config = AgentConfig::new(format!("sub-agent: {}", description))
         .with_description(description)
         .with_system_prompt(system_prompt)
         .with_max_turns(max_turns)
-        .with_allowed_tools(allowed_tools.to_vec());
+        .with_allowed_tools(allowed_tools.to_vec())
+        .with_context_messages(
+            forked_context
+                .as_ref()
+                .map(|context| context.messages.clone())
+                .unwrap_or_default(),
+        );
     let agent_config = if let Some(limit) = max_cost_usd {
         agent_config.with_max_cost_usd(limit)
     } else {
@@ -267,6 +307,11 @@ async fn spawn_single_agent(
             "timeout_secs": timeout_secs,
             "max_turns": max_turns,
             "allowed_tools": allowed_tools,
+            "fork_context": forked_context.as_ref().map(|fork| json!({
+                "message_count": fork.messages.len(),
+                "placeholder_complete": fork.is_placeholder_complete(),
+                "tool_call_ids": fork.tool_call_ids.clone(),
+            })),
         }),
     );
     if let Some(trace) = context.trace_collector.as_ref() {
@@ -675,6 +720,7 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
             ctx.role,
             ctx.template,
             ctx.definition.as_ref(),
+            true,
             ctx.context,
         )
         .await
@@ -802,6 +848,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     ctx.role,
                     ctx.template,
                     ctx.definition.as_ref(),
+                    false,
                     ctx.context,
                 )
             })
@@ -835,6 +882,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             ctx.role,
             ctx.template,
             ctx.definition.as_ref(),
+            false,
             ctx.context,
         )
         .await
@@ -899,6 +947,7 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
         ctx.role,
         ctx.template,
         ctx.definition.as_ref(),
+        false,
         ctx.context,
     )
     .await
