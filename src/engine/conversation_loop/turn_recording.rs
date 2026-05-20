@@ -144,6 +144,7 @@ pub(super) fn record_hook_traces(trace: &Option<TraceCollector>, records: &[Hook
     for record in records {
         trace.record(TraceEvent::HookCompleted {
             event: record.event.to_string(),
+            provider: record.provider.as_str().to_string(),
             hook_name: record.hook_name.clone(),
             call_id: record.tool_call_id.clone(),
             tool: record.tool_name.clone(),

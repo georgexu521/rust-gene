@@ -55,6 +55,84 @@ pub struct HumanReviewRequest {
     pub impact: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionReviewDecision {
+    ApproveOnce,
+    ApproveSession,
+    ApproveProject,
+    ApproveGlobal,
+    RejectOnce,
+    RejectAlways,
+}
+
+impl PermissionReviewDecision {
+    pub fn approved(self) -> bool {
+        matches!(
+            self,
+            PermissionReviewDecision::ApproveOnce
+                | PermissionReviewDecision::ApproveSession
+                | PermissionReviewDecision::ApproveProject
+                | PermissionReviewDecision::ApproveGlobal
+        )
+    }
+
+    pub fn rule_decision(self) -> Option<&'static str> {
+        match self {
+            PermissionReviewDecision::ApproveSession
+            | PermissionReviewDecision::ApproveProject
+            | PermissionReviewDecision::ApproveGlobal => Some("allow"),
+            PermissionReviewDecision::RejectAlways => Some("deny"),
+            PermissionReviewDecision::ApproveOnce | PermissionReviewDecision::RejectOnce => None,
+        }
+    }
+
+    pub fn persistence_scope(self) -> Option<&'static str> {
+        match self {
+            PermissionReviewDecision::ApproveOnce | PermissionReviewDecision::RejectOnce => None,
+            PermissionReviewDecision::ApproveSession => Some("session"),
+            PermissionReviewDecision::ApproveProject => Some("project"),
+            PermissionReviewDecision::ApproveGlobal | PermissionReviewDecision::RejectAlways => {
+                Some("global")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionReviewOption {
+    pub key: String,
+    pub decision: PermissionReviewDecision,
+    pub label: String,
+    pub impact: String,
+    pub default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionReview {
+    pub request: HumanReviewRequest,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub rule_pattern: String,
+    pub options: Vec<PermissionReviewOption>,
+}
+
+impl PermissionReview {
+    pub fn from_tool_call(tool_call: &ToolCall, prompt: &str) -> Self {
+        Self {
+            request: HumanReviewRequest::tool_permission(tool_call, prompt),
+            tool_call_id: tool_call.id.clone(),
+            tool_name: tool_call.name.clone(),
+            rule_pattern: permission_rule_pattern(&tool_call.name, &tool_call.arguments),
+            options: permission_review_options(),
+        }
+    }
+
+    pub fn option_for_key(&self, key: &str) -> Option<&PermissionReviewOption> {
+        self.options.iter().find(|option| option.key == key)
+    }
+}
+
 impl HumanReviewRequest {
     pub fn plan_approval(title: &str, goal: &str, steps: usize, complexity: &str) -> Self {
         Self {
@@ -140,6 +218,64 @@ impl HumanReviewRequest {
                     .to_string(),
         }
     }
+}
+
+pub fn permission_rule_pattern(tool_name: &str, args: &serde_json::Value) -> String {
+    if tool_name == "mcp_tool" {
+        let server = args["server_name"].as_str().unwrap_or("");
+        let tool = args["tool_name"].as_str().unwrap_or("");
+        if !server.is_empty() && !tool.is_empty() {
+            return format!("mcp/{}/{}", server, tool);
+        }
+    }
+    tool_name.to_string()
+}
+
+fn permission_review_options() -> Vec<PermissionReviewOption> {
+    vec![
+        PermissionReviewOption {
+            key: "y".to_string(),
+            decision: PermissionReviewDecision::ApproveOnce,
+            label: "allow once".to_string(),
+            impact: "Approve only this pending call.".to_string(),
+            default: false,
+        },
+        PermissionReviewOption {
+            key: "s".to_string(),
+            decision: PermissionReviewDecision::ApproveSession,
+            label: "allow session".to_string(),
+            impact: "Save an allow rule for this session.".to_string(),
+            default: false,
+        },
+        PermissionReviewOption {
+            key: "p".to_string(),
+            decision: PermissionReviewDecision::ApproveProject,
+            label: "allow project".to_string(),
+            impact: "Persist an allow rule in the current project.".to_string(),
+            default: false,
+        },
+        PermissionReviewOption {
+            key: "a".to_string(),
+            decision: PermissionReviewDecision::ApproveGlobal,
+            label: "allow global".to_string(),
+            impact: "Persist an allow rule globally.".to_string(),
+            default: false,
+        },
+        PermissionReviewOption {
+            key: "n".to_string(),
+            decision: PermissionReviewDecision::RejectOnce,
+            label: "deny".to_string(),
+            impact: "Reject this call without saving a rule.".to_string(),
+            default: true,
+        },
+        PermissionReviewOption {
+            key: "x".to_string(),
+            decision: PermissionReviewDecision::RejectAlways,
+            label: "deny global".to_string(),
+            impact: "Persist a global deny rule.".to_string(),
+            default: false,
+        },
+    ]
 }
 
 fn approve_deny_options() -> Vec<HumanReviewOption> {
@@ -263,5 +399,43 @@ mod tests {
         assert_eq!(req.kind, HumanReviewKind::ReflectionGate);
         assert_eq!(req.risk, HumanReviewRisk::High);
         assert!(req.reason.contains("2 unresolved"));
+    }
+
+    #[test]
+    fn permission_review_exposes_once_always_reject_actions() {
+        let review = PermissionReview::from_tool_call(
+            &tool("bash", serde_json::json!({"command": "npm run dev"})),
+            "Allow bash?",
+        );
+
+        assert_eq!(review.rule_pattern, "bash");
+        assert_eq!(
+            review.option_for_key("y").unwrap().decision,
+            PermissionReviewDecision::ApproveOnce
+        );
+        assert_eq!(
+            review.option_for_key("s").unwrap().decision.rule_decision(),
+            Some("allow")
+        );
+        assert_eq!(
+            review
+                .option_for_key("x")
+                .unwrap()
+                .decision
+                .persistence_scope(),
+            Some("global")
+        );
+        assert!(!review.option_for_key("n").unwrap().decision.approved());
+    }
+
+    #[test]
+    fn permission_rule_pattern_uses_mcp_server_tool_scope() {
+        assert_eq!(
+            permission_rule_pattern(
+                "mcp_tool",
+                &serde_json::json!({"server_name": "filesystem", "tool_name": "write_file"})
+            ),
+            "mcp/filesystem/write_file"
+        );
     }
 }

@@ -4,6 +4,11 @@
 > 目标：从“功能覆盖”升级到“产品级闭环”，在可靠性、权限安全、上下文管理、多 Agent 协作、生态集成五条主线上系统追赶。
 > 当前状态：作为长期产品成熟度计划保留；短期闭环状态见 `docs/PROJECT_STATUS.md`。
 
+> 当前战术计划（2026-05-20）：先追平 Claude Code-like runtime parity，再
+> 个性化和分化。近期开工路线以
+> `docs/CLAUDE_CODE_PARITY_IMPLEMENTATION_PLAN_2026-05-20.md` 为准；本文件保留
+> 为长期历史计划和背景。
+
 ---
 
 ## 1. 现状快照（基于当前仓库）

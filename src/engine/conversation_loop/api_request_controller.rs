@@ -106,16 +106,33 @@ impl ApiRequestController {
                                 let mut compressor = compressor.lock().await;
                                 compressor.micro_compress(context.messages)
                             };
-                            let compressed = compressor
-                                .lock()
-                                .await
-                                .compress_async(&messages_for_compression)
-                                .await;
+                            let mut compressor = compressor.lock().await;
+                            let compact_history_len = compressor.compact_metadata_history().len();
+                            let compressed =
+                                compressor.compress_async(&messages_for_compression).await;
+                            let compact_meta = compressor
+                                .compact_metadata_history()
+                                .get(compact_history_len)
+                                .cloned();
+                            drop(compressor);
                             context.trace.record(TraceEvent::ContextCompacted {
                                 before_tokens: estimate_messages_tokens(&messages_for_compression)
                                     as usize,
                                 after_tokens: estimate_messages_tokens(&compressed) as usize,
                                 strategy: "reactive".to_string(),
+                                boundary_id: compact_meta
+                                    .as_ref()
+                                    .map(|meta| meta.boundary_id.clone()),
+                                sequence: compact_meta.as_ref().map(|meta| meta.sequence),
+                                messages_before: compact_meta
+                                    .as_ref()
+                                    .map(|meta| meta.messages_before),
+                                messages_after: compact_meta
+                                    .as_ref()
+                                    .map(|meta| meta.messages_after),
+                                preserved_tail_count: compact_meta
+                                    .as_ref()
+                                    .map(|meta| meta.preserved_tail_count),
                             });
                             request = ChatRequest::new(&context.conversation.model)
                                 .with_messages(compressed)

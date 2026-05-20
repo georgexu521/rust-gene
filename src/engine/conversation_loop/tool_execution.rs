@@ -1,6 +1,7 @@
 //! 工具执行辅助函数与常量
 
-use crate::tools::ToolResult;
+use crate::tools::{ToolRegistry, ToolResult};
+use serde_json::Value;
 
 /// 只读工具列表（不消耗迭代预算，可并发执行）
 pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
@@ -231,9 +232,34 @@ pub(crate) fn is_read_only(tool_name: &str) -> bool {
     READ_ONLY_TOOLS.contains(&tool_name)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn tool_call_is_read_only(
+    registry: &ToolRegistry,
+    tool_name: &str,
+    params: &Value,
+) -> bool {
+    registry
+        .get(tool_name)
+        .map(|tool| tool.is_read_only(params))
+        .unwrap_or_else(|| is_read_only(tool_name))
+}
+
+pub(crate) fn tool_call_is_concurrency_safe(
+    registry: &ToolRegistry,
+    tool_name: &str,
+    params: &Value,
+) -> bool {
+    registry
+        .get(tool_name)
+        .map(|tool| tool.is_concurrency_safe(params))
+        .unwrap_or_else(|| is_read_only(tool_name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolRegistryProfile;
+    use serde_json::json;
 
     #[test]
     fn test_safe_prefix_by_bytes_short_string() {
@@ -277,6 +303,37 @@ mod tests {
         assert!(is_read_only("read_mcp_resource"));
         assert!(!is_read_only("file_write"));
         assert!(!is_read_only("bash"));
+    }
+
+    #[test]
+    fn test_tool_call_concurrency_uses_tool_contract() {
+        let registry = ToolRegistry::with_profile(ToolRegistryProfile::Core);
+
+        assert!(tool_call_is_concurrency_safe(
+            &registry,
+            "bash",
+            &json!({ "command": "ls -la" })
+        ));
+        assert!(tool_call_is_read_only(
+            &registry,
+            "bash",
+            &json!({ "command": "ls -la" })
+        ));
+        assert!(tool_call_is_concurrency_safe(
+            &registry,
+            "grep",
+            &json!({ "pattern": "ToolOperationKind" })
+        ));
+        assert!(!tool_call_is_concurrency_safe(
+            &registry,
+            "bash",
+            &json!({ "command": "cargo test -q" })
+        ));
+        assert!(!tool_call_is_concurrency_safe(
+            &registry,
+            "file_write",
+            &json!({ "path": "tmp.txt", "content": "hello" })
+        ));
     }
 
     #[tokio::test]

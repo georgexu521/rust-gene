@@ -665,10 +665,16 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                     }
                 }
             }
-            StreamEvent::ToolExecutionComplete { id, result } => {
+            StreamEvent::ToolExecutionComplete {
+                id,
+                result,
+                metadata,
+            } => {
                 clear_status_if_visible(&mut status_visible)?;
                 assistant_printer.finish_line_if_needed()?;
-                with_tool_run(&mut tool_runs, &id, |run| run.mark_complete(result));
+                with_tool_run(&mut tool_runs, &id, |run| {
+                    run.mark_complete_with_metadata(result, metadata)
+                });
                 if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
                     let marker = match run.status {
                         crate::tui::tool_view::ToolRunStatus::Failed

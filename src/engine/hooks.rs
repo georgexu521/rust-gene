@@ -44,6 +44,25 @@ pub enum HookEventKind {
     SessionEnd,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookProviderKind {
+    #[default]
+    Env,
+    Config,
+    Plugin,
+}
+
+impl HookProviderKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HookProviderKind::Env => "env",
+            HookProviderKind::Config => "config",
+            HookProviderKind::Plugin => "plugin",
+        }
+    }
+}
+
 impl std::fmt::Display for HookEventKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = serde_json::to_value(self)
@@ -58,6 +77,8 @@ impl std::fmt::Display for HookEventKind {
 pub struct HookRunRecord {
     pub sequence: u64,
     pub event: HookEventKind,
+    #[serde(default)]
+    pub provider: HookProviderKind,
     pub hook_name: String,
     pub tool_call_id: String,
     pub tool_name: Option<String>,
@@ -71,6 +92,7 @@ pub struct HookRunRecord {
 #[derive(Debug, Clone)]
 struct CommandHook {
     name: String,
+    provider: HookProviderKind,
     command: String,
     timeout_ms: u64,
     block_on_error: bool,
@@ -228,6 +250,7 @@ impl ToolHookManager {
             if !cmd.is_empty() {
                 mgr.pre_tool_hooks.push(CommandHook {
                     name: "env_pre_tool_hook".to_string(),
+                    provider: HookProviderKind::Env,
                     command: cmd.to_string(),
                     timeout_ms,
                     block_on_error: fail_closed,
@@ -240,6 +263,7 @@ impl ToolHookManager {
             if !cmd.is_empty() {
                 mgr.post_tool_hooks.push(CommandHook {
                     name: "env_post_tool_hook".to_string(),
+                    provider: HookProviderKind::Env,
                     command: cmd.to_string(),
                     timeout_ms,
                     block_on_error: fail_closed,
@@ -256,6 +280,7 @@ impl ToolHookManager {
                     let entry = mgr.tool_specific_pre_hooks.entry(tool_name.clone());
                     entry.or_default().push(CommandHook {
                         name: format!("env_pre_tool_hook_{}", tool_name),
+                        provider: HookProviderKind::Env,
                         command: value.trim().to_string(),
                         timeout_ms,
                         block_on_error: fail_closed,
@@ -273,6 +298,7 @@ impl ToolHookManager {
                     let entry = mgr.tool_specific_post_hooks.entry(tool_name.clone());
                     entry.or_default().push(CommandHook {
                         name: format!("env_post_tool_hook_{}", tool_name),
+                        provider: HookProviderKind::Env,
                         command: value.trim().to_string(),
                         timeout_ms,
                         block_on_error: fail_closed,
@@ -429,6 +455,7 @@ impl ToolHookManager {
             manager.push_record(HookRunRecord {
                 sequence: 0,
                 event: payload.event,
+                provider: hook.provider,
                 hook_name: hook.name.clone(),
                 tool_call_id: payload.tool_call_id.to_string(),
                 tool_name: Some(payload.tool_name.to_string()),
@@ -579,6 +606,7 @@ mod tests {
         ToolHookManager {
             pre_tool_hooks: vec![CommandHook {
                 name: "test_pre".to_string(),
+                provider: HookProviderKind::Env,
                 command: command.to_string(),
                 timeout_ms,
                 block_on_error,
@@ -627,6 +655,7 @@ mod tests {
         let records = manager.recent_records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].event, HookEventKind::PreToolUse);
+        assert_eq!(records[0].provider, HookProviderKind::Env);
         assert_eq!(records[0].sequence, 1);
         assert_eq!(records[0].tool_call_id, "1");
         assert_eq!(records[0].tool_name.as_deref(), Some("file_write"));

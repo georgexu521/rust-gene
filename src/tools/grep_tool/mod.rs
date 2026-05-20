@@ -3,7 +3,7 @@
 //! 在文件中搜索文本内容
 
 use crate::tools::file_tool::resolve_path;
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::hash::{Hash, Hasher};
@@ -79,6 +79,31 @@ impl Tool for GrepTool {
             },
             "required": ["pattern"]
         })
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Search
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn max_result_size_chars(&self) -> Option<usize> {
+        Some(40_000)
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let pattern = params["pattern"].as_str()?.trim();
+        if pattern.is_empty() {
+            return None;
+        }
+        let path = params["path"].as_str().unwrap_or(".");
+        Some(format!("{pattern} in {path}"))
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {

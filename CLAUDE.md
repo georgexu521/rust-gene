@@ -9,6 +9,11 @@ goal is a narrow, deep, personalized, and verifiable programming assistant for
 gex's local projects and workflows. See
 `docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md`.
 
+Current tactical plan: first reach Claude Code-like runtime parity, then
+personalize and diverge. Use
+`docs/CLAUDE_CODE_PARITY_IMPLEMENTATION_PLAN_2026-05-20.md` as the active
+near-term implementation roadmap.
+
 ## Build and Development Commands
 
 ```bash

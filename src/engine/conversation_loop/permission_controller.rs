@@ -155,6 +155,8 @@ impl PermissionController {
             tool_name
         );
         let recovery_feedback = recovery_feedback(kind, family, tool_name);
+        let command_classification =
+            permission_command_classification(tool_name, &tool_call.arguments);
         let record = PermissionRequestRecord {
             id: tool_call.id.clone(),
             session_id: session_id.to_string(),
@@ -170,6 +172,7 @@ impl PermissionController {
                 "permission_family": family.as_str(),
                 "permission_decision": format!("{:?}", permission_explanation.decision),
                 "risk_level": format!("{:?}", permission_explanation.risk_level),
+                "command_classification": command_classification,
                 "warnings": permission_explanation.warnings,
                 "reasons": permission_explanation.reasons,
                 "drift_reason": drift_check.reason,
@@ -340,6 +343,27 @@ fn recovery_feedback(
             format!("Ask the user to approve '{}', or choose a lower-risk alternative. Do not claim the tool ran.", tool_name)
         }
     }
+}
+
+fn permission_command_classification(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> serde_json::Value {
+    if tool_name != "bash" {
+        return serde_json::Value::Null;
+    }
+    let Some(command) = arguments.get("command").and_then(serde_json::Value::as_str) else {
+        return serde_json::Value::Null;
+    };
+    let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
+    serde_json::json!({
+        "command_kind": classification.command_kind,
+        "command_category": classification.category,
+        "validation_family": classification.validation_family,
+        "path_patterns": classification.path_patterns,
+        "safe_for_closeout": classification.safe_for_closeout,
+        "requires_pty": classification.requires_pty(),
+    })
 }
 
 fn permission_prompt(
@@ -548,6 +572,45 @@ mod tests {
             .unwrap()
             .recovery_feedback
             .contains("external path/scope"));
+    }
+
+    #[test]
+    fn bash_permission_metadata_includes_command_classification() {
+        let tmp = tempdir().expect("tempdir");
+        let mut context = ToolContext::new(tmp.path(), "session-1");
+        context.permission_context.rules = crate::permissions::PermissionRules::new().ask("bash");
+        let tool_call = ToolCall {
+            id: "call_bash".to_string(),
+            name: "bash".to_string(),
+            arguments: json!({"command": "npm run dev -- --host 0.0.0.0"}),
+        };
+
+        let evaluation = PermissionController::evaluate_tool_permission(
+            "session-1",
+            &tool_call,
+            &NamedTool {
+                name: "bash",
+                requires_confirmation: false,
+            },
+            &context,
+            &DriftCheck::ok(),
+        );
+
+        let metadata = &evaluation.record.as_ref().unwrap().metadata;
+        assert!(evaluation.requires_approval);
+        assert_eq!(metadata["permission_family"], "shell");
+        assert_eq!(
+            metadata["command_classification"]["command_category"],
+            "dev_server"
+        );
+        assert_eq!(
+            metadata["command_classification"]["command_kind"],
+            "unknown"
+        );
+        assert_eq!(
+            metadata["command_classification"]["requires_pty"],
+            serde_json::Value::Bool(false)
+        );
     }
 
     #[test]

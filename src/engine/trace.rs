@@ -219,6 +219,16 @@ pub enum TraceEvent {
         before_tokens: usize,
         after_tokens: usize,
         strategy: String,
+        #[serde(default)]
+        boundary_id: Option<String>,
+        #[serde(default)]
+        sequence: Option<u32>,
+        #[serde(default)]
+        messages_before: Option<usize>,
+        #[serde(default)]
+        messages_after: Option<usize>,
+        #[serde(default)]
+        preserved_tail_count: Option<usize>,
     },
     RuntimeDietReport {
         prompt_tokens: u64,
@@ -284,6 +294,7 @@ pub enum TraceEvent {
     },
     HookCompleted {
         event: String,
+        provider: String,
         hook_name: String,
         call_id: String,
         tool: Option<String>,
@@ -724,9 +735,29 @@ impl TraceEvent {
                 before_tokens,
                 after_tokens,
                 strategy,
+                boundary_id,
+                sequence,
+                messages_before,
+                messages_after,
+                preserved_tail_count,
             } => format!(
-                "context compacted: {} -> {} tokens ({})",
-                before_tokens, after_tokens, strategy
+                "context compacted: {} -> {} tokens ({}) boundary={} seq={} msgs={}->{} preserved={}",
+                before_tokens,
+                after_tokens,
+                strategy,
+                boundary_id.as_deref().unwrap_or("none"),
+                sequence
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                messages_before
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                messages_after
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                preserved_tail_count
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
             ),
             TraceEvent::RuntimeDietReport {
                 prompt_tokens,
@@ -850,6 +881,7 @@ impl TraceEvent {
             ),
             TraceEvent::HookCompleted {
                 event,
+                provider,
                 hook_name,
                 call_id,
                 tool,
@@ -865,9 +897,10 @@ impl TraceEvent {
                     .map(preview)
                     .unwrap_or_else(|| "no output".to_string());
                 format!(
-                    "{} hook '{}' for {} {}{} in {}ms: {}",
+                    "{} hook '{}' provider={} for {} {}{} in {}ms: {}",
                     event,
                     hook_name,
+                    provider,
                     tool.as_deref().unwrap_or(call_id),
                     if *success { "ok" } else { "failed" },
                     if *blocked { " blocked" } else { "" },

@@ -1747,6 +1747,11 @@ impl ContextCompressor {
         &self.compact_metadata_history
     }
 
+    /// 获取最近一次 compact boundary 元数据
+    pub fn latest_compact_metadata(&self) -> Option<&CompactMetadata> {
+        self.compact_metadata_history.last()
+    }
+
     /// 获取压缩统计
     pub fn stats(&self) -> CompressionStats {
         let savings_rate = if self.total_tokens_before > 0 {

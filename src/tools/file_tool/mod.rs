@@ -2,7 +2,7 @@
 //!
 //! 提供文件读取、写入、编辑功能
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde_json::json;
@@ -685,6 +685,27 @@ impl Tool for FileReadTool {
         format!("file_read: {}", path)
     }
 
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Read
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let path = params["path"].as_str()?.trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(path.to_string())
+        }
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let path_str = params["path"].as_str().unwrap_or("");
         if path_str.is_empty() {
@@ -918,6 +939,33 @@ impl Tool for FileWriteTool {
         let path = params["path"].as_str().unwrap_or("");
         let content_len = params["content"].as_str().map(|s| s.len()).unwrap_or(0);
         format!("file_write: {} ({} bytes)", path, content_len)
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Write
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
+    fn is_destructive(&self, params: &serde_json::Value) -> bool {
+        let path = params["path"].as_str().unwrap_or("");
+        let input_path = Path::new(path);
+        input_path.is_absolute() && input_path.exists()
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let path = params["path"].as_str()?.trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(path.to_string())
+        }
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
@@ -1414,6 +1462,37 @@ impl Tool for FileEditTool {
             "insert"
         };
         format!("file_edit: {} ({})", path, mode)
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Edit
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let path = params["path"].as_str()?.trim();
+        if path.is_empty() {
+            return None;
+        }
+        let mode = if params["old_string"].as_str().is_some() {
+            "replace"
+        } else if params["line_start"].as_u64().is_some() {
+            "line_range"
+        } else if params["insert_after"].as_str().is_some() {
+            "insert_after"
+        } else if params["insert_before"].as_str().is_some() {
+            "insert_before"
+        } else {
+            "edit"
+        };
+        Some(format!("{path} ({mode})"))
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {

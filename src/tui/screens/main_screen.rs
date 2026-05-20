@@ -272,6 +272,9 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default().fg(app.theme.text_dim),
             ));
         }
+        if let Some(label) = app.terminal_task_status_label() {
+            parts.push(Span::styled(label, Style::default().fg(app.theme.text_dim)));
+        }
         if let Some(usage) = app.stream_usage_label() {
             parts.push(Span::styled(usage, Style::default().fg(app.theme.text_dim)));
         }
@@ -422,6 +425,9 @@ fn push_normal_status_parts<'a>(app: &'a TuiApp, parts: &mut Vec<Span<'a>>) {
                 Style::default().fg(app.theme.text_dim),
             ));
         }
+    }
+    if let Some(label) = app.terminal_task_status_label() {
+        parts.push(Span::styled(label, Style::default().fg(app.theme.text_dim)));
     }
 }
 
@@ -1451,14 +1457,14 @@ pub fn render_permission_approval(
 ) {
     let popup_area = centered_rect(76, 64, area);
     let review = req.human_review_request();
+    let permission_review = req.permission_review();
     let goal_drift_approval =
         review.kind == crate::engine::human_review::HumanReviewKind::GoalDrift;
     let reflection_gate =
         review.kind == crate::engine::human_review::HumanReviewKind::ReflectionGate;
     let risk = review.risk.as_str();
     let risk_reason = review.reason.as_str();
-    let rule_pattern =
-        crate::tui::app::permission_rule_pattern(&req.tool_call.name, &req.tool_call.arguments);
+    let rule_pattern = permission_review.rule_pattern.as_str();
     let risk_color = match risk {
         "high" => Color::Red,
         "medium" => Color::Yellow,

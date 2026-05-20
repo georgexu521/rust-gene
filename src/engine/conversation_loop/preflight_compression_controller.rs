@@ -46,16 +46,24 @@ impl PreflightCompressionController {
             );
             drop(compressor);
             let before_tokens = preflight.observation.message_tokens;
-            *context.messages = compressor_mutex
-                .lock()
-                .await
-                .compress_async(context.messages)
-                .await;
+            let mut compressor = compressor_mutex.lock().await;
+            let compact_history_len = compressor.compact_metadata_history().len();
+            *context.messages = compressor.compress_async(context.messages).await;
+            let compact_meta = compressor
+                .compact_metadata_history()
+                .get(compact_history_len)
+                .cloned();
+            drop(compressor);
             let after_tokens = estimate_messages_tokens(context.messages);
             context.trace.record(TraceEvent::ContextCompacted {
                 before_tokens: before_tokens as usize,
                 after_tokens: after_tokens as usize,
                 strategy: "preflight".to_string(),
+                boundary_id: compact_meta.as_ref().map(|meta| meta.boundary_id.clone()),
+                sequence: compact_meta.as_ref().map(|meta| meta.sequence),
+                messages_before: compact_meta.as_ref().map(|meta| meta.messages_before),
+                messages_after: compact_meta.as_ref().map(|meta| meta.messages_after),
+                preserved_tail_count: compact_meta.as_ref().map(|meta| meta.preserved_tail_count),
             });
             if after_tokens >= before_tokens {
                 no_gain_passes += 1;

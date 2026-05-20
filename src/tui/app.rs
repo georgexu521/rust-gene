@@ -5,8 +5,11 @@
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::{PermissionMode, PermissionRules, RuleSource, SourcedRule};
-use crate::state::{AppContext, MessageItem, MessageRole, TaskItem};
-use crate::tools::Tool;
+use crate::state::{
+    select_runtime_status, select_tool_viewer_tool_id, AppContext, MessageItem, MessageRole,
+    RuntimeAppState, RuntimeMcpState, RuntimePermissionState, RuntimeStatusSnapshot,
+    RuntimeTerminalTask, RuntimeToolStatus, RuntimeToolUse, TaskItem,
+};
 use crate::tui::components::input::InputState;
 use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunStatus, ToolRunView};
 use futures::StreamExt;
@@ -156,6 +159,81 @@ pub(crate) fn parse_permission_mode(mode: &str) -> Option<PermissionMode> {
         "once" => Some(PermissionMode::Once),
         _ => None,
     }
+}
+
+fn runtime_tool_use_from_view(run: &ToolRunView) -> RuntimeToolUse {
+    RuntimeToolUse {
+        id: run.id.clone(),
+        name: run.name.clone(),
+        summary: run.summary(),
+        status: match run.status {
+            ToolRunStatus::Queued => RuntimeToolStatus::Queued,
+            ToolRunStatus::Running => RuntimeToolStatus::Running,
+            ToolRunStatus::Backgrounded => RuntimeToolStatus::Backgrounded,
+            ToolRunStatus::WaitingPermission => RuntimeToolStatus::WaitingPermission,
+            ToolRunStatus::TimedOut => RuntimeToolStatus::TimedOut,
+            ToolRunStatus::Cancelled => RuntimeToolStatus::Cancelled,
+            ToolRunStatus::Completed => RuntimeToolStatus::Completed,
+            ToolRunStatus::Failed => RuntimeToolStatus::Failed,
+        },
+        active: run.is_active(),
+        arguments: run.arguments.clone(),
+        latest_progress: run.progress.last().cloned(),
+        result_preview: run.result_preview.clone(),
+        elapsed_ms: u64::try_from(run.elapsed().as_millis()).ok(),
+    }
+}
+
+fn runtime_terminal_task_from_view(run: &ToolRunView) -> Option<RuntimeTerminalTask> {
+    let task = run.metadata.as_ref()?.get("terminal_task")?;
+    let id = task
+        .get("task_id")
+        .or_else(|| task.get("handle"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(run.id.as_str())
+        .to_string();
+    let status = task
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| match run.status {
+            ToolRunStatus::Queued => "queued",
+            ToolRunStatus::Running => "running",
+            ToolRunStatus::Backgrounded => "running",
+            ToolRunStatus::WaitingPermission => "waiting_permission",
+            ToolRunStatus::TimedOut => "timed_out",
+            ToolRunStatus::Cancelled => "cancelled",
+            ToolRunStatus::Completed => "completed",
+            ToolRunStatus::Failed => "failed",
+        })
+        .to_string();
+    Some(RuntimeTerminalTask {
+        id,
+        status,
+        terminal_kind: task
+            .get("terminal_kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        command: task
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        handle: task
+            .get("handle")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        output_path: task
+            .get("output_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        read_tool: task
+            .get("read_tool")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        cancel_handle: task
+            .get("cancel_handle")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -494,14 +572,7 @@ fn provider_name_from_base_url(base_url: &str) -> &'static str {
 }
 
 pub(crate) fn permission_rule_pattern(tool_name: &str, args: &serde_json::Value) -> String {
-    if tool_name == "mcp_tool" {
-        let server = args["server_name"].as_str().unwrap_or("");
-        let tool = args["tool_name"].as_str().unwrap_or("");
-        if !server.is_empty() && !tool.is_empty() {
-            return format!("mcp/{}/{}", server, tool);
-        }
-    }
-    tool_name.to_string()
+    crate::engine::human_review::permission_rule_pattern(tool_name, args)
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -695,6 +766,8 @@ pub struct TuiApp {
     tool_runs: Arc<Mutex<Vec<ToolRunView>>>,
     /// 当前工具运行视图快照
     pub tool_runs_snapshot: Vec<ToolRunView>,
+    /// Shared runtime-state snapshot used by status/tool selectors.
+    pub runtime_state_snapshot: RuntimeAppState,
     /// 历史工具运行视图，按触发该轮的用户消息 id 锚定
     pub tool_runs_by_message_id: HashMap<String, Vec<ToolRunView>>,
     current_tool_anchor_id: Option<String>,
@@ -901,6 +974,7 @@ impl TuiApp {
             current_response: Arc::new(Mutex::new(String::new())),
             tool_runs: Arc::new(Mutex::new(Vec::new())),
             tool_runs_snapshot: Vec::new(),
+            runtime_state_snapshot: RuntimeAppState::default(),
             tool_runs_by_message_id: HashMap::new(),
             current_tool_anchor_id: None,
             transcript_expanded: false,
@@ -1505,6 +1579,8 @@ impl TuiApp {
             self.tool_runs_snapshot.clear();
             self.current_tool_anchor_id = Some(user_msg_id);
             self.stream_usage_snapshot = None;
+            self.runtime_state_snapshot = self.build_runtime_state_snapshot();
+            self.sync_context_runtime_state().await;
             // 标记流未完成
             self.stream_done.store(false, Ordering::SeqCst);
 
@@ -1555,9 +1631,15 @@ impl TuiApp {
                             let mut runs = tool_runs_clone.lock().await;
                             with_tool_run(&mut runs, &id, |run| run.push_progress(progress));
                         }
-                        StreamEvent::ToolExecutionComplete { id, result } => {
+                        StreamEvent::ToolExecutionComplete {
+                            id,
+                            result,
+                            metadata,
+                        } => {
                             let mut runs = tool_runs_clone.lock().await;
-                            with_tool_run(&mut runs, &id, |run| run.mark_complete(result));
+                            with_tool_run(&mut runs, &id, |run| {
+                                run.mark_complete_with_metadata(result, metadata)
+                            });
                         }
                         StreamEvent::Complete => {
                             done_flag.store(true, Ordering::SeqCst);
@@ -1655,6 +1737,8 @@ impl TuiApp {
             }
         }
         self.stream_usage_snapshot = *self.stream_usage.lock().await;
+        self.runtime_state_snapshot = self.build_runtime_state_snapshot();
+        self.sync_context_runtime_state().await;
 
         // 更新最后一条助手消息
         if let Some(last_msg) = self.messages.last_mut() {
@@ -1694,6 +1778,8 @@ impl TuiApp {
                         final_response_to_persist = Some(last_msg.content.clone());
                     }
                 }
+                self.runtime_state_snapshot = self.build_runtime_state_snapshot();
+                self.sync_context_runtime_state().await;
                 let final_response_for_outcome =
                     final_response_to_persist.clone().unwrap_or_default();
                 if self.should_persist_messages_from_tui() {
@@ -2545,7 +2631,7 @@ impl TuiApp {
                 }
             }
             "/resume" => slash::handle_resume(self, args).await,
-            "/rewind" => slash::handle_rewind(self, args),
+            "/rewind" => slash::handle_rewind(self, args).await,
             // Phase 10 Batch 1: Session & Control Commands
             "/session" => slash::handle_session_cmd(self, args).await,
             "/undo" => slash::handle_undo(self, args),
@@ -2555,31 +2641,7 @@ impl TuiApp {
             "/reload" => slash::handle_reload(self, args).await,
             "/share" => slash::handle_share(self, args),
             "/cost" | "/token" => slash::handle_token(self).await,
-            "/diff" => {
-                let tool = crate::tools::GitTool;
-                let range = if args.trim().is_empty() {
-                    "HEAD~3..HEAD".to_string()
-                } else {
-                    args.trim().to_string()
-                };
-                let params = serde_json::json!({ "action": "diff", "range": range });
-                let result = tool.execute(params, self.build_tool_context().await).await;
-                if result.success {
-                    self.diff_title = format!("Diff: {}", args.trim());
-                    if args.trim().is_empty() {
-                        self.diff_title = "Recent changes (last 3 commits)".to_string();
-                    }
-                    self.diff_content = result.content;
-                    self.diff_scroll_offset = 0;
-                    self.mode = AppMode::DiffViewer;
-                } else {
-                    self.diff_title = "Error".to_string();
-                    self.diff_content = result.error.unwrap_or_else(|| "Unknown error".to_string());
-                    self.diff_scroll_offset = 0;
-                    self.mode = AppMode::DiffViewer;
-                }
-                String::new()
-            }
+            "/diff" => slash::handle_diff(self, args).await,
             "/quit" | "/exit" | "/q" => {
                 if let Some(ref engine) = self.streaming_engine {
                     engine
@@ -3157,6 +3219,88 @@ impl TuiApp {
         }
     }
 
+    fn runtime_permission_state(&self) -> RuntimePermissionState {
+        let mut state = RuntimePermissionState {
+            mode: self.current_permission_label(),
+            ..RuntimePermissionState::default()
+        };
+        if let Some(request) = self.pending_permission_request.as_ref() {
+            state.pending_call_id = Some(request.tool_call.id.clone());
+            state.pending_tool = Some(request.tool_call.name.clone());
+            state.pending_prompt = Some(request.prompt.clone());
+        }
+        state
+    }
+
+    fn runtime_mcp_state(&self) -> RuntimeMcpState {
+        let Some(engine) = self.streaming_engine.as_ref() else {
+            return RuntimeMcpState::default();
+        };
+        let Some(manager) = engine.mcp_manager() else {
+            return RuntimeMcpState::default();
+        };
+        let diagnostics = manager.health_diagnostics();
+        let available_count = diagnostics
+            .iter()
+            .filter(|diag| {
+                diag.approved && diag.health == crate::engine::mcp::McpHealthStatus::Healthy
+            })
+            .count();
+        let repair_hints = diagnostics
+            .iter()
+            .filter(|diag| diag.repair_hint != "none")
+            .map(|diag| format!("{}=>{}", diag.name, diag.repair_hint))
+            .collect::<Vec<_>>();
+        RuntimeMcpState {
+            server_count: diagnostics.len(),
+            available_count,
+            repair_hints,
+        }
+    }
+
+    fn build_runtime_state_snapshot(&self) -> RuntimeAppState {
+        let tool_uses = self
+            .tool_runs_snapshot
+            .iter()
+            .map(runtime_tool_use_from_view)
+            .collect();
+        let terminal_tasks = self
+            .tool_runs_snapshot
+            .iter()
+            .filter_map(runtime_terminal_task_from_view)
+            .collect();
+        RuntimeAppState {
+            tool_uses,
+            terminal_tasks,
+            permission: self.runtime_permission_state(),
+            mcp: self.runtime_mcp_state(),
+        }
+    }
+
+    async fn sync_context_runtime_state(&self) {
+        let runtime = self.runtime_state_snapshot.clone();
+        let messages = self.messages.clone();
+        let is_querying = self.is_querying;
+        let last_error = self.error_message.clone();
+        self.context
+            .set_state(move |state| {
+                state.messages = messages;
+                state.is_querying = is_querying;
+                state.last_error = last_error;
+                state.runtime = runtime;
+            })
+            .await;
+    }
+
+    pub async fn runtime_status_snapshot(&self) -> RuntimeStatusSnapshot {
+        let mut state = self.context.get_state().await;
+        state.messages = self.messages.clone();
+        state.is_querying = self.is_querying;
+        state.last_error = self.error_message.clone();
+        state.runtime = self.build_runtime_state_snapshot();
+        select_runtime_status(&state)
+    }
+
     pub fn current_goal_label(&self) -> Option<String> {
         self.streaming_engine
             .as_ref()
@@ -3181,13 +3325,31 @@ impl TuiApp {
     }
 
     pub fn active_tool_count(&self) -> usize {
-        self.tool_runs_snapshot
-            .iter()
-            .filter(|run| run.is_active())
-            .count()
+        if self.runtime_state_snapshot.tool_uses.is_empty() {
+            self.tool_runs_snapshot
+                .iter()
+                .filter(|run| run.is_active())
+                .count()
+        } else {
+            self.runtime_state_snapshot
+                .tool_uses
+                .iter()
+                .filter(|tool| tool.active)
+                .count()
+        }
     }
 
     pub fn current_tool_status_label(&self) -> Option<String> {
+        if let Some(tool) = self
+            .runtime_state_snapshot
+            .tool_uses
+            .iter()
+            .rev()
+            .find(|tool| tool.active)
+        {
+            let elapsed = tool.elapsed_ms.unwrap_or_default() / 1000;
+            return Some(format!("{} {}s", tool.summary, elapsed));
+        }
         let active = self
             .tool_runs_snapshot
             .iter()
@@ -3198,6 +3360,39 @@ impl TuiApp {
             active.summary(),
             active.elapsed().as_secs()
         ))
+    }
+
+    pub fn terminal_task_status_label(&self) -> Option<String> {
+        let terminal_count = self.runtime_state_snapshot.terminal_tasks.len();
+        let running = self
+            .runtime_state_snapshot
+            .terminal_tasks
+            .iter()
+            .filter(|task| task.status == "running")
+            .count();
+        let backgrounded = self
+            .runtime_state_snapshot
+            .tool_uses
+            .iter()
+            .filter(|tool| tool.status == RuntimeToolStatus::Backgrounded)
+            .count();
+        let pty = self
+            .runtime_state_snapshot
+            .terminal_tasks
+            .iter()
+            .filter(|task| task.terminal_kind.as_deref() == Some("pty_shell"))
+            .count();
+        if terminal_count == 0 && backgrounded == 0 {
+            return None;
+        }
+        let mut parts = vec![format!("terminal:{}", terminal_count.max(backgrounded))];
+        if running > 0 || backgrounded > 0 {
+            parts.push(format!("running:{}", running.max(backgrounded)));
+        }
+        if pty > 0 {
+            parts.push(format!("pty:{}", pty));
+        }
+        Some(parts.join(" "))
     }
 
     pub fn stream_usage_label(&self) -> Option<String> {
@@ -3239,10 +3434,18 @@ impl TuiApp {
     }
 
     pub fn open_tool_viewer(&mut self) -> bool {
-        let selected = self
-            .expanded_tool_run_id
+        let runtime_selected_id = select_tool_viewer_tool_id(
+            &self.runtime_state_snapshot,
+            self.expanded_tool_run_id.as_deref(),
+        );
+        let selected = runtime_selected_id
             .as_deref()
             .and_then(|id| self.find_visible_tool_run(id))
+            .or_else(|| {
+                self.expanded_tool_run_id
+                    .as_deref()
+                    .and_then(|id| self.find_visible_tool_run(id))
+            })
             .or_else(|| self.visible_tool_runs().into_iter().next_back());
 
         let Some(run) = selected else {
@@ -3827,6 +4030,34 @@ mod tests {
         app.expanded_tool_run_id = Some("tool_1".to_string());
         assert!(app.open_tool_viewer());
         assert!(app.tool_viewer_content.contains("first"));
+    }
+
+    #[test]
+    fn test_runtime_snapshot_keeps_terminal_task_metadata() {
+        let mut app = TuiApp::new();
+        let mut run = ToolRunView::new("tool_bg".to_string(), "bash".to_string());
+        run.mark_complete_with_metadata(
+            "Result: OK\nStarted background shell\n".to_string(),
+            Some(serde_json::json!({
+                "terminal_task": {
+                    "task_id": "shell_bg_1",
+                    "status": "running",
+                    "terminal_kind": "background_shell",
+                    "command": "npm run dev",
+                    "handle": "shell_bg_1",
+                    "read_tool": "bash_output",
+                    "cancel_handle": "shell_bg_1"
+                }
+            })),
+        );
+        app.tool_runs_snapshot.push(run);
+        app.runtime_state_snapshot = app.build_runtime_state_snapshot();
+
+        assert_eq!(app.runtime_state_snapshot.terminal_tasks.len(), 1);
+        assert_eq!(
+            app.terminal_task_status_label().as_deref(),
+            Some("terminal:1 running:1")
+        );
     }
 
     #[test]

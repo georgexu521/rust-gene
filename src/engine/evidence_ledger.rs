@@ -28,6 +28,10 @@ pub struct EvidenceLedger {
 pub struct ToolExecutionRecord {
     pub call_id: String,
     pub tool: String,
+    pub operation_kind: Option<String>,
+    pub read_only: Option<bool>,
+    pub concurrency_safe: Option<bool>,
+    pub destructive: Option<bool>,
     pub status: ToolExecutionStatus,
     pub arguments_hash: String,
     pub duration_ms: Option<u64>,
@@ -37,9 +41,13 @@ pub struct ToolExecutionRecord {
     pub error_preview: Option<String>,
     pub permission: Option<ToolPermissionRecord>,
     pub command: Option<String>,
+    #[serde(default)]
+    pub normalized_command: Option<String>,
     pub command_kind: Option<String>,
     pub command_category: Option<String>,
     pub validation_family: Option<String>,
+    #[serde(default)]
+    pub path_patterns: Vec<String>,
     pub safe_for_closeout: Option<bool>,
     pub terminal_task: Option<TerminalTaskRecord>,
     pub changed_paths: Vec<String>,
@@ -188,10 +196,14 @@ pub struct FileEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandEvidence {
     pub command: String,
+    #[serde(default)]
+    pub normalized_command: String,
     pub success: bool,
     pub command_kind: Option<String>,
     pub command_category: Option<String>,
     pub validation_family: Option<String>,
+    #[serde(default)]
+    pub path_patterns: Vec<String>,
     pub safe_for_closeout: bool,
     pub summary: String,
 }
@@ -703,10 +715,12 @@ impl EvidenceLedger {
         let summary = result_summary(result);
         self.command_facts.push(CommandEvidence {
             command: command.to_string(),
+            normalized_command: normalize_command_identity(command),
             success: result.success,
             command_kind,
             command_category,
             validation_family,
+            path_patterns: classification.path_patterns.clone(),
             safe_for_closeout,
             summary: summary.clone(),
         });
@@ -748,9 +762,15 @@ impl EvidenceLedger {
                     .and_then(serde_json::Value::as_str)
             })
             .map(preview);
+        let normalized_command = command.as_deref().map(normalize_command_identity);
         let command_kind = summary_string(summary, "command_kind");
         let command_category = summary_string(summary, "command_category");
         let validation_family = summary_string(summary, "validation_family");
+        let path_patterns = summary_string_array(summary, "path_patterns");
+        let operation_kind = summary_string(summary, "operation_kind");
+        let read_only = summary_bool(summary, "read_only");
+        let concurrency_safe = summary_bool(summary, "concurrency_safe");
+        let destructive = summary_bool(summary, "destructive");
         let safe_for_closeout = summary
             .and_then(|summary| summary.get("safe_for_closeout"))
             .and_then(serde_json::Value::as_bool);
@@ -775,6 +795,10 @@ impl EvidenceLedger {
         self.tool_execution_records.push(ToolExecutionRecord {
             call_id: tool_call.id.clone(),
             tool: tool_call.name.clone(),
+            operation_kind,
+            read_only,
+            concurrency_safe,
+            destructive,
             status,
             arguments_hash: tool_arguments_hash(&tool_call.arguments),
             duration_ms: result.duration_ms,
@@ -788,9 +812,11 @@ impl EvidenceLedger {
             error_preview: result.error.as_deref().map(preview),
             permission,
             command,
+            normalized_command,
             command_kind,
             command_category,
             validation_family,
+            path_patterns,
             safe_for_closeout,
             terminal_task: terminal_task_record(result),
             changed_paths,
@@ -918,6 +944,27 @@ fn summary_string(summary: Option<&serde_json::Value>, key: &str) -> Option<Stri
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn summary_string_array(summary: Option<&serde_json::Value>, key: &str) -> Vec<String> {
+    summary
+        .and_then(|summary| summary.get(key))
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn summary_bool(summary: Option<&serde_json::Value>, key: &str) -> Option<bool> {
+    summary
+        .and_then(|summary| summary.get(key))
+        .and_then(serde_json::Value::as_bool)
 }
 
 fn tool_permission_record(result: &ToolResult) -> Option<ToolPermissionRecord> {
@@ -1414,9 +1461,15 @@ fn normalize_command_identity(command: &str) -> String {
 }
 
 fn command_fact_satisfies_required(fact: &CommandEvidence, required_command: &str) -> bool {
-    let executed = normalize_command_identity(&fact.command);
+    let fallback;
+    let executed = if fact.normalized_command.is_empty() {
+        fallback = normalize_command_identity(&fact.command);
+        fallback.as_str()
+    } else {
+        fact.normalized_command.as_str()
+    };
     executed == required_command
-        || (fact.safe_for_closeout && shell_assertion_covers_required(&executed, required_command))
+        || (fact.safe_for_closeout && shell_assertion_covers_required(executed, required_command))
 }
 
 fn shell_assertion_covers_required(executed: &str, required_command: &str) -> bool {
@@ -1495,6 +1548,11 @@ fn format_repair_tool_record(record: &ToolExecutionRecord, file_facts: &[FileEvi
     } else {
         record.changed_paths.join(",")
     };
+    let path_patterns = if record.path_patterns.is_empty() {
+        "none".to_string()
+    } else {
+        record.path_patterns.join(",")
+    };
     let file_evidence = if file_evidence.is_empty() {
         "none".to_string()
     } else {
@@ -1512,11 +1570,13 @@ fn format_repair_tool_record(record: &ToolExecutionRecord, file_facts: &[FileEvi
     };
 
     preview(&format!(
-        "tool record evidence: tool={} status={} command={} validation_family={} safe_for_closeout={} duration_ms={} output_chars={} terminal={} changed_paths={} file_evidence={} repair_reasons={} error={}",
+        "tool record evidence: tool={} status={} command={} normalized_command={} validation_family={} path_patterns={} safe_for_closeout={} duration_ms={} output_chars={} terminal={} changed_paths={} file_evidence={} repair_reasons={} error={}",
         record.tool,
         status,
         record.command.as_deref().unwrap_or("none"),
+        record.normalized_command.as_deref().unwrap_or("none"),
         record.validation_family.as_deref().unwrap_or("none"),
+        path_patterns,
         record
             .safe_for_closeout
             .map(|value| value.to_string())
@@ -1563,6 +1623,33 @@ mod tests {
         assert_eq!(record.file_evidence.len(), 1);
         assert_eq!(record.file_evidence[0].fact_index, 0);
         assert_eq!(record.file_evidence[0].path.as_deref(), Some("src/app.py"));
+    }
+
+    #[test]
+    fn records_tool_contract_semantics_from_summary() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "listed files",
+            serde_json::json!({
+                "tool_summary": {
+                    "operation_kind": "list",
+                    "read_only": true,
+                    "concurrency_safe": true,
+                    "destructive": false
+                }
+            }),
+        );
+
+        ledger.record_tool_result(
+            &tool_call("bash", serde_json::json!({"command": "ls -la"})),
+            &result,
+        );
+
+        let record = &ledger.tool_execution_records()[0];
+        assert_eq!(record.operation_kind.as_deref(), Some("list"));
+        assert_eq!(record.read_only, Some(true));
+        assert_eq!(record.concurrency_safe, Some(true));
+        assert_eq!(record.destructive, Some(false));
     }
 
     #[test]
@@ -1733,7 +1820,7 @@ mod tests {
     fn records_safe_bash_validation_as_command_and_validation_fact() {
         let mut ledger = EvidenceLedger::new();
         ledger.record_tool_result(
-            &tool_call("bash", serde_json::json!({"command": "cargo test -q"})),
+            &tool_call("bash", serde_json::json!({"command": "cargo test -q src"})),
             &ToolResult::success("test result: ok"),
         );
 
@@ -1745,6 +1832,11 @@ mod tests {
             ledger.runtime_validation_label().as_deref(),
             Some("passed:1/1")
         );
+        assert_eq!(
+            ledger.command_facts[0].normalized_command,
+            "cargo test -q src"
+        );
+        assert_eq!(ledger.command_facts[0].path_patterns, vec!["src"]);
     }
 
     #[test]
@@ -1770,6 +1862,7 @@ mod tests {
                     "command_kind": "validation",
                     "command_category": "test_run",
                     "validation_family": "cargo_test",
+                    "path_patterns": ["src/lib.rs"],
                     "safe_for_closeout": true,
                     "terminal_task": {
                         "task_id": "shell_foreground_123",
@@ -1820,8 +1913,13 @@ mod tests {
         assert_eq!(records[0].status, ToolExecutionStatus::Completed);
         assert_eq!(records[0].arguments_hash.len(), HASH_PREVIEW_CHARS);
         assert_eq!(records[0].command.as_deref(), Some("cargo test -q"));
+        assert_eq!(
+            records[0].normalized_command.as_deref(),
+            Some("cargo test -q")
+        );
         assert_eq!(records[0].command_kind.as_deref(), Some("validation"));
         assert_eq!(records[0].validation_family.as_deref(), Some("cargo_test"));
+        assert_eq!(records[0].path_patterns, vec!["src/lib.rs"]);
         assert_eq!(records[0].safe_for_closeout, Some(true));
         assert_eq!(
             records[0].relevance,

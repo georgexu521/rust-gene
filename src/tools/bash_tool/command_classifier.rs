@@ -622,20 +622,84 @@ fn is_legacy_mutation_command(command: &str) -> bool {
 }
 
 fn extract_path_patterns(command: &str) -> Vec<String> {
-    let mut paths = command
+    let tokens = command
         .split_whitespace()
-        .filter_map(|token| {
-            let token = token.trim_matches(|ch| matches!(ch, '\'' | '"' | ',' | ';'));
-            if likely_path_token(token) {
-                Some(token.to_string())
-            } else {
+        .map(clean_shell_token)
+        .collect::<Vec<_>>();
+    let mut paths = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            if command_token_should_not_be_path(&tokens, index)
+                || !likely_path_token(token.as_str())
+            {
                 None
+            } else {
+                Some(token.clone())
             }
         })
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn clean_shell_token(token: &str) -> String {
+    token
+        .trim_matches(|ch| matches!(ch, '\'' | '"' | ',' | ';' | '(' | ')'))
+        .to_string()
+}
+
+fn command_token_should_not_be_path(tokens: &[String], index: usize) -> bool {
+    let Some(token) = tokens.get(index).map(String::as_str) else {
+        return false;
+    };
+
+    if index == 0
+        && matches!(
+            token,
+            "test"
+                | "["
+                | "[["
+                | "cargo"
+                | "npm"
+                | "pnpm"
+                | "yarn"
+                | "go"
+                | "python"
+                | "python3"
+                | "pip"
+                | "pip3"
+                | "git"
+                | "rg"
+                | "grep"
+                | "find"
+                | "ls"
+        )
+    {
+        return true;
+    }
+
+    let Some(previous) = tokens.get(index.saturating_sub(1)).map(String::as_str) else {
+        return false;
+    };
+    matches!(
+        (previous, token),
+        (
+            "cargo",
+            "test" | "check" | "clippy" | "fmt" | "build" | "run" | "doc" | "clean"
+        ) | ("go", "test" | "run" | "build" | "vet" | "fmt")
+            | (
+                "npm" | "pnpm" | "yarn",
+                "test" | "install" | "run" | "exec" | "dlx"
+            )
+            | ("python" | "python3", "-m")
+            | ("pip" | "pip3", "install" | "uninstall")
+            | (
+                "git",
+                "add" | "diff" | "status" | "checkout" | "restore" | "commit"
+            )
+    )
 }
 
 fn likely_path_token(token: &str) -> bool {
@@ -744,6 +808,10 @@ mod tests {
             classify_command("go test ./...").validation_family,
             Some(ValidationFamily::GoTest)
         );
+
+        let cargo = classify_command("cargo test -q tests src/lib.rs");
+        assert_eq!(cargo.path_patterns, vec!["src/lib.rs", "tests"]);
+        assert!(!cargo.path_patterns.contains(&"test".to_string()));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use super::{
     MAX_EDITABLE_FILE_SIZE_BYTES,
 };
 use crate::engine::checkpoint::RestoreResult;
-use crate::tools::{Tool, ToolContext, ToolPermissionLevel, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -103,6 +103,23 @@ impl Tool for FilePatchTool {
             .map(|operations| operations.len())
             .unwrap_or(0);
         format!("file_patch: {count} operation(s)")
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Patch
+    }
+
+    fn is_read_only(&self, _params: &Value) -> bool {
+        false
+    }
+
+    fn is_concurrency_safe(&self, _params: &Value) -> bool {
+        false
+    }
+
+    fn tool_use_summary(&self, params: &Value) -> Option<String> {
+        let operations = params["operations"].as_array()?;
+        Some(format!("{} operation(s)", operations.len()))
     }
 
     async fn execute(&self, params: Value, context: ToolContext) -> ToolResult {

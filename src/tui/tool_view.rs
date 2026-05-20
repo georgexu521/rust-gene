@@ -23,6 +23,7 @@ pub struct ToolRunView {
     pub progress: Vec<String>,
     pub result_body: Option<String>,
     pub result_preview: Option<String>,
+    pub metadata: Option<Value>,
     pub started_at: Instant,
     pub completed_at: Option<Instant>,
 }
@@ -38,6 +39,7 @@ impl ToolRunView {
             progress: Vec::new(),
             result_body: None,
             result_preview: None,
+            metadata: None,
             started_at: Instant::now(),
             completed_at: None,
         }
@@ -76,8 +78,14 @@ impl ToolRunView {
     }
 
     pub fn mark_complete(&mut self, result: String) {
+        self.mark_complete_with_metadata(result, None);
+    }
+
+    pub fn mark_complete_with_metadata(&mut self, result: String, metadata: Option<Value>) {
         let body = tool_result_body(&result).to_string();
-        self.status = if body.contains("Started background shell command") {
+        self.status = if let Some(status) = terminal_status_from_metadata(metadata.as_ref()) {
+            status
+        } else if body.contains("Started background shell command") {
             ToolRunStatus::Backgrounded
         } else if body.contains("Command timed out after")
             || body.contains(" is timed_out.")
@@ -91,6 +99,7 @@ impl ToolRunView {
         } else {
             ToolRunStatus::Completed
         };
+        self.metadata = metadata;
         self.result_preview = Some(compact_line(&body, 180));
         self.result_body = Some(body);
         self.completed_at = Some(Instant::now());
@@ -344,6 +353,26 @@ impl ToolRunView {
         );
 
         sections.join("\n")
+    }
+}
+
+fn terminal_status_from_metadata(metadata: Option<&Value>) -> Option<ToolRunStatus> {
+    let task = metadata?.get("terminal_task")?;
+    let status = task.get("status").and_then(Value::as_str)?;
+    match status {
+        "running" => {
+            let terminal_kind = task.get("terminal_kind").and_then(Value::as_str);
+            if terminal_kind == Some("background_shell") {
+                Some(ToolRunStatus::Backgrounded)
+            } else {
+                Some(ToolRunStatus::Running)
+            }
+        }
+        "completed" => Some(ToolRunStatus::Completed),
+        "failed" => Some(ToolRunStatus::Failed),
+        "timed_out" => Some(ToolRunStatus::TimedOut),
+        "cancelled" | "canceled" => Some(ToolRunStatus::Cancelled),
+        _ => None,
     }
 }
 
@@ -845,6 +874,41 @@ mod tests {
         cancelled.mark_complete("Result: OK\nBackground shell shell_123 is cancelled.".to_string());
         assert_eq!(cancelled.status, ToolRunStatus::Cancelled);
         assert!(cancelled.render_lines(false)[0].contains("cancelled"));
+    }
+
+    #[test]
+    fn shell_lifecycle_prefers_terminal_task_metadata() {
+        let mut background = ToolRunView::new("tool_bg".to_string(), "bash".to_string());
+        background.mark_complete_with_metadata(
+            "Result: OK\nStarted shell\n".to_string(),
+            Some(json!({
+                "terminal_task": {
+                    "task_id": "shell_bg_1",
+                    "status": "running",
+                    "terminal_kind": "background_shell"
+                }
+            })),
+        );
+
+        assert_eq!(background.status, ToolRunStatus::Backgrounded);
+        assert_eq!(
+            background.metadata.as_ref().unwrap()["terminal_task"]["task_id"],
+            "shell_bg_1"
+        );
+
+        let mut pty = ToolRunView::new("tool_pty".to_string(), "bash".to_string());
+        pty.mark_complete_with_metadata(
+            "Result: OK\n".to_string(),
+            Some(json!({
+                "terminal_task": {
+                    "task_id": "shell_pty_1",
+                    "status": "completed",
+                    "terminal_kind": "pty_shell"
+                }
+            })),
+        );
+
+        assert_eq!(pty.status, ToolRunStatus::Completed);
     }
 
     #[test]

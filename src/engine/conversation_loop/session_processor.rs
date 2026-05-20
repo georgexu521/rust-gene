@@ -1,6 +1,6 @@
 use super::runtime_timeouts::{llm_request_timeout, stream_chunk_idle_timeout};
 use super::text_sanitizer::{strip_think_blocks, VisibleTextSanitizer};
-use super::tool_execution::{is_read_only, read_only_tool_concurrency};
+use super::tool_execution::read_only_tool_concurrency;
 use super::turn_recording::{
     persist_turn_learning_event, record_hook_traces, record_recovery_plan,
 };
@@ -250,7 +250,6 @@ impl ConversationLoop {
                                         {
                                             if !tool_name.is_empty()
                                                 && exposed_tool_names.contains(&tool_name)
-                                                && is_read_only(&tool_name)
                                                 && !read_only_tasks.contains_key(&idx)
                                                 && read_only_tasks.len() < read_only_concurrency
                                             {
@@ -266,6 +265,9 @@ impl ConversationLoop {
                                                     continue;
                                                 };
                                                 if tool.validate_params(&parsed_args).is_some() {
+                                                    continue;
+                                                }
+                                                if !tool.is_concurrency_safe(&parsed_args) {
                                                     continue;
                                                 }
 

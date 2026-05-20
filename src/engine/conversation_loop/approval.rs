@@ -21,6 +21,10 @@ impl ToolApprovalRequest {
             &self.prompt,
         )
     }
+
+    pub fn permission_review(&self) -> crate::engine::human_review::PermissionReview {
+        crate::engine::human_review::PermissionReview::from_tool_call(&self.tool_call, &self.prompt)
+    }
 }
 
 /// 待审批的工具请求 + 响应通道

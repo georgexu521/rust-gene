@@ -2,6 +2,7 @@
 //!
 //! 对应 Claude Code 中的 AppState.tsx
 
+use super::runtime_state::RuntimeAppState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -24,6 +25,9 @@ pub struct AppState {
     pub last_error: Option<String>,
     /// UI 状态
     pub ui: UiState,
+    /// Runtime-owned state used by status/tool/permission/MCP selectors.
+    #[serde(default)]
+    pub runtime: RuntimeAppState,
 }
 
 impl Default for AppState {
@@ -42,6 +46,7 @@ impl AppState {
             is_querying: false,
             last_error: None,
             ui: UiState::default(),
+            runtime: RuntimeAppState::default(),
         }
     }
 

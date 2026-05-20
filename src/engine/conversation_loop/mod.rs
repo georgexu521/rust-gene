@@ -77,6 +77,7 @@ mod turn_post_change_closeout_controller;
 mod turn_recording;
 mod turn_request_bootstrap_controller;
 mod turn_retrieval_context_controller;
+mod turn_runtime_context;
 mod turn_runtime_diet_bootstrap_controller;
 mod turn_runtime_state;
 mod turn_setup_controller;

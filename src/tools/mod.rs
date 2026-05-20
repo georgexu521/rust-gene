@@ -242,6 +242,26 @@ impl ToolPermissionLevel {
     }
 }
 
+/// Tool operation semantics used by the runtime scheduler, permission layer,
+/// and evidence ledger. This is intentionally coarse: tools can keep their
+/// existing prompt/schema surface while the runtime makes Claude-like decisions
+/// from stable machine-readable facts instead of name-only heuristics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolOperationKind {
+    Read,
+    Search,
+    List,
+    Write,
+    Edit,
+    Patch,
+    Shell,
+    Task,
+    Network,
+    #[default]
+    Other,
+}
+
 /// 工具元数据（schema 标准化）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolSchema {
@@ -280,7 +300,7 @@ impl ToolSchema {
             is_retryable: tool.is_retryable(),
             estimated_duration_ms: tool.estimated_duration_ms(),
             input_schema: None,
-            output_schema: None,
+            output_schema: tool.output_schema(),
         }
     }
 }
@@ -335,6 +355,93 @@ pub trait Tool: Send + Sync {
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();
         format!("{}({})", self.name(), keys.join(", "))
+    }
+
+    /// Optional JSON schema for the structured result payload (`ToolResult.data`).
+    fn output_schema(&self) -> Option<Value> {
+        None
+    }
+
+    /// Runtime operation category for this invocation.
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        let name = self.name().to_ascii_lowercase();
+        if name.contains("grep") || name.contains("glob") || name.contains("search") {
+            ToolOperationKind::Search
+        } else if name.contains("read") || name.contains("get") {
+            ToolOperationKind::Read
+        } else if name.contains("list") {
+            ToolOperationKind::List
+        } else if name.contains("write") || name.contains("create") {
+            ToolOperationKind::Write
+        } else if name.contains("edit") || name.contains("update") {
+            ToolOperationKind::Edit
+        } else if name.contains("patch") {
+            ToolOperationKind::Patch
+        } else if name.contains("bash") || name.contains("shell") || name.contains("exec") {
+            ToolOperationKind::Shell
+        } else if name.contains("task") || name.contains("agent") {
+            ToolOperationKind::Task
+        } else if name.contains("web") || name.contains("browser") || name.contains("http") {
+            ToolOperationKind::Network
+        } else {
+            ToolOperationKind::Other
+        }
+    }
+
+    /// Whether this invocation only observes state and can avoid write budget.
+    fn is_read_only(&self, params: &Value) -> bool {
+        matches!(
+            self.operation_kind(params),
+            ToolOperationKind::Read | ToolOperationKind::Search | ToolOperationKind::List
+        ) || self.permission_level() == ToolPermissionLevel::ReadOnly
+    }
+
+    /// Whether this invocation can run while a model response is still streaming.
+    fn is_concurrency_safe(&self, params: &Value) -> bool {
+        self.is_read_only(params)
+    }
+
+    /// Whether the invocation can destroy or overwrite user data.
+    fn is_destructive(&self, params: &Value) -> bool {
+        self.requires_confirmation(params)
+            && matches!(
+                self.permission_level(),
+                ToolPermissionLevel::HighRisk | ToolPermissionLevel::Critical
+            )
+    }
+
+    /// Preferred maximum provider-visible result size for this tool.
+    fn max_result_size_chars(&self) -> Option<usize> {
+        None
+    }
+
+    /// Human-facing display name for this invocation.
+    fn user_facing_name(&self, _params: &Value) -> String {
+        self.name().to_string()
+    }
+
+    /// Short invocation summary suitable for progress events and ledgers.
+    fn tool_use_summary(&self, _params: &Value) -> Option<String> {
+        None
+    }
+
+    /// Progress text for active invocation state.
+    fn activity_description(&self, params: &Value) -> Option<String> {
+        self.tool_use_summary(params)
+            .map(|summary| format!("{}: {}", self.user_facing_name(params), summary))
+    }
+
+    /// Provider-visible payload for the result. Existing normalizers still own
+    /// formatting, but this hook gives tools a Claude-like escape hatch.
+    fn provider_payload(&self, result: &ToolResult) -> String {
+        if result.content.trim().is_empty() {
+            result
+                .error
+                .clone()
+                .unwrap_or_else(|| "Tool returned no output".to_string())
+        } else {
+            result.content.clone()
+        }
     }
 
     /// 验证参数是否符合 schema（返回 None 表示验证通过，Some(msg) 表示错误）

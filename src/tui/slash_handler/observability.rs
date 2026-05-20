@@ -75,6 +75,7 @@ pub fn handle_hooks(app: &TuiApp) -> String {
             .filter_map(|event| {
                 if let crate::engine::trace::TraceEvent::HookCompleted {
                     event,
+                    provider,
                     hook_name,
                     call_id,
                     tool,
@@ -86,9 +87,10 @@ pub fn handle_hooks(app: &TuiApp) -> String {
                 } = event
                 {
                     Some(format!(
-                        "  - {} '{}' tool={} call={} {}{} in {}ms{}",
+                        "  - {} '{}' provider={} tool={} call={} {}{} in {}ms{}",
                         event,
                         hook_name,
+                        provider,
                         tool.as_deref().unwrap_or("lifecycle"),
                         call_id,
                         if *success { "ok" } else { "failed" },

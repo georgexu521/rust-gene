@@ -38,7 +38,11 @@ pub enum StreamEvent {
     /// 工具执行进度
     ToolExecutionProgress { id: String, progress: String },
     /// 工具执行完成
-    ToolExecutionComplete { id: String, result: String },
+    ToolExecutionComplete {
+        id: String,
+        result: String,
+        metadata: Option<serde_json::Value>,
+    },
     /// 思考开始（extended thinking 模型）
     ThinkingStart,
     /// 思考内容块（增量）

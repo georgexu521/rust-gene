@@ -229,13 +229,18 @@ async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
                 &mut event_writer,
                 json!({"event": "tool_execution_progress", "id": id, "progress": progress}),
             )?,
-            StreamEvent::ToolExecutionComplete { id, result } => write_eval_event(
+            StreamEvent::ToolExecutionComplete {
+                id,
+                result,
+                metadata,
+            } => write_eval_event(
                 &mut event_writer,
                 json!({
                     "event": "tool_execution_complete",
                     "id": id,
                     "result_chars": result.chars().count(),
                     "result_preview": truncate_chars(&result, 2000),
+                    "metadata": metadata,
                 }),
             )?,
             StreamEvent::ThinkingStart => {

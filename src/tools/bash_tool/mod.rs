@@ -6,11 +6,11 @@ mod background;
 pub mod command_classifier;
 mod pty;
 
-use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use background::{background_shell_result_data, background_started_content};
 pub use background::{BashCancelTool, BashOutputTool, BashTasksTool};
-use command_classifier::classify_command;
+use command_classifier::{classify_command, ShellCommandCategory};
 use serde_json::json;
 use std::process::Stdio;
 use std::{
@@ -162,6 +162,16 @@ fn external_fallback_backend() -> Option<BashExecutionBackend> {
 
 fn first_shell_token(s: &str) -> Option<String> {
     s.split_whitespace().next().map(ToString::to_string)
+}
+
+fn short_command_summary(command: &str) -> String {
+    let mut chars = command.chars();
+    let summary: String = chars.by_ref().take(120).collect();
+    if chars.next().is_some() {
+        format!("{summary}...")
+    } else {
+        summary
+    }
 }
 
 fn validate_external_wrapper(template: &str) -> Result<(), String> {
@@ -701,6 +711,52 @@ impl Tool for BashTool {
     fn to_classifier_input(&self, params: &serde_json::Value) -> String {
         let cmd = params["command"].as_str().unwrap_or("");
         format!("bash: {}", cmd)
+    }
+
+    fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
+        let command = params["command"].as_str().unwrap_or("");
+        match classify_command(command).category {
+            ShellCommandCategory::Read => ToolOperationKind::Read,
+            ShellCommandCategory::List => ToolOperationKind::List,
+            ShellCommandCategory::Search => ToolOperationKind::Search,
+            _ => ToolOperationKind::Shell,
+        }
+    }
+
+    fn is_read_only(&self, params: &serde_json::Value) -> bool {
+        matches!(
+            self.operation_kind(params),
+            ToolOperationKind::Read | ToolOperationKind::List | ToolOperationKind::Search
+        )
+    }
+
+    fn is_concurrency_safe(&self, params: &serde_json::Value) -> bool {
+        self.is_read_only(params)
+    }
+
+    fn is_destructive(&self, params: &serde_json::Value) -> bool {
+        let command = params["command"].as_str().unwrap_or("");
+        classify_command(command).category == ShellCommandCategory::Destructive
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let command = params["command"].as_str()?.trim();
+        if command.is_empty() {
+            None
+        } else {
+            Some(short_command_summary(command))
+        }
+    }
+
+    fn activity_description(&self, params: &serde_json::Value) -> Option<String> {
+        let summary = self.tool_use_summary(params)?;
+        let verb = match self.operation_kind(params) {
+            ToolOperationKind::Read | ToolOperationKind::List | ToolOperationKind::Search => {
+                "Inspecting"
+            }
+            _ => "Running",
+        };
+        Some(format!("{verb}: {summary}"))
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {

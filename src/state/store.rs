@@ -2,7 +2,11 @@
 //!
 //! 管理状态更新和持久化
 
-use crate::state::{AppState, EventBus, StateEvent};
+use crate::state::{
+    select_runtime_mcp, select_runtime_permission, select_runtime_status, select_runtime_tools,
+    AppState, EventBus, RuntimeMcpState, RuntimePermissionState, RuntimeStatusSnapshot,
+    RuntimeToolUse, StateEvent,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -45,6 +49,26 @@ impl StateStore {
             *state = new_state;
         }
         self.event_bus.emit(StateEvent::StateUpdated);
+    }
+
+    pub async fn runtime_status(&self) -> RuntimeStatusSnapshot {
+        let state = self.state.read().await;
+        select_runtime_status(&state)
+    }
+
+    pub async fn runtime_tools(&self) -> Vec<RuntimeToolUse> {
+        let state = self.state.read().await;
+        select_runtime_tools(&state)
+    }
+
+    pub async fn runtime_permission(&self) -> RuntimePermissionState {
+        let state = self.state.read().await;
+        select_runtime_permission(&state)
+    }
+
+    pub async fn runtime_mcp(&self) -> RuntimeMcpState {
+        let state = self.state.read().await;
+        select_runtime_mcp(&state)
     }
 }
 

@@ -5,10 +5,16 @@
 
 pub mod app_state;
 pub mod events;
+pub mod runtime_state;
 pub mod store;
 
 pub use app_state::{AppState, MessageItem, MessageRole, TaskItem, TaskStatus, TaskType};
 pub use events::{EventBus, StateEvent};
+pub use runtime_state::{
+    select_runtime_mcp, select_runtime_permission, select_runtime_status, select_runtime_tools,
+    select_tool_viewer_tool_id, RuntimeAppState, RuntimeMcpState, RuntimePermissionState,
+    RuntimeStatusSnapshot, RuntimeTerminalTask, RuntimeToolStatus, RuntimeToolUse,
+};
 pub use store::StateStore;
 
 use std::sync::Arc;
@@ -40,6 +46,22 @@ impl AppContext {
         F: FnOnce(&mut AppState),
     {
         self.store.write().await.update(updater).await;
+    }
+
+    pub async fn runtime_status(&self) -> RuntimeStatusSnapshot {
+        self.store.read().await.runtime_status().await
+    }
+
+    pub async fn runtime_tools(&self) -> Vec<RuntimeToolUse> {
+        self.store.read().await.runtime_tools().await
+    }
+
+    pub async fn runtime_permission(&self) -> RuntimePermissionState {
+        self.store.read().await.runtime_permission().await
+    }
+
+    pub async fn runtime_mcp(&self) -> RuntimeMcpState {
+        self.store.read().await.runtime_mcp().await
     }
 
     /// 订阅状态变更事件

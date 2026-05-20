@@ -1,9 +1,9 @@
 use super::permission_controller::PermissionController;
 use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, ToolCallStatus};
 use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
-use super::tool_execution::{is_read_only, read_only_tool_concurrency};
+use super::tool_execution::{read_only_tool_concurrency, tool_call_is_concurrency_safe};
 use super::tool_metadata::{
-    attach_tool_execution_metadata, merge_tool_result_metadata,
+    attach_tool_contract_metadata, attach_tool_execution_metadata, merge_tool_result_metadata,
     persist_tool_outcome_learning_event, tool_execution_start_progress,
 };
 use super::tool_result_controller::{invalid_tool_params_result, ToolResultNormalizer};
@@ -408,6 +408,9 @@ impl<'a> ToolExecutionGate<'a> {
         mut result: ToolResult,
     ) -> ToolExecutionGateOutcome {
         attach_tool_execution_metadata(tool_call, &mut result);
+        if let Some(tool) = self.tool_registry.get(&tool_call.name) {
+            attach_tool_contract_metadata(tool, tool_call, &mut result);
+        }
         self.runtime_context.attach(
             &mut result,
             false,
@@ -507,6 +510,9 @@ impl ToolExecutionController {
                 record_hook_traces(&trace, &hook_records);
             };
             attach_tool_execution_metadata(&tc_clone, &mut result);
+            if let Some(tool) = registry.get(&tc_clone.name) {
+                attach_tool_contract_metadata(tool, &tc_clone, &mut result);
+            }
             runtime_context.attach(
                 &mut result,
                 true,
@@ -567,6 +573,7 @@ impl ToolExecutionController {
                     .send(StreamEvent::ToolExecutionComplete {
                         id: tc.id.clone(),
                         result: result_content,
+                        metadata: tool_completion_metadata(&result),
                     })
                     .await;
             }
@@ -723,6 +730,7 @@ impl ToolExecutionController {
                     result.duration_ms = Some(duration_ms);
                 }
                 attach_tool_execution_metadata(&tc, &mut result);
+                attach_tool_contract_metadata(tool, &tc, &mut result);
                 runtime_context.attach(
                     &mut result,
                     false,
@@ -784,6 +792,9 @@ impl ToolExecutionController {
             } else {
                 let mut result = ToolResult::error(format!("Tool '{}' not found", tool_name));
                 attach_tool_execution_metadata(&tc, &mut result);
+                if let Some(tool) = execution.tool_registry.get(&tc.name) {
+                    attach_tool_contract_metadata(tool, &tc, &mut result);
+                }
                 runtime_context.attach(
                     &mut result,
                     false,
@@ -806,6 +817,7 @@ impl ToolExecutionController {
                     .send(StreamEvent::ToolExecutionComplete {
                         id: tool_id.clone(),
                         result: result_content,
+                        metadata: tool_completion_metadata(&result),
                     })
                     .await;
             }
@@ -906,6 +918,9 @@ impl ToolExecutionController {
             if let Some(pre_result) = pre_executed.get(&i) {
                 let mut pre_result = pre_result.clone();
                 attach_tool_execution_metadata(tc, &mut pre_result);
+                if let Some(tool) = execution.tool_registry.get(&tc.name) {
+                    attach_tool_contract_metadata(tool, tc, &mut pre_result);
+                }
                 runtime_context.attach(&mut pre_result, true, true, None);
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
@@ -944,13 +959,18 @@ impl ToolExecutionController {
                         .send(StreamEvent::ToolExecutionComplete {
                             id: tc.id.clone(),
                             result: result_content,
+                            metadata: tool_completion_metadata(&pre_result),
                         })
                         .await;
                 }
                 continue;
             }
 
-            if is_read_only(&tc.name) {
+            if tool_call_is_concurrency_safe(
+                execution.tool_registry.as_ref(),
+                &tc.name,
+                &tc.arguments,
+            ) {
                 lifecycle.running(tc, true, false);
                 if let Some(tx) = tx {
                     let _ = tx
@@ -1003,6 +1023,14 @@ impl ToolExecutionController {
 
         batch
     }
+}
+
+fn tool_completion_metadata(result: &ToolResult) -> Option<serde_json::Value> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_summary"))
+        .cloned()
 }
 
 #[cfg(test)]

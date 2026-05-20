@@ -1,5 +1,5 @@
 use crate::services::api::ToolCall;
-use crate::tools::ToolResult;
+use crate::tools::{Tool, ToolResult};
 use std::sync::Arc;
 use tracing::warn;
 
@@ -75,6 +75,11 @@ pub(super) fn build_tool_execution_summary(
                 object.insert(
                     "validation_family".to_string(),
                     serde_json::to_value(classification.validation_family)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                object.insert(
+                    "path_patterns".to_string(),
+                    serde_json::to_value(classification.path_patterns)
                         .unwrap_or(serde_json::Value::Null),
                 );
                 object.insert(
@@ -226,30 +231,30 @@ fn terminal_task_summary_object(
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub(super) struct ToolExecutionRecord {
+pub(super) struct ProviderToolResultRecord {
     pub(super) call_id: String,
     pub(super) tool_name: String,
-    pub(super) status: ToolExecutionStatus,
+    pub(super) status: ProviderToolResultStatus,
     pub(super) user_output: String,
     pub(super) machine_metadata: serde_json::Value,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ToolExecutionStatus {
+pub(super) enum ProviderToolResultStatus {
     Completed,
     Failed,
 }
 
-impl ToolExecutionRecord {
+impl ProviderToolResultRecord {
     pub(super) fn from_result(tool_call: &ToolCall, result: &ToolResult) -> Self {
         Self {
             call_id: tool_call.id.clone(),
             tool_name: tool_call.name.clone(),
             status: if result.success {
-                ToolExecutionStatus::Completed
+                ProviderToolResultStatus::Completed
             } else {
-                ToolExecutionStatus::Failed
+                ProviderToolResultStatus::Failed
             },
             user_output: tool_result_user_output(result),
             machine_metadata: build_tool_execution_summary(tool_call, result),
@@ -258,15 +263,15 @@ impl ToolExecutionRecord {
 
     pub(super) fn provider_content(&self) -> String {
         let label = match self.status {
-            ToolExecutionStatus::Completed => "OK",
-            ToolExecutionStatus::Failed => "ERROR",
+            ProviderToolResultStatus::Completed => "OK",
+            ProviderToolResultStatus::Failed => "ERROR",
         };
         format!("Result: {}\n{}", label, self.user_output)
     }
 }
 
 pub(super) fn provider_tool_result_content(tool_call: &ToolCall, result: &ToolResult) -> String {
-    ToolExecutionRecord::from_result(tool_call, result).provider_content()
+    ProviderToolResultRecord::from_result(tool_call, result).provider_content()
 }
 
 fn tool_result_user_output(result: &ToolResult) -> String {
@@ -410,6 +415,48 @@ pub(super) fn attach_tool_execution_metadata(tool_call: &ToolCall, result: &mut 
     merge_tool_result_metadata(result, "recovery", metadata);
 }
 
+pub(super) fn attach_tool_contract_metadata(
+    tool: &dyn Tool,
+    tool_call: &ToolCall,
+    result: &mut ToolResult,
+) {
+    let params = &tool_call.arguments;
+    let contract = serde_json::json!({
+        "operation_kind": serde_json::to_value(tool.operation_kind(params)).unwrap_or(serde_json::Value::Null),
+        "read_only": tool.is_read_only(params),
+        "concurrency_safe": tool.is_concurrency_safe(params),
+        "destructive": tool.is_destructive(params),
+        "user_facing_name": tool.user_facing_name(params),
+        "tool_use_summary": tool.tool_use_summary(params),
+        "activity_description": tool.activity_description(params),
+        "max_result_size_chars": tool.max_result_size_chars(),
+    });
+    merge_tool_result_metadata(result, "tool_contract", contract.clone());
+
+    let Some(summary) = result
+        .data
+        .as_mut()
+        .and_then(|data| data.get_mut("tool_summary"))
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for key in [
+        "operation_kind",
+        "read_only",
+        "concurrency_safe",
+        "destructive",
+        "user_facing_name",
+        "tool_use_summary",
+        "activity_description",
+        "max_result_size_chars",
+    ] {
+        if let Some(value) = contract.get(key) {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+}
+
 fn fill_shell_result_duration(result: &mut ToolResult) {
     let Some(duration_ms) = result.duration_ms else {
         return;
@@ -524,15 +571,30 @@ mod tests {
     }
 
     #[test]
-    fn tool_execution_record_separates_machine_metadata_from_provider_text() {
-        let record =
-            ToolExecutionRecord::from_result(&tool_call("bash"), &ToolResult::success("compiled"));
+    fn provider_tool_result_record_separates_machine_metadata_from_provider_text() {
+        let record = ProviderToolResultRecord::from_result(
+            &tool_call("bash"),
+            &ToolResult::success("compiled"),
+        );
 
-        assert_eq!(record.status, ToolExecutionStatus::Completed);
+        assert_eq!(record.status, ProviderToolResultStatus::Completed);
         assert_eq!(record.provider_content(), "Result: OK\ncompiled");
         assert_eq!(record.machine_metadata["tool"], "bash");
         assert_eq!(record.machine_metadata["command_kind"], "validation");
         assert_eq!(record.machine_metadata["command_category"], "test_run");
+    }
+
+    #[test]
+    fn tool_execution_summary_includes_bash_path_patterns() {
+        let mut call = tool_call("bash");
+        call.arguments = serde_json::json!({"command": "rg -n TODO src src/tools"});
+
+        let summary = build_tool_execution_summary(&call, &ToolResult::success("src/lib.rs:1"));
+
+        assert_eq!(
+            summary["path_patterns"],
+            serde_json::json!(["src", "src/tools"])
+        );
     }
 
     #[test]
@@ -625,6 +687,30 @@ mod tests {
         assert_eq!(
             result.data.as_ref().unwrap()["tool_summary"]["duration_ms"],
             42
+        );
+    }
+
+    #[test]
+    fn attach_tool_contract_metadata_adds_runtime_semantics() {
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({"command": "ls -la"}),
+        };
+        let mut result = ToolResult::success("listed files");
+
+        attach_tool_execution_metadata(&call, &mut result);
+        attach_tool_contract_metadata(&crate::tools::BashTool, &call, &mut result);
+
+        let data = result.data.as_ref().unwrap();
+        assert_eq!(data["tool_contract"]["operation_kind"], "list");
+        assert_eq!(data["tool_contract"]["read_only"], true);
+        assert_eq!(data["tool_contract"]["concurrency_safe"], true);
+        assert_eq!(data["tool_summary"]["operation_kind"], "list");
+        assert_eq!(data["tool_summary"]["read_only"], true);
+        assert_eq!(
+            data["tool_summary"]["activity_description"],
+            "Inspecting: ls -la"
         );
     }
 }

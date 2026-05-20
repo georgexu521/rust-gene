@@ -7,11 +7,22 @@ use crate::tui::app::{AppMode, TuiApp};
 
 pub async fn handle_status(app: &TuiApp) -> String {
     let msg_count = app.messages.len();
+    let runtime = app.runtime_status_snapshot().await;
     let mut lines = vec![];
 
     // 基本信息
     lines.push(format!("Messages: {}", msg_count));
     lines.push(format!("Agent mode: {}", app.current_agent_mode_label()));
+    lines.push(format!(
+        "Runtime tools: {} active / {} total ({} failed)",
+        runtime.active_tool_count, runtime.total_tools, runtime.failed_tool_count
+    ));
+    if let Some(label) = runtime.current_tool_label.as_ref() {
+        lines.push(format!("Active tool: {}", label));
+    }
+    if let Some(pending) = runtime.pending_permission.as_ref() {
+        lines.push(format!("Permission pending: {}", pending));
+    }
 
     if let Some(ref engine) = app.streaming_engine {
         let history_len = engine.get_history().await.len();
@@ -78,6 +89,38 @@ pub async fn handle_status(app: &TuiApp) -> String {
         lines.push(format!("Permission mode: {:?}", mode));
     } else {
         lines.push("Model: unavailable".to_string());
+    }
+
+    if runtime.mcp_server_count > 0 {
+        lines.push(format!(
+            "Runtime MCP: {} servers, {} available",
+            runtime.mcp_server_count, runtime.mcp_available_count
+        ));
+        if !runtime.mcp_repair_hints.is_empty() {
+            lines.push(format!(
+                "Runtime MCP repair: {}",
+                runtime.mcp_repair_hints.join(", ")
+            ));
+        }
+    }
+    if runtime.running_task_count > 0 {
+        lines.push(format!(
+            "Runtime tasks: {} running / {} total",
+            runtime.running_task_count, runtime.task_count
+        ));
+    }
+    if runtime.terminal_task_count > 0 || runtime.backgrounded_tool_count > 0 {
+        lines.push(format!(
+            "Runtime terminal tasks: {} known ({} running, {} pty, {} backgrounded tools)",
+            runtime
+                .terminal_task_count
+                .max(runtime.backgrounded_tool_count),
+            runtime
+                .running_terminal_task_count
+                .max(runtime.backgrounded_tool_count),
+            runtime.pty_terminal_task_count,
+            runtime.backgrounded_tool_count
+        ));
     }
 
     let bash_exposure = terminal_bash_exposure_report(app).await;

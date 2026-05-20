@@ -11,6 +11,7 @@ use super::turn_model_step_controller::{
 use super::turn_post_change_closeout_controller::{
     TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
 };
+use super::turn_runtime_context::TurnRuntimeContext;
 use super::turn_runtime_state::TurnRuntimeState;
 use super::turn_tool_failure_followup_controller::{
     TurnToolFailureFollowupContext, TurnToolFailureFollowupController, TurnToolFailureFollowupFlow,
@@ -115,23 +116,25 @@ impl TurnIterationController {
             conversation: context.conversation,
             content: &content,
             tool_calls: &tool_calls,
-            tx: context.tx,
             pre_executed,
-            trace: context.trace,
-            route: context.route,
-            resource_policy: context.resource_policy,
-            exposed_tool_names: &exposed_tool_names,
+            runtime: TurnRuntimeContext {
+                tx: context.tx,
+                trace: context.trace,
+                route: context.route,
+                resource_policy: context.resource_policy,
+                exposed_tool_names: &exposed_tool_names,
+                working_dir: context.working_dir,
+                last_user_preview: context.last_user_preview,
+                required_validation_commands: context.required_validation_commands,
+                destructive_scope: context.destructive_scope,
+                baseline_git_status_files: context.baseline_git_status_files,
+            },
             turn_state: &mut *context.turn_state,
             messages: &mut *context.messages,
             is_programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(
                 context.route.workflow,
             ),
-            working_dir: context.working_dir,
-            last_user_preview: context.last_user_preview,
             loop_state: &mut *context.loop_state,
-            required_validation_commands: context.required_validation_commands,
-            destructive_scope: context.destructive_scope,
-            baseline_git_status_files: context.baseline_git_status_files,
         })
         .await;
 
