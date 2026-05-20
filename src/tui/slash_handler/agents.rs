@@ -397,16 +397,16 @@ pub async fn handle_tasks(app: &TuiApp) -> String {
 }
 pub async fn handle_agents(app: &TuiApp) -> String {
     let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let profiles = crate::agent::profiles::load_profiles(&working_dir);
-    let profile_line = if profiles.is_empty() {
-        "Profiles: none".to_string()
+    let definitions = crate::agent::profiles::load_definitions(&working_dir);
+    let profile_line = if definitions.is_empty() {
+        "Agent definitions: none".to_string()
     } else {
         format!(
-            "Profiles ({}): {}",
-            profiles.len(),
-            profiles
+            "Agent definitions ({}): {}",
+            definitions.len(),
+            definitions
                 .iter()
-                .map(|profile| profile.name.as_str())
+                .map(|definition| definition.summary_line())
                 .collect::<Vec<_>>()
                 .join(", ")
         )

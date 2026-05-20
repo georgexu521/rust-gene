@@ -5,6 +5,7 @@
 use crate::agent::agent::AgentConfig;
 use crate::agent::envelope::{AgentTaskEnvelope, AgentTaskPriority};
 use crate::agent::manager::AgentResult as ManagerAgentResult;
+use crate::agent::profiles::AgentDefinition;
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
 use crate::tools::{Tool, ToolContext, ToolResult};
@@ -215,30 +216,24 @@ async fn spawn_single_agent(
     allowed_tools: &[String],
     role: AgentRole,
     template: Option<AgentTemplate>,
-    profile: Option<&crate::agent::profiles::AgentProfile>,
+    definition: Option<&AgentDefinition>,
     working_dir: &Path,
     trace: Option<&crate::engine::trace::TraceCollector>,
 ) -> anyhow::Result<ManagerAgentResult> {
     let started_at = std::time::Instant::now();
     let file_context = load_file_context(files, working_dir).await;
     let mut system_prompt = build_system_prompt(template, role, description, prompt, &file_context);
-    if let Some(profile) = profile {
-        if !profile.system_prompt.trim().is_empty() {
-            system_prompt = format!("{}\n\n{}", profile.system_prompt.trim(), system_prompt);
+    if let Some(definition) = definition {
+        if !definition.system_prompt.trim().is_empty() {
+            system_prompt = format!("{}\n\n{}", definition.system_prompt.trim(), system_prompt);
         }
-        let mut contract_lines = Vec::new();
-        if let Some(context_mode) = profile.context {
-            contract_lines.push(format!("Context mode: {}", context_mode));
-        }
-        if let Some(risk_policy) = profile.risk_policy {
-            contract_lines.push(format!("Risk policy: {}", risk_policy));
-        }
-        if let Some(output_contract) = profile.output_contract {
-            contract_lines.push(format!("Output contract: {}", output_contract));
+        let mut contract_lines = definition.contract_lines();
+        if !definition.when_to_use.trim().is_empty() {
+            contract_lines.push(format!("When to use: {}", definition.when_to_use));
         }
         if !contract_lines.is_empty() {
             system_prompt = format!(
-                "Sub-agent profile contract:\n{}\n\n{}",
+                "Sub-agent definition contract:\n{}\n\n{}",
                 contract_lines.join("\n"),
                 system_prompt
             );
@@ -264,7 +259,7 @@ async fn spawn_single_agent(
     if let Some(trace) = trace {
         trace.record(crate::engine::trace::TraceEvent::SubagentStarted {
             agent_id: agent_id.to_string(),
-            profile: profile.map(|profile| profile.name.clone()),
+            profile: definition.map(|definition| definition.name.clone()),
             role: role.display_name().to_string(),
             description: description.to_string(),
             timeout_secs,
@@ -288,18 +283,12 @@ async fn spawn_single_agent(
     if !allowed_tools.is_empty() {
         envelope.add_constraint(format!("allowed_tools={}", allowed_tools.join(",")));
     }
-    if let Some(profile) = profile {
-        envelope.add_constraint(format!("profile={}", profile.name));
-        if let Some(context_mode) = profile.context {
-            envelope.add_constraint(format!("context={}", context_mode));
+    if let Some(definition) = definition {
+        envelope.add_constraint(format!("profile={}", definition.name));
+        for constraint in definition.envelope_constraints() {
+            envelope.add_constraint(constraint);
         }
-        if let Some(risk_policy) = profile.risk_policy {
-            envelope.add_constraint(format!("risk_policy={}", risk_policy));
-        }
-        if let Some(output_contract) = profile.output_contract {
-            envelope.add_constraint(format!("output_contract={}", output_contract));
-            envelope.add_expected_artifact(output_contract.to_string());
-        }
+        envelope.add_expected_artifact(definition.output_contract.to_string());
     }
     let envelope_json = serde_json::to_string_pretty(&envelope)
         .unwrap_or_else(|_| "{\"error\":\"failed to serialize envelope\"}".to_string());
@@ -412,7 +401,7 @@ fn persist_agent_artifact(
     context: &ToolContext,
     description: &str,
     role: AgentRole,
-    profile: Option<&crate::agent::profiles::AgentProfile>,
+    definition: Option<&AgentDefinition>,
     result: &ManagerAgentResult,
 ) {
     let Some(store) = context.session_store.as_ref() else {
@@ -427,7 +416,7 @@ fn persist_agent_artifact(
     if let Err(err) = store.add_agent_artifact(
         &context.session_id,
         &result.agent_id.to_string(),
-        profile.map(|profile| profile.name.as_str()),
+        definition.map(|definition| definition.name.as_str()),
         role.display_name(),
         &status,
         description,
@@ -452,7 +441,7 @@ struct ExecuteParams<'a> {
     allowed_tools: Vec<String>,
     role: AgentRole,
     template: Option<AgentTemplate>,
-    profile: Option<crate::agent::profiles::AgentProfile>,
+    definition: Option<AgentDefinition>,
 }
 
 fn default_subagent_allowed_tools(role: AgentRole, template: Option<AgentTemplate>) -> Vec<String> {
@@ -599,7 +588,7 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
             &ctx.allowed_tools,
             ctx.role,
             ctx.template,
-            ctx.profile.as_ref(),
+            ctx.definition.as_ref(),
             &ctx.context.working_dir,
             ctx.context.trace_collector.as_ref(),
         )
@@ -610,7 +599,7 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
                     ctx.context,
                     &format!("{}: {}", description, branch_desc),
                     ctx.role,
-                    ctx.profile.as_ref(),
+                    ctx.definition.as_ref(),
                     &result,
                 );
                 // If parent memory exists, copy to branch agent
@@ -727,7 +716,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     &ctx.allowed_tools,
                     ctx.role,
                     ctx.template,
-                    ctx.profile.as_ref(),
+                    ctx.definition.as_ref(),
                     &ctx.context.working_dir,
                     ctx.context.trace_collector.as_ref(),
                 )
@@ -743,7 +732,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     ctx.context,
                     description,
                     ctx.role,
-                    ctx.profile.as_ref(),
+                    ctx.definition.as_ref(),
                     result,
                 );
             })
@@ -761,7 +750,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             &ctx.allowed_tools,
             ctx.role,
             ctx.template,
-            ctx.profile.as_ref(),
+            ctx.definition.as_ref(),
             &ctx.context.working_dir,
             ctx.context.trace_collector.as_ref(),
         )
@@ -772,7 +761,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     ctx.context,
                     &st.description,
                     ctx.role,
-                    ctx.profile.as_ref(),
+                    ctx.definition.as_ref(),
                     &r,
                 );
                 vec![r]
@@ -826,7 +815,7 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
         &ctx.allowed_tools,
         ctx.role,
         ctx.template,
-        ctx.profile.as_ref(),
+        ctx.definition.as_ref(),
         &ctx.context.working_dir,
         ctx.context.trace_collector.as_ref(),
     )
@@ -837,7 +826,7 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
                 ctx.context,
                 description,
                 ctx.role,
-                ctx.profile.as_ref(),
+                ctx.definition.as_ref(),
                 &result,
             );
             let status_str = format!("{:?}", result.status);
@@ -882,10 +871,12 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
                     "files": files,
                     "role": ctx.role.display_name(),
                     "template": ctx.params["template"].as_str().unwrap_or(""),
-                    "profile": ctx.profile.as_ref().map(|profile| profile.name.clone()),
-                    "context_mode": ctx.profile.as_ref().and_then(|profile| profile.context.map(|value| value.to_string())),
-                    "risk_policy": ctx.profile.as_ref().and_then(|profile| profile.risk_policy.map(|value| value.to_string())),
-                    "output_contract": ctx.profile.as_ref().and_then(|profile| profile.output_contract.map(|value| value.to_string())),
+                    "profile": ctx.definition.as_ref().map(|definition| definition.name.clone()),
+                    "agent_definition": ctx.definition.as_ref(),
+                    "context_mode": ctx.definition.as_ref().map(|definition| definition.context_mode.to_string()),
+                    "permission_mode": ctx.definition.as_ref().map(|definition| definition.permission_mode.to_string()),
+                    "risk_policy": ctx.definition.as_ref().map(|definition| definition.risk_policy.to_string()),
+                    "output_contract": ctx.definition.as_ref().map(|definition| definition.output_contract.to_string()),
                     "allowed_tools": ctx.allowed_tools,
                     "completed_at": result.completed_at.elapsed().as_secs()
                 }),
@@ -1061,6 +1052,7 @@ impl Tool for AgentTool {
         let profile = params["profile"]
             .as_str()
             .and_then(|name| crate::agent::profiles::find_profile(&context.working_dir, name));
+        let mut definition = profile.as_ref().map(AgentDefinition::from_profile);
         let timeout_secs = requested_timeout_secs
             .or_else(|| profile.as_ref().and_then(|profile| profile.timeout_secs))
             .unwrap_or(300);
@@ -1092,6 +1084,12 @@ impl Tool for AgentTool {
             .and_then(|profile| profile.max_turns)
             .unwrap_or(max_turns);
         let max_cost_usd = max_cost_usd.or_else(|| profile.as_ref().and_then(|p| p.max_cost_usd));
+        if let Some(definition) = definition.as_mut() {
+            definition.role = role;
+            definition.tools = allowed_tools.clone();
+            definition.max_turns = max_turns;
+            definition.timeout_secs = timeout_secs;
+        }
 
         let ctx = ExecuteParams {
             agent_manager: &agent_manager,
@@ -1103,7 +1101,7 @@ impl Tool for AgentTool {
             allowed_tools,
             role,
             template,
-            profile,
+            definition,
         };
 
         // 2. Fork branches with memory inheritance

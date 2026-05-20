@@ -1303,6 +1303,23 @@ Expected files:
 - `src/tools/worktree_tool/`
 - `src/tui/slash_handler/agents.rs`
 
+2026-05-20 code status:
+
+- `AgentDefinition` now normalizes profile data into a Claude-like runtime
+  record: type/name, when-to-use text, role, tools, disallowed tools,
+  permission mode, model policy, max turns, MCP servers, memory policy,
+  context mode, risk policy, and output contract.
+- Context modes are explicit and backward-compatible with existing profile
+  config: `minimal`, `inherited_summary` (legacy `inherit`), `full_fork`
+  (legacy `fork`), and `isolated_worktree_fork`.
+- The `agent` tool now threads definitions into subagent prompt contracts,
+  A2A-style envelope constraints, persisted artifact profile metadata, trace
+  profile labels, and tool result JSON.
+- `/agents` and resource inventory now surface normalized agent definitions
+  instead of only raw profile names.
+- Validated with `cargo test -q profiles`, `cargo test -q agent_tool`,
+  `cargo fmt --check`, and `cargo check -q`.
+
 ### Phase 9: TUI Product Surface Pass
 
 Why ninth: the UI should now have real runtime data to render.
