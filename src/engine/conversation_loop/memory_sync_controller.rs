@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 pub(super) struct MemorySyncContext<'a> {
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
     pub(super) llm_memory_extraction: bool,
-    pub(super) provider: Option<&'a dyn LlmProvider>,
+    pub(super) provider: Option<Arc<dyn LlmProvider>>,
     pub(super) model: &'a str,
     pub(super) trace: &'a TraceCollector,
     pub(super) messages: &'a [Message],
@@ -29,13 +29,41 @@ impl MemorySyncController {
                 Self::assistant_memory_text(context.final_content, context.tool_results_text);
             if context.llm_memory_extraction {
                 if memory.should_extract_with_llm() {
-                    memory
-                        .sync_turn_llm(user_msg, &assistant_text, context.provider, context.model)
-                        .await;
-                    memory.mark_main_agent_wrote();
-                    context.trace.record(TraceEvent::MemorySynced {
-                        mode: "llm".to_string(),
-                    });
+                    if memory.is_forked_mode() {
+                        if let Some(provider) = context.provider.clone() {
+                            memory.mark_llm_extraction_started();
+                            memory.sync_turn_llm_background(
+                                user_msg.to_string(),
+                                assistant_text.clone(),
+                                provider,
+                                context.model.to_string(),
+                            );
+                            context.trace.record(TraceEvent::MemorySynced {
+                                mode: "llm_background_forked".to_string(),
+                            });
+                        } else {
+                            memory
+                                .sync_turn_llm(user_msg, &assistant_text, None, context.model)
+                                .await;
+                            memory.mark_main_agent_wrote();
+                            context.trace.record(TraceEvent::MemorySynced {
+                                mode: "llm".to_string(),
+                            });
+                        }
+                    } else {
+                        memory
+                            .sync_turn_llm(
+                                user_msg,
+                                &assistant_text,
+                                context.provider.as_deref(),
+                                context.model,
+                            )
+                            .await;
+                        memory.mark_main_agent_wrote();
+                        context.trace.record(TraceEvent::MemorySynced {
+                            mode: "llm".to_string(),
+                        });
+                    }
                 }
             } else {
                 memory.sync_turn(user_msg, &assistant_text);
@@ -125,6 +153,48 @@ mod tests {
         assert!(finished.events.iter().any(|event| matches!(
             event,
             TraceEvent::MemorySynced { mode } if mode == "heuristic"
+        )));
+    }
+
+    #[tokio::test]
+    async fn sync_turn_llm_path_marks_extraction_throttle_when_due() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut memory = MemoryManager::with_base_dir(tmp.path().to_path_buf());
+        for _ in 0..MemoryManager::llm_extraction_interval() {
+            memory.increment_turn();
+        }
+        let memory_manager = Arc::new(Mutex::new(memory));
+        let trace = TraceCollector::new(crate::engine::trace::TurnTrace::new(
+            "session".to_string(),
+            1,
+            "test",
+        ));
+        let messages = vec![Message::user("remember this preference")];
+
+        MemorySyncController::sync_turn(MemorySyncContext {
+            memory_manager: Some(&memory_manager),
+            llm_memory_extraction: true,
+            provider: None,
+            model: "test",
+            trace: &trace,
+            messages: &messages,
+            final_content: "final",
+            tool_results_text: "tools",
+        })
+        .await;
+
+        let memory = memory_manager.lock().await;
+        let (llm_count, turns, last_llm_turn) = memory.extraction_stats();
+        assert_eq!(llm_count, 1);
+        assert_eq!(turns, MemoryManager::llm_extraction_interval() + 1);
+        assert_eq!(last_llm_turn, MemoryManager::llm_extraction_interval());
+        assert!(memory.has_memory_writes_since(0));
+        drop(memory);
+
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::MemorySynced { mode } if mode == "llm"
         )));
     }
 }

@@ -10,6 +10,172 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+// ── Compact Boundary 元数据 ───────────────────────────────
+
+/// 压缩边界元数据（对标 Claude Code 的 compact_boundary）
+/// 嵌入在压缩后的摘要消息内容中，用于：
+/// 1. 标识压缩发生的位置
+/// 2. 记录被保留的尾部消息 UUID（用于恢复）
+/// 3. 追踪压缩历史
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompactMetadata {
+    /// 压缩序列号（单调递增）
+    pub sequence: u32,
+    /// 压缩边界唯一 ID
+    pub boundary_id: String,
+    /// 被保留的尾部消息数量
+    pub preserved_tail_count: usize,
+    /// 压缩前的消息总数
+    pub messages_before: usize,
+    /// 压缩后的消息总数
+    pub messages_after: usize,
+    /// 压缩前的 token 数
+    pub tokens_before: u64,
+    /// 压缩后的 token 数
+    pub tokens_after: u64,
+    /// 压缩时间戳
+    pub timestamp: String,
+}
+
+impl CompactMetadata {
+    /// 生成 compact boundary 标记文本（嵌入到消息内容中）
+    pub fn to_boundary_marker(&self) -> String {
+        format!(
+            "\n[COMPACT_BOUNDARY seq={} id={} preserved={} before_msgs={} after_msgs={} before_tokens={} after_tokens={} timestamp={}]",
+            self.sequence,
+            self.boundary_id,
+            self.preserved_tail_count,
+            self.messages_before,
+            self.messages_after,
+            self.tokens_before,
+            self.tokens_after,
+            self.timestamp
+        )
+    }
+
+    /// 从消息内容中解析 compact boundary 标记
+    pub fn parse_from_text(text: &str) -> Option<(Self, String)> {
+        let marker_start = text.find("[COMPACT_BOUNDARY")?;
+        let marker_end = text[marker_start..].find(']')? + marker_start + 1;
+        let marker = &text[marker_start..marker_end];
+        let clean_text = format!("{}{}", &text[..marker_start], &text[marker_end..]);
+
+        let mut seq = 0u32;
+        let mut id = String::new();
+        let mut preserved = 0usize;
+        let mut before_msgs = 0usize;
+        let mut after_msgs = 0usize;
+        let mut before_tok = 0u64;
+        let mut after_tok = 0u64;
+        let mut timestamp = String::new();
+
+        for part in marker.split_whitespace() {
+            if let Some((k, v)) = part.split_once('=') {
+                match k {
+                    "seq" => seq = v.parse().unwrap_or(0),
+                    "id" => id = v.to_string(),
+                    "preserved" => preserved = v.parse().unwrap_or(0),
+                    "before_msgs" => before_msgs = v.parse().unwrap_or(0),
+                    "after_msgs" => after_msgs = v.parse().unwrap_or(0),
+                    "before_tokens" => before_tok = v.parse().unwrap_or(0),
+                    "after_tokens" => after_tok = v.parse().unwrap_or(0),
+                    "timestamp" => timestamp = v.to_string(),
+                    _ => {}
+                }
+            }
+        }
+
+        Some((
+            Self {
+                sequence: seq,
+                boundary_id: id,
+                preserved_tail_count: preserved,
+                messages_before: before_msgs,
+                messages_after: after_msgs,
+                tokens_before: before_tok,
+                tokens_after: after_tok,
+                timestamp,
+            },
+            clean_text,
+        ))
+    }
+}
+
+/// 从消息列表中提取所有 compact boundary 元数据
+pub fn extract_compact_boundaries(messages: &[Message]) -> Vec<CompactMetadata> {
+    let mut result = Vec::new();
+    for msg in messages {
+        let text = message_content(msg);
+        if text.contains("[COMPACT_BOUNDARY") {
+            if let Some((meta, _)) = CompactMetadata::parse_from_text(text) {
+                result.push(meta);
+            }
+        }
+    }
+    result
+}
+
+fn message_content(message: &Message) -> &str {
+    match message {
+        Message::System { content }
+        | Message::User { content }
+        | Message::Assistant { content, .. }
+        | Message::Tool { content, .. } => content,
+    }
+}
+
+/// Runtime-visible compaction strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextCompactionStrategy {
+    Snip,
+    MicroCompact,
+    AutoCompact,
+    ReactiveCompact,
+    SessionMemoryCompact,
+}
+
+impl ContextCompactionStrategy {
+    pub fn label(self) -> &'static str {
+        match self {
+            ContextCompactionStrategy::Snip => "snip",
+            ContextCompactionStrategy::MicroCompact => "microcompact",
+            ContextCompactionStrategy::AutoCompact => "auto_compact",
+            ContextCompactionStrategy::ReactiveCompact => "reactive_compact",
+            ContextCompactionStrategy::SessionMemoryCompact => "session_memory_compact",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct CompactionRuntimeRecord {
+    pub strategy: ContextCompactionStrategy,
+    pub level: Option<String>,
+    pub messages_before: usize,
+    pub messages_after: usize,
+    pub tokens_before: u64,
+    pub tokens_after: u64,
+    pub boundary_id: Option<String>,
+    pub sequence: Option<u32>,
+    pub preserved_tail_count: Option<usize>,
+    pub provenance: Vec<String>,
+}
+
+impl CompactionRuntimeRecord {
+    pub fn normalize_provenance(&mut self) {
+        let strategy_tag = format!("strategy:{}", self.strategy.label());
+        if !self.provenance.iter().any(|tag| tag == &strategy_tag) {
+            self.provenance.insert(0, strategy_tag);
+        }
+        if let Some(boundary_id) = &self.boundary_id {
+            let boundary_tag = format!("compact_boundary:{}", boundary_id);
+            if !self.provenance.iter().any(|tag| tag == &boundary_tag) {
+                self.provenance.push(boundary_tag);
+            }
+        }
+    }
+}
+
 /// 折叠条目类型
 #[derive(Debug, Clone)]
 pub enum ContextCollapseEntry {
@@ -129,11 +295,18 @@ impl ContextCollapseService {
 
         // 创建折叠条目
         let entry = self.create_commit_entry(&collapsed_messages).await?;
-        self.entries.write().await.push(entry);
+        let entry_id = match &entry {
+            ContextCollapseEntry::Commit { id, .. } => id.clone(),
+            ContextCollapseEntry::Snapshot { id, .. } => id.clone(),
+        };
 
         // 写入磁盘
-        let file_path = self.persist_collapsed_messages(&collapsed_messages).await?;
+        let file_path = self
+            .persist_collapsed_messages(&entry_id, &collapsed_messages)
+            .await?;
         debug!("Collapsed messages persisted to: {:?}", file_path);
+
+        self.entries.write().await.push(entry);
 
         // 更新 messages 列表，只保留窗口内的消息
         *messages = remaining_messages;
@@ -212,12 +385,15 @@ impl ContextCollapseService {
     }
 
     /// 将折叠的消息持久化到磁盘
-    async fn persist_collapsed_messages(&self, messages: &[Message]) -> Result<PathBuf> {
+    async fn persist_collapsed_messages(
+        &self,
+        entry_id: &str,
+        messages: &[Message],
+    ) -> Result<PathBuf> {
         let session_prefix = self
             .session_id
             .clone()
             .unwrap_or_else(|| "default".to_string());
-        let entry_id = uuid::Uuid::new_v4().to_string();
         let file_name = format!("{}_{}.jsonl", session_prefix, entry_id);
         let file_path = self.config.storage_dir.join(&file_name);
 
@@ -400,5 +576,86 @@ mod tests {
             .unwrap();
         assert_eq!(collapsed, 3); // 5 - 2 = 3 messages collapsed
         assert_eq!(messages.len(), 2); // only window kept
+    }
+
+    #[tokio::test]
+    async fn test_apply_collapse_restores_persisted_messages() {
+        let storage_dir = std::env::temp_dir().join(format!(
+            "test-collapse-restore-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let config = ContextCollapseConfig {
+            enabled: true,
+            window_size: 2,
+            threshold: 3,
+            storage_dir: storage_dir.clone(),
+        };
+        let mut service = ContextCollapseService::with_config(config);
+        service.set_session_id("test-session");
+
+        let mut messages = vec![
+            Message::user("msg1"),
+            Message::assistant("reply1"),
+            Message::user("msg2"),
+            Message::assistant("reply2"),
+            Message::user("msg3"),
+        ];
+
+        let collapsed = service
+            .apply_collapses_if_needed(&mut messages)
+            .await
+            .unwrap();
+        let restored = service.restore().await.unwrap();
+        let full_messages = service.get_full_messages(&messages).await.unwrap();
+
+        assert_eq!(collapsed, 3);
+        assert_eq!(restored.len(), 3);
+        assert!(matches!(
+            &restored[0],
+            Message::User { content } if content == "msg1"
+        ));
+        assert_eq!(full_messages.len(), 5);
+        assert!(matches!(
+            full_messages.last(),
+            Some(Message::User { content }) if content == "msg3"
+        ));
+
+        let _ = tokio::fs::remove_dir_all(storage_dir).await;
+    }
+
+    #[test]
+    fn test_compaction_runtime_record_normalizes_provenance() {
+        let mut record = CompactionRuntimeRecord {
+            strategy: ContextCompactionStrategy::ReactiveCompact,
+            level: Some("heavy".to_string()),
+            messages_before: 10,
+            messages_after: 4,
+            tokens_before: 1000,
+            tokens_after: 300,
+            boundary_id: Some("cb-test".to_string()),
+            sequence: Some(2),
+            preserved_tail_count: Some(3),
+            provenance: vec!["trigger:api_context_error".to_string()],
+        };
+
+        record.normalize_provenance();
+        record.normalize_provenance();
+
+        assert_eq!(
+            record
+                .provenance
+                .iter()
+                .filter(|tag| *tag == "strategy:reactive_compact")
+                .count(),
+            1
+        );
+        assert_eq!(
+            record
+                .provenance
+                .iter()
+                .filter(|tag| *tag == "compact_boundary:cb-test")
+                .count(),
+            1
+        );
     }
 }

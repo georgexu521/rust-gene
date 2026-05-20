@@ -8,117 +8,14 @@
 //! - Token-budget 尾部保护（soft_ceiling = budget * 1.5）
 //! - 工具调用对完整性校验（孤立项清理 + stub 插入）
 
+pub use crate::engine::context_collapse::{
+    extract_compact_boundaries, CompactMetadata, CompactionRuntimeRecord, ContextCompactionStrategy,
+};
 use crate::services::api::Message;
 #[cfg(test)]
 use crate::services::api::ToolCall;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
-
-// ── Compact Boundary 元数据 ───────────────────────────────
-
-/// 压缩边界元数据（对标 Claude Code 的 compact_boundary）
-/// 嵌入在压缩后的摘要消息内容中，用于：
-/// 1. 标识压缩发生的位置
-/// 2. 记录被保留的尾部消息 UUID（用于恢复）
-/// 3. 追踪压缩历史
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CompactMetadata {
-    /// 压缩序列号（单调递增）
-    pub sequence: u32,
-    /// 压缩边界唯一 ID
-    pub boundary_id: String,
-    /// 被保留的尾部消息数量
-    pub preserved_tail_count: usize,
-    /// 压缩前的消息总数
-    pub messages_before: usize,
-    /// 压缩后的消息总数
-    pub messages_after: usize,
-    /// 压缩前的 token 数
-    pub tokens_before: u64,
-    /// 压缩后的 token 数
-    pub tokens_after: u64,
-    /// 压缩时间戳
-    pub timestamp: String,
-}
-
-impl CompactMetadata {
-    /// 生成 compact boundary 标记文本（嵌入到消息内容中）
-    pub fn to_boundary_marker(&self) -> String {
-        format!(
-            "\n[COMPACT_BOUNDARY seq={} id={} preserved={} before_msgs={} after_msgs={} before_tokens={} after_tokens={} timestamp={}]",
-            self.sequence,
-            self.boundary_id,
-            self.preserved_tail_count,
-            self.messages_before,
-            self.messages_after,
-            self.tokens_before,
-            self.tokens_after,
-            self.timestamp
-        )
-    }
-
-    /// 从消息内容中解析 compact boundary 标记
-    pub fn parse_from_text(text: &str) -> Option<(Self, String)> {
-        let marker_start = text.find("[COMPACT_BOUNDARY")?;
-        let marker_end = text[marker_start..].find(']')? + marker_start + 1;
-        let marker = &text[marker_start..marker_end];
-        let clean_text = format!("{}{}", &text[..marker_start], &text[marker_end..]);
-
-        // 简单解析关键字段
-        let mut seq = 0u32;
-        let mut id = String::new();
-        let mut preserved = 0usize;
-        let mut before_msgs = 0usize;
-        let mut after_msgs = 0usize;
-        let mut before_tok = 0u64;
-        let mut after_tok = 0u64;
-        let mut timestamp = String::new();
-
-        for part in marker.split_whitespace() {
-            if let Some((k, v)) = part.split_once('=') {
-                match k {
-                    "seq" => seq = v.parse().unwrap_or(0),
-                    "id" => id = v.to_string(),
-                    "preserved" => preserved = v.parse().unwrap_or(0),
-                    "before_msgs" => before_msgs = v.parse().unwrap_or(0),
-                    "after_msgs" => after_msgs = v.parse().unwrap_or(0),
-                    "before_tokens" => before_tok = v.parse().unwrap_or(0),
-                    "after_tokens" => after_tok = v.parse().unwrap_or(0),
-                    "timestamp" => timestamp = v.to_string(),
-                    _ => {}
-                }
-            }
-        }
-
-        Some((
-            Self {
-                sequence: seq,
-                boundary_id: id,
-                preserved_tail_count: preserved,
-                messages_before: before_msgs,
-                messages_after: after_msgs,
-                tokens_before: before_tok,
-                tokens_after: after_tok,
-                timestamp,
-            },
-            clean_text,
-        ))
-    }
-}
-
-/// 从消息列表中提取所有 compact boundary 元数据
-pub fn extract_compact_boundaries(messages: &[Message]) -> Vec<CompactMetadata> {
-    let mut result = Vec::new();
-    for msg in messages {
-        let text = msg.content();
-        if text.contains("[COMPACT_BOUNDARY") {
-            if let Some((meta, _)) = CompactMetadata::parse_from_text(&text) {
-                result.push(meta);
-            }
-        }
-    }
-    result
-}
 
 // ── 摘要模板 ──────────────────────────────────────────────
 
@@ -235,6 +132,12 @@ impl SessionMemoryCompact {
 
     /// 将会话记忆注入到摘要文本中
     pub fn inject_into_summary(&self, summary: &mut String) {
+        if !self.user_preferences.is_empty() {
+            summary.push_str("\n\n## User Preferences\n");
+            for preference in &self.user_preferences {
+                summary.push_str(&format!("- {}\n", preference));
+            }
+        }
         if !self.hot_files.is_empty() {
             summary.push_str("\n\n## Frequently Accessed Files\n");
             for f in &self.hot_files {
@@ -253,6 +156,32 @@ impl SessionMemoryCompact {
                 summary.push_str(&format!("- {}\n", p));
             }
         }
+    }
+
+    pub fn provenance_tags(&self) -> Vec<String> {
+        let mut tags = Vec::new();
+        if !self.hot_files.is_empty() {
+            tags.push(format!("session_memory:hot_files={}", self.hot_files.len()));
+        }
+        if !self.user_preferences.is_empty() {
+            tags.push(format!(
+                "session_memory:user_preferences={}",
+                self.user_preferences.len()
+            ));
+        }
+        if !self.pending_tasks.is_empty() {
+            tags.push(format!(
+                "session_memory:pending_tasks={}",
+                self.pending_tasks.len()
+            ));
+        }
+        if !self.tool_patterns.is_empty() {
+            tags.push(format!(
+                "session_memory:tool_patterns={}",
+                self.tool_patterns.len()
+            ));
+        }
+        tags
     }
 }
 
@@ -861,6 +790,8 @@ pub struct ContextCompressor {
     compact_sequence: u32,
     /// Compact Boundary 历史（用于追踪和恢复）
     compact_metadata_history: Vec<CompactMetadata>,
+    /// Runtime compaction records for trace/UI provenance.
+    compaction_records: Vec<CompactionRuntimeRecord>,
 }
 
 impl ContextCompressor {
@@ -883,6 +814,7 @@ impl ContextCompressor {
             max_consecutive_llm_failures: 3,
             compact_sequence: 0,
             compact_metadata_history: Vec::new(),
+            compaction_records: Vec::new(),
         }
     }
 
@@ -909,6 +841,43 @@ impl ContextCompressor {
     /// 微压缩：轻量级压缩，不触发 LLM，仅裁剪工具输出
     /// 用于中等长度对话或空闲后轻量整理
     pub fn micro_compress(&mut self, messages: &[Message]) -> Vec<Message> {
+        self.micro_compress_with_strategy(
+            messages,
+            ContextCompactionStrategy::MicroCompact,
+            Some(CompressionLevel::Light),
+        )
+    }
+
+    /// Snip old tool outputs without summarizing the conversation.
+    pub fn snip_tool_results(&mut self, messages: &[Message]) -> Vec<Message> {
+        let tokens_before = estimate_messages_tokens(messages);
+        self.total_tokens_before += tokens_before;
+
+        let result = Self::prune_old_tool_results(messages);
+        let tokens_after = estimate_messages_tokens(&result);
+        self.total_tokens_after += tokens_after;
+        self.record_compaction(CompactionRuntimeRecord {
+            strategy: ContextCompactionStrategy::Snip,
+            level: None,
+            messages_before: messages.len(),
+            messages_after: result.len(),
+            tokens_before,
+            tokens_after,
+            boundary_id: None,
+            sequence: None,
+            preserved_tail_count: None,
+            provenance: vec!["tool_result_snip".to_string()],
+        });
+
+        result
+    }
+
+    fn micro_compress_with_strategy(
+        &mut self,
+        messages: &[Message],
+        strategy: ContextCompactionStrategy,
+        level: Option<CompressionLevel>,
+    ) -> Vec<Message> {
         let tokens_before = estimate_messages_tokens(messages);
         self.total_tokens_before += tokens_before;
 
@@ -918,6 +887,21 @@ impl ContextCompressor {
 
         let tokens_after = estimate_messages_tokens(&result);
         self.total_tokens_after += tokens_after;
+        self.record_compaction(CompactionRuntimeRecord {
+            strategy,
+            level: level.map(|value| value.label().to_string()),
+            messages_before: messages.len(),
+            messages_after: result.len(),
+            tokens_before,
+            tokens_after,
+            boundary_id: None,
+            sequence: None,
+            preserved_tail_count: None,
+            provenance: vec![
+                "tool_result_snip".to_string(),
+                "tool_pair_sanitize".to_string(),
+            ],
+        });
 
         info!(
             "Micro compression: {} messages -> {} messages ({} -> {} tokens)",
@@ -991,15 +975,40 @@ impl ContextCompressor {
         messages: &[Message],
         level: CompressionLevel,
     ) -> Vec<Message> {
-        let tokens_before = estimate_messages_tokens(messages);
-        self.total_tokens_before += tokens_before;
+        self.compress_with_level_for_strategy(
+            messages,
+            level,
+            ContextCompactionStrategy::AutoCompact,
+        )
+    }
 
-        let result = match level {
-            CompressionLevel::None => messages.to_vec(),
+    fn compress_with_level_for_strategy(
+        &mut self,
+        messages: &[Message],
+        level: CompressionLevel,
+        strategy: ContextCompactionStrategy,
+    ) -> Vec<Message> {
+        let tokens_before = estimate_messages_tokens(messages);
+
+        match level {
+            CompressionLevel::None => {
+                self.record_compaction(CompactionRuntimeRecord {
+                    strategy,
+                    level: Some(level.label().to_string()),
+                    messages_before: messages.len(),
+                    messages_after: messages.len(),
+                    tokens_before,
+                    tokens_after: tokens_before,
+                    boundary_id: None,
+                    sequence: None,
+                    preserved_tail_count: None,
+                    provenance: vec!["level:none".to_string()],
+                });
+                messages.to_vec()
+            }
             CompressionLevel::Light => {
-                let r = self.micro_compress(messages);
+                let r = self.micro_compress_with_strategy(messages, strategy, Some(level));
                 let tokens_after = estimate_messages_tokens(&r);
-                self.total_tokens_after += tokens_after;
                 info!(
                     "Light compression ({}): {} -> {} tokens",
                     level.label(),
@@ -1009,9 +1018,9 @@ impl ContextCompressor {
                 r
             }
             CompressionLevel::Medium => {
-                let r = self.compress(messages);
+                let r =
+                    self.compress_with_summary_for_strategy(messages, None, strategy, Some(level));
                 let tokens_after = estimate_messages_tokens(&r);
-                self.total_tokens_after += tokens_after;
                 info!(
                     "Medium compression ({}): {} -> {} tokens",
                     level.label(),
@@ -1022,14 +1031,9 @@ impl ContextCompressor {
             }
             CompressionLevel::Heavy => {
                 // Heavy 需要 LLM，在 compress_async 中处理
-                let r = self.compress(messages);
-                let tokens_after = estimate_messages_tokens(&r);
-                self.total_tokens_after += tokens_after;
-                r
+                self.compress_with_summary_for_strategy(messages, None, strategy, Some(level))
             }
-        };
-
-        result
+        }
     }
 
     /// 异步压缩消息列表（分层压缩流水线）
@@ -1038,6 +1042,15 @@ impl ContextCompressor {
     /// - Medium (70-85%): 裁剪 + 启发式摘要
     /// - Heavy (>85%): 裁剪 + LLM 摘要
     pub async fn compress_async(&mut self, messages: &[Message]) -> Vec<Message> {
+        self.compress_async_with_strategy(messages, ContextCompactionStrategy::AutoCompact)
+            .await
+    }
+
+    pub async fn compress_async_with_strategy(
+        &mut self,
+        messages: &[Message],
+        strategy: ContextCompactionStrategy,
+    ) -> Vec<Message> {
         let tokens_before = estimate_messages_tokens(messages);
         let total =
             tokens_before + self.budget.system_prompt_tokens + self.budget.tool_schemas_tokens;
@@ -1060,12 +1073,10 @@ impl ContextCompressor {
 
         // Light/Medium 不需要 LLM，直接同步处理
         if level == CompressionLevel::Light || level == CompressionLevel::Medium {
-            return self.compress_with_level(messages, level);
+            return self.compress_with_level_for_strategy(messages, level, strategy);
         }
 
         // Heavy: 尝试 LLM 摘要
-        self.total_tokens_before += tokens_before;
-
         if self.has_llm_provider()
             && !self.is_in_cooldown()
             && self.consecutive_llm_failures < self.max_consecutive_llm_failures
@@ -1074,9 +1085,13 @@ impl ContextCompressor {
             match self.llm_summarize_middle(messages).await {
                 Some(summary_text) => {
                     self.consecutive_llm_failures = 0;
-                    let compressed = self.compress_with_summary(messages, Some(&summary_text));
+                    let compressed = self.compress_with_summary_for_strategy(
+                        messages,
+                        Some(&summary_text),
+                        strategy,
+                        Some(level),
+                    );
                     let tokens_after = estimate_messages_tokens(&compressed);
-                    self.total_tokens_after += tokens_after;
                     info!(
                         "Heavy (LLM) compression succeeded: {} -> {} tokens (saved {}%)",
                         tokens_before,
@@ -1093,9 +1108,13 @@ impl ContextCompressor {
                     self.llm_compression_failures += 1;
                     self.consecutive_llm_failures += 1;
                     self.record_failure();
-                    let compressed = self.compress(messages);
+                    let compressed = self.compress_with_summary_for_strategy(
+                        messages,
+                        None,
+                        strategy,
+                        Some(level),
+                    );
                     let tokens_after = estimate_messages_tokens(&compressed);
-                    self.total_tokens_after += tokens_after;
                     warn!(
                         "LLM compression failed, fell back to medium: {} -> {} tokens",
                         tokens_before, tokens_after
@@ -1110,10 +1129,7 @@ impl ContextCompressor {
                     self.consecutive_llm_failures
                 );
             }
-            let compressed = self.compress(messages);
-            let tokens_after = estimate_messages_tokens(&compressed);
-            self.total_tokens_after += tokens_after;
-            compressed
+            self.compress_with_summary_for_strategy(messages, None, strategy, Some(level))
         }
     }
 
@@ -1130,9 +1146,33 @@ impl ContextCompressor {
         messages: &[Message],
         summary_text: Option<&str>,
     ) -> Vec<Message> {
+        self.compress_with_summary_for_strategy(
+            messages,
+            summary_text,
+            ContextCompactionStrategy::AutoCompact,
+            None,
+        )
+    }
+
+    fn compress_with_summary_for_strategy(
+        &mut self,
+        messages: &[Message],
+        summary_text: Option<&str>,
+        strategy: ContextCompactionStrategy,
+        level: Option<CompressionLevel>,
+    ) -> Vec<Message> {
+        let original_message_count = messages.len();
+        let original_tokens_before = estimate_messages_tokens(messages);
+        let summary_source_tag = if summary_text.is_some() {
+            "summary_source:llm"
+        } else {
+            "summary_source:heuristic"
+        };
         if messages.is_empty() {
             return messages.to_vec();
         }
+        self.total_tokens_before += original_tokens_before;
+        let session_memory = SessionMemoryCompact::analyze(messages);
 
         info!(
             "Compressing {} messages (budget: {} available tokens, iteration: {})",
@@ -1157,7 +1197,7 @@ impl ContextCompressor {
         let (middle, tail) = self.split_tail(rest);
 
         // Phase 3: 对中间部分生成摘要
-        let summary_text = if let Some(text) = summary_text {
+        let mut summary_text = if let Some(text) = summary_text {
             // 使用 LLM 预计算的摘要
             let new_summary = StructuredSummary::from_text(text);
             if let Some(ref mut acc) = self.accumulated_summary {
@@ -1171,6 +1211,7 @@ impl ContextCompressor {
             // 启发式摘要
             self.summarize_middle(middle)
         };
+        session_memory.inject_into_summary(&mut summary_text);
 
         // Phase 4: 组装结果
         let mut result = head.to_vec();
@@ -1182,9 +1223,9 @@ impl ContextCompressor {
                 sequence: self.compact_sequence,
                 boundary_id: format!("cb-{}", Uuid::new_v4().simple()),
                 preserved_tail_count: tail.len(),
-                messages_before: messages.len(),
+                messages_before: original_message_count,
                 messages_after: head.len() + tail.len() + 1, // +1 for summary
-                tokens_before: estimate_messages_tokens(&messages),
+                tokens_before: original_tokens_before,
                 tokens_after: 0, // 将在后面更新
                 timestamp: chrono::Local::now().to_rfc3339(),
             })
@@ -1290,11 +1331,49 @@ impl ContextCompressor {
         let result = Self::sanitize_tool_pairs(result);
 
         // 更新 compact metadata 的 tokens_after 并保存到历史
+        let tokens_after = estimate_messages_tokens(&result);
+        let mut recorded_meta = None;
         if let Some(mut meta) = compact_meta {
-            meta.tokens_after = estimate_messages_tokens(&result);
+            meta.tokens_after = tokens_after;
+            recorded_meta = Some(meta.clone());
             self.compact_metadata_history.push(meta);
         }
 
+        self.total_tokens_after += tokens_after;
+        let mut provenance = vec![
+            format!(
+                "level:{}",
+                level.map(|value| value.label()).unwrap_or("summary")
+            ),
+            "summary:structured".to_string(),
+            "tool_result_snip".to_string(),
+            "tool_pair_sanitize".to_string(),
+        ];
+        if summary_text.contains("Frequently Accessed Files")
+            || summary_text.contains("Pending Tasks")
+            || summary_text.contains("Common Tool Patterns")
+            || summary_text.contains("User Preferences")
+        {
+            provenance.push("summary_memory:session".to_string());
+        }
+        provenance.push(if summary_text.is_empty() {
+            "summary_source:empty".to_string()
+        } else {
+            summary_source_tag.to_string()
+        });
+        provenance.extend(session_memory.provenance_tags());
+        self.record_compaction(CompactionRuntimeRecord {
+            strategy,
+            level: level.map(|value| value.label().to_string()),
+            messages_before: original_message_count,
+            messages_after: result.len(),
+            tokens_before: original_tokens_before,
+            tokens_after,
+            boundary_id: recorded_meta.as_ref().map(|meta| meta.boundary_id.clone()),
+            sequence: recorded_meta.as_ref().map(|meta| meta.sequence),
+            preserved_tail_count: recorded_meta.as_ref().map(|meta| meta.preserved_tail_count),
+            provenance,
+        });
         self.compression_count += 1;
 
         info!(
@@ -1750,6 +1829,21 @@ impl ContextCompressor {
     /// 获取最近一次 compact boundary 元数据
     pub fn latest_compact_metadata(&self) -> Option<&CompactMetadata> {
         self.compact_metadata_history.last()
+    }
+
+    fn record_compaction(&mut self, mut record: CompactionRuntimeRecord) {
+        record.normalize_provenance();
+        self.compaction_records.push(record);
+    }
+
+    /// 获取运行时压缩记录（策略、来源和 compact boundary）。
+    pub fn compaction_records(&self) -> &[CompactionRuntimeRecord] {
+        &self.compaction_records
+    }
+
+    /// 获取最近一次运行时压缩记录。
+    pub fn latest_compaction_record(&self) -> Option<&CompactionRuntimeRecord> {
+        self.compaction_records.last()
     }
 
     /// 获取压缩统计
@@ -2655,6 +2749,39 @@ mod tests {
     }
 
     #[test]
+    fn test_snip_tool_results_records_strategy() {
+        let messages = vec![
+            Message::tool("call_1", "x".repeat(500)),
+            Message::tool("call_2", "recent"),
+            Message::tool("call_3", "recent"),
+            Message::tool("call_4", "recent"),
+        ];
+        let mut compressor = ContextCompressor::new(128_000);
+
+        let compressed = compressor.snip_tool_results(&messages);
+        let record = compressor.latest_compaction_record().unwrap();
+
+        assert_eq!(record.strategy, ContextCompactionStrategy::Snip);
+        assert_eq!(record.messages_before, messages.len());
+        assert_eq!(record.messages_after, compressed.len());
+        assert!(record.provenance.iter().any(|p| p == "tool_result_snip"));
+    }
+
+    #[test]
+    fn test_micro_compress_records_strategy_and_provenance() {
+        let messages = create_long_conversation(5);
+        let mut compressor = ContextCompressor::new(128_000);
+
+        let compressed = compressor.micro_compress(&messages);
+        let record = compressor.latest_compaction_record().unwrap();
+
+        assert_eq!(record.strategy, ContextCompactionStrategy::MicroCompact);
+        assert_eq!(record.level.as_deref(), Some("light"));
+        assert_eq!(record.messages_after, compressed.len());
+        assert!(record.provenance.iter().any(|p| p == "tool_pair_sanitize"));
+    }
+
+    #[test]
     fn test_compress_with_level_medium() {
         let messages = create_long_conversation(50);
         let tokens_before = estimate_messages_tokens(&messages);
@@ -2768,6 +2895,14 @@ mod tests {
 
         // compressor 应该记录了历史
         assert_eq!(compressor.compact_metadata_history.len(), 1);
+        let record = compressor.latest_compaction_record().unwrap();
+        assert_eq!(record.strategy, ContextCompactionStrategy::AutoCompact);
+        assert!(record.boundary_id.is_some());
+        assert_eq!(record.sequence, Some(1));
+        assert!(record
+            .provenance
+            .iter()
+            .any(|p| p.starts_with("compact_boundary:")));
     }
 
     #[test]
@@ -2803,7 +2938,7 @@ mod tests {
     fn test_session_memory_compact_inject() {
         let smc = SessionMemoryCompact {
             hot_files: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()],
-            user_preferences: vec![],
+            user_preferences: vec!["Use concise output".to_string()],
             pending_tasks: vec!["TODO: fix bug".to_string()],
             tool_patterns: vec!["file_read".to_string()],
         };
@@ -2811,12 +2946,18 @@ mod tests {
         let mut summary = "Summary text".to_string();
         smc.inject_into_summary(&mut summary);
 
+        assert!(summary.contains("User Preferences"));
+        assert!(summary.contains("Use concise output"));
         assert!(summary.contains("Frequently Accessed Files"));
         assert!(summary.contains("src/main.rs"));
         assert!(summary.contains("Pending Tasks"));
         assert!(summary.contains("TODO: fix bug"));
         assert!(summary.contains("Common Tool Patterns"));
         assert!(summary.contains("file_read"));
+
+        let tags = smc.provenance_tags();
+        assert!(tags.contains(&"session_memory:user_preferences=1".to_string()));
+        assert!(tags.contains(&"session_memory:hot_files=2".to_string()));
     }
 
     #[test]

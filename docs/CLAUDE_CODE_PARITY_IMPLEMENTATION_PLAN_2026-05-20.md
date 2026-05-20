@@ -1232,9 +1232,37 @@ Progress, 2026-05-20:
   from earlier compactions.
 - Done: trace rendering now includes the compact boundary id/sequence and
   message counts, giving `/trace` durable provenance for context compaction.
+- Done: added runtime compaction records for `snip`, `microcompact`,
+  `auto_compact`, and `reactive_compact`, including level, token/message
+  deltas, compact-boundary ids, preserved tail counts, and provenance tags.
+- Done: preflight and reactive compression now consume those runtime records
+  directly, and add trigger provenance (`preflight`, `api_context_error`)
+  instead of reconstructing trace fields from stale compact metadata.
+- Done: session-memory compaction now keeps explicit user preferences in the
+  injected summary and emits provenance tags for hot files, pending tasks,
+  tool patterns, and preferences.
+- Done: moved compact-boundary metadata, boundary extraction, compaction
+  strategy labels, and runtime compaction records into `context_collapse`,
+  leaving `context_compressor` as the compaction pipeline and compatibility
+  re-export point.
+- Done: fixed `context_collapse` persisted commit restore by writing collapsed
+  messages under the same id stored in the collapse entry; added restore
+  coverage for the persisted window prefix.
+- Done: wired forked/background LLM memory extraction through
+  `MemorySyncController` when `PRIORITY_AGENT_LLM_MEMORY_FORKED=1`, while the
+  non-forked LLM path now marks extraction attempts for throttle and telemetry.
 - Validation: `cargo test -q test_compact_boundary_embedded_in_compression`,
   `cargo test -q records_preflight_budget_when_compressor_is_available`, and
   `cargo check -q` all passed.
+- Validation: `cargo test -q context_compressor`,
+  `cargo test -q records_preflight_budget_when_compressor_is_available`, and
+  `cargo check -q` all passed after the runtime-record update.
+- Validation: `cargo test -q context_collapse`,
+  `cargo test -q context_compressor`, `cargo test -q memory_sync_controller`,
+  `cargo test -q test_extraction_stats`, and `cargo check -q` all passed after
+  the `context_collapse`/background-memory slice.
+- Remaining: deeper project/skill memory retention in `ToolUseContext` can
+  stay as the next Phase 7 slice.
 
 ### Phase 8: Subagent And Task Runtime
 

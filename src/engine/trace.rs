@@ -229,6 +229,8 @@ pub enum TraceEvent {
         messages_after: Option<usize>,
         #[serde(default)]
         preserved_tail_count: Option<usize>,
+        #[serde(default)]
+        provenance: Vec<String>,
     },
     RuntimeDietReport {
         prompt_tokens: u64,
@@ -740,8 +742,9 @@ impl TraceEvent {
                 messages_before,
                 messages_after,
                 preserved_tail_count,
+                provenance,
             } => format!(
-                "context compacted: {} -> {} tokens ({}) boundary={} seq={} msgs={}->{} preserved={}",
+                "context compacted: {} -> {} tokens ({}) boundary={} seq={} msgs={}->{} preserved={} provenance={}",
                 before_tokens,
                 after_tokens,
                 strategy,
@@ -757,7 +760,12 @@ impl TraceEvent {
                     .unwrap_or_else(|| "unknown".to_string()),
                 preserved_tail_count
                     .map(|value| value.to_string())
-                    .unwrap_or_else(|| "unknown".to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                if provenance.is_empty() {
+                    "none".to_string()
+                } else {
+                    provenance.join(",")
+                }
             ),
             TraceEvent::RuntimeDietReport {
                 prompt_tokens,

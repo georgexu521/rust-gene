@@ -771,6 +771,8 @@ impl MemoryManager {
         provider: Option<&dyn LlmProvider>,
         model: &str,
     ) {
+        self.mark_llm_extraction_started();
+
         // 先尝试启发式提取
         let heuristic = extract_learnings_from_turn(user, assistant);
         self.ingest_learnings(heuristic.clone(), MAX_LEARNINGS_PER_TURN);
@@ -1669,6 +1671,12 @@ Return exactly the word NONE if there is nothing critical to remember.";
         // throttle：每 N 轮提取一次
         let interval = Self::llm_extraction_interval();
         self.turn_count - self.last_llm_extraction_turn >= interval
+    }
+
+    /// 记录一次 LLM/forked 记忆提取已启动，用于 throttle 和 telemetry。
+    pub fn mark_llm_extraction_started(&mut self) {
+        self.last_llm_extraction_turn = self.turn_count;
+        self.llm_extraction_count += 1;
     }
 
     /// 是否启用了 forked 模式
@@ -3456,6 +3464,12 @@ Always check logs first.
         assert_eq!(count, 0); // 尚未触发 LLM 提取
         assert_eq!(turns, 3);
         assert_eq!(last, 0);
+
+        mgr.mark_llm_extraction_started();
+        let (count, turns, last) = mgr.extraction_stats();
+        assert_eq!(count, 1);
+        assert_eq!(turns, 3);
+        assert_eq!(last, 3);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use super::context_budget_controller::ContextBudgetController;
 use super::runtime_diet::RuntimeDietSnapshot;
+use crate::engine::context_collapse::ContextCompactionStrategy;
 use crate::engine::context_compressor::{estimate_messages_tokens, ContextCompressor};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool};
@@ -47,23 +48,47 @@ impl PreflightCompressionController {
             drop(compressor);
             let before_tokens = preflight.observation.message_tokens;
             let mut compressor = compressor_mutex.lock().await;
-            let compact_history_len = compressor.compact_metadata_history().len();
-            *context.messages = compressor.compress_async(context.messages).await;
-            let compact_meta = compressor
-                .compact_metadata_history()
-                .get(compact_history_len)
+            let compaction_record_len = compressor.compaction_records().len();
+            *context.messages = compressor
+                .compress_async_with_strategy(
+                    context.messages,
+                    ContextCompactionStrategy::AutoCompact,
+                )
+                .await;
+            let compaction_record = compressor
+                .compaction_records()
+                .get(compaction_record_len)
                 .cloned();
             drop(compressor);
             let after_tokens = estimate_messages_tokens(context.messages);
+            let mut provenance = compaction_record
+                .as_ref()
+                .map(|record| record.provenance.clone())
+                .unwrap_or_default();
+            provenance.push("trigger:preflight".to_string());
             context.trace.record(TraceEvent::ContextCompacted {
                 before_tokens: before_tokens as usize,
                 after_tokens: after_tokens as usize,
-                strategy: "preflight".to_string(),
-                boundary_id: compact_meta.as_ref().map(|meta| meta.boundary_id.clone()),
-                sequence: compact_meta.as_ref().map(|meta| meta.sequence),
-                messages_before: compact_meta.as_ref().map(|meta| meta.messages_before),
-                messages_after: compact_meta.as_ref().map(|meta| meta.messages_after),
-                preserved_tail_count: compact_meta.as_ref().map(|meta| meta.preserved_tail_count),
+                strategy: compaction_record
+                    .as_ref()
+                    .map(|record| record.strategy.label().to_string())
+                    .unwrap_or_else(|| "auto_compact".to_string()),
+                boundary_id: compaction_record
+                    .as_ref()
+                    .and_then(|record| record.boundary_id.clone()),
+                sequence: compaction_record
+                    .as_ref()
+                    .and_then(|record| record.sequence),
+                messages_before: compaction_record
+                    .as_ref()
+                    .map(|record| record.messages_before),
+                messages_after: compaction_record
+                    .as_ref()
+                    .map(|record| record.messages_after),
+                preserved_tail_count: compaction_record
+                    .as_ref()
+                    .and_then(|record| record.preserved_tail_count),
+                provenance,
             });
             if after_tokens >= before_tokens {
                 no_gain_passes += 1;

@@ -1,6 +1,7 @@
 use super::session_processor::SessionStepResult;
 use super::turn_recording::record_recovery_plan;
 use super::{should_use_nonstreaming_tools, ConversationLoop};
+use crate::engine::context_collapse::ContextCompactionStrategy;
 use crate::engine::context_compressor::estimate_messages_tokens;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
@@ -107,32 +108,47 @@ impl ApiRequestController {
                                 compressor.micro_compress(context.messages)
                             };
                             let mut compressor = compressor.lock().await;
-                            let compact_history_len = compressor.compact_metadata_history().len();
-                            let compressed =
-                                compressor.compress_async(&messages_for_compression).await;
-                            let compact_meta = compressor
-                                .compact_metadata_history()
-                                .get(compact_history_len)
+                            let compaction_record_len = compressor.compaction_records().len();
+                            let compressed = compressor
+                                .compress_async_with_strategy(
+                                    &messages_for_compression,
+                                    ContextCompactionStrategy::ReactiveCompact,
+                                )
+                                .await;
+                            let compaction_record = compressor
+                                .compaction_records()
+                                .get(compaction_record_len)
                                 .cloned();
                             drop(compressor);
+                            let mut provenance = compaction_record
+                                .as_ref()
+                                .map(|record| record.provenance.clone())
+                                .unwrap_or_default();
+                            provenance.push("trigger:api_context_error".to_string());
                             context.trace.record(TraceEvent::ContextCompacted {
                                 before_tokens: estimate_messages_tokens(&messages_for_compression)
                                     as usize,
                                 after_tokens: estimate_messages_tokens(&compressed) as usize,
-                                strategy: "reactive".to_string(),
-                                boundary_id: compact_meta
+                                strategy: compaction_record
                                     .as_ref()
-                                    .map(|meta| meta.boundary_id.clone()),
-                                sequence: compact_meta.as_ref().map(|meta| meta.sequence),
-                                messages_before: compact_meta
+                                    .map(|record| record.strategy.label().to_string())
+                                    .unwrap_or_else(|| "reactive_compact".to_string()),
+                                boundary_id: compaction_record
                                     .as_ref()
-                                    .map(|meta| meta.messages_before),
-                                messages_after: compact_meta
+                                    .and_then(|record| record.boundary_id.clone()),
+                                sequence: compaction_record
                                     .as_ref()
-                                    .map(|meta| meta.messages_after),
-                                preserved_tail_count: compact_meta
+                                    .and_then(|record| record.sequence),
+                                messages_before: compaction_record
                                     .as_ref()
-                                    .map(|meta| meta.preserved_tail_count),
+                                    .map(|record| record.messages_before),
+                                messages_after: compaction_record
+                                    .as_ref()
+                                    .map(|record| record.messages_after),
+                                preserved_tail_count: compaction_record
+                                    .as_ref()
+                                    .and_then(|record| record.preserved_tail_count),
+                                provenance,
                             });
                             request = ChatRequest::new(&context.conversation.model)
                                 .with_messages(compressed)
