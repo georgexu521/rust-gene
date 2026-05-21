@@ -88,6 +88,16 @@ impl RecoveryPlan {
     }
 
     pub fn tool_failure(tool_name: &str, error: &str, error_code: Option<&str>) -> Self {
+        if is_hook_blocked_error(error) {
+            return Self::hook_failure(
+                "PreToolUse",
+                "unknown",
+                "pre_tool_hook",
+                Some(tool_name),
+                true,
+                error,
+            );
+        }
         let remote_tool = is_remote_tool(tool_name);
         let recoverable = !matches!(
             error_code.unwrap_or("unknown"),
@@ -109,6 +119,55 @@ impl RecoveryPlan {
                 && !remote_tool,
             suggested_command,
             user_note: tool_user_note(tool_name, error, error_code),
+            status: RecoveryStatus::Planned,
+        }
+    }
+
+    pub fn hook_failure(
+        event: &str,
+        provider: &str,
+        hook_name: &str,
+        tool_name: Option<&str>,
+        blocked: bool,
+        detail: &str,
+    ) -> Self {
+        let category = if blocked {
+            "hook_blocked"
+        } else {
+            "hook_failed"
+        };
+        let target = tool_name.unwrap_or("runtime");
+        let action = if blocked {
+            format!(
+                "inspect or adjust hook '{}' before retrying {}",
+                hook_name, target
+            )
+        } else {
+            format!(
+                "inspect hook '{}' failure before relying on {} lifecycle automation",
+                hook_name, event
+            )
+        };
+        Self {
+            id: format!("recovery_{}", uuid::Uuid::new_v4().simple()),
+            source: "hook_runtime".to_string(),
+            category: category.to_string(),
+            primary_error: truncate(detail, 240),
+            action,
+            retryable: !blocked,
+            safe_retry: false,
+            suggested_command: Some("/hooks".to_string()),
+            user_note: if blocked {
+                format!(
+                    "{} was blocked by hook '{}' from provider {}; do not treat the tool action as executed until the hook decision is reviewed.",
+                    target, hook_name, provider
+                )
+            } else {
+                format!(
+                    "Hook '{}' from provider {} failed during {}; inspect `/hooks` before assuming lifecycle automation ran.",
+                    hook_name, provider, event
+                )
+            },
             status: RecoveryStatus::Planned,
         }
     }
@@ -242,6 +301,11 @@ fn is_remote_tool(tool_name: &str) -> bool {
     matches!(tool_name, "remote_trigger" | "remote_dev")
 }
 
+fn is_hook_blocked_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("pre-tool hook") || lower.contains("blocked by hook")
+}
+
 fn suggested_command(category: &ErrorCategory, action: &RecoveryAction) -> Option<String> {
     match (category, action) {
         (ErrorCategory::Auth, _) => Some("/login".to_string()),
@@ -347,6 +411,42 @@ mod tests {
         assert_eq!(plan.suggested_command.as_deref(), Some("/retry"));
         assert!(plan.retryable);
         assert!(plan.safe_retry);
+    }
+
+    #[test]
+    fn hook_blocked_tool_failure_suggests_hooks_and_disables_retry() {
+        let plan = RecoveryPlan::tool_failure(
+            "bash",
+            "blocked by pre-tool hook: policy denied shell command",
+            Some("dangerous_blocked"),
+        );
+
+        assert_eq!(plan.category, "hook_blocked");
+        assert_eq!(plan.source, "hook_runtime");
+        assert_eq!(plan.suggested_command.as_deref(), Some("/hooks"));
+        assert!(!plan.retryable);
+        assert!(!plan.safe_retry);
+        assert!(plan
+            .user_note
+            .contains("do not treat the tool action as executed"));
+    }
+
+    #[test]
+    fn hook_failure_suggests_hooks_without_safe_retry() {
+        let plan = RecoveryPlan::hook_failure(
+            "PostToolUse",
+            "env",
+            "env_post_tool_hook",
+            Some("file_edit"),
+            false,
+            "exit status 1",
+        );
+
+        assert_eq!(plan.category, "hook_failed");
+        assert_eq!(plan.suggested_command.as_deref(), Some("/hooks"));
+        assert!(plan.retryable);
+        assert!(!plan.safe_retry);
+        assert!(plan.user_note.contains("inspect `/hooks`"));
     }
 
     #[test]

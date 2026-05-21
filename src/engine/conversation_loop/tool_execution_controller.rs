@@ -9,7 +9,8 @@ use super::tool_metadata::{
 use super::tool_result_controller::{invalid_tool_params_result, ToolResultNormalizer};
 use super::turn_recording::{
     record_goal_drift_if_needed, record_hook_traces, record_mcp_resource_trace,
-    record_remote_bridge_trace, record_web_retrieval_trace,
+    record_permission_denial_recovery_trace, record_remote_bridge_trace,
+    record_web_retrieval_trace,
 };
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
@@ -566,6 +567,7 @@ impl ToolExecutionController {
                 let trace_ref = Some(trace.clone());
                 record_mcp_resource_trace(&trace_ref, &tc_clone, &result);
                 record_remote_bridge_trace(&trace_ref, &tc_clone, &result);
+                record_permission_denial_recovery_trace(&trace_ref, &tc_clone, &result);
                 record_web_retrieval_trace(&trace_ref, &tc_clone, &result);
             }
             (tc_clone, result)
@@ -867,6 +869,7 @@ impl ToolExecutionController {
                 let trace_ref = Some(trace.clone());
                 record_mcp_resource_trace(&trace_ref, &tc, &result);
                 record_remote_bridge_trace(&trace_ref, &tc, &result);
+                record_permission_denial_recovery_trace(&trace_ref, &tc, &result);
                 record_web_retrieval_trace(&trace_ref, &tc, &result);
             }
             if PermissionController::is_permission_denied(&result) {
@@ -985,6 +988,7 @@ impl ToolExecutionController {
                     let trace_ref = Some(trace.clone());
                     record_mcp_resource_trace(&trace_ref, tc, &pre_result);
                     record_remote_bridge_trace(&trace_ref, tc, &pre_result);
+                    record_permission_denial_recovery_trace(&trace_ref, tc, &pre_result);
                     record_web_retrieval_trace(&trace_ref, tc, &pre_result);
                 }
                 lifecycle.provider_executed(tc, &pre_result);

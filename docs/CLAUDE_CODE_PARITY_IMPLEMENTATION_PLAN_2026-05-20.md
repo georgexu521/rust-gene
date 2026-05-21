@@ -1209,6 +1209,12 @@ Progress, 2026-05-20:
   preview, and recent success/failure/blocked statistics. `/hooks` now reuses
   the shared hook panel renderer, and `/panel hooks` plus `/panel all` expose
   the same product surface beside approvals, tasks, MCP, and bridge state.
+- Done, 2026-05-21: connected hook failure, hook blocking, and permission
+  denial into the shared recovery spine. Failed/blocked hook records now emit
+  `hook_failed`/`hook_blocked` recovery plans with `/hooks` guidance, pre-tool
+  hook blocks are treated as hook-runtime failures instead of generic dangerous
+  tool blocks, and non-remote permission denials now emit trace-backed recovery
+  plans pointing to `/permissions explain`.
 - Validation: `cargo test -q human_review`, `cargo test -q
   bash_permission_metadata_includes_command_classification`, `cargo test -q
   test_pre_tool_hook_can_deny_execution`, and `cargo check -q` all passed.
@@ -1222,6 +1228,10 @@ Progress, 2026-05-20:
   `cargo fmt --check`, `cargo check -q`, `cargo test -q hooks`, `cargo test -q
   runtime_panels`, `cargo test -q trace_summary`, and `cargo test -q commands`
   all passed.
+- Validation, 2026-05-21: after the hook/permission recovery slice,
+  `cargo fmt --check`, `cargo check -q`, `cargo test -q recovery_plan`,
+  `cargo test -q turn_recording`, `cargo test -q hooks`, and `cargo test -q
+  trace_summary` all passed.
 
 ### Phase 7: Context Compaction And Memory Runtime
 

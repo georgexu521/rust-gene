@@ -63,7 +63,10 @@ Current stage:
   now has a structured lifecycle surface as well: `HookLifecycleSnapshot`
   reports configured hook registrations, provider/event/scope, timeout and
   fail-open/fail-closed policy, recent execution statistics, `/hooks`, and
-  `/panel hooks`.
+  `/panel hooks`. Hook and permission failures now share the recovery spine:
+  failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
+  classified as hook runtime failures, and permission denials emit
+  `/permissions explain` recovery plans in trace.
 
 The recent closure plan is complete:
 

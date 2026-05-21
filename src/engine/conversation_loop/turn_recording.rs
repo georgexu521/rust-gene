@@ -209,7 +209,58 @@ pub(super) fn record_hook_traces(trace: &Option<TraceCollector>, records: &[Hook
             error: record.error.clone(),
             output_preview: record.output_preview.clone(),
         });
+        if record.blocked || !record.success {
+            let detail = record
+                .error
+                .as_deref()
+                .or(record.output_preview.as_deref())
+                .unwrap_or("hook did not complete cleanly");
+            let plan = crate::engine::recovery_plan::RecoveryPlan::hook_failure(
+                &record.event.to_string(),
+                record.provider.as_str(),
+                &record.hook_name,
+                record.tool_name.as_deref(),
+                record.blocked,
+                detail,
+            );
+            record_recovery_plan(trace, &plan);
+        }
     }
+}
+
+pub(super) fn record_permission_denial_recovery_trace(
+    trace: &Option<TraceCollector>,
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) {
+    let Some(trace) = trace else {
+        return;
+    };
+    if result.success || matches!(tool_call.name.as_str(), "remote_trigger" | "remote_dev") {
+        return;
+    }
+    let error_code = result.error_code.as_ref().and_then(tool_error_code_label);
+    let error = result
+        .error
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| result.content.as_str());
+    let permission_denied = matches!(error_code.as_deref(), Some("permission_denied"))
+        || result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("permission_request"))
+            .is_some()
+        || error.to_ascii_lowercase().contains("permission denied");
+    if !permission_denied {
+        return;
+    }
+    let plan = crate::engine::recovery_plan::RecoveryPlan::tool_failure(
+        &tool_call.name,
+        error,
+        error_code.as_deref(),
+    );
+    record_recovery_plan(trace, &plan);
 }
 
 fn tool_error_code_label(code: &crate::tools::ToolErrorCode) -> Option<String> {
@@ -268,6 +319,7 @@ pub(super) fn record_web_retrieval_trace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::hooks::{HookEventKind, HookProviderKind};
     use crate::engine::trace::{TurnStatus, TurnTrace};
     use crate::tools::{ToolErrorCode, ToolResult};
     use serde_json::json;
@@ -293,6 +345,56 @@ mod tests {
             .any(|event| matches!(event, TraceEvent::RemoteBridgeAction { action, success: false, .. } if action == "run")));
         assert!(finished.events.iter().any(
             |event| matches!(event, TraceEvent::RecoveryPlan { suggested_command: Some(command), safe_retry: false, .. } if command == "/remote status")
+        ));
+    }
+
+    #[test]
+    fn hook_trace_records_recovery_plan_for_blocked_hook() {
+        let collector = TraceCollector::new(TurnTrace::new("session-1", 1, "edit file"));
+        let trace = Some(collector.clone());
+        let records = vec![HookRunRecord {
+            sequence: 1,
+            event: HookEventKind::PreToolUse,
+            provider: HookProviderKind::Env,
+            hook_name: "env_pre_tool_hook".to_string(),
+            tool_call_id: "call_bash".to_string(),
+            tool_name: Some("bash".to_string()),
+            success: true,
+            blocked: true,
+            duration_ms: 12,
+            error: None,
+            output_preview: Some("policy denied".to_string()),
+        }];
+
+        record_hook_traces(&trace, &records);
+
+        let finished = collector.finish(TurnStatus::Failed);
+        assert!(finished
+            .events
+            .iter()
+            .any(|event| matches!(event, TraceEvent::HookCompleted { blocked: true, .. })));
+        assert!(finished.events.iter().any(
+            |event| matches!(event, TraceEvent::RecoveryPlan { category, suggested_command: Some(command), safe_retry: false, .. } if category == "hook_blocked" && command == "/hooks")
+        ));
+    }
+
+    #[test]
+    fn permission_denial_trace_records_recovery_plan() {
+        let collector = TraceCollector::new(TurnTrace::new("session-1", 1, "run command"));
+        let trace = Some(collector.clone());
+        let tool_call = ToolCall {
+            id: "call_bash".to_string(),
+            name: "bash".to_string(),
+            arguments: json!({"command": "rm -rf target"}),
+        };
+        let mut result = ToolResult::error("Permission denied: 'bash' requires user confirmation.");
+        result.error_code = Some(ToolErrorCode::PermissionDenied);
+
+        record_permission_denial_recovery_trace(&trace, &tool_call, &result);
+
+        let finished = collector.finish(TurnStatus::Failed);
+        assert!(finished.events.iter().any(
+            |event| matches!(event, TraceEvent::RecoveryPlan { category, suggested_command: Some(command), safe_retry: false, .. } if category == "permission_denied" && command == "/permissions explain")
         ));
     }
 }
