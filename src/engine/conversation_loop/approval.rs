@@ -1,6 +1,8 @@
 //! 工具授权通道
 
+use crate::engine::human_review::PermissionReviewDecision;
 use crate::services::api::ToolCall;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -27,8 +29,75 @@ impl ToolApprovalRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolApprovalResponse {
+    pub approved: bool,
+    #[serde(default)]
+    pub decision: Option<PermissionReviewDecision>,
+    #[serde(default)]
+    pub rule_decision: Option<String>,
+    #[serde(default)]
+    pub persistence_scope: Option<String>,
+    #[serde(default)]
+    pub rule_pattern: Option<String>,
+    #[serde(default)]
+    pub persisted_path: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl ToolApprovalResponse {
+    pub fn approved_once() -> Self {
+        Self {
+            approved: true,
+            decision: Some(PermissionReviewDecision::ApproveOnce),
+            rule_decision: None,
+            persistence_scope: None,
+            rule_pattern: None,
+            persisted_path: None,
+            note: None,
+        }
+    }
+
+    pub fn rejected_once() -> Self {
+        Self {
+            approved: false,
+            decision: Some(PermissionReviewDecision::RejectOnce),
+            rule_decision: None,
+            persistence_scope: None,
+            rule_pattern: None,
+            persisted_path: None,
+            note: None,
+        }
+    }
+
+    pub fn with_rule(
+        decision: PermissionReviewDecision,
+        rule_pattern: impl Into<String>,
+        persisted_path: Option<String>,
+        note: Option<String>,
+    ) -> Self {
+        Self {
+            approved: decision.approved(),
+            rule_decision: decision.rule_decision().map(str::to_string),
+            persistence_scope: decision.persistence_scope().map(str::to_string),
+            decision: Some(decision),
+            rule_pattern: Some(rule_pattern.into()),
+            persisted_path,
+            note,
+        }
+    }
+
+    pub fn decision_label(&self) -> Option<&'static str> {
+        self.decision.map(PermissionReviewDecision::as_str)
+    }
+}
+
 /// 待审批的工具请求 + 响应通道
-type PendingApproval = Option<(ToolApprovalRequest, tokio::sync::oneshot::Sender<bool>)>;
+type PendingApproval = Option<(
+    ToolApprovalRequest,
+    tokio::sync::oneshot::Sender<ToolApprovalResponse>,
+)>;
 
 /// 工具授权通道（类似 PlanApprovalChannel）
 pub struct ToolApprovalChannel {
@@ -43,7 +112,10 @@ impl ToolApprovalChannel {
     }
 
     /// 提交授权请求并等待响应（60 秒超时）
-    pub async fn submit(&self, request: ToolApprovalRequest) -> anyhow::Result<bool> {
+    pub async fn submit(
+        &self,
+        request: ToolApprovalRequest,
+    ) -> anyhow::Result<ToolApprovalResponse> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
@@ -58,7 +130,10 @@ impl ToolApprovalChannel {
     /// TUI 取出待审批的请求
     pub async fn take_pending(
         &self,
-    ) -> Option<(ToolApprovalRequest, tokio::sync::oneshot::Sender<bool>)> {
+    ) -> Option<(
+        ToolApprovalRequest,
+        tokio::sync::oneshot::Sender<ToolApprovalResponse>,
+    )> {
         let mut pending = self.pending.lock().await;
         pending.take()
     }

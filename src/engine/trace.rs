@@ -294,6 +294,14 @@ pub enum TraceEvent {
         tool: String,
         call_id: String,
         approved: bool,
+        #[serde(default)]
+        decision: Option<String>,
+        #[serde(default)]
+        persistence_scope: Option<String>,
+        #[serde(default)]
+        rule_pattern: Option<String>,
+        #[serde(default)]
+        persisted_path: Option<String>,
     },
     ToolCompleted {
         tool: String,
@@ -896,12 +904,31 @@ impl TraceEvent {
                 tool,
                 call_id,
                 approved,
-            } => format!(
-                "{} {} permission {}",
-                tool,
-                short_id(call_id),
-                if *approved { "approved" } else { "denied" }
-            ),
+                decision,
+                persistence_scope,
+                rule_pattern,
+                persisted_path,
+            } => {
+                let mut summary = format!(
+                    "{} {} permission {}",
+                    tool,
+                    short_id(call_id),
+                    if *approved { "approved" } else { "denied" }
+                );
+                if let Some(decision) = decision {
+                    summary.push_str(&format!(" decision={}", decision));
+                }
+                if let Some(scope) = persistence_scope {
+                    summary.push_str(&format!(" scope={}", scope));
+                }
+                if let Some(pattern) = rule_pattern {
+                    summary.push_str(&format!(" rule={}", pattern));
+                }
+                if let Some(path) = persisted_path {
+                    summary.push_str(&format!(" saved={}", path));
+                }
+                summary
+            }
             TraceEvent::ToolCompleted {
                 tool,
                 call_id,

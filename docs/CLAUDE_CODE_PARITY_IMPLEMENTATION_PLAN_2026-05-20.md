@@ -1195,9 +1195,23 @@ Progress, 2026-05-20:
 - Done: hook records now include a typed `HookProviderKind`; current env hooks
   are explicitly recorded as the `env` provider, and hook trace/TUI summaries
   carry that provider through.
+- Done, 2026-05-21: upgraded the approval channel response from a bare boolean
+  to `ToolApprovalResponse`, preserving the selected review decision
+  (`approve_once`, `approve_session`, `approve_project`, `approve_global`,
+  `reject_once`, `reject_always`), rule decision, persistence scope, rule
+  pattern, saved config path, and note. TUI, shell, eval approval, and
+  reflection-gate callers now share that response shape, and
+  `permission.resolve` trace events expose the decision/scope/rule instead of
+  only approved/denied.
 - Validation: `cargo test -q human_review`, `cargo test -q
   bash_permission_metadata_includes_command_classification`, `cargo test -q
   test_pre_tool_hook_can_deny_execution`, and `cargo check -q` all passed.
+- Validation, 2026-05-21: after this response-contract slice,
+  `cargo fmt --check`, `cargo check -q`, `cargo test -q human_review`,
+  `cargo test -q permission_controller`, `cargo test -q
+  test_session_permission_rule_is_added_when_approving_for_session`, `cargo
+  test -q test_respond_to_permission`, and `cargo test -q trace_summary` all
+  passed.
 
 ### Phase 7: Context Compaction And Memory Runtime
 

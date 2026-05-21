@@ -147,7 +147,12 @@ async fn answer_pending_approval(
 
     for _ in 0..20 {
         if let Some((_request, tx)) = channel.take_pending().await {
-            let _ = tx.send(approved);
+            let response = if approved {
+                crate::engine::conversation_loop::ToolApprovalResponse::approved_once()
+            } else {
+                crate::engine::conversation_loop::ToolApprovalResponse::rejected_once()
+            };
+            let _ = tx.send(response);
             return true;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

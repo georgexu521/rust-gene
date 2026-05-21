@@ -296,7 +296,8 @@ pub fn handle_reject(app: &mut TuiApp, _args: &str) -> String {
     if app.pending_permission_request.is_some() {
         app.pending_permission_request = None;
         if let Some(tx) = app.permission_response_tx.take() {
-            let _ = tx.send(false);
+            let _ =
+                tx.send(crate::engine::conversation_loop::ToolApprovalResponse::rejected_once());
         }
         app.mode = crate::tui::app::AppMode::Chat;
         "Rejected pending permission request.".to_string()

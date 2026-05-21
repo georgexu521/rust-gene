@@ -92,7 +92,7 @@ mod workflow_prompt_policy;
 mod workflow_runtime;
 mod workflow_trace;
 
-pub use approval::{ToolApprovalChannel, ToolApprovalRequest};
+pub use approval::{ToolApprovalChannel, ToolApprovalRequest, ToolApprovalResponse};
 use patch_recovery::PatchSynthesisAction;
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 #[cfg(test)]

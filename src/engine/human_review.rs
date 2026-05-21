@@ -67,6 +67,17 @@ pub enum PermissionReviewDecision {
 }
 
 impl PermissionReviewDecision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PermissionReviewDecision::ApproveOnce => "approve_once",
+            PermissionReviewDecision::ApproveSession => "approve_session",
+            PermissionReviewDecision::ApproveProject => "approve_project",
+            PermissionReviewDecision::ApproveGlobal => "approve_global",
+            PermissionReviewDecision::RejectOnce => "reject_once",
+            PermissionReviewDecision::RejectAlways => "reject_always",
+        }
+    }
+
     pub fn approved(self) -> bool {
         matches!(
             self,

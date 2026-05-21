@@ -227,8 +227,12 @@ impl PermissionController {
                 prompt: prompt.clone(),
                 review: None,
             };
+            let mut approval_response = None;
             match channel.submit(request).await {
-                Ok(is_approved) => approved = is_approved,
+                Ok(response) => {
+                    approved = response.approved;
+                    approval_response = Some(response);
+                }
                 Err(e) => warn!("Tool approval error: {}", e),
             }
             if let Some(ref trace) = trace {
@@ -236,6 +240,18 @@ impl PermissionController {
                     tool: tool_call.name.clone(),
                     call_id: tool_call.id.clone(),
                     approved,
+                    decision: approval_response
+                        .as_ref()
+                        .and_then(|response| response.decision_label().map(str::to_string)),
+                    persistence_scope: approval_response
+                        .as_ref()
+                        .and_then(|response| response.persistence_scope.clone()),
+                    rule_pattern: approval_response
+                        .as_ref()
+                        .and_then(|response| response.rule_pattern.clone()),
+                    persisted_path: approval_response
+                        .as_ref()
+                        .and_then(|response| response.persisted_path.clone()),
                 });
             }
         }

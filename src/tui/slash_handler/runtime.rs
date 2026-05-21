@@ -63,7 +63,7 @@ pub fn handle_untrap(app: &mut TuiApp, _args: &str) -> String {
     }
     app.pending_permission_request = None;
     if let Some(tx) = app.permission_response_tx.take() {
-        let _ = tx.send(false);
+        let _ = tx.send(crate::engine::conversation_loop::ToolApprovalResponse::rejected_once());
     }
     app.pending_question = None;
     app.pending_question_options.clear();

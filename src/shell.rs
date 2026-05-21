@@ -704,7 +704,12 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                 let approved = prompt_for_permission(&engine, &tool_name, &arguments, &prompt)?;
                 if let Some(channel) = engine.approval_channel() {
                     if let Some((_request, tx)) = channel.take_pending().await {
-                        let _ = tx.send(approved);
+                        let response = if approved {
+                            crate::engine::conversation_loop::ToolApprovalResponse::approved_once()
+                        } else {
+                            crate::engine::conversation_loop::ToolApprovalResponse::rejected_once()
+                        };
+                        let _ = tx.send(response);
                     }
                 }
                 show_status("Thinking...")?;

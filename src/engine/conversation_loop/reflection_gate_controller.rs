@@ -114,13 +114,17 @@ impl ReflectionGateController {
                 })
                 .await
             {
-                Ok(is_approved) => approved = is_approved,
+                Ok(response) => approved = response.approved,
                 Err(e) => warn!("Reflection approval error: {}", e),
             }
             trace.record(TraceEvent::PermissionResolved {
                 tool: review_call.name,
                 call_id: review_call.id,
                 approved,
+                decision: None,
+                persistence_scope: None,
+                rule_pattern: None,
+                persisted_path: None,
             });
         } else {
             approved = true;
@@ -209,7 +213,9 @@ mod tests {
             loop {
                 if let Some((request, response)) = responder_channel.take_pending().await {
                     assert_eq!(request.tool_call.name, "reflection_review");
-                    let _ = response.send(false);
+                    let _ = response.send(
+                        crate::engine::conversation_loop::ToolApprovalResponse::rejected_once(),
+                    );
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;

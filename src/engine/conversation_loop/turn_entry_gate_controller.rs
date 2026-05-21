@@ -243,7 +243,9 @@ mod tests {
         let responder = tokio::spawn(async move {
             loop {
                 if let Some((_request, response)) = responder_channel.take_pending().await {
-                    let _ = response.send(false);
+                    let _ = response.send(
+                        crate::engine::conversation_loop::ToolApprovalResponse::rejected_once(),
+                    );
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;

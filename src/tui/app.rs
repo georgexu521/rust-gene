@@ -3,6 +3,8 @@
 //! 对应 Claude Code 中的 AppState 概念
 
 use crate::engine::agent_mode::AgentMode;
+use crate::engine::conversation_loop::ToolApprovalResponse;
+use crate::engine::human_review::PermissionReviewDecision;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::{PermissionMode, PermissionRules, RuleSource, SourcedRule};
 use crate::state::{
@@ -667,6 +669,31 @@ pub(crate) fn persist_permission_rule(
     Ok(path)
 }
 
+fn permission_review_decision_for_response(
+    approved: bool,
+    decision: Option<&str>,
+    scope: Option<RuleSource>,
+) -> Option<PermissionReviewDecision> {
+    match (approved, decision, scope) {
+        (true, Some("allow"), Some(RuleSource::User)) => {
+            Some(PermissionReviewDecision::ApproveSession)
+        }
+        (true, Some("allow"), Some(RuleSource::Project)) => {
+            Some(PermissionReviewDecision::ApproveProject)
+        }
+        (true, Some("allow"), Some(RuleSource::Global)) => {
+            Some(PermissionReviewDecision::ApproveGlobal)
+        }
+        (false, Some("deny"), Some(RuleSource::Global)) => {
+            Some(PermissionReviewDecision::RejectAlways)
+        }
+        (true, None, None) => Some(PermissionReviewDecision::ApproveOnce),
+        (false, None, None) => Some(PermissionReviewDecision::RejectOnce),
+        (true, _, _) => Some(PermissionReviewDecision::ApproveOnce),
+        (false, _, _) => Some(PermissionReviewDecision::RejectOnce),
+    }
+}
+
 /// 交互式 CLI 应用模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
@@ -808,7 +835,7 @@ pub struct TuiApp {
     /// 待审批的工具权限请求
     pub pending_permission_request: Option<crate::engine::conversation_loop::ToolApprovalRequest>,
     /// 工具权限审批响应发送器
-    pub permission_response_tx: Option<tokio::sync::oneshot::Sender<bool>>,
+    pub permission_response_tx: Option<tokio::sync::oneshot::Sender<ToolApprovalResponse>>,
     /// 待回答的用户问题
     pub pending_question: Option<String>,
     /// 用户问题的选项
@@ -1928,18 +1955,28 @@ impl TuiApp {
         scope: Option<RuleSource>,
     ) {
         let mut rule_note = None;
+        let mut response = if approved {
+            ToolApprovalResponse::approved_once()
+        } else {
+            ToolApprovalResponse::rejected_once()
+        };
         if let Some(ref req) = self.pending_permission_request {
+            let pattern = permission_rule_pattern(&req.tool_call.name, &req.tool_call.arguments);
+            if let Some(review_decision) =
+                permission_review_decision_for_response(approved, decision, scope)
+            {
+                response =
+                    ToolApprovalResponse::with_rule(review_decision, pattern.clone(), None, None);
+            }
             if let (Some(decision), Some(scope)) = (decision, scope) {
-                let pattern =
-                    permission_rule_pattern(&req.tool_call.name, &req.tool_call.arguments);
                 match scope {
                     RuleSource::User => {
                         if let Some(engine) = &self.streaming_engine {
                             engine.add_session_permission_rule(decision, &pattern);
-                            rule_note = Some(format!(
-                                "Session permission rule saved: {} {}",
-                                decision, pattern
-                            ));
+                            let note =
+                                format!("Session permission rule saved: {} {}", decision, pattern);
+                            response.note = Some(note.clone());
+                            rule_note = Some(note);
                         }
                     }
                     RuleSource::Project | RuleSource::Global => {
@@ -1947,16 +1984,20 @@ impl TuiApp {
                             .unwrap_or_else(|_| std::path::PathBuf::from("."));
                         match persist_permission_rule(scope, decision, &pattern, &cwd) {
                             Ok(path) => {
-                                rule_note = Some(format!(
+                                response.persisted_path = Some(path.display().to_string());
+                                let note = format!(
                                     "Permission rule saved to {}: {} {}",
                                     path.display(),
                                     decision,
                                     pattern
-                                ));
+                                );
+                                response.note = Some(note.clone());
+                                rule_note = Some(note);
                             }
                             Err(err) => {
-                                rule_note =
-                                    Some(format!("Failed to save permission rule: {}", err));
+                                let note = format!("Failed to save permission rule: {}", err);
+                                response.note = Some(note.clone());
+                                rule_note = Some(note);
                             }
                         }
                     }
@@ -1977,7 +2018,7 @@ impl TuiApp {
             self.add_system_message(note);
         }
         if let Some(tx) = self.permission_response_tx.take() {
-            let _ = tx.send(approved);
+            let _ = tx.send(response);
         }
         self.pending_permission_request = None;
         self.mode = AppMode::Chat;
@@ -4297,7 +4338,17 @@ mod tests {
 
         app.respond_to_permission_with_rule(true, Some("allow"), Some(RuleSource::User));
 
-        assert!(rx.try_recv().unwrap());
+        let response = rx.try_recv().unwrap();
+        assert!(response.approved);
+        assert_eq!(
+            response.decision,
+            Some(PermissionReviewDecision::ApproveSession)
+        );
+        assert_eq!(response.persistence_scope.as_deref(), Some("session"));
+        assert_eq!(
+            response.rule_pattern.as_deref(),
+            Some("mcp/filesystem/write_file")
+        );
         let rules = engine.session_permission_rules();
         assert!(rules
             .always_allow
@@ -4439,7 +4490,13 @@ mod tests {
         assert_eq!(app.mode, AppMode::Chat);
         assert!(app.pending_permission_request.is_none());
         assert!(app.permission_response_tx.is_none());
-        assert!(rx.try_recv().unwrap());
+        let response = rx.try_recv().unwrap();
+        assert!(response.approved);
+        assert_eq!(
+            response.decision,
+            Some(PermissionReviewDecision::ApproveOnce)
+        );
+        assert!(response.persistence_scope.is_none());
     }
 
     #[test]

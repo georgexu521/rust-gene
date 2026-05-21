@@ -55,6 +55,11 @@ Current stage:
   signals; dynamic validation/tool failures now record `risk.signal` trace
   events. See `docs/WORKFLOW_CONTRACT_TARGETING_PLAN_2026-05-18.md` and
   `docs/RISK_SIGNAL_CONTROLLER_PLAN_2026-05-18.md`.
+- Claude Code parity implementation is current through the first Phase 11
+  provider/bridge slice, with Phase 6 product-hardening resumed: permission
+  approvals now return a structured `ToolApprovalResponse` so trace and runtime
+  consumers can distinguish approve-once, session/project/global allow, and
+  global deny decisions with rule persistence evidence.
 
 The recent closure plan is complete:
 
