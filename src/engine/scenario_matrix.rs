@@ -242,7 +242,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         title: "File edit with rewind",
         phase: "Phase 12",
         user_task: "edit a file, verify checkpoint evidence, then rewind the edit",
-        status: ReplayStatus::RuntimeMapped,
+        status: ReplayStatus::ReplayFixtureReady,
         external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
         evidence: FILE_EDIT_REWIND_EVIDENCE,
     },
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn external_baseline_stays_deferred_until_replays_are_ready() {
         let summary = scenario_matrix_summary();
-        assert_eq!(summary.replay_ready, 2);
+        assert_eq!(summary.replay_ready, 3);
         assert!(!summary.external_baseline_ready);
         assert!(deterministic_scenarios()
             .iter()
@@ -444,6 +444,7 @@ mod tests {
         assert_eq!(
             replay_ready,
             vec![
+                ScenarioKind::FileEditRewind,
                 ScenarioKind::BashBackgroundTask,
                 ScenarioKind::PermissionDenialRetry
             ]

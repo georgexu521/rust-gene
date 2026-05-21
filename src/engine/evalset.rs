@@ -64,6 +64,14 @@ pub struct EvalExpect {
     pub terminal_task_read_tool: Option<String>,
     pub terminal_task_cancel_tool: Option<String>,
     pub backgrounded_tool: Option<String>,
+    pub file_checkpoint_count: Option<usize>,
+    pub file_checkpoint_id: Option<String>,
+    pub file_change_id: Option<String>,
+    pub file_checkpoint_path: Option<String>,
+    pub rewind_target: Option<String>,
+    pub rewind_command: Option<String>,
+    pub rewind_checkpoint_id: Option<String>,
+    pub rewind_restored_files: Option<usize>,
     #[serde(default)]
     pub available_tools: Vec<String>,
     #[serde(default)]
@@ -96,6 +104,10 @@ pub struct EvalReplay {
     pub recovery_plans: Vec<EvalRecoveryPlan>,
     #[serde(default)]
     pub terminal_tasks: Vec<EvalTerminalTaskReplay>,
+    #[serde(default)]
+    pub file_changes: Vec<EvalFileChangeReplay>,
+    #[serde(default)]
+    pub rewind: Option<EvalRewindReplay>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +173,39 @@ pub struct EvalTerminalTaskReplay {
     pub output_path: Option<String>,
     #[serde(default)]
     pub backgrounded: bool,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EvalFileChangeReplay {
+    pub id: String,
+    pub checkpoint_id: String,
+    pub path: String,
+    #[serde(default)]
+    pub tool_name: String,
+    #[serde(default)]
+    pub existed_before: bool,
+    #[serde(default)]
+    pub before_hash: Option<String>,
+    #[serde(default)]
+    pub after_hash: Option<String>,
+    #[serde(default)]
+    pub diff: Option<String>,
+    #[serde(default)]
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EvalRewindReplay {
+    pub target: String,
+    pub checkpoint_id: String,
+    #[serde(default = "default_rewind_command")]
+    pub command: String,
+    #[serde(default)]
+    pub restored_files: Vec<String>,
+    #[serde(default)]
+    pub removed_files: Vec<String>,
+    #[serde(default)]
+    pub failed_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -417,6 +462,7 @@ impl EvalRunner {
         }
 
         self.check_terminal_task_replay(scenario, &mut failures);
+        self.check_file_rewind_replay(scenario, &mut failures);
         self.check_feature_reality(scenario, &mut failures);
 
         failures
@@ -446,6 +492,47 @@ impl EvalRunner {
                     expect.terminal_task_read_tool,
                     expect.terminal_task_cancel_tool,
                     expect.backgrounded_tool
+                ),
+            });
+        }
+    }
+
+    fn check_file_rewind_replay(&self, scenario: &EvalScenario, failures: &mut Vec<EvalFailure>) {
+        let expect = &scenario.expect;
+        if let Some(expected) = expect.file_checkpoint_count {
+            let actual = scenario.replay.file_changes.len();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!(
+                        "file_checkpoint_count expected {}, got {}",
+                        expected, actual
+                    ),
+                });
+            }
+        }
+
+        if has_file_checkpoint_expectation(expect)
+            && !replay_has_matching_file_change(&scenario.replay, expect)
+        {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching file checkpoint change_id={:?} checkpoint={:?} path={:?}",
+                    expect.file_change_id, expect.file_checkpoint_id, expect.file_checkpoint_path
+                ),
+            });
+        }
+
+        if has_rewind_expectation(expect) && !replay_has_matching_rewind(&scenario.replay, expect) {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching rewind target={:?} command={:?} checkpoint={:?} restored_files={:?}",
+                    expect.rewind_target,
+                    expect.rewind_command,
+                    expect.rewind_checkpoint_id,
+                    expect.rewind_restored_files
                 ),
             });
         }
@@ -1160,6 +1247,59 @@ fn replay_has_matching_terminal_task(replay: &EvalReplay, expect: &EvalExpect) -
     })
 }
 
+fn has_file_checkpoint_expectation(expect: &EvalExpect) -> bool {
+    expect.file_checkpoint_id.is_some()
+        || expect.file_change_id.is_some()
+        || expect.file_checkpoint_path.is_some()
+}
+
+fn replay_has_matching_file_change(replay: &EvalReplay, expect: &EvalExpect) -> bool {
+    replay.file_changes.iter().any(|change| {
+        expect
+            .file_checkpoint_id
+            .as_deref()
+            .is_none_or(|expected| change.checkpoint_id == expected)
+            && expect
+                .file_change_id
+                .as_deref()
+                .is_none_or(|expected| change.id == expected)
+            && expect
+                .file_checkpoint_path
+                .as_deref()
+                .is_none_or(|expected| change.path == expected)
+    })
+}
+
+fn has_rewind_expectation(expect: &EvalExpect) -> bool {
+    expect.rewind_target.is_some()
+        || expect.rewind_command.is_some()
+        || expect.rewind_checkpoint_id.is_some()
+        || expect.rewind_restored_files.is_some()
+}
+
+fn replay_has_matching_rewind(replay: &EvalReplay, expect: &EvalExpect) -> bool {
+    let Some(rewind) = &replay.rewind else {
+        return false;
+    };
+
+    expect
+        .rewind_target
+        .as_deref()
+        .is_none_or(|expected| rewind.target == expected)
+        && expect
+            .rewind_command
+            .as_deref()
+            .is_none_or(|expected| rewind.command == expected)
+        && expect
+            .rewind_checkpoint_id
+            .as_deref()
+            .is_none_or(|expected| rewind.checkpoint_id == expected)
+        && expect
+            .rewind_restored_files
+            .is_none_or(|expected| rewind.restored_files.len() == expected)
+        && rewind.failed_files.is_empty()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1170,6 +1310,10 @@ fn default_recovery_status() -> String {
 
 fn default_running_status() -> String {
     "running".to_string()
+}
+
+fn default_rewind_command() -> String {
+    "/rewind".to_string()
 }
 
 fn is_evalset_file(path: &Path) -> bool {
@@ -1468,6 +1612,63 @@ scenarios:
                     terminal_task_read_tool: Some("bash_output".to_string()),
                     terminal_task_cancel_tool: Some("bash_cancel".to_string()),
                     backgrounded_tool: Some("bash".to_string()),
+                    trace_events: vec!["tool.start".to_string(), "tool.done".to_string()],
+                    ..Default::default()
+                },
+            }],
+        };
+
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_runner_replays_file_checkpoint_and_rewind() {
+        let set = EvalSet {
+            name: "file_rewind".to_string(),
+            description: String::new(),
+            scenarios: vec![EvalScenario {
+                id: "file-edit-rewind".to_string(),
+                prompt: "改一个文件，然后回滚这次修改".to_string(),
+                replay: EvalReplay {
+                    tool_calls: vec![EvalToolCall {
+                        tool: "file_edit".to_string(),
+                        success: true,
+                        output: "edited src/lib.rs with checkpoint cp_eval_1".to_string(),
+                        permission: None,
+                    }],
+                    file_changes: vec![EvalFileChangeReplay {
+                        id: "fc_eval_1".to_string(),
+                        checkpoint_id: "cp_eval_1".to_string(),
+                        path: "src/lib.rs".to_string(),
+                        tool_name: "file_edit".to_string(),
+                        existed_before: true,
+                        before_hash: Some("before123".to_string()),
+                        after_hash: Some("after456".to_string()),
+                        diff: Some("-old\n+new".to_string()),
+                        bytes_written: 42,
+                    }],
+                    rewind: Some(EvalRewindReplay {
+                        target: "fc_eval_1".to_string(),
+                        checkpoint_id: "cp_eval_1".to_string(),
+                        command: "/rewind".to_string(),
+                        restored_files: vec!["src/lib.rs".to_string()],
+                        removed_files: Vec::new(),
+                        failed_files: Vec::new(),
+                    }),
+                    ..Default::default()
+                },
+                expect: EvalExpect {
+                    tool_sequence: vec!["file_edit".to_string()],
+                    file_checkpoint_count: Some(1),
+                    file_change_id: Some("fc_eval_1".to_string()),
+                    file_checkpoint_id: Some("cp_eval_1".to_string()),
+                    file_checkpoint_path: Some("src/lib.rs".to_string()),
+                    rewind_target: Some("fc_eval_1".to_string()),
+                    rewind_command: Some("/rewind".to_string()),
+                    rewind_checkpoint_id: Some("cp_eval_1".to_string()),
+                    rewind_restored_files: Some(1),
+                    available_commands: vec!["/rewind".to_string(), "/checkpoints".to_string()],
                     trace_events: vec!["tool.start".to_string(), "tool.done".to_string()],
                     ..Default::default()
                 },

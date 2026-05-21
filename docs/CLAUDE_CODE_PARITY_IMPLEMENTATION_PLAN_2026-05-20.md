@@ -1606,6 +1606,13 @@ Progress, 2026-05-21 follow-up:
   `evalsets/coding_replay_matrix.yaml`; it now asserts that background shell
   work returns a handle, remains visible as a terminal task, and can be polled
   without blocking the main turn.
+- Promoted `file_edit_rewind` to replay-ready as the third Phase 12 fixture.
+- Extended deterministic eval replay with file-change/checkpoint records and
+  rewind restore assertions.
+- Added `file-edit-rewind-checkpoint` to
+  `evalsets/coding_replay_matrix.yaml`; it now asserts that `file_edit`
+  produces a checkpoint-backed file-change record and that `/rewind
+  <file_change_id>` restores through the same checkpoint.
 
 ## First Ten Code Batches
 

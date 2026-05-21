@@ -70,15 +70,16 @@ Current stage:
 - Phase 12 verification work has started with a deterministic scenario matrix
   skeleton: `src/engine/scenario_matrix.rs` declares the six required parity
   scenarios and maps each one to concrete runtime/trace/recovery evidence, with
-  `/eval matrix` exposing the current readout. The first two replay-ready
-  fixtures are now `permission_denial_retry` and `bash_background_task`:
-  deterministic eval replay can emit permission request/resolution and
-  recovery-plan trace events, plus terminal task records for background shell
-  handles, `bash_output`, and `bash_cancel` paths.
+  `/eval matrix` exposing the current readout. The first three replay-ready
+  fixtures are now `file_edit_rewind`, `permission_denial_retry`, and
+  `bash_background_task`: deterministic eval replay can emit permission
+  request/resolution and recovery-plan trace events, terminal task records for
+  background shell handles, `bash_output`, and `bash_cancel` paths, plus
+  file-change/checkpoint records with rewind restore assertions.
   `evalsets/coding_replay_matrix.yaml` includes
-  `permission-denial-retry-recovery` and `bash-background-task-handle`. The
-  other Phase 12 replay fixtures and external Claude/Codex baselines are still
-  pending.
+  `file-edit-rewind-checkpoint`, `permission-denial-retry-recovery`, and
+  `bash-background-task-handle`. The other Phase 12 replay fixtures and
+  external Claude/Codex baselines are still pending.
 
 The recent closure plan is complete:
 

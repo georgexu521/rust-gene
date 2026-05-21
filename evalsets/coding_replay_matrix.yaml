@@ -18,6 +18,40 @@ scenarios:
       reflection_status: Passed
       trace_events: ["tool.start", "tool.done", "verify.done", "reflection.pass", "acceptance.review"]
 
+  - id: file-edit-rewind-checkpoint
+    prompt: "修改文件后用 checkpoint-backed rewind 回滚这次改动"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          output: "edited src/lib.rs with checkpoint cp_eval_1"
+      file_changes:
+        - id: fc_eval_1
+          checkpoint_id: cp_eval_1
+          path: src/lib.rs
+          tool_name: file_edit
+          existed_before: true
+          before_hash: before123
+          after_hash: after456
+          diff: "-old\n+new"
+          bytes_written: 42
+      rewind:
+        target: fc_eval_1
+        checkpoint_id: cp_eval_1
+        command: "/rewind"
+        restored_files: ["src/lib.rs"]
+    expect:
+      tool_sequence: ["file_edit"]
+      file_checkpoint_count: 1
+      file_change_id: fc_eval_1
+      file_checkpoint_id: cp_eval_1
+      file_checkpoint_path: src/lib.rs
+      rewind_target: fc_eval_1
+      rewind_command: "/rewind"
+      rewind_checkpoint_id: cp_eval_1
+      rewind_restored_files: 1
+      available_commands: ["/rewind", "/checkpoints"]
+      trace_events: ["tool.start", "tool.done"]
+
   - id: edit-then-test-fail
     prompt: "修复失败测试"
     replay:
