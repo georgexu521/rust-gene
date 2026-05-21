@@ -200,6 +200,9 @@ Status: initial matrix landed.
   `target/eval-reports/` for trend collection.
 - `/eval trend [limit]` summarizes recent persisted reports and shows pass/fail
   deltas against the previous run.
+- `/eval baseline [provider|all]` loads external Claude/Codex-style baseline
+  files from `evalsets/external_baselines/` and reports scenario coverage,
+  pass/fail/blocked/not-run counts, and per-scenario evidence metadata.
 - Persisted eval report JSON is backward compatible and can carry optional
   external baseline metadata for Claude/Codex-style comparisons.
 - Git tool execution now honors `ToolContext.working_dir` and returns

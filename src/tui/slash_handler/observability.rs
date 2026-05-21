@@ -232,7 +232,17 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Eval trend failed: {}", e),
             }
         }
-        _ => "Usage: /eval [list|matrix|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
+        "baseline" => {
+            let provider = parts.next();
+            let baseline_dir = eval_dir.join("external_baselines");
+            match crate::engine::evalset::load_external_baselines_from_dir(&baseline_dir) {
+                Ok(baselines) => {
+                    crate::engine::evalset::format_external_baseline_comparison(&baselines, provider)
+                }
+                Err(e) => format!("Eval baseline failed: {}", e),
+            }
+        }
+        _ => "Usage: /eval [list|matrix|baseline [provider|all]|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
             .to_string(),
     }
 }

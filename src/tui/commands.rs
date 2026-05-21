@@ -1290,8 +1290,8 @@ pub const CMD_EVAL: CommandDef = CommandDef::new(
     "/eval",
     &[],
     "Info",
-    "/eval [list|matrix|run <name|all>]",
-    "Run evalsets or show deterministic scenario matrix",
+    "/eval [list|matrix|baseline [provider|all]|run <name|all>]",
+    "Run evalsets, compare external baselines, or show deterministic scenario matrix",
 );
 
 pub const CMD_RESOURCE: CommandDef = CommandDef::new(

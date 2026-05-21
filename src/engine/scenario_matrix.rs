@@ -355,7 +355,7 @@ pub fn format_scenario_matrix() -> String {
         lines.push(format!("  evidence: {}", evidence));
     }
 
-    lines.push("Next gate: convert these mapped cases into deterministic replay fixtures before external Claude/Codex baseline runs.".to_string());
+    lines.push("Next gate: record external Claude/Codex baseline files under evalsets/external_baselines/ and compare them with /eval baseline.".to_string());
     lines.join("\n")
 }
 
@@ -462,5 +462,6 @@ mod tests {
         }
         assert!(rendered.contains("Next gate"));
         assert!(rendered.contains("External baseline: deferred"));
+        assert!(rendered.contains("/eval baseline"));
     }
 }

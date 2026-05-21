@@ -1638,6 +1638,13 @@ Progress, 2026-05-21 follow-up:
   `evalsets/coding_replay_matrix.yaml`; it now asserts failed MCP resource
   access, `/mcp approve <server>` repair guidance, `/panel mcp` visibility, and
   successful resource retry after approval.
+- Started the Phase 12 external baseline layer without fabricating external
+  results.
+- Added external baseline YAML/JSON loading, provider filtering, and
+  `/eval baseline [provider|all]` comparison output for the six deterministic
+  scenario ids.
+- Added `evalsets/external_baselines/README.md` as the durable schema and
+  staging location for real Claude Code/Codex baseline artifacts.
 
 ## First Ten Code Batches
 

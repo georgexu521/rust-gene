@@ -10,6 +10,7 @@ use crate::engine::intent_router::{
 use crate::engine::trace::{TraceEvent, TurnTrace};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -1211,6 +1212,57 @@ pub struct EvalBaselineSummary {
     pub failed: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalExternalBaselineSet {
+    pub provider: String,
+    #[serde(default)]
+    pub generated_at: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub scenarios: Vec<EvalExternalBaselineScenario>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalExternalBaselineScenario {
+    pub id: String,
+    pub outcome: EvalExternalBaselineOutcome,
+    #[serde(default)]
+    pub evidence: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<usize>,
+    #[serde(default)]
+    pub repair_turns: Option<usize>,
+    #[serde(default)]
+    pub validation_passed: Option<bool>,
+    #[serde(default)]
+    pub final_evidence_backed: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalExternalBaselineOutcome {
+    Pass,
+    Fail,
+    Blocked,
+    NotRun,
+}
+
+impl EvalExternalBaselineOutcome {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Blocked => "blocked",
+            Self::NotRun => "not_run",
+        }
+    }
+}
+
 impl EvalReportBundle {
     pub fn from_reports(reports: &[EvalReport]) -> Self {
         Self {
@@ -1266,6 +1318,165 @@ pub fn write_reports_json(
     fs::write(&path, json)
         .with_context(|| format!("failed to write eval report {}", path.display()))?;
     Ok(path)
+}
+
+pub fn load_external_baseline(path: impl AsRef<Path>) -> Result<EvalExternalBaselineSet> {
+    let path = path.as_ref();
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read external baseline {}", path.display()))?;
+    serde_yaml::from_str(&content)
+        .with_context(|| format!("failed to parse external baseline {}", path.display()))
+}
+
+pub fn load_external_baselines_from_dir(
+    dir: impl AsRef<Path>,
+) -> Result<Vec<(PathBuf, EvalExternalBaselineSet)>> {
+    let dir = dir.as_ref();
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut baselines = Vec::new();
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if !is_evalset_file(&path) {
+            continue;
+        }
+        baselines.push((path.clone(), load_external_baseline(&path)?));
+    }
+    baselines.sort_by(|a, b| a.1.provider.cmp(&b.1.provider).then_with(|| a.0.cmp(&b.0)));
+    Ok(baselines)
+}
+
+pub fn format_external_baseline_comparison(
+    baselines: &[(PathBuf, EvalExternalBaselineSet)],
+    provider_filter: Option<&str>,
+) -> String {
+    let expected = crate::engine::scenario_matrix::deterministic_scenarios()
+        .iter()
+        .map(|scenario| scenario.id)
+        .collect::<Vec<_>>();
+    let expected_set = expected.iter().copied().collect::<BTreeSet<_>>();
+    let filter = provider_filter.filter(|value| !value.eq_ignore_ascii_case("all"));
+    let filtered = baselines
+        .iter()
+        .filter(|(_, baseline)| {
+            filter.is_none_or(|target| baseline.provider.eq_ignore_ascii_case(target))
+        })
+        .collect::<Vec<_>>();
+
+    if filtered.is_empty() {
+        return match filter {
+            Some(provider) => format!(
+                "External Baseline Comparison\nNo external baseline found for provider '{}'. Add YAML or JSON files under evalsets/external_baselines/.",
+                provider
+            ),
+            None => "External Baseline Comparison\nNo external baselines found. Add YAML or JSON files under evalsets/external_baselines/.".to_string(),
+        };
+    }
+
+    let mut lines = vec![
+        "External Baseline Comparison".to_string(),
+        format!(
+            "Expected scenarios: {}  Providers: {}",
+            expected.len(),
+            filtered.len()
+        ),
+    ];
+
+    for (path, baseline) in filtered {
+        let records = baseline
+            .scenarios
+            .iter()
+            .filter(|record| expected_set.contains(record.id.as_str()))
+            .collect::<Vec<_>>();
+        let recorded_ids = records
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing = expected
+            .iter()
+            .copied()
+            .filter(|id| !recorded_ids.contains(id))
+            .collect::<Vec<_>>();
+        let unknown = baseline
+            .scenarios
+            .iter()
+            .filter(|record| !expected_set.contains(record.id.as_str()))
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>();
+        let pass = records
+            .iter()
+            .filter(|record| record.outcome == EvalExternalBaselineOutcome::Pass)
+            .count();
+        let fail = records
+            .iter()
+            .filter(|record| record.outcome == EvalExternalBaselineOutcome::Fail)
+            .count();
+        let blocked = records
+            .iter()
+            .filter(|record| record.outcome == EvalExternalBaselineOutcome::Blocked)
+            .count();
+        let not_run = records
+            .iter()
+            .filter(|record| record.outcome == EvalExternalBaselineOutcome::NotRun)
+            .count();
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown");
+        lines.push(format!(
+            "\n{} [{}] file={}",
+            baseline.provider,
+            baseline.model.as_deref().unwrap_or("model unknown"),
+            filename
+        ));
+        if let Some(generated_at) = &baseline.generated_at {
+            lines.push(format!("  generated_at={}", generated_at));
+        }
+        if let Some(source) = &baseline.source {
+            lines.push(format!("  source={}", source));
+        }
+        lines.push(format!(
+            "  coverage={}/{} pass={} fail={} blocked={} not_run={}",
+            records.len(),
+            expected.len(),
+            pass,
+            fail,
+            blocked,
+            not_run
+        ));
+        if !missing.is_empty() {
+            lines.push(format!("  missing: {}", missing.join(", ")));
+        }
+        if !unknown.is_empty() {
+            lines.push(format!("  unknown: {}", unknown.join(", ")));
+        }
+        for id in &expected {
+            if let Some(record) = records.iter().find(|record| record.id == *id) {
+                let mut detail = format!("  - {}: {}", id, record.outcome.label());
+                if let Some(validation) = record.validation_passed {
+                    detail.push_str(&format!(" validation={}", validation));
+                }
+                if let Some(evidence_backed) = record.final_evidence_backed {
+                    detail.push_str(&format!(" evidence_backed={}", evidence_backed));
+                }
+                if let Some(tool_calls) = record.tool_calls {
+                    detail.push_str(&format!(" tool_calls={}", tool_calls));
+                }
+                if let Some(repair_turns) = record.repair_turns {
+                    detail.push_str(&format!(" repair_turns={}", repair_turns));
+                }
+                if let Some(evidence) = &record.evidence {
+                    detail.push_str(&format!(" evidence={}", evidence));
+                }
+                lines.push(detail);
+            }
+        }
+    }
+
+    lines.join("\n")
 }
 
 pub fn load_eval_report_bundles(
@@ -3077,5 +3288,56 @@ scenarios:
         assert!(trend.contains("failed=+1"));
         assert!(trend.contains("baseline_generated=2026-05-03T01:30:00Z"));
         assert!(trend.contains("baseline=claude-code-local"));
+    }
+
+    #[test]
+    fn load_external_baselines_and_format_matrix_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("claude-code.yaml"),
+            r#"
+provider: claude-code
+generated_at: "2026-05-21T12:00:00Z"
+model: claude-opus
+source: manual smoke run
+scenarios:
+  - id: file_edit_rewind
+    outcome: pass
+    validation_passed: true
+    final_evidence_backed: true
+    tool_calls: 4
+    repair_turns: 0
+    evidence: "edited, tested, rewound"
+  - id: bash_background_task
+    outcome: fail
+    validation_passed: false
+    final_evidence_backed: true
+    tool_calls: 3
+    repair_turns: 1
+  - id: extra_untracked_case
+    outcome: pass
+"#,
+        )
+        .unwrap();
+
+        let baselines = load_external_baselines_from_dir(dir.path()).unwrap();
+        let rendered = format_external_baseline_comparison(&baselines, Some("all"));
+
+        assert_eq!(baselines.len(), 1);
+        assert!(rendered.contains("External Baseline Comparison"));
+        assert!(rendered.contains("claude-code [claude-opus]"));
+        assert!(rendered.contains("coverage=2/6 pass=1 fail=1 blocked=0 not_run=0"));
+        assert!(rendered.contains("missing: permission_denial_retry"));
+        assert!(rendered.contains("unknown: extra_untracked_case"));
+        assert!(rendered.contains("- file_edit_rewind: pass validation=true"));
+        assert!(rendered.contains("evidence=edited, tested, rewound"));
+    }
+
+    #[test]
+    fn external_baseline_provider_filter_reports_missing_provider() {
+        let rendered = format_external_baseline_comparison(&[], Some("codex"));
+
+        assert!(rendered.contains("No external baseline found for provider 'codex'"));
+        assert!(rendered.contains("evalsets/external_baselines"));
     }
 }
