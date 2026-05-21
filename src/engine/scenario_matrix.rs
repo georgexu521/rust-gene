@@ -262,7 +262,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         title: "Permission denial and retry",
         phase: "Phase 12",
         user_task: "deny a risky tool call, explain recovery, then retry through an allowed path",
-        status: ReplayStatus::RuntimeMapped,
+        status: ReplayStatus::ReplayFixtureReady,
         external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
         evidence: PERMISSION_DENIAL_EVIDENCE,
     },
@@ -425,11 +425,23 @@ mod tests {
     #[test]
     fn external_baseline_stays_deferred_until_replays_are_ready() {
         let summary = scenario_matrix_summary();
-        assert_eq!(summary.replay_ready, 0);
+        assert_eq!(summary.replay_ready, 1);
         assert!(!summary.external_baseline_ready);
-        assert!(deterministic_scenarios().iter().all(|scenario| {
-            scenario.external_baseline == ExternalBaselineStatus::DeferredUntilReplayFixture
-        }));
+        assert!(deterministic_scenarios()
+            .iter()
+            .all(|scenario| scenario.external_baseline
+                == ExternalBaselineStatus::DeferredUntilReplayFixture));
+    }
+
+    #[test]
+    fn permission_denial_scenario_is_first_replay_fixture() {
+        let replay_ready = deterministic_scenarios()
+            .iter()
+            .filter(|scenario| scenario.status == ReplayStatus::ReplayFixtureReady)
+            .map(|scenario| scenario.kind)
+            .collect::<Vec<_>>();
+
+        assert_eq!(replay_ready, vec![ScenarioKind::PermissionDenialRetry]);
     }
 
     #[test]

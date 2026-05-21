@@ -119,6 +119,40 @@ scenarios:
       failed_tool: bash
       tool_sequence: ["bash"]
 
+  - id: permission-denial-retry-recovery
+    prompt: "拒绝危险删除命令后解释权限恢复，并改用只读检查继续"
+    replay:
+      tool_calls:
+        - tool: bash
+          success: false
+          output: "Permission denied: 'bash' requires user confirmation."
+          permission:
+            prompt: "Allow bash rm -rf fixtures/tmp?"
+            approved: false
+            decision: reject_once
+        - tool: file_read
+          output: "safe readonly manifest"
+        - tool: grep
+          output: "cleanup skipped by user request"
+      recovery_plans:
+        - source: tool_execution
+          category: permission_denied
+          action: "explain denial and retry with safe readonly path"
+          retryable: false
+          safe_retry: false
+          suggested_command: "/permissions explain"
+          status: Planned
+    expect:
+      failed_tool: bash
+      tool_sequence: ["bash", "file_read", "grep"]
+      permission_approved: false
+      permission_decision: reject_once
+      recovery_category: permission_denied
+      recovery_suggested_command: "/permissions explain"
+      recovery_safe_retry: false
+      repair_required: false
+      trace_events: ["permission.request", "permission.resolve", "recovery.plan", "tool.done"]
+
   - id: hook-blocks-risky-tool
     prompt: "pre-tool hook 阻止风险操作"
     replay:

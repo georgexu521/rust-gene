@@ -1587,6 +1587,17 @@ Progress, 2026-05-21:
 - External Claude/Codex baselines remain deferred until these six mapped cases
   become deterministic replay fixtures.
 
+Progress, 2026-05-21 follow-up:
+
+- Promoted `permission_denial_retry` from mapped coverage to the first
+  replay-ready Phase 12 fixture.
+- Extended deterministic eval replay so YAML cases can emit permission request,
+  permission resolution, and recovery-plan trace events.
+- Added `permission-denial-retry-recovery` to
+  `evalsets/coding_replay_matrix.yaml`; it now asserts rejected permission,
+  `/permissions explain` recovery, unsafe retry classification, and a safe
+  read-only continuation path.
+
 ## First Ten Code Batches
 
 These are the concrete next implementation batches after this planning pass:

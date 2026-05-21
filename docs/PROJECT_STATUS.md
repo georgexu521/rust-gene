@@ -70,8 +70,12 @@ Current stage:
 - Phase 12 verification work has started with a deterministic scenario matrix
   skeleton: `src/engine/scenario_matrix.rs` declares the six required parity
   scenarios and maps each one to concrete runtime/trace/recovery evidence, with
-  `/eval matrix` exposing the current readout. Replay fixtures and external
-  Claude/Codex baselines are still pending.
+  `/eval matrix` exposing the current readout. The first replay-ready fixture
+  is now `permission_denial_retry`: deterministic eval replay can emit
+  permission request/resolution and recovery-plan trace events, and
+  `evalsets/coding_replay_matrix.yaml` includes
+  `permission-denial-retry-recovery`. The other Phase 12 replay fixtures and
+  external Claude/Codex baselines are still pending.
 
 The recent closure plan is complete:
 
