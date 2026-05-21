@@ -59,7 +59,11 @@ Current stage:
   provider/bridge slice, with Phase 6 product-hardening resumed: permission
   approvals now return a structured `ToolApprovalResponse` so trace and runtime
   consumers can distinguish approve-once, session/project/global allow, and
-  global deny decisions with rule persistence evidence.
+  global deny decisions with rule persistence evidence. Hook runtime visibility
+  now has a structured lifecycle surface as well: `HookLifecycleSnapshot`
+  reports configured hook registrations, provider/event/scope, timeout and
+  fail-open/fail-closed policy, recent execution statistics, `/hooks`, and
+  `/panel hooks`.
 
 The recent closure plan is complete:
 

@@ -632,8 +632,8 @@ pub const CMD_PANEL: CommandDef = CommandDef::new(
     "/panel",
     &["/panels", "/runtime"],
     "Info",
-    "/panel [all|diff|approval|context|tasks|mcp|bridge]",
-    "Show runtime panels for diffs, approvals, context, tasks, MCP, and bridge",
+    "/panel [all|diff|approval|hooks|context|tasks|mcp|bridge]",
+    "Show runtime panels for diffs, approvals, hooks, context, tasks, MCP, and bridge",
 );
 
 pub const CMD_TASKS: CommandDef = CommandDef::new(

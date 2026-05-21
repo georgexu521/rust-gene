@@ -6,6 +6,7 @@ pub enum RuntimePanelKind {
     All,
     Diff,
     Approval,
+    Hooks,
     Context,
     Tasks,
     Mcp,
@@ -19,6 +20,7 @@ impl RuntimePanelKind {
             "" | "all" | "runtime" | "status" => Some(Self::All),
             "diff" | "changes" => Some(Self::Diff),
             "approval" | "approvals" | "permission" | "permissions" => Some(Self::Approval),
+            "hook" | "hooks" => Some(Self::Hooks),
             "context" | "memory" | "tokens" => Some(Self::Context),
             "task" | "tasks" | "agents" => Some(Self::Tasks),
             "mcp" | "servers" => Some(Self::Mcp),
@@ -28,7 +30,7 @@ impl RuntimePanelKind {
     }
 
     pub const fn usage() -> &'static str {
-        "Usage: /panel [all|diff|approval|context|tasks|mcp|bridge]"
+        "Usage: /panel [all|diff|approval|hooks|context|tasks|mcp|bridge]"
     }
 }
 
@@ -38,6 +40,7 @@ pub async fn render_runtime_panel(app: &TuiApp, kind: RuntimePanelKind) -> Strin
             let mut sections = vec![
                 render_context_panel(app).await,
                 render_approval_panel(app),
+                render_hooks_panel(app),
                 render_tasks_panel(app).await,
                 render_mcp_panel(app).await,
                 render_bridge_panel(app),
@@ -48,6 +51,7 @@ pub async fn render_runtime_panel(app: &TuiApp, kind: RuntimePanelKind) -> Strin
         }
         RuntimePanelKind::Diff => render_diff_panel(app),
         RuntimePanelKind::Approval => render_approval_panel(app),
+        RuntimePanelKind::Hooks => render_hooks_panel(app),
         RuntimePanelKind::Context => render_context_panel(app).await,
         RuntimePanelKind::Tasks => render_tasks_panel(app).await,
         RuntimePanelKind::Mcp => render_mcp_panel(app).await,
@@ -123,6 +127,82 @@ pub fn render_approval_panel(app: &TuiApp) -> String {
         }
         if preview.lines().count() > 10 {
             lines.push("  ...".to_string());
+        }
+    }
+
+    lines.join("\n")
+}
+
+pub fn render_hooks_panel(app: &TuiApp) -> String {
+    let snapshot = crate::engine::hooks::ToolHookManager::lifecycle_snapshot_from_env();
+    let mut lines = vec![
+        "# Hook Panel".to_string(),
+        format!(
+            "Configured: {}",
+            if snapshot.configured { "yes" } else { "no" }
+        ),
+        format!(
+            "Policy: timeout={}ms, {}",
+            snapshot.default_timeout_ms,
+            if snapshot.fail_closed {
+                "fail-closed"
+            } else {
+                "fail-open"
+            }
+        ),
+    ];
+
+    if snapshot.registrations.is_empty() {
+        lines.push("Registrations: none".to_string());
+        lines.push(
+            "Set PRIORITY_AGENT_PRE_TOOL_HOOK, PRIORITY_AGENT_POST_TOOL_HOOK, or tool-specific hook env vars."
+                .to_string(),
+        );
+    } else {
+        lines.push(format!(
+            "Registrations: {} hook(s)",
+            snapshot.registrations.len()
+        ));
+        for registration in snapshot.registrations.iter().take(16) {
+            lines.push(format!(
+                "- {} {} provider={} scope={} timeout={}ms block_on_error={} command={}",
+                registration.event,
+                registration.hook_name,
+                registration.provider.as_str(),
+                registration.scope,
+                registration.timeout_ms,
+                registration.block_on_error,
+                compact_panel_line(&registration.command_preview, 120)
+            ));
+        }
+    }
+
+    let latest_trace = crate::tui::slash_handler::utils::latest_trace_for_app(app);
+    let trace_records = latest_trace
+        .as_ref()
+        .map(hook_trace_lines)
+        .unwrap_or_default();
+    if trace_records.is_empty() {
+        lines.push("Recent executions: none in latest trace".to_string());
+    } else {
+        let success_count = trace_records
+            .iter()
+            .filter(|record| record.contains(" ok "))
+            .count();
+        let failed_count = trace_records
+            .iter()
+            .filter(|record| record.contains(" failed "))
+            .count();
+        let blocked_count = trace_records
+            .iter()
+            .filter(|record| record.contains(" blocked"))
+            .count();
+        lines.push(format!(
+            "Recent executions: ok={} failed={} blocked={}",
+            success_count, failed_count, blocked_count
+        ));
+        for record in trace_records.into_iter().rev().take(8) {
+            lines.push(record);
         }
     }
 
@@ -492,6 +572,48 @@ fn empty_as_unknown(value: &str) -> &str {
     }
 }
 
+fn hook_trace_lines(trace: &crate::engine::trace::TurnTrace) -> Vec<String> {
+    trace
+        .events
+        .iter()
+        .filter_map(|event| {
+            if let crate::engine::trace::TraceEvent::HookCompleted {
+                event,
+                provider,
+                hook_name,
+                call_id,
+                tool,
+                success,
+                blocked,
+                duration_ms,
+                error,
+                output_preview,
+            } = event
+            {
+                let detail = error
+                    .as_deref()
+                    .or(output_preview.as_deref())
+                    .map(|detail| format!(": {}", compact_panel_line(detail, 120)))
+                    .unwrap_or_default();
+                Some(format!(
+                    "- {} {} provider={} tool={} call={} {}{} duration={}ms{}",
+                    event,
+                    hook_name,
+                    provider,
+                    tool.as_deref().unwrap_or("lifecycle"),
+                    call_id,
+                    if *success { "ok" } else { "failed" },
+                    if *blocked { " blocked" } else { "" },
+                    duration_ms,
+                    detail
+                ))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn compact_panel_line(text: &str, max_chars: usize) -> String {
     let one_line = text
         .lines()
@@ -523,6 +645,10 @@ mod tests {
             Some(RuntimePanelKind::Approval)
         );
         assert_eq!(
+            RuntimePanelKind::parse("hooks"),
+            Some(RuntimePanelKind::Hooks)
+        );
+        assert_eq!(
             RuntimePanelKind::parse("tokens"),
             Some(RuntimePanelKind::Context)
         );
@@ -535,6 +661,30 @@ mod tests {
             Some(RuntimePanelKind::Bridge)
         );
         assert_eq!(RuntimePanelKind::parse("unknown"), None);
+    }
+
+    #[test]
+    fn renders_hook_panel_from_env_snapshot() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_PRE_TOOL_HOOK");
+        env.remove("PRIORITY_AGENT_POST_TOOL_HOOK");
+        for (key, _) in std::env::vars() {
+            if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_")
+                || key.starts_with("PRIORITY_AGENT_TOOL_HOOK_AFTER_")
+            {
+                env.remove(&key);
+            }
+        }
+        env.set("PRIORITY_AGENT_PRE_TOOL_HOOK", "echo ok");
+        env.set("PRIORITY_AGENT_HOOK_TIMEOUT_MS", "1500");
+        let app = TuiApp::new();
+
+        let panel = render_hooks_panel(&app);
+
+        assert!(panel.contains("# Hook Panel"));
+        assert!(panel.contains("Configured: yes"));
+        assert!(panel.contains("timeout=1500ms"));
+        assert!(panel.contains("env_pre_tool_hook"));
     }
 
     #[tokio::test]

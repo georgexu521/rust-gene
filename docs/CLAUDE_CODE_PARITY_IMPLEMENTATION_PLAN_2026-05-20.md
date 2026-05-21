@@ -1203,6 +1203,12 @@ Progress, 2026-05-20:
   reflection-gate callers now share that response shape, and
   `permission.resolve` trace events expose the decision/scope/rule instead of
   only approved/denied.
+- Done, 2026-05-21: added `HookLifecycleSnapshot` and `HookRegistration` so
+  env-backed hooks have a structured lifecycle surface: configured hooks,
+  provider, event, scope, timeout, fail-open/fail-closed policy, command
+  preview, and recent success/failure/blocked statistics. `/hooks` now reuses
+  the shared hook panel renderer, and `/panel hooks` plus `/panel all` expose
+  the same product surface beside approvals, tasks, MCP, and bridge state.
 - Validation: `cargo test -q human_review`, `cargo test -q
   bash_permission_metadata_includes_command_classification`, `cargo test -q
   test_pre_tool_hook_can_deny_execution`, and `cargo check -q` all passed.
@@ -1212,6 +1218,10 @@ Progress, 2026-05-20:
   test_session_permission_rule_is_added_when_approving_for_session`, `cargo
   test -q test_respond_to_permission`, and `cargo test -q trace_summary` all
   passed.
+- Validation, 2026-05-21: after the hook lifecycle surface slice,
+  `cargo fmt --check`, `cargo check -q`, `cargo test -q hooks`, `cargo test -q
+  runtime_panels`, `cargo test -q trace_summary`, and `cargo test -q commands`
+  all passed.
 
 ### Phase 7: Context Compaction And Memory Runtime
 

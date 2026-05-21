@@ -89,6 +89,89 @@ pub struct HookRunRecord {
     pub output_preview: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HookRegistration {
+    pub event: HookEventKind,
+    pub provider: HookProviderKind,
+    pub hook_name: String,
+    pub scope: String,
+    pub timeout_ms: u64,
+    pub block_on_error: bool,
+    pub command_preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookLifecycleSnapshot {
+    pub configured: bool,
+    pub default_timeout_ms: u64,
+    pub fail_closed: bool,
+    pub registrations: Vec<HookRegistration>,
+    pub recent_records: Vec<HookRunRecord>,
+    pub recent_success_count: usize,
+    pub recent_failure_count: usize,
+    pub recent_blocked_count: usize,
+    pub recent_avg_duration_ms: Option<u64>,
+}
+
+impl HookLifecycleSnapshot {
+    fn from_parts(
+        default_timeout_ms: u64,
+        fail_closed: bool,
+        mut registrations: Vec<HookRegistration>,
+        recent_records: Vec<HookRunRecord>,
+    ) -> Self {
+        registrations.sort_by(|a, b| {
+            (
+                a.event.to_string(),
+                a.scope.as_str(),
+                a.hook_name.as_str(),
+                a.provider.as_str(),
+            )
+                .cmp(&(
+                    b.event.to_string(),
+                    b.scope.as_str(),
+                    b.hook_name.as_str(),
+                    b.provider.as_str(),
+                ))
+        });
+        let recent_success_count = recent_records
+            .iter()
+            .filter(|record| record.success)
+            .count();
+        let recent_failure_count = recent_records
+            .iter()
+            .filter(|record| !record.success)
+            .count();
+        let recent_blocked_count = recent_records
+            .iter()
+            .filter(|record| record.blocked)
+            .count();
+        let recent_avg_duration_ms = if recent_records.is_empty() {
+            None
+        } else {
+            Some(
+                recent_records
+                    .iter()
+                    .map(|record| record.duration_ms)
+                    .sum::<u64>()
+                    / recent_records.len() as u64,
+            )
+        };
+
+        Self {
+            configured: !registrations.is_empty(),
+            default_timeout_ms,
+            fail_closed,
+            registrations,
+            recent_records,
+            recent_success_count,
+            recent_failure_count,
+            recent_blocked_count,
+            recent_avg_duration_ms,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CommandHook {
     name: String,
@@ -155,6 +238,74 @@ struct HookResponse {
 }
 
 impl ToolHookManager {
+    pub fn lifecycle_snapshot_from_env() -> HookLifecycleSnapshot {
+        let timeout_ms = hook_timeout_ms_from_env();
+        let fail_closed = hook_fail_closed_from_env();
+        match Self::from_env() {
+            Some(manager) => manager.lifecycle_snapshot_with_defaults(timeout_ms, fail_closed),
+            None => {
+                HookLifecycleSnapshot::from_parts(timeout_ms, fail_closed, Vec::new(), Vec::new())
+            }
+        }
+    }
+
+    pub fn lifecycle_snapshot(&self) -> HookLifecycleSnapshot {
+        self.lifecycle_snapshot_with_defaults(
+            hook_timeout_ms_from_env(),
+            hook_fail_closed_from_env(),
+        )
+    }
+
+    fn lifecycle_snapshot_with_defaults(
+        &self,
+        default_timeout_ms: u64,
+        fail_closed: bool,
+    ) -> HookLifecycleSnapshot {
+        HookLifecycleSnapshot::from_parts(
+            default_timeout_ms,
+            fail_closed,
+            self.registrations(),
+            self.recent_records(),
+        )
+    }
+
+    fn registrations(&self) -> Vec<HookRegistration> {
+        let mut registrations = Vec::new();
+        for hook in &self.pre_tool_hooks {
+            registrations.push(hook_registration(
+                HookEventKind::PreToolUse,
+                "global".to_string(),
+                hook,
+            ));
+        }
+        for hook in &self.post_tool_hooks {
+            registrations.push(hook_registration(
+                HookEventKind::PostToolUse,
+                "global".to_string(),
+                hook,
+            ));
+        }
+        for (tool, hooks) in &self.tool_specific_pre_hooks {
+            for hook in hooks {
+                registrations.push(hook_registration(
+                    HookEventKind::PreToolUse,
+                    format!("tool:{}", tool),
+                    hook,
+                ));
+            }
+        }
+        for (tool, hooks) in &self.tool_specific_post_hooks {
+            for hook in hooks {
+                registrations.push(hook_registration(
+                    HookEventKind::PostToolUse,
+                    format!("tool:{}", tool),
+                    hook,
+                ));
+            }
+        }
+        registrations
+    }
+
     pub fn recent_records(&self) -> Vec<HookRunRecord> {
         self.recent_records
             .lock()
@@ -229,19 +380,8 @@ impl ToolHookManager {
             return None;
         }
 
-        let timeout_ms = std::env::var("PRIORITY_AGENT_HOOK_TIMEOUT_MS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|v| *v > 0)
-            .unwrap_or(DEFAULT_HOOK_TIMEOUT_MS);
-
-        let fail_closed = std::env::var("PRIORITY_AGENT_HOOK_FAIL_CLOSED")
-            .ok()
-            .map(|s| {
-                let normalized = s.trim().to_ascii_lowercase();
-                normalized == "1" || normalized == "true" || normalized == "yes"
-            })
-            .unwrap_or(false);
+        let timeout_ms = hook_timeout_ms_from_env();
+        let fail_closed = hook_fail_closed_from_env();
 
         let mut mgr = Self::default();
 
@@ -593,6 +733,47 @@ impl ToolHookManager {
     }
 }
 
+fn hook_registration(event: HookEventKind, scope: String, hook: &CommandHook) -> HookRegistration {
+    HookRegistration {
+        event,
+        provider: hook.provider,
+        hook_name: hook.name.clone(),
+        scope,
+        timeout_ms: hook.timeout_ms,
+        block_on_error: hook.block_on_error,
+        command_preview: preview_hook_command(&hook.command),
+    }
+}
+
+fn hook_timeout_ms_from_env() -> u64 {
+    std::env::var("PRIORITY_AGENT_HOOK_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_HOOK_TIMEOUT_MS)
+}
+
+fn hook_fail_closed_from_env() -> bool {
+    std::env::var("PRIORITY_AGENT_HOOK_FAIL_CLOSED")
+        .ok()
+        .map(|s| {
+            let normalized = s.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        })
+        .unwrap_or(false)
+}
+
+fn preview_hook_command(command: &str) -> String {
+    let compact = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= 120 {
+        compact
+    } else {
+        let mut out = compact.chars().take(119).collect::<String>();
+        out.push('…');
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +814,41 @@ mod tests {
             }
         }
         assert!(ToolHookManager::from_env().is_none());
+    }
+
+    #[test]
+    fn lifecycle_snapshot_from_env_reports_registration_policy() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_PRE_TOOL_HOOK");
+        env.remove("PRIORITY_AGENT_POST_TOOL_HOOK");
+        for (key, _) in std::env::vars() {
+            if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_")
+                || key.starts_with("PRIORITY_AGENT_TOOL_HOOK_AFTER_")
+            {
+                env.remove(&key);
+            }
+        }
+        env.set("PRIORITY_AGENT_PRE_TOOL_HOOK", "echo '{\"allow\": true}'");
+        env.set("PRIORITY_AGENT_HOOK_TIMEOUT_MS", "2500");
+        env.set("PRIORITY_AGENT_HOOK_FAIL_CLOSED", "true");
+        env.set("PRIORITY_AGENT_TOOL_HOOK_AFTER_BASH", "printf done");
+
+        let snapshot = ToolHookManager::lifecycle_snapshot_from_env();
+
+        assert!(snapshot.configured);
+        assert_eq!(snapshot.default_timeout_ms, 2500);
+        assert!(snapshot.fail_closed);
+        assert_eq!(snapshot.registrations.len(), 2);
+        assert!(snapshot.registrations.iter().any(|registration| {
+            registration.event == HookEventKind::PreToolUse
+                && registration.scope == "global"
+                && registration.block_on_error
+        }));
+        assert!(snapshot.registrations.iter().any(|registration| {
+            registration.event == HookEventKind::PostToolUse
+                && registration.scope == "tool:bash"
+                && registration.hook_name == "env_post_tool_hook_bash"
+        }));
     }
 
     #[tokio::test]
