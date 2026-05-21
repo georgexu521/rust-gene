@@ -152,9 +152,11 @@ fn should_use_nonstreaming_tools(
     if tools.is_empty() {
         return false;
     }
-    let base_url = provider.base_url().to_ascii_lowercase();
-    let model = provider.default_model().to_ascii_lowercase();
-    base_url.contains("minimax") || model.contains("minimax")
+    crate::services::api::provider_protocol::ProviderCapabilities::detect(
+        provider.base_url(),
+        provider.default_model(),
+    )
+    .requires_nonstreaming_tool_calls
 }
 
 /// 统一对话循环
@@ -596,11 +598,55 @@ mod tests {
     use std::sync::{Mutex as StdMutex, OnceLock};
     use tempfile::tempdir;
 
+    struct CapabilityProbeProvider {
+        base_url: &'static str,
+        model: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for CapabilityProbeProvider {
+        async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            Err(anyhow::anyhow!("chat not used in capability probe"))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("chat_stream not used in capability probe"))
+        }
+
+        fn base_url(&self) -> &str {
+            self.base_url
+        }
+
+        fn default_model(&self) -> &str {
+            self.model
+        }
+    }
+
     #[tokio::test]
     async fn test_truncate_tool_result_handles_utf8_boundaries() {
         let mut result = ToolResult::success("中".repeat(20_000));
         truncate_tool_result(&mut result, "grep", "call_utf8").await;
         assert!(result.content.contains("Output truncated"));
+    }
+
+    #[test]
+    fn nonstreaming_tool_routing_uses_provider_capabilities() {
+        let tools = vec![crate::services::api::Tool::new("bash", "run shell command")];
+        let minimax = CapabilityProbeProvider {
+            base_url: "https://api.minimaxi.com/v1",
+            model: "MiniMax-M2.7",
+        };
+        let openai = CapabilityProbeProvider {
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-4o",
+        };
+
+        assert!(should_use_nonstreaming_tools(&minimax, &tools));
+        assert!(!should_use_nonstreaming_tools(&openai, &tools));
+        assert!(!should_use_nonstreaming_tools(&minimax, &[]));
     }
 
     #[tokio::test]

@@ -7,8 +7,8 @@ use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::{PermissionMode, PermissionRules, RuleSource, SourcedRule};
 use crate::state::{
     select_runtime_status, select_tool_viewer_tool_id, AppContext, AppState, MessageItem,
-    MessageRole, RuntimeAppState, RuntimeMcpState, RuntimePermissionState, RuntimeStatusSnapshot,
-    RuntimeTerminalTask, RuntimeToolStatus, RuntimeToolUse, TaskItem,
+    MessageRole, RuntimeAppState, RuntimeBridgeState, RuntimeMcpState, RuntimePermissionState,
+    RuntimeStatusSnapshot, RuntimeTerminalTask, RuntimeToolStatus, RuntimeToolUse, TaskItem,
 };
 use crate::tui::components::input::InputState;
 use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunStatus, ToolRunView};
@@ -2184,6 +2184,9 @@ impl TuiApp {
 
         let response = match cmd.as_str() {
             "/help" | "/h" => {
+                if args.trim() == "maturity" {
+                    return self.add_system_message(self.command_registry.maturity_report());
+                }
                 let mut help = self.command_registry.help_text();
                 help.push_str("\n\nSession Commands:\n");
                 help.push_str("  /sessions    - List recent sessions\n");
@@ -2630,6 +2633,7 @@ impl TuiApp {
                 }
             }
             "/status" => slash::handle_status(self).await,
+            "/panel" | "/panels" | "/runtime" => slash::handle_panel(self, args).await,
             "/tool-output" | "/tool" => {
                 let args = args.trim();
                 if args.is_empty() || args == "latest" {
@@ -3293,6 +3297,37 @@ impl TuiApp {
         }
     }
 
+    fn runtime_bridge_state(&self) -> RuntimeBridgeState {
+        let bridge = crate::bridge::runtime_snapshot();
+        let remote_env = crate::remote::RemoteEnvDetector::detect();
+        let saved_session_count = crate::remote::RemoteSessionManager::new()
+            .list_sessions()
+            .len();
+        let remote_trigger_tool_available = self
+            .streaming_engine
+            .as_ref()
+            .map(|engine| engine.tool_registry().has("remote_trigger"))
+            .unwrap_or(false);
+        let remote_dev_tool_available = self
+            .streaming_engine
+            .as_ref()
+            .map(|engine| engine.tool_registry().has("remote_dev"))
+            .unwrap_or(false);
+
+        RuntimeBridgeState {
+            bridge_url_configured: bridge.bridge_url.is_some(),
+            bridge_url_source: bridge.bridge_url_source,
+            auth_token_configured: bridge.auth_token_configured,
+            tenant_configured: bridge.tenant_id.is_some(),
+            cursor_count: bridge.cursor_count,
+            saved_session_count,
+            remote_env_type: remote_env.env_type.to_string(),
+            is_remote_env: remote_env.is_remote,
+            remote_trigger_tool_available,
+            remote_dev_tool_available,
+        }
+    }
+
     fn build_runtime_state_snapshot(&self) -> RuntimeAppState {
         let tool_uses = self
             .tool_runs_snapshot
@@ -3309,6 +3344,7 @@ impl TuiApp {
             terminal_tasks,
             permission: self.runtime_permission_state(),
             mcp: self.runtime_mcp_state(),
+            bridge: self.runtime_bridge_state(),
         }
     }
 
@@ -4027,6 +4063,80 @@ mod tests {
         assert!(rendered.contains("[usable]"));
         assert!(rendered.contains("Maturity:"));
         assert!(rendered.contains("usable"));
+    }
+
+    #[tokio::test]
+    async fn test_help_maturity_slash_reports_buckets() {
+        let mut app = TuiApp::new();
+
+        app.handle_slash_command("/help maturity").await;
+
+        let content = app
+            .messages
+            .last()
+            .map(|message| message.content.as_str())
+            .unwrap_or("");
+        assert!(content.contains("Command maturity:"));
+        assert!(content.contains("- usable"));
+        assert!(content.contains("/panel"));
+        assert!(content.contains("- placeholder"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_status_slash_uses_runtime_panel_without_engine() {
+        let mut app = TuiApp::new();
+
+        app.handle_slash_command("/mcp status").await;
+
+        let content = app
+            .messages
+            .last()
+            .map(|message| message.content.as_str())
+            .unwrap_or("");
+        assert!(content.contains("# MCP Panel"));
+        assert!(content.contains("Manager: engine unavailable"));
+    }
+
+    #[tokio::test]
+    async fn test_permissions_slash_includes_pending_approval_panel() {
+        let mut app = TuiApp::new();
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({ "command": "cargo check -q" }),
+                },
+                prompt: "Approve shell command?".to_string(),
+                review: None,
+            });
+
+        app.handle_slash_command("/permissions").await;
+
+        let content = app
+            .messages
+            .last()
+            .map(|message| message.content.as_str())
+            .unwrap_or("");
+        assert!(content.contains("Permission mode:"));
+        assert!(content.contains("# Approval Panel"));
+        assert!(content.contains("Pending approval: Tool approval"));
+    }
+
+    #[tokio::test]
+    async fn test_context_slash_uses_runtime_context_panel() {
+        let mut app = TuiApp::new();
+
+        app.handle_slash_command("/context").await;
+
+        let content = app
+            .messages
+            .last()
+            .map(|message| message.content.as_str())
+            .unwrap_or("");
+        assert!(content.contains("# Context Panel"));
+        assert!(content.contains("Context budget: engine unavailable"));
+        assert!(!content.contains("# Context Status"));
     }
 
     #[test]

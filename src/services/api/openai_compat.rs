@@ -3,7 +3,9 @@
 //! 将内部类型转换为 async-openai 类型，供 Kimi/OpenAI 等兼容 API 使用
 
 use crate::services::api::{
-    provider_protocol::{normalize_messages_for_provider, ProviderProtocolFamily},
+    provider_protocol::{
+        normalize_messages_for_capabilities, ProviderCapabilities, ProviderProtocolFamily,
+    },
     sanitize_assistant_content, ChatRequest, ChatResponse, Message, ToolCall, ToolChoice, Usage,
 };
 use anyhow::{Context, Result};
@@ -17,11 +19,13 @@ use async_openai::types::{
 };
 
 pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletionRequest {
-    let messages: Vec<ChatCompletionRequestMessage> =
-        normalize_messages_for_provider(ProviderProtocolFamily::OpenAiCompatible, request.messages)
-            .into_iter()
-            .map(convert_message)
-            .collect();
+    let messages: Vec<ChatCompletionRequestMessage> = normalize_messages_for_capabilities(
+        ProviderCapabilities::for_family(ProviderProtocolFamily::OpenAiCompatible),
+        request.messages,
+    )
+    .into_iter()
+    .map(convert_message)
+    .collect();
 
     let mut req = CreateChatCompletionRequest {
         model: if request.model.is_empty() {

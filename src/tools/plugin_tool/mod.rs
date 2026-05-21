@@ -18,6 +18,68 @@ pub struct PluginRuntimeTool {
     default_timeout_secs: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRegistrationReport {
+    pub roots: Vec<std::path::PathBuf>,
+    pub discovered_count: usize,
+    pub enabled_count: usize,
+    pub injected_count: usize,
+    pub injected_tool_names: Vec<String>,
+    pub skipped_disabled: usize,
+    pub skipped_missing_entry: usize,
+    pub skipped_unsigned: usize,
+    pub skipped_name_collision: usize,
+    pub trust_mode: String,
+}
+
+impl PluginRegistrationReport {
+    fn skipped_count(&self) -> usize {
+        self.skipped_disabled
+            + self.skipped_missing_entry
+            + self.skipped_unsigned
+            + self.skipped_name_collision
+    }
+
+    pub fn summary(&self) -> String {
+        let injected = if self.injected_tool_names.is_empty() {
+            "none".to_string()
+        } else {
+            self.injected_tool_names.join(", ")
+        };
+        format!(
+            "Plugins reloaded: discovered={} enabled={} injected={} skipped={} trust_mode={}\nInjected tools: {}\nSkipped: disabled={} missing_entry={} unsigned={} name_collision={}",
+            self.discovered_count,
+            self.enabled_count,
+            self.injected_count,
+            self.skipped_count(),
+            self.trust_mode,
+            injected,
+            self.skipped_disabled,
+            self.skipped_missing_entry,
+            self.skipped_unsigned,
+            self.skipped_name_collision
+        )
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        json!({
+            "roots": self.roots,
+            "discovered_count": self.discovered_count,
+            "enabled_count": self.enabled_count,
+            "injected_count": self.injected_count,
+            "injected_tool_names": self.injected_tool_names,
+            "skipped": {
+                "total": self.skipped_count(),
+                "disabled": self.skipped_disabled,
+                "missing_entry": self.skipped_missing_entry,
+                "unsigned": self.skipped_unsigned,
+                "name_collision": self.skipped_name_collision,
+            },
+            "trust_mode": self.trust_mode,
+        })
+    }
+}
+
 struct PluginExecutionOutput {
     success: bool,
     stdout: String,
@@ -189,13 +251,35 @@ async fn execute_plugin_process(
 }
 
 pub fn register_enabled_plugin_tools(registry: &mut ToolRegistry, working_dir: &Path) -> usize {
+    register_enabled_plugin_tools_with_report(registry, working_dir).injected_count
+}
+
+pub fn register_enabled_plugin_tools_with_report(
+    registry: &mut ToolRegistry,
+    working_dir: &Path,
+) -> PluginRegistrationReport {
     let roots = plugins::default_plugin_roots(working_dir);
     let discovered = plugins::discover_plugins(&roots);
-    let mut registered = 0usize;
     let trust_mode = current_trust_mode();
+    let mut report = PluginRegistrationReport {
+        roots: roots.clone(),
+        discovered_count: discovered.len(),
+        enabled_count: discovered
+            .iter()
+            .filter(|plugin| plugin.manifest.enabled)
+            .count(),
+        injected_count: 0,
+        injected_tool_names: Vec::new(),
+        skipped_disabled: 0,
+        skipped_missing_entry: 0,
+        skipped_unsigned: 0,
+        skipped_name_collision: 0,
+        trust_mode: trust_mode.as_str().to_string(),
+    };
 
     for plugin in discovered {
         if !plugin.manifest.enabled {
+            report.skipped_disabled += 1;
             continue;
         }
 
@@ -203,6 +287,7 @@ pub fn register_enabled_plugin_tools(registry: &mut ToolRegistry, working_dir: &
             let sig_valid = plugins::trust::SignatureVerifier::verify_manifest(&plugin.manifest)
                 .unwrap_or(false);
             if !sig_valid {
+                report.skipped_unsigned += 1;
                 warn!(
                     "Skipping unsigned plugin '{}' in strict trust mode",
                     plugin.id
@@ -218,6 +303,7 @@ pub fn register_enabled_plugin_tools(registry: &mut ToolRegistry, working_dir: &
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
         else {
+            report.skipped_missing_entry += 1;
             warn!(
                 "Skipping enabled plugin '{}' without entry_command",
                 plugin.id
@@ -235,6 +321,7 @@ pub fn register_enabled_plugin_tools(registry: &mut ToolRegistry, working_dir: &
             .unwrap_or_else(|| sanitize_tool_name(&plugin.id));
 
         if registry.has(&tool_name) {
+            report.skipped_name_collision += 1;
             warn!(
                 "Skipping plugin '{}' tool '{}' due to name collision",
                 plugin.id, tool_name
@@ -258,18 +345,19 @@ pub fn register_enabled_plugin_tools(registry: &mut ToolRegistry, working_dir: &
             .unwrap_or(30);
 
         registry.register(PluginRuntimeTool {
-            tool_name,
+            tool_name: tool_name.clone(),
             tool_description,
             plugin,
             default_timeout_secs: timeout_secs,
         });
-        registered += 1;
+        report.injected_count += 1;
+        report.injected_tool_names.push(tool_name);
     }
 
-    if registered > 0 {
-        info!("Registered {} plugin runtime tools", registered);
+    if report.injected_count > 0 {
+        info!("Registered {} plugin runtime tools", report.injected_count);
     }
-    registered
+    report
 }
 
 #[async_trait]
@@ -341,7 +429,7 @@ impl Tool for PluginManageTool {
     }
 
     fn description(&self) -> &str {
-        "Manage plugins (list, validate, enable, disable, run)."
+        "Manage plugins (list, validate, reload, enable, disable, run)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -350,7 +438,7 @@ impl Tool for PluginManageTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "validate", "enable", "disable", "run", "sign", "generate_key"],
+                    "enum": ["list", "validate", "reload", "enable", "disable", "run", "sign", "generate_key"],
                     "description": "Management action"
                 },
                 "plugin_id": {
@@ -452,6 +540,12 @@ impl Tool for PluginManageTool {
                         "reports": reports
                     }),
                 )
+            }
+            "reload" => {
+                let mut registry = ToolRegistry::default_registry();
+                let report =
+                    register_enabled_plugin_tools_with_report(&mut registry, &context.working_dir);
+                ToolResult::success_with_data(report.summary(), report.to_json())
             }
             "enable" | "disable" => {
                 let Some(pid) = plugin_id else {
@@ -844,6 +938,66 @@ entry_args = ["-c", "cat"]
         let result = tool.execute(json!({"hello":"world"}), ctx).await;
         assert!(result.success, "{:?}", result.error);
         assert!(result.content.contains("world"));
+
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_plugin_registration_report_counts_reload_lifecycle() {
+        let tmp = std::env::temp_dir().join(format!(
+            "priority-agent-plugin-report-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let plugins_root = tmp.join(".priority-agent").join("plugins");
+        let enabled_dir = plugins_root.join("enabled");
+        let disabled_dir = plugins_root.join("disabled");
+        let missing_entry_dir = plugins_root.join("missing-entry");
+        std::fs::create_dir_all(&enabled_dir).expect("create enabled plugin");
+        std::fs::create_dir_all(&disabled_dir).expect("create disabled plugin");
+        std::fs::create_dir_all(&missing_entry_dir).expect("create missing-entry plugin");
+
+        std::fs::write(
+            enabled_dir.join("plugin.toml"),
+            r#"
+name = "enabled"
+version = "0.1.0"
+enabled = true
+entry_command = "sh"
+entry_args = ["-c", "echo ok"]
+tool_name = "plugin_enabled"
+"#,
+        )
+        .expect("write enabled manifest");
+        std::fs::write(
+            disabled_dir.join("plugin.toml"),
+            r#"
+name = "disabled"
+version = "0.1.0"
+enabled = false
+entry_command = "sh"
+"#,
+        )
+        .expect("write disabled manifest");
+        std::fs::write(
+            missing_entry_dir.join("plugin.toml"),
+            r#"
+name = "missing-entry"
+version = "0.1.0"
+enabled = true
+"#,
+        )
+        .expect("write missing-entry manifest");
+
+        let mut registry = ToolRegistry::new();
+        let report = register_enabled_plugin_tools_with_report(&mut registry, &tmp);
+
+        assert_eq!(report.discovered_count, 3);
+        assert_eq!(report.enabled_count, 2);
+        assert_eq!(report.injected_count, 1);
+        assert_eq!(report.skipped_disabled, 1);
+        assert_eq!(report.skipped_missing_entry, 1);
+        assert_eq!(report.injected_tool_names, vec!["plugin_enabled"]);
+        assert!(registry.has("plugin_enabled"));
 
         let _ = std::fs::remove_dir_all(tmp);
     }

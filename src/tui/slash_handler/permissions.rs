@@ -19,7 +19,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 .unwrap_or(PermissionMode::AutoAll);
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
-            format!(
+            let mut output = format!(
                 "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions explain <tool_name> - explain why a decision was made (with confidence & warnings)\n  /permissions export [path] - export rules to a file\n  /permissions import <path> [project|global] [merge] - import rules (merge to append)\n  /permissions dry-run <allow|deny|ask> <pattern> - test a rule against all registered tools\n  /permissions <allow|deny|ask> <pattern> [project|global]",
                 permission_mode_name(mode),
                 ctx.rules.always_allow.len(),
@@ -31,7 +31,12 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                     .join(".priority-agent")
                     .join("permissions.toml")
                     .display(),
-            )
+            );
+            if app.pending_permission_request.is_some() {
+                output.push_str("\n\n");
+                output.push_str(&crate::tui::runtime_panels::render_approval_panel(app));
+            }
+            output
         }
         Some("explain") => {
             let tool_name = match parts.next() {

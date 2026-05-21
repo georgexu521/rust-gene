@@ -17,6 +17,8 @@ pub struct RuntimeAppState {
     pub permission: RuntimePermissionState,
     #[serde(default)]
     pub mcp: RuntimeMcpState,
+    #[serde(default)]
+    pub bridge: RuntimeBridgeState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -115,6 +117,22 @@ pub struct RuntimeMcpState {
     pub repair_hints: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeBridgeState {
+    pub bridge_url_configured: bool,
+    #[serde(default)]
+    pub bridge_url_source: Option<String>,
+    pub auth_token_configured: bool,
+    #[serde(default)]
+    pub tenant_configured: bool,
+    pub cursor_count: usize,
+    pub saved_session_count: usize,
+    pub remote_env_type: String,
+    pub is_remote_env: bool,
+    pub remote_trigger_tool_available: bool,
+    pub remote_dev_tool_available: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeStatusSnapshot {
     pub messages: usize,
@@ -136,6 +154,12 @@ pub struct RuntimeStatusSnapshot {
     pub mcp_server_count: usize,
     pub mcp_available_count: usize,
     pub mcp_repair_hints: Vec<String>,
+    pub bridge_url_configured: bool,
+    pub bridge_url_source: Option<String>,
+    pub bridge_cursor_count: usize,
+    pub remote_env_type: String,
+    pub remote_trigger_tool_available: bool,
+    pub remote_dev_tool_available: bool,
 }
 
 pub fn select_runtime_status(state: &AppState) -> RuntimeStatusSnapshot {
@@ -215,6 +239,12 @@ pub fn select_runtime_status(state: &AppState) -> RuntimeStatusSnapshot {
         mcp_server_count: state.runtime.mcp.server_count,
         mcp_available_count: state.runtime.mcp.available_count,
         mcp_repair_hints: state.runtime.mcp.repair_hints.clone(),
+        bridge_url_configured: state.runtime.bridge.bridge_url_configured,
+        bridge_url_source: state.runtime.bridge.bridge_url_source.clone(),
+        bridge_cursor_count: state.runtime.bridge.cursor_count,
+        remote_env_type: state.runtime.bridge.remote_env_type.clone(),
+        remote_trigger_tool_available: state.runtime.bridge.remote_trigger_tool_available,
+        remote_dev_tool_available: state.runtime.bridge.remote_dev_tool_available,
     }
 }
 
@@ -270,6 +300,11 @@ mod tests {
         state.runtime.permission.pending_call_id = Some("call_1".to_string());
         state.runtime.mcp.server_count = 2;
         state.runtime.mcp.available_count = 1;
+        state.runtime.bridge.bridge_url_configured = true;
+        state.runtime.bridge.bridge_url_source = Some("PRIORITY_AGENT_BRIDGE_URL".to_string());
+        state.runtime.bridge.cursor_count = 3;
+        state.runtime.bridge.remote_env_type = "ssh".to_string();
+        state.runtime.bridge.remote_trigger_tool_available = true;
         state.runtime.tool_uses.push(RuntimeToolUse {
             id: "call_1".to_string(),
             name: "bash".to_string(),
@@ -309,6 +344,14 @@ mod tests {
         );
         assert_eq!(snapshot.mcp_server_count, 2);
         assert_eq!(snapshot.mcp_available_count, 1);
+        assert!(snapshot.bridge_url_configured);
+        assert_eq!(
+            snapshot.bridge_url_source.as_deref(),
+            Some("PRIORITY_AGENT_BRIDGE_URL")
+        );
+        assert_eq!(snapshot.bridge_cursor_count, 3);
+        assert_eq!(snapshot.remote_env_type, "ssh");
+        assert!(snapshot.remote_trigger_tool_available);
     }
 
     #[test]

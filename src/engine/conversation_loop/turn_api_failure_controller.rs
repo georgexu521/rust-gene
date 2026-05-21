@@ -1,7 +1,9 @@
 use super::runtime_diet::{trace_runtime_diet_report, RuntimeDietSnapshot};
+use super::turn_recording::record_recovery_plan;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
 use crate::engine::intent_router::IntentRoute;
+use crate::engine::recovery_plan::{RecoveryPlan, RecoveryStatus};
 use crate::engine::trace::{TraceCollector, TraceEvent, TurnStatus};
 
 pub(super) struct TurnApiFailureContext<'a> {
@@ -20,6 +22,16 @@ impl TurnApiFailureController {
         context.trace.record(TraceEvent::Error {
             message: context.error_message.to_string(),
         });
+        let classified = crate::engine::error_classifier::ErrorClassifier::from_anyhow(
+            &anyhow::anyhow!(context.error_message.to_string()),
+        );
+        let status = if classified.retryable {
+            RecoveryStatus::Planned
+        } else {
+            RecoveryStatus::Aborted
+        };
+        let plan = RecoveryPlan::from_classified("api_failure", &classified).with_status(status);
+        record_recovery_plan(context.trace, &plan);
         context.runtime_diet.validation_evidence = "api_error".to_string();
         trace_runtime_diet_report(
             context.trace,
@@ -107,5 +119,39 @@ mod tests {
             .events
             .iter()
             .any(|event| matches!(event, TraceEvent::RuntimeDietReport { .. })));
+    }
+
+    #[test]
+    fn provider_protocol_failure_records_typed_recovery_plan() {
+        let conversation = conversation();
+        let route = IntentRouter::new().route("fix it");
+        let task_bundle = TaskContextBundle::new("fix it", ".", route.clone(), None);
+        let code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "fix it"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+
+        TurnApiFailureController::record(TurnApiFailureContext {
+            conversation: &conversation,
+            trace: &trace,
+            route: &route,
+            code_workflow: &code_workflow,
+            runtime_diet: &mut runtime_diet,
+            error_message: "bad_request_error: tool call result does not follow tool call",
+        });
+
+        let finished = trace.finish(TurnStatus::Failed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::RecoveryPlan {
+                category,
+                safe_retry,
+                suggested_command,
+                status,
+                ..
+            } if category == "provider_protocol"
+                && !safe_retry
+                && suggested_command.as_deref() == Some("/trace last")
+                && status == "Aborted"
+        )));
     }
 }

@@ -12,8 +12,9 @@ pub use app_state::{AppState, MessageItem, MessageRole, TaskItem, TaskStatus, Ta
 pub use events::{EventBus, StateEvent};
 pub use runtime_state::{
     select_runtime_mcp, select_runtime_permission, select_runtime_status, select_runtime_tools,
-    select_tool_viewer_tool_id, RuntimeAppState, RuntimeMcpState, RuntimePermissionState,
-    RuntimeStatusSnapshot, RuntimeTerminalTask, RuntimeToolStatus, RuntimeToolUse,
+    select_tool_viewer_tool_id, RuntimeAppState, RuntimeBridgeState, RuntimeMcpState,
+    RuntimePermissionState, RuntimeStatusSnapshot, RuntimeTerminalTask, RuntimeToolStatus,
+    RuntimeToolUse,
 };
 pub use store::StateStore;
 

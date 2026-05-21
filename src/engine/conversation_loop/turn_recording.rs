@@ -137,6 +137,61 @@ pub(super) fn record_mcp_resource_trace(
     });
 }
 
+pub(super) fn record_remote_bridge_trace(
+    trace: &Option<TraceCollector>,
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) {
+    let Some(trace) = trace else {
+        return;
+    };
+    let facts = match tool_call.name.as_str() {
+        "remote_trigger" => crate::tools::remote_trigger_tool::remote_trigger_permission_metadata(
+            &tool_call.arguments,
+        ),
+        "remote_dev" => {
+            crate::tools::remote_dev_tool::remote_dev_permission_metadata(&tool_call.arguments)
+        }
+        _ => return,
+    };
+    let action = facts["action"].as_str().unwrap_or("unknown").to_string();
+    let target = facts["target"].as_str().map(str::to_string);
+    let risk = facts["risk_level"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let permission_hint = facts["permission_summary"]
+        .as_str()
+        .unwrap_or("remote action")
+        .to_string();
+    let error_code = result.error_code.as_ref().and_then(tool_error_code_label);
+
+    trace.record(TraceEvent::RemoteBridgeAction {
+        tool: tool_call.name.clone(),
+        call_id: tool_call.id.clone(),
+        action,
+        target,
+        risk,
+        permission_hint,
+        success: result.success,
+        error_code: error_code.clone(),
+    });
+
+    if !result.success {
+        let error = result
+            .error
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| result.content.as_str());
+        let plan = crate::engine::recovery_plan::RecoveryPlan::tool_failure(
+            &tool_call.name,
+            error,
+            error_code.as_deref(),
+        );
+        record_recovery_plan(trace, &plan);
+    }
+}
+
 pub(super) fn record_hook_traces(trace: &Option<TraceCollector>, records: &[HookRunRecord]) {
     let Some(trace) = trace else {
         return;
@@ -155,6 +210,12 @@ pub(super) fn record_hook_traces(trace: &Option<TraceCollector>, records: &[Hook
             output_preview: record.output_preview.clone(),
         });
     }
+}
+
+fn tool_error_code_label(code: &crate::tools::ToolErrorCode) -> Option<String> {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
 }
 
 pub(super) fn record_web_retrieval_trace(
@@ -201,5 +262,37 @@ pub(super) fn record_web_retrieval_trace(
             provenance: ctx.provenance_summaries(),
             conflicts: ctx.conflict_count(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::trace::{TurnStatus, TurnTrace};
+    use crate::tools::{ToolErrorCode, ToolResult};
+    use serde_json::json;
+
+    #[test]
+    fn remote_bridge_trace_records_recovery_plan_for_failure() {
+        let collector = TraceCollector::new(TurnTrace::new("session-1", 1, "run remote"));
+        let trace = Some(collector.clone());
+        let tool_call = ToolCall {
+            id: "call_remote".to_string(),
+            name: "remote_trigger".to_string(),
+            arguments: json!({"action": "run", "id": "session-1"}),
+        };
+        let mut result = ToolResult::error("Failed to run trigger: bridge unavailable");
+        result.error_code = Some(ToolErrorCode::Unavailable);
+
+        record_remote_bridge_trace(&trace, &tool_call, &result);
+
+        let finished = collector.finish(TurnStatus::Failed);
+        assert!(finished
+            .events
+            .iter()
+            .any(|event| matches!(event, TraceEvent::RemoteBridgeAction { action, success: false, .. } if action == "run")));
+        assert!(finished.events.iter().any(
+            |event| matches!(event, TraceEvent::RecoveryPlan { suggested_command: Some(command), safe_retry: false, .. } if command == "/remote status")
+        ));
     }
 }

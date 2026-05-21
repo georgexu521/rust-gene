@@ -2,9 +2,9 @@
 //!
 //! 支持列出、获取、创建和运行远程触发器
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// Remote Trigger 工具
 pub struct RemoteTriggerTool;
@@ -61,15 +61,62 @@ impl Tool for RemoteTriggerTool {
         })
     }
 
+    fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
+        remote_trigger_requires_confirmation(params)
+    }
+
+    fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {
+        remote_trigger_requires_confirmation(params)
+            .then(|| remote_trigger_permission_prompt(params))
+    }
+
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let facts = remote_trigger_permission_metadata(params);
+        format!(
+            "remote_trigger(action={}, target={}, risk={})",
+            facts["action"].as_str().unwrap_or("unknown"),
+            facts["target"].as_str().unwrap_or("none"),
+            facts["risk_level"].as_str().unwrap_or("unknown")
+        )
+    }
+
+    fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
+        match remote_trigger_action(params) {
+            "list" => ToolOperationKind::List,
+            "get" | "status" | "replay" => ToolOperationKind::Read,
+            "sync" if !remote_trigger_persist_cursor(params) => ToolOperationKind::Read,
+            "sync" => ToolOperationKind::Write,
+            "create" | "run" => ToolOperationKind::Task,
+            _ => ToolOperationKind::Network,
+        }
+    }
+
+    fn is_read_only(&self, params: &serde_json::Value) -> bool {
+        matches!(
+            remote_trigger_action(params),
+            "list" | "get" | "status" | "replay"
+        ) || (remote_trigger_action(params) == "sync" && !remote_trigger_persist_cursor(params))
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let action = remote_trigger_action(params);
+        if action.is_empty() {
+            return None;
+        }
+        let target = remote_trigger_target(params).unwrap_or_else(|| "no target".to_string());
+        Some(format!("{} {}", action, target))
+    }
+
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
         let action = params["action"].as_str().unwrap_or("");
 
-        let bridge_url = crate::bridge::get_bridge_url()
-            .cloned()
-            .or_else(|| std::env::var("BRIDGE_URL").ok())
-            .ok_or_else(|| {
+        let bridge_url = crate::bridge::resolve_bridge_url().ok_or_else(|| {
                 ToolResult::error(
-                    "BRIDGE_URL not set. Pass --bridge-url or set the environment variable.",
+                    "Bridge URL not set. Pass --bridge-url or set PRIORITY_AGENT_BRIDGE_URL/BRIDGE_URL.",
                 )
             });
         let bridge_url = match bridge_url {
@@ -77,8 +124,8 @@ impl Tool for RemoteTriggerTool {
             Err(e) => return e,
         };
 
-        let auth_token = std::env::var("BRIDGE_TOKEN").ok();
-        let tenant_id = std::env::var("BRIDGE_TENANT_ID").ok();
+        let auth_token = crate::bridge::resolve_bridge_auth_token();
+        let tenant_id = crate::bridge::resolve_bridge_tenant_id();
         let client = crate::bridge::BridgeClient::with_tenant(bridge_url, auth_token, tenant_id);
 
         match action {
@@ -205,6 +252,149 @@ impl Tool for RemoteTriggerTool {
     }
 }
 
+pub(crate) fn remote_trigger_permission_metadata(params: &Value) -> Value {
+    let snapshot = crate::bridge::runtime_snapshot();
+    let action = remote_trigger_action(params).to_string();
+    let target = remote_trigger_target(params);
+    let persist_cursor = remote_trigger_persist_cursor(params);
+    let use_saved_cursor = params["use_saved_cursor"].as_bool().unwrap_or(true);
+    let risk_level = remote_trigger_risk_level(&action, persist_cursor);
+    let remote_effect = remote_trigger_effect(&action, persist_cursor);
+    let permission_summary = remote_trigger_permission_summary(
+        &action,
+        target.as_deref(),
+        risk_level,
+        remote_effect,
+        snapshot.bridge_url_source.as_deref(),
+        snapshot.auth_token_configured,
+        snapshot.tenant_id.is_some(),
+    );
+
+    json!({
+        "surface": "bridge",
+        "tool_name": "remote_trigger",
+        "action": action,
+        "target": target,
+        "risk_level": risk_level,
+        "requires_confirmation": remote_trigger_requires_confirmation(params),
+        "remote_effect": remote_effect,
+        "permission_summary": permission_summary,
+        "bridge_url_configured": snapshot.bridge_url.is_some(),
+        "bridge_url_source": snapshot.bridge_url_source,
+        "auth_token_configured": snapshot.auth_token_configured,
+        "tenant_configured": snapshot.tenant_id.is_some(),
+        "cursor": {
+            "use_saved_cursor": use_saved_cursor,
+            "persist_cursor": persist_cursor,
+            "cursor_path": snapshot.cursor_path.display().to_string(),
+            "known_cursor_sessions": snapshot.cursor_count,
+        }
+    })
+}
+
+fn remote_trigger_action(params: &Value) -> &str {
+    params["action"].as_str().unwrap_or("")
+}
+
+fn remote_trigger_target(params: &Value) -> Option<String> {
+    params["id"]
+        .as_str()
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn remote_trigger_persist_cursor(params: &Value) -> bool {
+    remote_trigger_action(params) == "sync" && params["persist_cursor"].as_bool().unwrap_or(true)
+}
+
+fn remote_trigger_requires_confirmation(params: &Value) -> bool {
+    matches!(remote_trigger_action(params), "create" | "run")
+        || remote_trigger_persist_cursor(params)
+}
+
+fn remote_trigger_risk_level(action: &str, persist_cursor: bool) -> &'static str {
+    match action {
+        "run" => "high",
+        "create" => "medium",
+        "sync" if persist_cursor => "medium",
+        "sync" => "low",
+        "list" | "get" | "status" | "replay" => "low",
+        _ => "unknown",
+    }
+}
+
+fn remote_trigger_effect(action: &str, persist_cursor: bool) -> &'static str {
+    match action {
+        "run" => "remote_execution",
+        "create" => "remote_session_create",
+        "sync" if persist_cursor => "remote_read_and_local_cursor_write",
+        "sync" => "remote_read",
+        "replay" => "remote_message_read",
+        "status" => "remote_status_read",
+        "get" => "remote_session_read",
+        "list" => "remote_session_list",
+        _ => "unknown",
+    }
+}
+
+fn remote_trigger_permission_summary(
+    action: &str,
+    target: Option<&str>,
+    risk_level: &str,
+    remote_effect: &str,
+    bridge_url_source: Option<&str>,
+    auth_token_configured: bool,
+    tenant_configured: bool,
+) -> String {
+    format!(
+        "remote trigger action={} target={} risk={} effect={} bridge_source={} auth_token={} tenant={}",
+        action,
+        target.unwrap_or("none"),
+        risk_level,
+        remote_effect,
+        bridge_url_source.unwrap_or("none"),
+        auth_token_configured,
+        tenant_configured
+    )
+}
+
+fn remote_trigger_permission_prompt(params: &Value) -> String {
+    let facts = remote_trigger_permission_metadata(params);
+    let action = facts["action"].as_str().unwrap_or("unknown");
+    let target = facts["target"].as_str().unwrap_or("none");
+    let effect = facts["remote_effect"].as_str().unwrap_or("unknown");
+    let risk = facts["risk_level"].as_str().unwrap_or("unknown");
+    let bridge_source = facts["bridge_url_source"].as_str().unwrap_or("none");
+    match action {
+        "run" => format!(
+            "Run remote trigger '{}' through the bridge?\nRisk: high remote execution; it may mutate remote/project state and is not automatically safe to retry.\nBridge: source={}, auth_token_configured={}, tenant_configured={}\nEffect: {}\nAllow?",
+            target,
+            bridge_source,
+            facts["auth_token_configured"].as_bool().unwrap_or(false),
+            facts["tenant_configured"].as_bool().unwrap_or(false),
+            effect
+        ),
+        "create" => {
+            let prompt_chars = params["prompt"].as_str().map(str::chars).map(Iterator::count).unwrap_or(0);
+            format!(
+                "Create a remote bridge session with a {} character prompt?\nRisk: medium remote session creation; prompt content will be sent to the configured bridge.\nBridge: source={}, auth_token_configured={}, tenant_configured={}\nAllow?",
+                prompt_chars,
+                bridge_source,
+                facts["auth_token_configured"].as_bool().unwrap_or(false),
+                facts["tenant_configured"].as_bool().unwrap_or(false)
+            )
+        }
+        "sync" => format!(
+            "Synchronize remote session '{}' and persist the replay cursor locally?\nRisk: {} {}; this reads remote state and updates the local bridge cursor.\nBridge: source={}\nAllow?",
+            target, risk, effect, bridge_source
+        ),
+        _ => format!(
+            "Run remote trigger action '{}' for target '{}'?\nRisk: {} {}\nAllow?",
+            action, target, risk, effect
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +404,41 @@ mod tests {
         let tool = RemoteTriggerTool;
         let params = tool.parameters();
         assert!(params.get("properties").is_some());
+    }
+
+    #[test]
+    fn remote_trigger_run_requires_confirmation_with_high_risk_facts() {
+        let tool = RemoteTriggerTool;
+        let params = json!({"action": "run", "id": "session-1"});
+
+        assert!(tool.requires_confirmation(&params));
+        assert_eq!(tool.operation_kind(&params), ToolOperationKind::Task);
+        assert!(!tool.is_concurrency_safe(&params));
+
+        let facts = remote_trigger_permission_metadata(&params);
+        assert_eq!(facts["risk_level"], "high");
+        assert_eq!(facts["remote_effect"], "remote_execution");
+        assert!(facts["permission_summary"]
+            .as_str()
+            .unwrap()
+            .contains("remote trigger action=run"));
+    }
+
+    #[test]
+    fn remote_trigger_sync_cursor_is_not_read_only() {
+        let tool = RemoteTriggerTool;
+        let persist = json!({"action": "sync", "id": "session-1"});
+        let no_persist = json!({
+            "action": "sync",
+            "id": "session-1",
+            "persist_cursor": false
+        });
+
+        assert!(tool.requires_confirmation(&persist));
+        assert!(!tool.is_read_only(&persist));
+        assert_eq!(tool.operation_kind(&persist), ToolOperationKind::Write);
+        assert!(!tool.requires_confirmation(&no_persist));
+        assert!(tool.is_read_only(&no_persist));
+        assert_eq!(tool.operation_kind(&no_persist), ToolOperationKind::Read);
     }
 }

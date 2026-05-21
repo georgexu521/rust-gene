@@ -85,6 +85,8 @@ pub enum TraceEvent {
         parallelism_limit: usize,
         max_tool_calls: usize,
         context_budget_tokens: usize,
+        #[serde(default)]
+        allow_fallback_model: bool,
         reason: String,
     },
     TaskContextBuilt {
@@ -265,6 +267,12 @@ pub enum TraceEvent {
         iteration: usize,
         model: String,
         tools: usize,
+        #[serde(default)]
+        provider_family: Option<String>,
+        #[serde(default)]
+        nonstreaming_tools_required: bool,
+        #[serde(default)]
+        tool_result_adjacency_required: bool,
     },
     ApiRequestCompleted {
         iteration: usize,
@@ -368,6 +376,16 @@ pub enum TraceEvent {
         success: bool,
         content_chars: usize,
     },
+    RemoteBridgeAction {
+        tool: String,
+        call_id: String,
+        action: String,
+        target: Option<String>,
+        risk: String,
+        permission_hint: String,
+        success: bool,
+        error_code: Option<String>,
+    },
     AssistantResponded {
         chars: usize,
         iterations: usize,
@@ -431,6 +449,7 @@ impl TraceEvent {
             TraceEvent::RecoveryApplied { .. } => "recovery",
             TraceEvent::RecoveryPlan { .. } => "recovery.plan",
             TraceEvent::McpResourceAccessed { .. } => "mcp.resource",
+            TraceEvent::RemoteBridgeAction { .. } => "remote.bridge",
             TraceEvent::AssistantResponded { .. } => "assistant",
             TraceEvent::FinalCloseoutPrepared { .. } => "closeout",
             TraceEvent::Error { .. } => "error",
@@ -472,9 +491,10 @@ impl TraceEvent {
                 parallelism_limit,
                 max_tool_calls,
                 context_budget_tokens,
+                allow_fallback_model,
                 reason,
             } => format!(
-                "resource policy: latency={} target={}ms cost<=${:.2} reasoning={} parallel={} tools={} ctx={} ({})",
+                "resource policy: latency={} target={}ms cost<=${:.2} reasoning={} parallel={} tools={} ctx={} fallback={} ({})",
                 latency,
                 target_ms,
                 cost_ceiling_usd,
@@ -482,6 +502,7 @@ impl TraceEvent {
                 parallelism_limit,
                 max_tool_calls,
                 context_budget_tokens,
+                allow_fallback_model,
                 preview(reason)
             ),
             TraceEvent::TaskContextBuilt {
@@ -829,9 +850,17 @@ impl TraceEvent {
                 iteration,
                 model,
                 tools,
+                provider_family,
+                nonstreaming_tools_required,
+                tool_result_adjacency_required,
             } => format!(
-                "api request #{}: model={}, tools={}",
-                iteration, model, tools
+                "api request #{}: model={}, tools={}, provider={}, nonstreaming_tools={}, tool_adjacency={}",
+                iteration,
+                model,
+                tools,
+                provider_family.as_deref().unwrap_or("unknown"),
+                nonstreaming_tools_required,
+                tool_result_adjacency_required
             ),
             TraceEvent::ApiRequestCompleted {
                 iteration,
@@ -1014,6 +1043,26 @@ impl TraceEvent {
                 server,
                 success,
                 content_chars
+            ),
+            TraceEvent::RemoteBridgeAction {
+                tool,
+                call_id,
+                action,
+                target,
+                risk,
+                permission_hint,
+                success,
+                error_code,
+            } => format!(
+                "{} {} remote action={} target={} risk={} success={} error={} hint={}",
+                tool,
+                short_id(call_id),
+                action,
+                target.as_deref().unwrap_or("none"),
+                risk,
+                success,
+                error_code.as_deref().unwrap_or("none"),
+                preview(permission_hint)
             ),
             TraceEvent::AssistantResponded { chars, iterations } => {
                 format!(
@@ -1288,6 +1337,47 @@ mod tests {
         assert!(summary.contains("mcp.resource"));
         assert!(summary.contains("filesystem"));
         assert!(summary.contains("file:///tmp/a.txt"));
+    }
+
+    #[test]
+    fn trace_summary_includes_provider_protocol_facts_on_api_start() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "ask provider"));
+        collector.record(TraceEvent::ApiRequestStarted {
+            iteration: 1,
+            model: "MiniMax-M2.7".to_string(),
+            tools: 4,
+            provider_family: Some("minimax".to_string()),
+            nonstreaming_tools_required: true,
+            tool_result_adjacency_required: true,
+        });
+
+        let trace = collector.finish(TurnStatus::Completed);
+        let summary = format_trace_summary(&trace, 10);
+        assert!(summary.contains("provider=minimax"));
+        assert!(summary.contains("nonstreaming_tools=true"));
+        assert!(summary.contains("tool_adjacency=true"));
+    }
+
+    #[test]
+    fn trace_summary_includes_remote_bridge_action() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "run remote task"));
+        collector.record(TraceEvent::RemoteBridgeAction {
+            tool: "remote_trigger".to_string(),
+            call_id: "remote_call_123".to_string(),
+            action: "run".to_string(),
+            target: Some("session-1".to_string()),
+            risk: "high".to_string(),
+            permission_hint: "remote trigger action=run target=session-1 risk=high".to_string(),
+            success: false,
+            error_code: Some("unavailable".to_string()),
+        });
+
+        let trace = collector.finish(TurnStatus::Completed);
+        let summary = format_trace_summary(&trace, 10);
+        assert!(summary.contains("remote.bridge"));
+        assert!(summary.contains("remote_trigger"));
+        assert!(summary.contains("risk=high"));
+        assert!(summary.contains("error=unavailable"));
     }
 
     #[test]

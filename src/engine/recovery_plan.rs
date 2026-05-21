@@ -88,6 +88,7 @@ impl RecoveryPlan {
     }
 
     pub fn tool_failure(tool_name: &str, error: &str, error_code: Option<&str>) -> Self {
+        let remote_tool = is_remote_tool(tool_name);
         let recoverable = !matches!(
             error_code.unwrap_or("unknown"),
             "permission_denied" | "dangerous_blocked" | "cancelled"
@@ -104,7 +105,8 @@ impl RecoveryPlan {
                 && !matches!(
                     error_code.unwrap_or("unknown"),
                     "execution_failed" | "unknown"
-                ),
+                )
+                && !remote_tool,
             suggested_command,
             user_note: tool_user_note(tool_name, error, error_code),
             status: RecoveryStatus::Planned,
@@ -142,6 +144,12 @@ fn suggested_tool_command(
     error_code: Option<&str>,
 ) -> Option<String> {
     let lower = error.to_ascii_lowercase();
+    if is_remote_tool(tool_name) {
+        return match error_code.unwrap_or("unknown") {
+            "permission_denied" | "dangerous_blocked" => Some("/permissions explain".to_string()),
+            _ => Some("/remote status".to_string()),
+        };
+    }
     match error_code.unwrap_or("unknown") {
         "permission_denied" | "dangerous_blocked" => Some("/permissions explain".to_string()),
         "timeout" => Some("/retry".to_string()),
@@ -166,6 +174,29 @@ fn suggested_tool_command(
 }
 
 fn suggested_tool_action(tool_name: &str, _error: &str, error_code: Option<&str>) -> String {
+    if is_remote_tool(tool_name) {
+        return match error_code.unwrap_or("unknown") {
+            "invalid_params" => format!(
+                "inspect {} remote arguments and retry with corrected parameters",
+                tool_name
+            ),
+            "permission_denied" => {
+                format!("review remote permission request before running {}", tool_name)
+            }
+            "timeout" => format!(
+                "check remote status before retrying {} because remote side effects may already exist",
+                tool_name
+            ),
+            "not_found" => format!(
+                "verify the remote session/bridge target exists before retrying {}",
+                tool_name
+            ),
+            _ => format!(
+                "inspect bridge/remote status and retry {} only after confirming remote side effects",
+                tool_name
+            ),
+        };
+    }
     match error_code.unwrap_or("unknown") {
         "invalid_params" => format!(
             "inspect {} arguments and retry with corrected parameters",
@@ -184,6 +215,19 @@ fn suggested_tool_action(tool_name: &str, _error: &str, error_code: Option<&str>
 }
 
 fn tool_user_note(tool_name: &str, error: &str, error_code: Option<&str>) -> String {
+    if is_remote_tool(tool_name) {
+        return match error_code.unwrap_or("unknown") {
+            "permission_denied" => format!(
+                "{} was blocked by remote permission policy; do not treat the remote action as executed.",
+                tool_name
+            ),
+            _ => format!(
+                "{} failed in the bridge/remote path: {}. Inspect `/remote status`, bridge URL/auth/tenant, saved session/cursor state, and remote side effects before retrying.",
+                tool_name,
+                truncate(error, 120)
+            ),
+        };
+    }
     match error_code.unwrap_or("unknown") {
         "invalid_params" => format!("{} failed because its arguments were invalid.", tool_name),
         "permission_denied" => format!("{} was blocked by permission policy.", tool_name),
@@ -194,12 +238,19 @@ fn tool_user_note(tool_name: &str, error: &str, error_code: Option<&str>) -> Str
     }
 }
 
+fn is_remote_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "remote_trigger" | "remote_dev")
+}
+
 fn suggested_command(category: &ErrorCategory, action: &RecoveryAction) -> Option<String> {
     match (category, action) {
         (ErrorCategory::Auth, _) => Some("/login".to_string()),
         (ErrorCategory::Billing, _) => Some("/status".to_string()),
         (ErrorCategory::ContextOverflow | ErrorCategory::PayloadTooLarge, _) => {
             Some("/compact".to_string())
+        }
+        (ErrorCategory::ProviderProtocol | ErrorCategory::RequestSchema, _) => {
+            Some("/trace last".to_string())
         }
         (_, RecoveryAction::FallbackModel) => Some("/model".to_string()),
         (_, RecoveryAction::Retry | RecoveryAction::RetryWithBackoff { .. }) => {
@@ -225,6 +276,14 @@ fn user_note(category: &ErrorCategory, action: &RecoveryAction) -> String {
         }
         ErrorCategory::Billing => {
             "Billing or quota blocked the request; retrying will not help until resolved."
+                .to_string()
+        }
+        ErrorCategory::ProviderProtocol => {
+            "Provider rejected the message/tool protocol; inspect the trace before retrying so the next request can be normalized instead of repeated blindly."
+                .to_string()
+        }
+        ErrorCategory::RequestSchema => {
+            "Provider rejected the request schema; inspect the trace and generated payload shape before retrying."
                 .to_string()
         }
         _ => format!("Selected recovery action: {}", action),
@@ -268,10 +327,55 @@ mod tests {
     }
 
     #[test]
+    fn provider_protocol_error_suggests_trace_not_retry() {
+        let err = ClassifiedError::new(
+            ErrorCategory::ProviderProtocol,
+            RecoveryAction::Abort,
+            "tool result does not follow tool call".to_string(),
+        );
+        let plan = RecoveryPlan::from_classified("api", &err);
+
+        assert_eq!(plan.suggested_command.as_deref(), Some("/trace last"));
+        assert!(!plan.retryable);
+        assert!(!plan.safe_retry);
+        assert!(plan.user_note.contains("message/tool protocol"));
+    }
+
+    #[test]
     fn tool_timeout_suggests_retry() {
         let plan = RecoveryPlan::tool_failure("bash", "command timed out", Some("timeout"));
         assert_eq!(plan.suggested_command.as_deref(), Some("/retry"));
         assert!(plan.retryable);
         assert!(plan.safe_retry);
+    }
+
+    #[test]
+    fn remote_tool_failure_suggests_remote_status_and_disables_safe_retry() {
+        let plan = RecoveryPlan::tool_failure(
+            "remote_trigger",
+            "Failed to run trigger: bridge unavailable",
+            Some("unavailable"),
+        );
+
+        assert_eq!(plan.suggested_command.as_deref(), Some("/remote status"));
+        assert!(plan.retryable);
+        assert!(!plan.safe_retry);
+        assert!(plan.user_note.contains("bridge/remote path"));
+    }
+
+    #[test]
+    fn remote_permission_failure_stays_on_permission_explain() {
+        let plan = RecoveryPlan::tool_failure(
+            "remote_dev",
+            "Permission denied: remote exec requires user confirmation",
+            Some("permission_denied"),
+        );
+
+        assert_eq!(
+            plan.suggested_command.as_deref(),
+            Some("/permissions explain")
+        );
+        assert!(!plan.retryable);
+        assert!(!plan.safe_retry);
     }
 }

@@ -1376,14 +1376,32 @@ Current code status:
 - Tool output viewer now has a slash command surface:
   `/tool-output [list|latest|<tool_id>]` and alias `/tool`, backed by visible
   tool run records with full output details.
+- Runtime panels now have an initial slash surface:
+  `/panel [all|diff|approval|context|tasks|mcp]` plus `/runtime`, with shared
+  formatters for cached diff state, pending approvals, context budget facts,
+  tracked/runtime/terminal tasks, and MCP health/repair status.
+- Command maturity is now driven by explicit usable/placeholder command lists,
+  with `/help maturity` reporting production/usable/placeholder buckets and
+  initial runtime surfaces such as `/panel` and `/tool-output` marked usable
+  instead of silently appearing production-grade.
+- `/tasks` now reuses the task runtime panel, so the high-use task command
+  reports tracked tasks, runtime task counts, terminal handles, backgrounded
+  tools, and recent runtime tool status from one product surface.
+- `/mcp status|health` now reuses the MCP runtime panel, and `/permissions`
+  includes the shared approval panel whenever a tool approval is pending.
+- `/context` now starts with the shared context runtime panel and then appends
+  the detailed request-budget, memory-preview, and compression sections.
 
 Tasks:
 
 1. Status line from runtime state. (done)
 2. Tool output viewer from execution records. (initial slash surface done)
-3. Diff/approval/context/task/MCP panels.
-4. Command maturity cleanup.
-5. High-use command flows made production-grade.
+3. Diff/approval/context/task/MCP panels. (initial slash/runtime panel surface
+   done)
+4. Command maturity cleanup. (explicit registry lists and `/help maturity`
+   report done)
+5. High-use command flows made production-grade. (`/tasks`, `/mcp status`,
+   `/context`, and pending `/permissions` runtime panel flows done)
 
 Expected files:
 
@@ -1398,12 +1416,53 @@ Expected files:
 
 Why tenth: external surfaces are easier after local runtime parity.
 
+Current code status:
+
+- `/mcp repair` now prints a repair plan from MCP health diagnostics, separating
+  explicit approval, explicit OAuth auth, and circuit-breaker repair actions.
+- `/mcp repair --all` applies only safe circuit-breaker resets and leaves
+  approval/OAuth steps explicit.
+- The runtime `mcp` management tool now covers MCP resources and server repair:
+  `list_resources`, `read_resource`, and `repair_server` are part of the tool
+  schema and respect per-agent MCP server scopes.
+- `/mcp resources [server]` and `/mcp read <server> <uri>` now reuse the
+  runtime MCP resource tools, so CLI resource discovery follows the same
+  approval, health, and scoped-server rules as agent tool use.
+- Plugin reload now has a registration lifecycle report shared by startup
+  injection, `plugin_manage reload`, and `/reload plugins`: discovered,
+  enabled, injected tool names, skipped disabled/missing-entry/unsigned/name
+  collision counts, and trust mode are reported from one path.
+- Bridge/remote runtime status now has a first TUI surface:
+  `/panel bridge` and `/remote status` show bridge URL source, auth-token
+  presence, tenant id, replay cursor file/count/session ids, remote environment
+  detection, saved SSH sessions, and whether `remote_trigger`/`remote_dev` are
+  exposed in the active tool registry. The same facts are now represented in
+  `RuntimeAppState`/`RuntimeStatusSnapshot` selectors for future status/trace
+  consumers.
+- Bridge configuration resolution is now shared by the remote trigger tool and
+  TUI status: `PRIORITY_AGENT_BRIDGE_URL`/`BRIDGE_URL`,
+  `PRIORITY_AGENT_BRIDGE_TOKEN`/`BRIDGE_TOKEN`, and
+  `PRIORITY_AGENT_BRIDGE_TENANT_ID`/`BRIDGE_TENANT_ID` are handled through the
+  bridge module instead of one-off slash/tool parsing.
+- Bridge/remote permission callbacks now carry structured risk facts for
+  `remote_trigger` and `remote_dev`: remote execution, remote session creation,
+  cursor-persisting sync, and SSH exec are classified for permission prompts,
+  permission request metadata, recovery guidance, and `/trace` via
+  `remote.bridge` events. Remote execution failures now prefer `/remote status`
+  and are not marked as safe automatic retries unless the user/agent has checked
+  remote side effects.
+
 Tasks:
 
-1. MCP prompt/resource/tool/command parity.
-2. MCP auth repair and approval flows.
-3. Plugin lifecycle and reload.
-4. Bridge/remote state and permission callbacks.
+1. MCP prompt/resource/tool/command parity. (initial MCP manage-tool and slash
+   resource/read parity done)
+2. MCP auth repair and approval flows. (initial repair-plan and safe
+   circuit-reset flow done)
+3. Plugin lifecycle and reload. (initial reload diagnostics and registration
+   report done)
+4. Bridge/remote state and permission callbacks. (runtime state panel, shared
+   config resolution, remote permission facts, recovery hints, and trace events
+   done)
 
 Expected files:
 
@@ -1418,12 +1477,43 @@ Expected files:
 Why eleventh: provider correctness must hold after the runtime message model
 changes.
 
+Current code status:
+
+- `ProviderCapabilities` now records protocol family, streaming/tool-call
+  support, reasoning-token support, MiniMax non-streaming tool-call
+  requirements, system-message merging, and tool-result adjacency requirements.
+- Provider config/type resolution can derive capability records from explicit
+  provider type, base URL, and model name.
+- Provider message normalization can run through capability records, preserving
+  the existing provider-family normalizer while making the capability table the
+  routing surface.
+- Conversation-loop streaming fallback now uses provider capabilities for
+  MiniMax-style non-streaming tool-call routing instead of ad hoc string checks
+  in the loop.
+- Terminal API failures now emit a classified recovery plan. Provider protocol
+  and request-schema failures are marked non-safe-retry and point to
+  `/trace last` instead of collapsing into a generic `api_error`.
+- Provider request recovery now treats fallback model use as runtime policy:
+  `ResourcePolicy` decides whether fallback is allowed, `/resource` and
+  `resource.policy` traces expose that decision, transient provider failures can
+  retry once with `PRIORITY_AGENT_FALLBACK_MODEL`, and context-size errors prefer
+  reactive compaction before fallback instead of repeating the same oversized
+  request when no compressor is available.
+- API start traces now include provider protocol facts: detected provider
+  family, whether non-streaming tool requests are required, and whether strict
+  tool-result adjacency is required. This makes provider incompatibility visible
+  in `/trace last` before looking at serialized payloads.
+
 Tasks:
 
-1. Normalize provider message generation.
-2. Add provider capability records.
-3. Add typed provider error recovery.
-4. Add context-too-long reactive compaction and fallback model policy.
+1. Normalize provider message generation. (initial capability-driven
+   normalization entrypoint done)
+2. Add provider capability records. (initial provider/type/config capability
+   records done)
+3. Add typed provider error recovery. (initial terminal API failure recovery
+   plans done)
+4. Add context-too-long reactive compaction and fallback model policy. (initial
+   reactive compaction plus policy-gated fallback model retry done)
 
 Expected files:
 

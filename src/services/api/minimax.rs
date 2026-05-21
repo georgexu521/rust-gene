@@ -4,7 +4,9 @@
 
 use crate::services::api::retry::ProviderRetryPolicy;
 use crate::services::api::{
-    provider_protocol::{normalize_messages_for_provider, ProviderProtocolFamily},
+    provider_protocol::{
+        normalize_messages_for_capabilities, ProviderCapabilities, ProviderProtocolFamily,
+    },
     sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
 };
 use anyhow::{bail, Context, Result};
@@ -91,7 +93,10 @@ impl MiniMaxClient {
     }
 
     fn normalize_messages_for_minimax(messages: Vec<Message>) -> Vec<Message> {
-        normalize_messages_for_provider(ProviderProtocolFamily::MiniMax, messages)
+        normalize_messages_for_capabilities(
+            ProviderCapabilities::for_family(ProviderProtocolFamily::MiniMax),
+            messages,
+        )
     }
 }
 

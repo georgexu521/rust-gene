@@ -10,6 +10,18 @@ use std::sync::OnceLock;
 
 static BRIDGE_URL: OnceLock<String> = OnceLock::new();
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BridgeRuntimeSnapshot {
+    pub bridge_url: Option<String>,
+    pub bridge_url_source: Option<String>,
+    pub auth_token_configured: bool,
+    pub auth_token_source: Option<String>,
+    pub tenant_id: Option<String>,
+    pub cursor_path: PathBuf,
+    pub cursor_count: usize,
+    pub cursor_session_ids: Vec<String>,
+}
+
 /// 设置全局桥接服务器 URL（线程安全，只能设置一次）
 pub fn set_bridge_url(url: String) -> Result<(), String> {
     BRIDGE_URL
@@ -22,7 +34,20 @@ pub fn get_bridge_url() -> Option<&'static String> {
     BRIDGE_URL.get()
 }
 
-fn bridge_cursor_path() -> PathBuf {
+pub fn resolve_bridge_url() -> Option<String> {
+    resolve_bridge_url_with_source().map(|(url, _)| url)
+}
+
+pub fn resolve_bridge_auth_token() -> Option<String> {
+    first_non_empty_env(&["PRIORITY_AGENT_BRIDGE_TOKEN", "BRIDGE_TOKEN"]).map(|(value, _)| value)
+}
+
+pub fn resolve_bridge_tenant_id() -> Option<String> {
+    first_non_empty_env(&["PRIORITY_AGENT_BRIDGE_TENANT_ID", "BRIDGE_TENANT_ID"])
+        .map(|(value, _)| value)
+}
+
+pub fn bridge_cursor_path() -> PathBuf {
     if let Ok(custom) = std::env::var("PRIORITY_AGENT_BRIDGE_CURSOR_FILE") {
         if !custom.trim().is_empty() {
             return PathBuf::from(custom);
@@ -34,12 +59,37 @@ fn bridge_cursor_path() -> PathBuf {
         .join("bridge_cursors.json")
 }
 
+pub fn runtime_snapshot() -> BridgeRuntimeSnapshot {
+    let (bridge_url, bridge_url_source) = resolve_bridge_url_with_source()
+        .map(|(value, source)| (Some(value), Some(source)))
+        .unwrap_or((None, None));
+    let (auth_token_configured, auth_token_source) =
+        match first_non_empty_env(&["PRIORITY_AGENT_BRIDGE_TOKEN", "BRIDGE_TOKEN"]) {
+            Some((_, source)) => (true, Some(source)),
+            None => (false, None),
+        };
+    let tenant_id = resolve_bridge_tenant_id();
+    let cursor_path = bridge_cursor_path();
+    let cursor_map = load_replay_cursor_map(&cursor_path);
+    let mut cursor_session_ids = cursor_map.keys().cloned().collect::<Vec<_>>();
+    cursor_session_ids.sort();
+
+    BridgeRuntimeSnapshot {
+        bridge_url,
+        bridge_url_source,
+        auth_token_configured,
+        auth_token_source,
+        tenant_id,
+        cursor_path,
+        cursor_count: cursor_map.len(),
+        cursor_session_ids,
+    }
+}
+
 /// 读取远程会话回放游标
 pub fn load_replay_cursor(session_id: &str) -> Option<i64> {
     let path = bridge_cursor_path();
-    let content = std::fs::read_to_string(path).ok()?;
-    let map: HashMap<String, i64> = serde_json::from_str(&content).ok()?;
-    map.get(session_id).copied()
+    load_replay_cursor_map(&path).get(session_id).copied()
 }
 
 /// 保存远程会话回放游标
@@ -58,6 +108,32 @@ pub fn save_replay_cursor(session_id: &str, cursor: i64) -> anyhow::Result<()> {
     let content = serde_json::to_string_pretty(&map)?;
     std::fs::write(path, content)?;
     Ok(())
+}
+
+fn resolve_bridge_url_with_source() -> Option<(String, String)> {
+    if let Some(url) = get_bridge_url().map(|value| value.trim().to_string()) {
+        if !url.is_empty() {
+            return Some((url, "runtime".to_string()));
+        }
+    }
+    first_non_empty_env(&["PRIORITY_AGENT_BRIDGE_URL", "BRIDGE_URL"])
+}
+
+fn first_non_empty_env(keys: &[&str]) -> Option<(String, String)> {
+    keys.iter().find_map(|key| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| (value, (*key).to_string()))
+    })
+}
+
+fn load_replay_cursor_map(path: &PathBuf) -> HashMap<String, i64> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    serde_json::from_str(&content).unwrap_or_default()
 }
 
 /// 桥接客户端
@@ -224,6 +300,7 @@ impl BridgeClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     #[test]
     fn test_bridge_client_new() {
@@ -241,5 +318,43 @@ mod tests {
         );
         assert_eq!(client.base_url, "http://localhost:8080");
         assert_eq!(client.tenant_id.as_deref(), Some("team-a"));
+    }
+
+    #[test]
+    fn runtime_snapshot_reports_env_and_cursor_state() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        let cursor_path = std::env::temp_dir().join(format!(
+            "priority-agent-bridge-cursors-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        env.set("PRIORITY_AGENT_BRIDGE_URL", "http://bridge.local");
+        env.set("PRIORITY_AGENT_BRIDGE_TOKEN", "secret");
+        env.set("PRIORITY_AGENT_BRIDGE_TENANT_ID", "team-a");
+        env.set(
+            "PRIORITY_AGENT_BRIDGE_CURSOR_FILE",
+            &cursor_path.to_string_lossy(),
+        );
+        env.remove("BRIDGE_URL");
+        env.remove("BRIDGE_TOKEN");
+        env.remove("BRIDGE_TENANT_ID");
+
+        save_replay_cursor("remote-1", 42).expect("save cursor");
+        let snapshot = runtime_snapshot();
+
+        assert_eq!(snapshot.bridge_url.as_deref(), Some("http://bridge.local"));
+        assert_eq!(
+            snapshot.bridge_url_source.as_deref(),
+            Some("PRIORITY_AGENT_BRIDGE_URL")
+        );
+        assert!(snapshot.auth_token_configured);
+        assert_eq!(
+            snapshot.auth_token_source.as_deref(),
+            Some("PRIORITY_AGENT_BRIDGE_TOKEN")
+        );
+        assert_eq!(snapshot.tenant_id.as_deref(), Some("team-a"));
+        assert_eq!(snapshot.cursor_count, 1);
+        assert_eq!(snapshot.cursor_session_ids, vec!["remote-1"]);
+
+        let _ = std::fs::remove_file(cursor_path);
     }
 }

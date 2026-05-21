@@ -123,6 +123,7 @@ impl TurnSetupController {
             parallelism_limit: resource_policy.parallelism_limit,
             max_tool_calls: resource_policy.max_tool_calls,
             context_budget_tokens: resource_policy.context_budget_tokens,
+            allow_fallback_model: resource_policy.allow_fallback_model,
             reason: resource_policy.reason.clone(),
         });
     }

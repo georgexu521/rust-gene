@@ -123,6 +123,40 @@ pub fn is_suggested_command(name: &str) -> bool {
     SUGGESTED_COMMANDS.contains(&name)
 }
 
+const USABLE_COMMANDS: &[&str] = &[
+    "/tool-output",
+    "/panel",
+    "/agents",
+    "/tasks",
+    "/teammate",
+    "/critic",
+    "/assistant",
+    "/dream",
+    "/custom",
+    "/orchestrate",
+    "/remote",
+    "/lsp",
+    "/npm",
+    "/profiling",
+    "/migrate",
+    "/install",
+    "/skeleton",
+    "/branch",
+    "/webhook",
+    "/wizard",
+    "/workspace",
+    "/stealth",
+    "/shadow",
+    "/subscribe",
+    "/ticker",
+    "/eval",
+    "/resource",
+    "/evolution",
+    "/skill-proposals",
+];
+
+const PLACEHOLDER_COMMANDS: &[&str] = &["/desktop", "/reset", "/slack", "/chrome"];
+
 impl CommandRegistry {
     pub fn new() -> Self {
         Self {
@@ -297,6 +331,45 @@ impl CommandRegistry {
             .filter(|cmd| seen.insert(cmd.name))
             .filter(|cmd| cmd.maturity == maturity)
             .collect()
+    }
+
+    pub fn maturity_summary(&self) -> BTreeMap<&'static str, usize> {
+        let mut summary = BTreeMap::new();
+        for maturity in [
+            CommandMaturity::Production,
+            CommandMaturity::Usable,
+            CommandMaturity::Placeholder,
+        ] {
+            summary.insert(maturity.label(), self.maturity_commands(maturity).len());
+        }
+        summary
+    }
+
+    pub fn maturity_report(&self) -> String {
+        let mut lines = vec!["Command maturity:".to_string()];
+        for maturity in [
+            CommandMaturity::Production,
+            CommandMaturity::Usable,
+            CommandMaturity::Placeholder,
+        ] {
+            let mut names = self
+                .maturity_commands(maturity)
+                .into_iter()
+                .map(|cmd| cmd.name)
+                .collect::<Vec<_>>();
+            names.sort_unstable();
+            lines.push(format!(
+                "- {} ({}): {}",
+                maturity.label(),
+                names.len(),
+                if names.is_empty() {
+                    "none".to_string()
+                } else {
+                    names.join(", ")
+                }
+            ));
+        }
+        lines.join("\n")
     }
 
     /// 命令面板候选项，使用轻量 fuzzy 排序，并过滤别名重复项。
@@ -489,8 +562,13 @@ impl Default for CommandRegistry {
 // 命令定义（编译期常量）
 // ═══════════════════════════════════════
 
-pub const CMD_HELP: CommandDef =
-    CommandDef::new("/help", &["/h"], "General", "/help", "Show this help");
+pub const CMD_HELP: CommandDef = CommandDef::new(
+    "/help",
+    &["/h"],
+    "General",
+    "/help [maturity]",
+    "Show help or command maturity report",
+);
 
 pub const CMD_CLEAR: CommandDef = CommandDef::new(
     "/clear",
@@ -548,6 +626,14 @@ pub const CMD_TOOL_OUTPUT: CommandDef = CommandDef::new(
     "Info",
     "/tool-output [list|latest|<tool_id>]",
     "Open or list captured tool outputs",
+);
+
+pub const CMD_PANEL: CommandDef = CommandDef::new(
+    "/panel",
+    &["/panels", "/runtime"],
+    "Info",
+    "/panel [all|diff|approval|context|tasks|mcp|bridge]",
+    "Show runtime panels for diffs, approvals, context, tasks, MCP, and bridge",
 );
 
 pub const CMD_TASKS: CommandDef = CommandDef::new(
@@ -791,8 +877,8 @@ pub const CMD_REMOTE: CommandDef = CommandDef::new(
     "/remote",
     &[],
     "Agents",
-    "/remote [task]",
-    "Start a remote agent via bridge",
+    "/remote [status|task]",
+    "Show bridge status or start a remote agent",
 );
 
 pub const CMD_DREAM: CommandDef = CommandDef::new(
@@ -1468,6 +1554,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_STATUSBAR);
     registry.register(&CMD_TOOLS);
     registry.register(&CMD_TOOL_OUTPUT);
+    registry.register(&CMD_PANEL);
     registry.register(&CMD_TASKS);
     registry.register(&CMD_AGENTS);
     registry.register(&CMD_CHECKPOINTS);
@@ -1600,46 +1687,20 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_RECOVER);
     registry.register(&CMD_FEEDBACK);
 
-    // Keep partially implemented commands visible but honest. Mature CLIs should
-    // not make unavailable integrations look production-ready in help/palette UI.
-    for name in [
-        "/agents",
-        "/tasks",
-        "/teammate",
-        "/critic",
-        "/assistant",
-        "/dream",
-        "/custom",
-        "/orchestrate",
-        "/remote",
-        "/lsp",
-        "/npm",
-        "/profiling",
-        "/migrate",
-        "/install",
-        "/skeleton",
-        "/branch",
-        "/webhook",
-        "/wizard",
-        "/workspace",
-        "/stealth",
-        "/shadow",
-        "/subscribe",
-        "/ticker",
-        "/eval",
-        "/resource",
-        "/evolution",
-        "/skill-proposals",
-    ] {
-        registry.mark_usable(name);
-    }
-
-    registry.mark_placeholder("/desktop");
-    registry.mark_placeholder("/reset");
-    registry.mark_placeholder("/slack");
-    registry.mark_placeholder("/chrome");
+    apply_command_maturity(&mut registry);
 
     registry
+}
+
+fn apply_command_maturity(registry: &mut CommandRegistry) {
+    // Keep partially implemented commands visible but honest. Mature CLIs should
+    // not make unavailable integrations look production-ready in help/palette UI.
+    for name in USABLE_COMMANDS {
+        registry.mark_usable(name);
+    }
+    for name in PLACEHOLDER_COMMANDS {
+        registry.mark_placeholder(name);
+    }
 }
 
 /// All registered command definitions (for gap analysis and introspection)
@@ -1656,6 +1717,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_STATUSBAR,
     &CMD_TOOLS,
     &CMD_TOOL_OUTPUT,
+    &CMD_PANEL,
     &CMD_TASKS,
     &CMD_AGENTS,
     &CMD_CHECKPOINTS,
@@ -1787,6 +1849,8 @@ mod tests {
         assert!(registry.get("/h").is_some()); // alias
         assert!(registry.get("/tool-output").is_some());
         assert!(registry.get("/tool").is_some()); // alias
+        assert!(registry.get("/panel").is_some());
+        assert!(registry.get("/runtime").is_some()); // alias
         assert!(registry.get("/quit").is_some());
         assert!(registry.get("/exit").is_some()); // alias
         assert!(registry.get("/nonexistent").is_none());
@@ -1818,6 +1882,22 @@ mod tests {
             Some(CommandMaturity::Usable)
         );
         assert_eq!(
+            registry.get("/panel").map(|cmd| cmd.maturity),
+            Some(CommandMaturity::Usable)
+        );
+        assert_eq!(
+            registry.get("/runtime").map(|cmd| cmd.maturity),
+            Some(CommandMaturity::Usable)
+        );
+        assert_eq!(
+            registry.get("/tool-output").map(|cmd| cmd.maturity),
+            Some(CommandMaturity::Usable)
+        );
+        assert_eq!(
+            registry.get("/tool").map(|cmd| cmd.maturity),
+            Some(CommandMaturity::Usable)
+        );
+        assert_eq!(
             registry.get("/desktop").map(|cmd| cmd.maturity),
             Some(CommandMaturity::Placeholder)
         );
@@ -1828,6 +1908,63 @@ mod tests {
         assert!(!registry
             .maturity_commands(CommandMaturity::Placeholder)
             .is_empty());
+    }
+
+    #[test]
+    fn test_command_maturity_lists_are_registered_and_disjoint() {
+        let registry = default_command_registry();
+        let mut listed = HashSet::new();
+
+        for name in USABLE_COMMANDS {
+            assert!(
+                registry.get(name).is_some(),
+                "usable command {name} is registered"
+            );
+            assert!(
+                listed.insert(*name),
+                "duplicate command maturity entry {name}"
+            );
+        }
+        for name in PLACEHOLDER_COMMANDS {
+            assert!(
+                registry.get(name).is_some(),
+                "placeholder command {name} is registered"
+            );
+            assert!(
+                listed.insert(*name),
+                "duplicate command maturity entry {name}"
+            );
+        }
+
+        let summary = registry.maturity_summary();
+        assert_eq!(
+            summary.get(CommandMaturity::Usable.label()).copied(),
+            Some(USABLE_COMMANDS.len())
+        );
+        assert_eq!(
+            summary.get(CommandMaturity::Placeholder.label()).copied(),
+            Some(PLACEHOLDER_COMMANDS.len())
+        );
+        assert!(
+            summary
+                .get(CommandMaturity::Production.label())
+                .copied()
+                .unwrap_or_default()
+                > 0
+        );
+    }
+
+    #[test]
+    fn test_maturity_report_lists_runtime_surfaces() {
+        let registry = default_command_registry();
+        let report = registry.maturity_report();
+
+        assert!(report.contains("Command maturity:"));
+        assert!(report.contains("- usable"));
+        assert!(report.contains("/panel"));
+        assert!(report.contains("/tool-output"));
+        assert!(report.contains("- placeholder"));
+        assert!(report.contains("/desktop"));
     }
 
     #[test]

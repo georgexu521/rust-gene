@@ -1836,6 +1836,39 @@ impl crate::tools::Tool for McpToolAdapter {
 /// MCP 管理工具 - 让 agent 管理 MCP 服务器连接
 pub struct McpManageTool;
 
+fn scoped_mcp_servers(context: &crate::tools::ToolContext) -> Option<Vec<String>> {
+    let value = context.metadata.get("allowed_mcp_servers")?;
+    let servers = value
+        .split(',')
+        .map(str::trim)
+        .filter(|server| !server.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if servers.is_empty() {
+        None
+    } else {
+        Some(servers)
+    }
+}
+
+fn ensure_mcp_server_allowed(
+    context: &crate::tools::ToolContext,
+    server_name: &str,
+) -> std::result::Result<(), crate::tools::ToolResult> {
+    let Some(servers) = scoped_mcp_servers(context) else {
+        return Ok(());
+    };
+    if servers.iter().any(|server| server == server_name) {
+        Ok(())
+    } else {
+        Err(crate::tools::ToolResult::error(format!(
+            "MCP server '{}' is outside this agent's allowed MCP scope: {}",
+            server_name,
+            servers.join(", ")
+        )))
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::tools::Tool for McpManageTool {
     fn name(&self) -> &str {
@@ -1844,7 +1877,8 @@ impl crate::tools::Tool for McpManageTool {
 
     fn description(&self) -> &str {
         "Manage MCP (Model Context Protocol) server connections. List servers, \
-         discover tools, and call remote tools."
+         discover tools/prompts/resources, read resources, authenticate servers, \
+         and call remote tools."
     }
 
     fn parameters(&self) -> Value {
@@ -1853,20 +1887,36 @@ impl crate::tools::Tool for McpManageTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list_servers", "list_tools", "list_prompts", "call_tool", "auth_server"],
+                    "enum": [
+                        "list_servers",
+                        "list_tools",
+                        "list_prompts",
+                        "list_resources",
+                        "read_resource",
+                        "call_tool",
+                        "auth_server",
+                        "repair_server"
+                    ],
                     "description": "list_servers: show connected servers. \
                                    list_tools: show all available MCP tools. \
                                    list_prompts: show MCP prompts that can become commands. \
+                                   list_resources: show available MCP resources. \
+                                   read_resource: read one MCP resource by URI. \
                                    call_tool: invoke an MCP tool. \
-                                   auth_server: authenticate a server with OAuth."
+                                   auth_server: authenticate a server with OAuth. \
+                                   repair_server: reset a server circuit breaker."
                 },
                 "server_name": {
                     "type": "string",
-                    "description": "MCP server name (for 'auth_server')"
+                    "description": "MCP server name (for server-scoped actions)"
                 },
                 "tool_name": {
                     "type": "string",
                     "description": "Tool name (for 'call_tool')"
+                },
+                "uri": {
+                    "type": "string",
+                    "description": "Resource URI (for 'read_resource')"
                 },
                 "arguments": {
                     "type": "object",
@@ -1952,6 +2002,111 @@ impl crate::tools::Tool for McpManageTool {
                     )
                 }
             }
+            "list_resources" => {
+                let server_name = params["server_name"]
+                    .as_str()
+                    .filter(|name| !name.is_empty());
+                if let Some(name) = server_name {
+                    if let Err(result) = ensure_mcp_server_allowed(&context, name) {
+                        return result;
+                    }
+                } else if let Some(servers) = scoped_mcp_servers(&context) {
+                    return crate::tools::ToolResult::error(format!(
+                        "This agent is scoped to MCP servers: {}. Pass server_name explicitly.",
+                        servers.join(", ")
+                    ));
+                }
+
+                let resources = if let Some(name) = server_name {
+                    if !mcp_manager.is_server_approved(name) {
+                        return crate::tools::ToolResult::error(format!(
+                            "MCP server '{}' is not approved. Use '/mcp approve {}' to approve it.",
+                            name, name
+                        ));
+                    }
+                    if let Err(error) = mcp_manager.health_check(name).await {
+                        return crate::tools::ToolResult::error(format!(
+                            "MCP server '{}' is not healthy enough to list resources: {}",
+                            name, error
+                        ));
+                    }
+                    match mcp_manager.get_client(name) {
+                        Some(client) => match client.discover_resources().await {
+                            Ok(resources) => resources,
+                            Err(error) => {
+                                return crate::tools::ToolResult::error(format!(
+                                    "Failed to discover resources from {}: {}",
+                                    name, error
+                                ));
+                            }
+                        },
+                        None => {
+                            return crate::tools::ToolResult::error(format!(
+                                "MCP server '{}' not found",
+                                name
+                            ));
+                        }
+                    }
+                } else {
+                    mcp_manager.discover_all_resources().await
+                };
+
+                if resources.is_empty() {
+                    crate::tools::ToolResult::success("No MCP resources available.".to_string())
+                } else {
+                    let resource_list = resources
+                        .iter()
+                        .map(|resource| {
+                            format!(
+                                "- {} ({}): {} [{}]",
+                                resource.name,
+                                resource.server_name,
+                                resource.uri,
+                                resource.mime_type.as_deref().unwrap_or("unknown")
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    crate::tools::ToolResult::success_with_data(
+                        format!(
+                            "Available MCP resources ({}):\n{}",
+                            resources.len(),
+                            resource_list.join("\n")
+                        ),
+                        json!({ "resources": resources }),
+                    )
+                }
+            }
+            "read_resource" => {
+                let server_name = params["server_name"].as_str().unwrap_or("");
+                let uri = params["uri"].as_str().unwrap_or("");
+                if server_name.is_empty() || uri.is_empty() {
+                    return crate::tools::ToolResult::error(
+                        "server_name and uri are required for 'read_resource'".to_string(),
+                    );
+                }
+                if let Err(result) = ensure_mcp_server_allowed(&context, server_name) {
+                    return result;
+                }
+
+                match mcp_manager.read_resource(server_name, uri).await {
+                    Ok(resource) => {
+                        let content = serde_json::to_string_pretty(&resource)
+                            .unwrap_or_else(|_| resource.to_string());
+                        crate::tools::ToolResult::success_with_data(
+                            content,
+                            json!({
+                                "server_name": server_name,
+                                "uri": uri,
+                                "resource": resource,
+                            }),
+                        )
+                    }
+                    Err(error) => crate::tools::ToolResult::error(format!(
+                        "Failed to read MCP resource '{}': {}",
+                        uri, error
+                    )),
+                }
+            }
             "call_tool" => {
                 let tool_name = params["tool_name"].as_str().unwrap_or("");
                 if tool_name.is_empty() {
@@ -1985,6 +2140,24 @@ impl crate::tools::Tool for McpManageTool {
                     Err(e) => crate::tools::ToolResult::error(format!(
                         "MCP OAuth authentication failed for '{}': {}",
                         server_name, e
+                    )),
+                }
+            }
+            "repair_server" => {
+                let server_name = params["server_name"].as_str().unwrap_or("");
+                if server_name.is_empty() {
+                    return crate::tools::ToolResult::error(
+                        "server_name is required for 'repair_server'".to_string(),
+                    );
+                }
+                if let Err(result) = ensure_mcp_server_allowed(&context, server_name) {
+                    return result;
+                }
+                match mcp_manager.repair_server(server_name) {
+                    Ok(message) => crate::tools::ToolResult::success(message),
+                    Err(error) => crate::tools::ToolResult::error(format!(
+                        "MCP repair failed for '{}': {}",
+                        server_name, error
                     )),
                 }
             }
@@ -2044,6 +2217,60 @@ mod tests {
         };
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.server_name, "filesystem");
+    }
+
+    #[test]
+    fn test_mcp_manage_tool_schema_includes_resource_and_repair_actions() {
+        use crate::tools::Tool;
+
+        let schema = McpManageTool.parameters();
+        let actions = schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum");
+        let action_names = actions
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(action_names.contains(&"list_resources"));
+        assert!(action_names.contains(&"read_resource"));
+        assert!(action_names.contains(&"repair_server"));
+        assert!(schema["properties"].get("uri").is_some());
+    }
+
+    #[test]
+    fn test_mcp_manage_scope_rejects_unlisted_server() {
+        let mut context = crate::tools::ToolContext::new(".", "test");
+        context.metadata.insert(
+            "allowed_mcp_servers".to_string(),
+            "filesystem,github".to_string(),
+        );
+
+        assert!(ensure_mcp_server_allowed(&context, "filesystem").is_ok());
+        assert!(ensure_mcp_server_allowed(&context, "slack").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_manage_resource_listing_requires_explicit_scoped_server() {
+        use crate::tools::Tool;
+
+        let manager = Arc::new(McpManager::new());
+        let mut context = crate::tools::ToolContext::new(".", "test").with_mcp_manager(manager);
+        context.metadata.insert(
+            "allowed_mcp_servers".to_string(),
+            "filesystem,github".to_string(),
+        );
+
+        let result = McpManageTool
+            .execute(json!({ "action": "list_resources" }), context)
+            .await;
+
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Pass server_name explicitly"));
     }
 
     #[test]

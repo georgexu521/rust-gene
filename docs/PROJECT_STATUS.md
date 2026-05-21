@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-18
+Last updated: 2026-05-21
 
 ## Summary
 
@@ -435,10 +435,51 @@ current passing run with a real code diff.
   trace events, durable result artifacts, and manager tests for timeout, failure,
   cancellation, and resumable results.
 - Slash commands are labeled as `production`, `usable`, or `placeholder` in help
-  and command-palette surfaces, with rendered command-palette smoke tests for
-  placeholder, usable, and contextual permission actions plus approval-panel
-  smoke tests for bash and file-write review flows, statusline active-tool
-  state, tool-output viewer controls, and diff viewer output/empty states.
+  and command-palette surfaces, `/help maturity` reports the current maturity
+  buckets, and rendered command-palette smoke tests cover placeholder, usable,
+  and contextual permission actions plus approval-panel smoke tests for bash and
+  file-write review flows, statusline active-tool state, tool-output viewer
+  controls, context/task/MCP/permission runtime-panel output, and diff viewer
+  output/empty states.
+- MCP repair flow distinguishes explicit approval, explicit OAuth auth, and safe
+  circuit-breaker reset actions; `/mcp repair --all` applies only the circuit
+  reset subset.
+- MCP runtime resource parity is wired through both the `mcp` management tool
+  and slash commands: `list_resources`, `read_resource`, `repair_server`,
+  `/mcp resources [server]`, and `/mcp read <server> <uri>` share approval,
+  health, and per-agent MCP server scope checks.
+- Provider protocol hardening now has explicit capability records for provider
+  family, streaming/tool-call support, reasoning-token support, MiniMax
+  non-streaming tool-call routing, system-message merging, and tool-result
+  adjacency. Provider type/config detection feeds those records, and the
+  conversation loop uses them for MiniMax-style non-streaming tool requests.
+- Terminal API failures now record classified recovery plans. Provider protocol
+  and request-schema failures are surfaced as non-safe-retry trace events with
+  `/trace last` as the next diagnostic command instead of disappearing into a
+  generic API failure.
+- Provider fallback is now a visible runtime policy rather than prompt text:
+  `ResourcePolicy` exposes `allow_fallback_model` through traces and
+  `/resource`; transient provider failures can retry once with
+  `PRIORITY_AGENT_FALLBACK_MODEL`, while context-size errors still prefer
+  reactive compaction before falling back.
+- API request traces now expose provider protocol facts, including detected
+  provider family, non-streaming tool-call requirements, and strict tool-result
+  adjacency requirements, so `/trace last` can explain why a request changed
+  shape for MiniMax/Kimi/OpenAI-compatible providers.
+- Plugin reload has a shared lifecycle report for startup injection,
+  `plugin_manage reload`, and `/reload plugins`, including discovered/enabled
+  counts, injected tool names, skipped reason counts, and trust mode.
+- Bridge/remote state is now visible from `/panel bridge` and `/remote status`.
+  The panel reports bridge URL source, auth-token presence, tenant id, replay
+  cursor state, remote environment detection, saved SSH sessions, and active
+  `remote_trigger`/`remote_dev` tool exposure. These facts are also part of
+  `RuntimeAppState`/`RuntimeStatusSnapshot`, and the remote trigger tool now
+  uses the same bridge config resolver as the TUI status surface.
+- Remote bridge actions now flow through the same permission/recovery/trace
+  spine as local tools: `remote_trigger` and `remote_dev` classify run/create/
+  sync/SSH exec risk, attach remote facts to permission request metadata, record
+  `remote.bridge` trace events, and route remote failures toward `/remote status`
+  with conservative non-safe-retry guidance.
 - Evalsets include a 25-scenario deterministic coding replay matrix, JSON
   report output, and `/eval record <name|all>` persisted report files for
   pass/fail trend collection; `/eval trend [limit]` summarizes recent persisted

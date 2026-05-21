@@ -587,6 +587,16 @@ impl PermissionContext {
                 Some("run") => RiskLevel::High,
                 _ => RiskLevel::Low,
             },
+            "remote_trigger" => match params["action"].as_str() {
+                Some("run") => RiskLevel::High,
+                Some("create" | "sync") => RiskLevel::Medium,
+                _ => RiskLevel::Low,
+            },
+            "remote_dev" => match params["action"].as_str() {
+                Some("exec") => RiskLevel::High,
+                Some("create" | "remove") => RiskLevel::Medium,
+                _ => RiskLevel::Low,
+            },
             "mcp_tool" => RiskLevel::High,
             _ => RiskLevel::Low,
         }
@@ -855,6 +865,55 @@ impl PermissionContext {
             let url = params["url"].as_str().unwrap_or_default();
             if !self.url_is_trusted(url) {
                 warnings.push("UNTRUSTED_NETWORK: URL host is not in trusted domains".to_string());
+            }
+        }
+        if tool_name == "remote_trigger" {
+            let facts =
+                crate::tools::remote_trigger_tool::remote_trigger_permission_metadata(params);
+            if let Some(summary) = facts["permission_summary"].as_str() {
+                reasons.push(format!("Remote bridge facts: {}", summary));
+            }
+            match facts["remote_effect"].as_str().unwrap_or_default() {
+                "remote_execution" => warnings.push(
+                    "REMOTE_EXECUTION: bridge trigger can execute work outside the local process"
+                        .to_string(),
+                ),
+                "remote_read_and_local_cursor_write" => warnings.push(
+                    "LOCAL_CURSOR_WRITE: sync reads remote state and updates the local replay cursor"
+                        .to_string(),
+                ),
+                "remote_session_create" => warnings.push(
+                    "REMOTE_SESSION_CREATE: prompt content will be sent to the configured bridge"
+                        .to_string(),
+                ),
+                _ => {}
+            }
+            if !facts["bridge_url_configured"].as_bool().unwrap_or(false) {
+                warnings.push(
+                    "BRIDGE_NOT_CONFIGURED: bridge URL is missing, execution will fail before contacting a remote"
+                        .to_string(),
+                );
+            }
+        }
+        if tool_name == "remote_dev" {
+            let facts = crate::tools::remote_dev_tool::remote_dev_permission_metadata(params);
+            if let Some(summary) = facts["permission_summary"].as_str() {
+                reasons.push(format!("Remote dev facts: {}", summary));
+            }
+            match facts["remote_effect"].as_str().unwrap_or_default() {
+                "remote_ssh_execution" => warnings.push(
+                    "REMOTE_COMMAND: SSH command can mutate remote files/processes outside the local workspace"
+                        .to_string(),
+                ),
+                "local_remote_session_create" => warnings.push(
+                    "REMOTE_SESSION_CONFIG: stores host/user/key metadata for future remote use"
+                        .to_string(),
+                ),
+                "local_remote_session_delete" => warnings.push(
+                    "REMOTE_SESSION_DELETE: removes a saved remote session configuration"
+                        .to_string(),
+                ),
+                _ => {}
             }
         }
 
@@ -1349,6 +1408,74 @@ mod tests {
         assert!(
             !ctx.requires_confirmation("web_search", &serde_json::json!({"query": "rust ratatui"}))
         );
+    }
+
+    #[test]
+    fn test_auto_all_prompts_for_remote_execution_but_not_remote_reads() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoAll,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("."),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        assert!(ctx.requires_confirmation(
+            "remote_trigger",
+            &serde_json::json!({"action": "run", "id": "session-1"})
+        ));
+        assert!(ctx.requires_confirmation(
+            "remote_dev",
+            &serde_json::json!({
+                "action": "exec",
+                "id": "prod-shell",
+                "command": "cargo test -q"
+            })
+        ));
+        assert!(!ctx.requires_confirmation(
+            "remote_trigger",
+            &serde_json::json!({"action": "status", "id": "session-1"})
+        ));
+        assert!(!ctx.requires_confirmation("remote_dev", &serde_json::json!({"action": "detect"})));
+    }
+
+    #[test]
+    fn remote_permission_explanation_includes_remote_facts() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoAll,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("."),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        let trigger = ctx.explain_decision(
+            "remote_trigger",
+            &serde_json::json!({"action": "run", "id": "session-1"}),
+        );
+        assert_eq!(trigger.risk_level, RiskLevel::High);
+        assert!(trigger
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("REMOTE_EXECUTION")));
+        assert!(trigger
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("Remote bridge facts")));
+
+        let remote_dev = ctx.explain_decision(
+            "remote_dev",
+            &serde_json::json!({
+                "action": "exec",
+                "id": "prod-shell",
+                "command": "cargo test -q"
+            }),
+        );
+        assert_eq!(remote_dev.risk_level, RiskLevel::High);
+        assert!(remote_dev
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("REMOTE_COMMAND")));
     }
 
     #[test]

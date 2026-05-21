@@ -11,6 +11,7 @@ use super::turn_runtime_state::TurnRuntimeState;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
 use crate::engine::intent_router::IntentRoute;
+use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
@@ -29,6 +30,7 @@ pub(super) struct TurnModelStepContext<'a> {
     pub(super) focused_repair_prompt: Option<Message>,
     pub(super) tools: &'a [Tool],
     pub(super) exposed_tool_names: &'a HashSet<String>,
+    pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) loop_state: &'a mut TurnLoopState,
     pub(super) turn_state: &'a mut TurnRuntimeState,
     pub(super) messages: &'a mut Vec<Message>,
@@ -71,6 +73,7 @@ impl TurnModelStepController {
             messages: context.messages,
             tools: context.tools,
             exposed_tool_names: context.exposed_tool_names,
+            resource_policy: context.resource_policy,
             tx: context.tx,
             trace: context.trace,
             iteration: context.iteration,
@@ -195,6 +198,7 @@ mod tests {
         );
         let code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
+        let resource_policy = ResourcePolicy::from_route(route);
 
         TurnModelStepController::run(TurnModelStepContext {
             conversation,
@@ -205,6 +209,7 @@ mod tests {
             focused_repair_prompt: None,
             tools: &[],
             exposed_tool_names: &exposed_tool_names,
+            resource_policy: &resource_policy,
             loop_state,
             turn_state,
             messages,

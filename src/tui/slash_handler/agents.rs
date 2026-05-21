@@ -341,59 +341,11 @@ fn format_terminal_task_status_counts(tasks: &[serde_json::Value]) -> String {
 }
 
 pub async fn handle_tasks(app: &TuiApp) -> String {
-    if let Some(manager) = app.streaming_engine.as_ref().and_then(|e| e.task_manager()) {
-        let tasks = manager.list_tasks(None).await;
-        if tasks.is_empty() {
-            "No tracked tasks.".to_string()
-        } else {
-            use crate::state::TaskStatus;
-            let pending = tasks
-                .iter()
-                .filter(|t| t.status == TaskStatus::Pending)
-                .count();
-            let running = tasks
-                .iter()
-                .filter(|t| t.status == TaskStatus::Running)
-                .count();
-            let completed = tasks
-                .iter()
-                .filter(|t| t.status == TaskStatus::Completed)
-                .count();
-            let failed = tasks
-                .iter()
-                .filter(|t| t.status == TaskStatus::Failed)
-                .count();
-            let killed = tasks
-                .iter()
-                .filter(|t| t.status == TaskStatus::Killed)
-                .count();
-            let mut lines = vec![
-                format!(
-                    "Tasks summary: total={} pending={} running={} completed={} failed={} killed={}",
-                    tasks.len(), pending, running, completed, failed, killed
-                ),
-                String::new(),
-                "Recent tasks:".to_string(),
-            ];
-            for task in tasks.iter().take(20) {
-                lines.push(format!(
-                    "- {} [{}] {}",
-                    task.id,
-                    match task.status {
-                        TaskStatus::Pending => "pending",
-                        TaskStatus::Running => "running",
-                        TaskStatus::Completed => "completed",
-                        TaskStatus::Failed => "failed",
-                        TaskStatus::Killed => "killed",
-                    },
-                    task.name
-                ));
-            }
-            lines.join("\n")
-        }
-    } else {
-        "Task manager unavailable (no engine connected).".to_string()
-    }
+    crate::tui::runtime_panels::render_runtime_panel(
+        app,
+        crate::tui::runtime_panels::RuntimePanelKind::Tasks,
+    )
+    .await
 }
 pub async fn handle_agents(app: &TuiApp, args: &str) -> String {
     let args = args.trim();
@@ -1037,10 +989,103 @@ pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
         "Audit unavailable (no engine connected).".to_string()
     }
 }
+
+fn format_mcp_repair_plan(diagnostics: &[crate::engine::mcp::McpServerHealth]) -> String {
+    if diagnostics.is_empty() {
+        return "MCP Repair Plan\n- no servers configured".to_string();
+    }
+
+    let mut lines = vec!["MCP Repair Plan".to_string()];
+    let mut actionable = 0usize;
+    for diag in diagnostics {
+        if diag.repair_hint == "none" {
+            lines.push(format!(
+                "- {} [{:?}] healthy enough; no repair needed",
+                diag.name, diag.health
+            ));
+            continue;
+        }
+        actionable += 1;
+        let kind = if diag.repair_hint.starts_with("/mcp approve ") {
+            "approval"
+        } else if diag.repair_hint.starts_with("/mcp auth ") {
+            "auth"
+        } else if diag.repair_hint.starts_with("/mcp repair ") {
+            "circuit"
+        } else {
+            "manual"
+        };
+        lines.push(format!(
+            "- {} [{:?}] {} repair: {}",
+            diag.name, diag.health, kind, diag.repair_hint
+        ));
+    }
+
+    if actionable == 0 {
+        lines.push(
+            "All configured MCP servers are healthy or have no known repair action.".to_string(),
+        );
+    } else {
+        lines.push("Use /mcp repair --all to apply only circuit-breaker repairs; approvals and OAuth remain explicit.".to_string());
+    }
+    lines.join("\n")
+}
+
+fn mcp_circuit_repair_targets(diagnostics: &[crate::engine::mcp::McpServerHealth]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .filter(|diag| diag.repair_hint == format!("/mcp repair {}", diag.name))
+        .map(|diag| diag.name.clone())
+        .collect()
+}
+
+fn format_mcp_repair_all_result(
+    diagnostics: &[crate::engine::mcp::McpServerHealth],
+    manager: &crate::engine::mcp::McpManager,
+) -> String {
+    let targets = mcp_circuit_repair_targets(diagnostics);
+    let mut lines = vec!["MCP repair --all".to_string()];
+    if targets.is_empty() {
+        lines.push("No circuit-breaker repairs to apply.".to_string());
+    } else {
+        lines.push("Applied circuit-breaker repairs:".to_string());
+        for target in targets {
+            match manager.repair_server(&target) {
+                Ok(message) => lines.push(format!("- {}", message)),
+                Err(err) => lines.push(format!("- {}: failed: {}", target, err)),
+            }
+        }
+    }
+
+    let skipped = diagnostics
+        .iter()
+        .filter(|diag| {
+            diag.repair_hint != "none" && diag.repair_hint != format!("/mcp repair {}", diag.name)
+        })
+        .collect::<Vec<_>>();
+    if !skipped.is_empty() {
+        lines.push("Skipped explicit repairs:".to_string());
+        for diag in skipped {
+            lines.push(format!("- {} -> {}", diag.name, diag.repair_hint));
+        }
+    }
+    lines.join("\n")
+}
 pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts
+        .first()
+        .is_some_and(|part| matches!(*part, "status" | "health"))
+    {
+        return crate::tui::runtime_panels::render_runtime_panel(
+            app,
+            crate::tui::runtime_panels::RuntimePanelKind::Mcp,
+        )
+        .await;
+    }
+
     if let Some(ref engine) = app.streaming_engine {
         if let Some(mgr) = engine.mcp_manager() {
-            let parts: Vec<&str> = args.split_whitespace().collect();
             if parts.is_empty() || parts[0] == "list" {
                 let servers = mgr.server_summaries();
                 let approved = mgr.approved_server_names();
@@ -1048,7 +1093,7 @@ pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
                     "No MCP servers configured.".to_string()
                 } else {
                     format!(
-                        "MCP servers ({}):\n{}\n\nApproved: {}\n\nUsage:\n  /mcp status\n  /mcp prompts\n  /mcp auth <server>\n  /mcp repair <server>\n  /mcp approve <server>\n  /mcp revoke <server>",
+                        "MCP servers ({}):\n{}\n\nApproved: {}\n\nUsage:\n  /mcp status\n  /mcp prompts\n  /mcp resources [server]\n  /mcp read <server> <uri>\n  /mcp auth <server>\n  /mcp repair [server|--all]\n  /mcp approve <server>\n  /mcp revoke <server>",
                         servers.len(),
                         servers.join("\n"),
                         if approved.is_empty() {
@@ -1058,48 +1103,6 @@ pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
                         }
                     )
                 }
-            } else if parts[0] == "status" || parts[0] == "health" {
-                let diagnostics = mgr.health_diagnostics();
-                if diagnostics.is_empty() {
-                    return "MCP Status\n- no servers configured".to_string();
-                }
-
-                let available = mgr.available_servers();
-                let mut lines = vec![
-                    format!("MCP Status ({} servers)", diagnostics.len()),
-                    format!(
-                        "Available: {}",
-                        if available.is_empty() {
-                            "none".to_string()
-                        } else {
-                            available.join(", ")
-                        }
-                    ),
-                    String::new(),
-                    "Servers:".to_string(),
-                ];
-                for diag in diagnostics {
-                    lines.push(format!(
-                        "- {} [{}] health={:?} approved={} oauth={} token={} circuit={} repair={}",
-                        diag.name,
-                        diag.transport,
-                        diag.health,
-                        diag.approved,
-                        if diag.oauth_configured {
-                            "configured"
-                        } else {
-                            "none"
-                        },
-                        if diag.oauth_token_present {
-                            "present"
-                        } else {
-                            "missing"
-                        },
-                        diag.circuit_breaker,
-                        diag.repair_hint
-                    ));
-                }
-                lines.join("\n")
             } else if parts[0] == "prompts" {
                 let prompts = mgr.discover_all_prompts().await;
                 if prompts.is_empty() {
@@ -1117,6 +1120,37 @@ pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
                         })
                         .collect::<Vec<_>>();
                     format!("MCP prompts ({}):\n{}", lines.len(), lines.join("\n"))
+                }
+            } else if matches!(parts[0], "resources" | "list_resources" | "list-resources") {
+                let params = if parts.len() >= 2 {
+                    serde_json::json!({ "server_name": parts[1] })
+                } else {
+                    serde_json::json!({})
+                };
+                let result = crate::tools::ListMcpResourcesTool
+                    .execute(params, app.build_tool_context().await)
+                    .await;
+                if result.success {
+                    result.content
+                } else {
+                    result
+                        .error
+                        .unwrap_or_else(|| "Failed to list MCP resources.".to_string())
+                }
+            } else if parts[0] == "read" && parts.len() >= 3 {
+                let params = serde_json::json!({
+                    "server_name": parts[1],
+                    "uri": parts[2],
+                });
+                let result = crate::tools::ReadMcpResourceTool
+                    .execute(params, app.build_tool_context().await)
+                    .await;
+                if result.success {
+                    result.content
+                } else {
+                    result
+                        .error
+                        .unwrap_or_else(|| "Failed to read MCP resource.".to_string())
                 }
             } else if parts[0] == "approve" && parts.len() >= 2 {
                 let name = parts[1];
@@ -1143,14 +1177,20 @@ pub async fn handle_mcp(app: &TuiApp, args: &str) -> String {
                         name, e, name
                     ),
                 }
-            } else if parts[0] == "repair" && parts.len() >= 2 {
-                let name = parts[1];
-                match mgr.repair_server(name) {
-                    Ok(msg) => msg,
-                    Err(e) => format!("MCP repair failed for '{}': {}", name, e),
+            } else if parts[0] == "repair" {
+                if parts.len() == 1 {
+                    format_mcp_repair_plan(&mgr.health_diagnostics())
+                } else if matches!(parts[1], "--all" | "all") {
+                    format_mcp_repair_all_result(&mgr.health_diagnostics(), &mgr)
+                } else {
+                    let name = parts[1];
+                    match mgr.repair_server(name) {
+                        Ok(msg) => msg,
+                        Err(e) => format!("MCP repair failed for '{}': {}", name, e),
+                    }
                 }
             } else {
-                "Usage: /mcp [list|status|prompts|auth <server>|repair <server>|approve <server>|revoke <server>]".to_string()
+                "Usage: /mcp [list|status|prompts|resources [server]|read <server> <uri>|auth <server>|repair [server|--all]|approve <server>|revoke <server>]".to_string()
             }
         } else {
             "No MCP manager configured.".to_string()
@@ -1214,47 +1254,14 @@ pub async fn handle_btw(app: &mut TuiApp, args: &str) -> String {
 }
 /// /context - 显示当前上下文状态
 pub async fn handle_context(app: &TuiApp) -> String {
-    let msg_count = app.messages.len();
-    let model = app.current_model_label();
-    let provider = app.current_provider_label();
-    let working_dir = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
-    let session_id = app
-        .session_manager
-        .current_session_id()
-        .map(|s| s[..8.min(s.len())].to_string())
-        .unwrap_or_else(|| "none".to_string());
-
-    let mut lines = vec![
-        "# Context Status".to_string(),
-        "".to_string(),
-        format!("Session: {}", session_id),
-        format!("Model: {} ({})", model, provider),
-        format!("Working dir: {}", working_dir),
-        "".to_string(),
-    ];
+    let mut lines = vec![crate::tui::runtime_panels::render_context_panel(app).await];
 
     if let Some(ref engine) = app.streaming_engine {
         let usage = engine.context_usage_report().await;
-        let usage_pct = if usage.max_context_tokens > 0 {
-            usage.total_estimated_tokens.saturating_mul(100) / usage.max_context_tokens
-        } else {
-            0
-        };
 
-        lines.push(format!("History turns: {}", usage.history_messages));
-        lines.push(format!("Messages in view: {}", msg_count));
-        lines.push(format!(
-            "Estimated request tokens: {} / {} ({}%)",
-            usage.total_estimated_tokens, usage.max_context_tokens, usage_pct
-        ));
-        lines.push(format!(
-            "Stable prefix fingerprint: {}",
-            usage.stable_prefix_fingerprint
-        ));
         lines.push("".to_string());
-        lines.push("## Request Budget".to_string());
+        lines.push("## Request Budget Detail".to_string());
+        lines.push(format!("History turns: {}", usage.history_messages));
         lines.push(format!(
             "  System prompt: {} tokens ({} chars, hash {})",
             usage.prompt.total_tokens, usage.prompt.total_chars, usage.prompt.fingerprint
@@ -1658,6 +1665,15 @@ pub async fn handle_assistant(app: &mut TuiApp, args: &str) -> String {
 }
 /// /remote - 启动远程专家 Agent
 pub async fn handle_remote(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if matches!(args, "status" | "bridge" | "runtime" | "panel") {
+        return crate::tui::runtime_panels::render_runtime_panel(
+            app,
+            crate::tui::runtime_panels::RuntimePanelKind::Bridge,
+        )
+        .await;
+    }
+
     match app.bundled_skills.get("remote") {
         Some(skill) => {
             let started = std::time::Instant::now();
@@ -1671,15 +1687,21 @@ pub async fn handle_remote(app: &mut TuiApp, args: &str) -> String {
                 );
             }
 
-            // Bridge configuration is read from environment variables
-            let bridge_url = std::env::var("PRIORITY_AGENT_BRIDGE_URL")
-                .ok()
-                .unwrap_or_else(|| "not configured".to_string());
+            let bridge = crate::bridge::runtime_snapshot();
+            let bridge_url = bridge
+                .bridge_url
+                .as_deref()
+                .unwrap_or("not configured")
+                .to_string();
+            let bridge_source = bridge.bridge_url_source.as_deref().unwrap_or("none");
 
             let prompt = format!(
-                "{}\n\n## Bridge Configuration\n\nBridge URL: {}\n\nTo enable remote execution, set PRIORITY_AGENT_BRIDGE_URL environment variable.\n\n## Your Task\n\n{}",
+                "{}\n\n## Bridge Configuration\n\nBridge URL: {}\nBridge source: {}\nAuth token configured: {}\nTenant: {}\n\nTo inspect bridge state, run `/remote status`.\n\n## Your Task\n\n{}",
                 skill.content,
                 bridge_url,
+                bridge_source,
+                bridge.auth_token_configured,
+                bridge.tenant_id.as_deref().unwrap_or("none"),
                 if args.is_empty() { "What remote task would you like to execute?" } else { args }
             );
             app.send_message(prompt).await;
@@ -2398,5 +2420,48 @@ mod tests {
         assert!(rendered.contains("cleanup=worktree_cleanup"));
         assert!(rendered.contains("worktree: /tmp/agent-worktree (codex/agent-1234)"));
         assert!(rendered.contains("fork_context: messages=3 placeholder_complete=true"));
+    }
+
+    #[test]
+    fn mcp_repair_plan_separates_explicit_and_auto_safe_repairs() {
+        let diagnostics = vec![
+            crate::engine::mcp::McpServerHealth {
+                name: "filesystem".to_string(),
+                transport: "stdio".to_string(),
+                health: crate::engine::mcp::McpHealthStatus::Pending,
+                circuit_breaker: "CLOSED".to_string(),
+                approved: false,
+                oauth_configured: false,
+                oauth_token_present: false,
+                repair_hint: "/mcp approve filesystem".to_string(),
+            },
+            crate::engine::mcp::McpServerHealth {
+                name: "github".to_string(),
+                transport: "http".to_string(),
+                health: crate::engine::mcp::McpHealthStatus::Healthy,
+                circuit_breaker: "CLOSED".to_string(),
+                approved: true,
+                oauth_configured: true,
+                oauth_token_present: false,
+                repair_hint: "/mcp auth github".to_string(),
+            },
+            crate::engine::mcp::McpServerHealth {
+                name: "jira".to_string(),
+                transport: "websocket".to_string(),
+                health: crate::engine::mcp::McpHealthStatus::Degraded,
+                circuit_breaker: "HALF-OPEN".to_string(),
+                approved: true,
+                oauth_configured: false,
+                oauth_token_present: false,
+                repair_hint: "/mcp repair jira".to_string(),
+            },
+        ];
+
+        let plan = format_mcp_repair_plan(&diagnostics);
+
+        assert!(plan.contains("approval repair: /mcp approve filesystem"));
+        assert!(plan.contains("auth repair: /mcp auth github"));
+        assert!(plan.contains("circuit repair: /mcp repair jira"));
+        assert_eq!(mcp_circuit_repair_targets(&diagnostics), vec!["jira"]);
     }
 }

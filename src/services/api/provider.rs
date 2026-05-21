@@ -2,7 +2,10 @@
 //!
 //! 支持动态注册和选择多个 LLM Provider
 
-use crate::services::api::LlmProvider;
+use crate::services::api::{
+    provider_protocol::{ProviderCapabilities, ProviderProtocolFamily},
+    LlmProvider,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -57,6 +60,37 @@ impl ProviderType {
             "google" | "gemini" => ProviderType::Google,
             "azure" | "azure_openai" => ProviderType::Azure,
             _ => ProviderType::Custom,
+        }
+    }
+
+    pub fn protocol_family(&self) -> ProviderProtocolFamily {
+        match self {
+            ProviderType::Kimi => ProviderProtocolFamily::Kimi,
+            ProviderType::Minimax => ProviderProtocolFamily::MiniMax,
+            ProviderType::Anthropic => ProviderProtocolFamily::AnthropicLike,
+            ProviderType::OpenAI
+            | ProviderType::OpenAICompat
+            | ProviderType::Google
+            | ProviderType::Azure
+            | ProviderType::Custom => ProviderProtocolFamily::OpenAiCompatible,
+        }
+    }
+
+    pub fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::for_family(self.protocol_family())
+    }
+}
+
+impl ProviderConfig {
+    pub fn capabilities(&self) -> ProviderCapabilities {
+        let detected = ProviderCapabilities::detect(
+            self.base_url.as_deref().unwrap_or_default(),
+            &self.default_model,
+        );
+        if detected.protocol_family == ProviderProtocolFamily::OpenAiCompatible {
+            self.provider_type.capabilities()
+        } else {
+            detected
         }
     }
 }
@@ -462,6 +496,40 @@ mod tests {
             ProviderType::Anthropic
         );
         assert_eq!(ProviderType::parse_lossy("unknown"), ProviderType::Custom);
+    }
+
+    #[test]
+    fn test_provider_type_capabilities() {
+        let minimax = ProviderType::Minimax.capabilities();
+        assert_eq!(minimax.protocol_family, ProviderProtocolFamily::MiniMax);
+        assert!(minimax.requires_nonstreaming_tool_calls);
+
+        let openai = ProviderType::OpenAI.capabilities();
+        assert_eq!(
+            openai.protocol_family,
+            ProviderProtocolFamily::OpenAiCompatible
+        );
+        assert!(!openai.requires_nonstreaming_tool_calls);
+    }
+
+    #[test]
+    fn test_provider_config_capabilities_detect_model_and_base_url() {
+        let cfg = ProviderConfig {
+            name: "custom-minimax".to_string(),
+            provider_type: ProviderType::OpenAICompat,
+            api_key: "k".to_string(),
+            base_url: Some("https://api.minimaxi.com/v1".to_string()),
+            default_model: "MiniMax-M2.7".to_string(),
+            enabled: true,
+        };
+
+        let capabilities = cfg.capabilities();
+
+        assert_eq!(
+            capabilities.protocol_family,
+            ProviderProtocolFamily::MiniMax
+        );
+        assert!(capabilities.requires_nonstreaming_tool_calls);
     }
 
     #[test]

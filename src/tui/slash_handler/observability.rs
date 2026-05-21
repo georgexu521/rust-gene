@@ -369,6 +369,7 @@ pub fn handle_resource(app: &mut TuiApp) -> String {
             parallelism_limit,
             max_tool_calls,
             context_budget_tokens,
+            allow_fallback_model,
             reason,
         } = event
         {
@@ -380,6 +381,7 @@ pub fn handle_resource(app: &mut TuiApp) -> String {
                 parallelism_limit,
                 max_tool_calls,
                 context_budget_tokens,
+                allow_fallback_model,
                 reason,
             ))
         } else {
@@ -395,6 +397,7 @@ pub fn handle_resource(app: &mut TuiApp) -> String {
         parallelism_limit,
         max_tool_calls,
         context_budget_tokens,
+        allow_fallback_model,
         reason,
     )) = policy
     else {
@@ -405,7 +408,7 @@ pub fn handle_resource(app: &mut TuiApp) -> String {
     };
 
     format!(
-        "Resource Policy\n- trace: {}\n- latency: {} ({} ms)\n- cost ceiling: ${:.2}\n- reasoning: {}\n- parallelism: {}\n- max tool calls: {}\n- context budget: {} tokens\n- reason: {}\n\nRuntime Inventory\n- skills: {}\n- agent definitions: {}\n- mcp servers: {}\n- evalsets: {}",
+        "Resource Policy\n- trace: {}\n- latency: {} ({} ms)\n- cost ceiling: ${:.2}\n- reasoning: {}\n- parallelism: {}\n- max tool calls: {}\n- context budget: {} tokens\n- fallback model allowed: {}\n- reason: {}\n\nRuntime Inventory\n- skills: {}\n- agent definitions: {}\n- mcp servers: {}\n- evalsets: {}",
         &trace.trace_id[..8.min(trace.trace_id.len())],
         latency,
         target_ms,
@@ -414,6 +417,7 @@ pub fn handle_resource(app: &mut TuiApp) -> String {
         parallelism_limit,
         max_tool_calls,
         context_budget_tokens,
+        allow_fallback_model,
         reason,
         app.skill_runtime.len(),
         crate::agent::profiles::load_definitions(

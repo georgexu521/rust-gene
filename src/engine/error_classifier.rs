@@ -264,6 +264,26 @@ impl ErrorClassifier {
                 RecoveryAction::Abort,
                 format!("Request schema rejected: {}", truncate(&msg, 200)),
             )
+        } else if msg_lower.contains("rate limit")
+            || msg_lower.contains("rate_limited")
+            || msg_lower.contains("429")
+        {
+            ClassifiedError::new(
+                ErrorCategory::RateLimited,
+                RecoveryAction::RetryWithBackoff { backoff_ms: 5000 },
+                format!("Rate limited: {}", truncate(&msg, 200)),
+            )
+        } else if msg_lower.contains("overloaded")
+            || msg_lower.contains("server error")
+            || msg_lower.contains("503")
+            || msg_lower.contains("502")
+            || msg_lower.contains("500")
+        {
+            ClassifiedError::new(
+                ErrorCategory::Overloaded,
+                RecoveryAction::RetryWithBackoff { backoff_ms: 2000 },
+                format!("Provider overloaded: {}", truncate(&msg, 200)),
+            )
         } else if msg_lower.contains("timeout") || msg_lower.contains("timed out") {
             ClassifiedError::new(
                 ErrorCategory::Timeout,
@@ -430,6 +450,26 @@ mod tests {
         let err = ErrorClassifier::from_anyhow(&anyhow::anyhow!("connection timed out after 30s"));
         assert_eq!(err.category, ErrorCategory::Timeout);
         assert!(err.retryable);
+    }
+
+    #[test]
+    fn test_classify_anyhow_overload_and_rate_limit() {
+        let overloaded = ErrorClassifier::from_anyhow(&anyhow::anyhow!(
+            "provider server overloaded with HTTP 503"
+        ));
+        assert_eq!(overloaded.category, ErrorCategory::Overloaded);
+        assert!(matches!(
+            overloaded.action,
+            RecoveryAction::RetryWithBackoff { .. }
+        ));
+
+        let rate_limited =
+            ErrorClassifier::from_anyhow(&anyhow::anyhow!("rate limit exceeded: 429"));
+        assert_eq!(rate_limited.category, ErrorCategory::RateLimited);
+        assert!(matches!(
+            rate_limited.action,
+            RecoveryAction::RetryWithBackoff { .. }
+        ));
     }
 
     #[test]

@@ -1,10 +1,13 @@
 use super::session_processor::SessionStepResult;
 use super::turn_recording::record_recovery_plan;
-use super::{should_use_nonstreaming_tools, ConversationLoop};
+use super::ConversationLoop;
 use crate::engine::context_collapse::ContextCompactionStrategy;
 use crate::engine::context_compressor::estimate_messages_tokens;
+use crate::engine::error_classifier::{ClassifiedError, ErrorCategory};
+use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::services::api::provider_protocol::ProviderCapabilities;
 use crate::services::api::{ChatRequest, Message, Tool, ToolCall};
 use crate::tools::ToolResult;
 use anyhow::Result;
@@ -18,6 +21,7 @@ pub(super) struct ApiRequestContext<'a> {
     pub(super) messages: &'a [Message],
     pub(super) tools: &'a [Tool],
     pub(super) exposed_tool_names: &'a HashSet<String>,
+    pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) trace: &'a TraceCollector,
     pub(super) iteration: usize,
@@ -49,19 +53,26 @@ impl ApiRequestController {
     pub(super) async fn execute(context: ApiRequestContext<'_>) -> Result<ApiRequestOutcome> {
         let mut request = context.request;
         let mut compressed_this_turn = false;
+        let mut fallback_attempted = false;
         let mut api_result = Err(anyhow::anyhow!("initial"));
 
         for compress_retry in 0..3 {
+            let provider_capabilities = ProviderCapabilities::detect(
+                context.conversation.provider.base_url(),
+                &request.model,
+            );
             context.trace.record(TraceEvent::ApiRequestStarted {
                 iteration: context.iteration,
-                model: context.conversation.model.clone(),
+                model: request.model.clone(),
                 tools: context.tools.len(),
+                provider_family: Some(provider_capabilities.protocol_family.label().to_string()),
+                nonstreaming_tools_required: provider_capabilities.requires_nonstreaming_tool_calls,
+                tool_result_adjacency_required: provider_capabilities
+                    .requires_tool_result_adjacency,
             });
             let nonstreaming_tool_request = context.tx.is_some()
-                && should_use_nonstreaming_tools(
-                    context.conversation.provider.as_ref(),
-                    context.tools,
-                );
+                && !context.tools.is_empty()
+                && provider_capabilities.requires_nonstreaming_tool_calls;
             api_result = if let Some(tx) = context.tx {
                 if nonstreaming_tool_request {
                     context.trace.record(TraceEvent::WorkflowFallback {
@@ -86,6 +97,7 @@ impl ApiRequestController {
             match &api_result {
                 Ok(_) => break,
                 Err(error) => {
+                    let mut recovered = false;
                     if Self::is_context_size_error(error) && compress_retry < 2 {
                         let classified =
                             crate::engine::error_classifier::ErrorClassifier::from_anyhow(error);
@@ -155,10 +167,39 @@ impl ApiRequestController {
                                 .with_tools(context.tools.to_vec())
                                 .with_temperature(0.2);
                             compressed_this_turn = true;
+                            recovered = true;
                         }
-                    } else {
-                        break;
                     }
+
+                    if recovered {
+                        continue;
+                    }
+
+                    if let Some((fallback_model, classified)) = Self::fallback_model_for_error(
+                        error,
+                        context.resource_policy,
+                        &request.model,
+                        fallback_attempted,
+                    ) {
+                        let plan = crate::engine::recovery_plan::RecoveryPlan::fallback_model(
+                            "api_request",
+                            &classified.message,
+                            &fallback_model,
+                        )
+                        .with_status(crate::engine::recovery_plan::RecoveryStatus::Applied);
+                        record_recovery_plan(context.trace, &plan);
+                        context.trace.record(TraceEvent::WorkflowFallback {
+                            error: format!(
+                                "provider error category={} triggered fallback model {}",
+                                classified.category, fallback_model
+                            ),
+                        });
+                        request.model = fallback_model;
+                        fallback_attempted = true;
+                        continue;
+                    }
+
+                    break;
                 }
             }
         }
@@ -220,12 +261,54 @@ impl ApiRequestController {
             || text.contains("too many tokens")
             || text.contains("maximum context length")
     }
+
+    fn fallback_model_for_error(
+        error: &anyhow::Error,
+        resource_policy: &ResourcePolicy,
+        current_model: &str,
+        fallback_attempted: bool,
+    ) -> Option<(String, ClassifiedError)> {
+        if fallback_attempted || !resource_policy.allow_fallback_model {
+            return None;
+        }
+        let fallback_model = Self::configured_fallback_model(current_model)?;
+        let classified = crate::engine::error_classifier::ErrorClassifier::from_anyhow(error);
+        if Self::category_allows_fallback_model(&classified.category) {
+            Some((fallback_model, classified))
+        } else {
+            None
+        }
+    }
+
+    fn configured_fallback_model(current_model: &str) -> Option<String> {
+        let fallback = std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").ok()?;
+        let fallback = fallback.trim();
+        if fallback.is_empty() || fallback == current_model {
+            return None;
+        }
+        Some(fallback.to_string())
+    }
+
+    fn category_allows_fallback_model(category: &ErrorCategory) -> bool {
+        matches!(
+            category,
+            ErrorCategory::RateLimited
+                | ErrorCategory::Overloaded
+                | ErrorCategory::ContextOverflow
+                | ErrorCategory::PayloadTooLarge
+                | ErrorCategory::Timeout
+                | ErrorCategory::ConnectionError
+                | ErrorCategory::MalformedResponse
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::intent_router::IntentRouter;
     use crate::engine::trace::{TurnStatus, TurnTrace};
+    use crate::test_utils::env_guard::EnvVarGuard;
 
     #[test]
     fn context_size_errors_are_detected() {
@@ -241,6 +324,67 @@ mod tests {
         assert!(!ApiRequestController::is_context_size_error(
             &anyhow::anyhow!("permission denied")
         ));
+    }
+
+    #[test]
+    fn fallback_model_policy_allows_transient_provider_errors() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_FALLBACK_MODEL", "fallback-model");
+        let route = IntentRouter::new().route("fix the bug");
+        let policy = ResourcePolicy::from_route(&route);
+
+        let decision = ApiRequestController::fallback_model_for_error(
+            &anyhow::anyhow!("server overloaded"),
+            &policy,
+            "primary-model",
+            false,
+        );
+
+        let (model, classified) = decision.expect("fallback should be selected");
+        assert_eq!(model, "fallback-model");
+        assert_eq!(classified.category, ErrorCategory::Overloaded);
+    }
+
+    #[test]
+    fn fallback_model_policy_blocks_provider_protocol_errors() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_FALLBACK_MODEL", "fallback-model");
+        let route = IntentRouter::new().route("fix the bug");
+        let policy = ResourcePolicy::from_route(&route);
+
+        let decision = ApiRequestController::fallback_model_for_error(
+            &anyhow::anyhow!("tool call result does not follow tool call"),
+            &policy,
+            "primary-model",
+            false,
+        );
+
+        assert!(decision.is_none());
+    }
+
+    #[test]
+    fn fallback_model_policy_skips_same_model_and_repeated_attempt() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_FALLBACK_MODEL", "primary-model");
+        let route = IntentRouter::new().route("fix the bug");
+        let policy = ResourcePolicy::from_route(&route);
+
+        assert!(ApiRequestController::fallback_model_for_error(
+            &anyhow::anyhow!("server overloaded"),
+            &policy,
+            "primary-model",
+            false,
+        )
+        .is_none());
+
+        env.set("PRIORITY_AGENT_FALLBACK_MODEL", "fallback-model");
+        assert!(ApiRequestController::fallback_model_for_error(
+            &anyhow::anyhow!("server overloaded"),
+            &policy,
+            "primary-model",
+            true,
+        )
+        .is_none());
     }
 
     #[test]

@@ -690,6 +690,7 @@ fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRou
         parallelism_limit: policy.parallelism_limit,
         max_tool_calls: policy.max_tool_calls,
         context_budget_tokens: policy.context_budget_tokens,
+        allow_fallback_model: policy.allow_fallback_model,
         reason: policy.reason,
     });
     if scenario.replay.workflow_judgment {

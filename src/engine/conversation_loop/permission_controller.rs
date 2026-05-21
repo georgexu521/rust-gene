@@ -32,6 +32,7 @@ enum PermissionToolFamily {
     ExternalDirectory,
     Task,
     Subagent,
+    Remote,
     Other,
 }
 
@@ -43,6 +44,7 @@ impl PermissionToolFamily {
             PermissionToolFamily::ExternalDirectory => "external_directory",
             PermissionToolFamily::Task => "task",
             PermissionToolFamily::Subagent => "subagent",
+            PermissionToolFamily::Remote => "remote",
             PermissionToolFamily::Other => "other",
         }
     }
@@ -157,6 +159,8 @@ impl PermissionController {
         let recovery_feedback = recovery_feedback(kind, family, tool_name);
         let command_classification =
             permission_command_classification(tool_name, &tool_call.arguments);
+        let remote_classification =
+            permission_remote_classification(tool_name, &tool_call.arguments);
         let record = PermissionRequestRecord {
             id: tool_call.id.clone(),
             session_id: session_id.to_string(),
@@ -173,6 +177,7 @@ impl PermissionController {
                 "permission_decision": format!("{:?}", permission_explanation.decision),
                 "risk_level": format!("{:?}", permission_explanation.risk_level),
                 "command_classification": command_classification,
+                "remote_classification": remote_classification,
                 "warnings": permission_explanation.warnings,
                 "reasons": permission_explanation.reasons,
                 "drift_reason": drift_check.reason,
@@ -310,6 +315,7 @@ fn permission_tool_family(
         }
         "task_create" | "task_update" | "task_stop" | "task_output" => PermissionToolFamily::Task,
         "agent" | "send_message" => PermissionToolFamily::Subagent,
+        "remote_trigger" | "remote_dev" => PermissionToolFamily::Remote,
         _ => PermissionToolFamily::Other,
     }
 }
@@ -339,6 +345,9 @@ fn recovery_feedback(
         PermissionToolFamily::Subagent => {
             "Ask the user to approve delegation, or continue locally with the available context. Do not claim a sub-agent was started.".to_string()
         }
+        PermissionToolFamily::Remote => {
+            "Ask the user to approve the exact remote action. If it failed, inspect `/remote status`, bridge/session configuration, and prior remote side effects before retrying. Do not claim remote work or sync completed.".to_string()
+        }
         PermissionToolFamily::Other => {
             format!("Ask the user to approve '{}', or choose a lower-risk alternative. Do not claim the tool ran.", tool_name)
         }
@@ -364,6 +373,19 @@ fn permission_command_classification(
         "safe_for_closeout": classification.safe_for_closeout,
         "requires_pty": classification.requires_pty(),
     })
+}
+
+fn permission_remote_classification(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> serde_json::Value {
+    match tool_name {
+        "remote_trigger" => {
+            crate::tools::remote_trigger_tool::remote_trigger_permission_metadata(arguments)
+        }
+        "remote_dev" => crate::tools::remote_dev_tool::remote_dev_permission_metadata(arguments),
+        _ => serde_json::Value::Null,
+    }
 }
 
 fn permission_prompt(
@@ -680,5 +702,82 @@ mod tests {
             .unwrap()
             .recovery_feedback
             .contains("delegation"));
+    }
+
+    #[test]
+    fn remote_trigger_run_records_remote_family_and_risk_facts() {
+        let tmp = tempdir().expect("tempdir");
+        let mut context = ToolContext::new(tmp.path(), "session-1");
+        context.permission_context.mode = crate::permissions::PermissionMode::AutoAll;
+        let tool_call = ToolCall {
+            id: "call_remote_run".to_string(),
+            name: "remote_trigger".to_string(),
+            arguments: json!({"action": "run", "id": "session-123"}),
+        };
+
+        let evaluation = PermissionController::evaluate_tool_permission(
+            "session-1",
+            &tool_call,
+            &NamedTool {
+                name: "remote_trigger",
+                requires_confirmation: false,
+            },
+            &context,
+            &DriftCheck::ok(),
+        );
+
+        let metadata = &evaluation.record.as_ref().unwrap().metadata;
+        assert!(evaluation.requires_approval);
+        assert_eq!(metadata["permission_family"], "remote");
+        assert_eq!(metadata["remote_classification"]["risk_level"], "high");
+        assert_eq!(
+            metadata["remote_classification"]["remote_effect"],
+            "remote_execution"
+        );
+        assert!(evaluation
+            .record
+            .as_ref()
+            .unwrap()
+            .recovery_feedback
+            .contains("/remote status"));
+    }
+
+    #[test]
+    fn remote_dev_exec_records_command_preview() {
+        let tmp = tempdir().expect("tempdir");
+        let mut context = ToolContext::new(tmp.path(), "session-1");
+        context.permission_context.mode = crate::permissions::PermissionMode::AutoAll;
+        let tool_call = ToolCall {
+            id: "call_remote_exec".to_string(),
+            name: "remote_dev".to_string(),
+            arguments: json!({
+                "action": "exec",
+                "id": "prod-shell",
+                "command": "cargo test -q"
+            }),
+        };
+
+        let evaluation = PermissionController::evaluate_tool_permission(
+            "session-1",
+            &tool_call,
+            &NamedTool {
+                name: "remote_dev",
+                requires_confirmation: false,
+            },
+            &context,
+            &DriftCheck::ok(),
+        );
+
+        let metadata = &evaluation.record.as_ref().unwrap().metadata;
+        assert!(evaluation.requires_approval);
+        assert_eq!(metadata["permission_family"], "remote");
+        assert_eq!(
+            metadata["remote_classification"]["remote_effect"],
+            "remote_ssh_execution"
+        );
+        assert_eq!(
+            metadata["remote_classification"]["command_preview"],
+            "cargo test -q"
+        );
     }
 }

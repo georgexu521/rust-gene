@@ -26,6 +26,93 @@ impl ProviderProtocolFamily {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderCapabilities {
+    pub protocol_family: ProviderProtocolFamily,
+    pub supports_tool_calls: bool,
+    pub supports_streaming_tool_calls: bool,
+    pub supports_streaming_usage: bool,
+    pub supports_reasoning_tokens: bool,
+    pub requires_nonstreaming_tool_calls: bool,
+    pub requires_merged_system_messages: bool,
+    pub requires_tool_result_adjacency: bool,
+}
+
+impl ProviderCapabilities {
+    pub const fn for_family(protocol_family: ProviderProtocolFamily) -> Self {
+        match protocol_family {
+            ProviderProtocolFamily::MiniMax => Self {
+                protocol_family,
+                supports_tool_calls: true,
+                supports_streaming_tool_calls: false,
+                supports_streaming_usage: false,
+                supports_reasoning_tokens: true,
+                requires_nonstreaming_tool_calls: true,
+                requires_merged_system_messages: true,
+                requires_tool_result_adjacency: true,
+            },
+            ProviderProtocolFamily::Kimi => Self {
+                protocol_family,
+                supports_tool_calls: true,
+                supports_streaming_tool_calls: true,
+                supports_streaming_usage: true,
+                supports_reasoning_tokens: true,
+                requires_nonstreaming_tool_calls: false,
+                requires_merged_system_messages: false,
+                requires_tool_result_adjacency: true,
+            },
+            ProviderProtocolFamily::ReasoningCapable => Self {
+                protocol_family,
+                supports_tool_calls: true,
+                supports_streaming_tool_calls: true,
+                supports_streaming_usage: true,
+                supports_reasoning_tokens: true,
+                requires_nonstreaming_tool_calls: false,
+                requires_merged_system_messages: false,
+                requires_tool_result_adjacency: true,
+            },
+            ProviderProtocolFamily::AnthropicLike => Self {
+                protocol_family,
+                supports_tool_calls: true,
+                supports_streaming_tool_calls: true,
+                supports_streaming_usage: true,
+                supports_reasoning_tokens: false,
+                requires_nonstreaming_tool_calls: false,
+                requires_merged_system_messages: false,
+                requires_tool_result_adjacency: true,
+            },
+            ProviderProtocolFamily::OpenAiCompatible => Self {
+                protocol_family,
+                supports_tool_calls: true,
+                supports_streaming_tool_calls: true,
+                supports_streaming_usage: true,
+                supports_reasoning_tokens: false,
+                requires_nonstreaming_tool_calls: false,
+                requires_merged_system_messages: false,
+                requires_tool_result_adjacency: true,
+            },
+        }
+    }
+
+    pub fn detect(base_url: &str, model: &str) -> Self {
+        let base = base_url.to_ascii_lowercase();
+        let model = model.to_ascii_lowercase();
+        let family = if base.contains("minimax") || model.contains("minimax") {
+            ProviderProtocolFamily::MiniMax
+        } else if base.contains("moonshot") || model.contains("kimi") {
+            ProviderProtocolFamily::Kimi
+        } else if base.contains("anthropic") || model.contains("claude") {
+            ProviderProtocolFamily::AnthropicLike
+        } else if model.contains("reasoning") || model.starts_with("o1") || model.starts_with("o3")
+        {
+            ProviderProtocolFamily::ReasoningCapable
+        } else {
+            ProviderProtocolFamily::OpenAiCompatible
+        };
+        Self::for_family(family)
+    }
+}
+
 pub fn normalize_messages_for_provider(
     family: ProviderProtocolFamily,
     messages: Vec<Message>,
@@ -39,6 +126,13 @@ pub fn normalize_messages_for_provider(
     };
 
     normalize_tool_message_sequence(messages)
+}
+
+pub fn normalize_messages_for_capabilities(
+    capabilities: ProviderCapabilities,
+    messages: Vec<Message>,
+) -> Vec<Message> {
+    normalize_messages_for_provider(capabilities.protocol_family, messages)
 }
 
 fn merge_system_messages(messages: Vec<Message>) -> Vec<Message> {
@@ -83,6 +177,38 @@ mod tests {
             ProviderProtocolFamily::AnthropicLike,
             ProviderProtocolFamily::ReasoningCapable,
         ]
+    }
+
+    #[test]
+    fn provider_capabilities_capture_minimax_streaming_constraints() {
+        let capabilities =
+            ProviderCapabilities::detect("https://api.minimaxi.com/v1", "MiniMax-M2.7");
+
+        assert_eq!(
+            capabilities.protocol_family,
+            ProviderProtocolFamily::MiniMax
+        );
+        assert!(capabilities.supports_tool_calls);
+        assert!(!capabilities.supports_streaming_tool_calls);
+        assert!(capabilities.requires_nonstreaming_tool_calls);
+        assert!(capabilities.requires_merged_system_messages);
+    }
+
+    #[test]
+    fn provider_capabilities_drive_same_normalization_path() {
+        let capabilities =
+            ProviderCapabilities::for_family(ProviderProtocolFamily::OpenAiCompatible);
+        let normalized = normalize_messages_for_capabilities(
+            capabilities,
+            vec![
+                Message::user("inspect"),
+                Message::assistant_with_tools("", vec![tool_call("call_1")]),
+                Message::tool("call_1", "Result: OK\ncontent"),
+            ],
+        );
+
+        assert_eq!(normalized.len(), 3);
+        assert!(normalized[1].tool_calls().is_some());
     }
 
     #[test]

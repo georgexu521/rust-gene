@@ -97,6 +97,7 @@ impl TurnIterationController {
                 focused_repair_prompt: exposure_plan.focused_repair_prompt,
                 tools: &tools,
                 exposed_tool_names: &exposed_tool_names,
+                resource_policy: context.resource_policy,
                 loop_state: &mut *context.loop_state,
                 turn_state: &mut *context.turn_state,
                 messages: &mut *context.messages,

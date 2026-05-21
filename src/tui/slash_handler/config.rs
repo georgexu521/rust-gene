@@ -61,12 +61,16 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
             Err(e) => format!("Failed to reload config: {}", e),
         }
     } else if args == "plugins" {
-        // Reload plugins
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let mut registry = crate::tools::ToolRegistry::default_registry();
-        let injected =
-            crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
-        format!("Plugins reloaded. {} plugin tools injected.", injected)
+        let report = crate::tools::plugin_tool::register_enabled_plugin_tools_with_report(
+            &mut registry,
+            &working_dir,
+        );
+        format!(
+            "{}\nRuntime note: this command validates the current plugin registry snapshot; newly injected plugin tools are available after the next engine registry rebuild.",
+            report.summary()
+        )
     } else if args == "skills" {
         let count = app.skill_runtime.reload();
         format!(

@@ -4,7 +4,9 @@
 
 use crate::services::api::retry::ProviderRetryPolicy;
 use crate::services::api::{
-    provider_protocol::{normalize_messages_for_provider, ProviderProtocolFamily},
+    provider_protocol::{
+        normalize_messages_for_capabilities, ProviderCapabilities, ProviderProtocolFamily,
+    },
     sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
 };
 use anyhow::{bail, Context, Result};
@@ -306,11 +308,13 @@ fn convert_request_for_kimi(
     request: ChatRequest,
     thinking_budget: Option<u32>,
 ) -> CreateChatCompletionRequest {
-    let messages: Vec<ChatCompletionRequestMessage> =
-        normalize_messages_for_provider(ProviderProtocolFamily::Kimi, request.messages)
-            .into_iter()
-            .map(convert_message)
-            .collect();
+    let messages: Vec<ChatCompletionRequestMessage> = normalize_messages_for_capabilities(
+        ProviderCapabilities::for_family(ProviderProtocolFamily::Kimi),
+        request.messages,
+    )
+    .into_iter()
+    .map(convert_message)
+    .collect();
 
     let mut req = CreateChatCompletionRequest {
         model: request.model.clone(),
