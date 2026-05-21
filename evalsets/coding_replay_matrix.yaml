@@ -326,13 +326,50 @@ scenarios:
     prompt: "长会话压缩后继续执行当前修复"
     replay:
       workflow_judgment: true
+      context_compactions:
+        - before_tokens: 122000
+          after_tokens: 64000
+          strategy: semantic_boundary
+          boundary_id: cb-eval-1
+          sequence: 7
+          messages_before: 48
+          messages_after: 19
+          preserved_tail_count: 6
+          provenance: ["summary:project_state", "tail:latest_tool_results"]
+      runtime_diet:
+        prompt_tokens: 64000
+        tool_schema_tokens: 3200
+        total_request_tokens: 67200
+        max_context_tokens: 128000
+        remaining_context_tokens: 60800
+        tool_result_chars: 4096
+        tool_result_tokens: 1024
+        truncated_tool_results: 1
+        tool_result_artifacts: 1
+        exposed_tools: 12
+        retrieval_items: 2
+        retrieval_tokens: 720
+        route_scoped_tools: true
+        workflow_context: strict
+        closeout_visibility: full
+        validation_evidence: pending
       tool_calls:
         - tool: file_read
           output: "compressed context retained target"
         - tool: file_edit
           output: "edited after compaction"
     expect:
-      trace_events: ["workflow.judgment", "workflow.plan", "tool.done"]
+      context_compaction_count: 1
+      context_boundary_id: cb-eval-1
+      context_compaction_strategy: semantic_boundary
+      context_before_tokens: 122000
+      context_after_tokens: 64000
+      context_preserved_tail_count: 6
+      runtime_diet_total_request_tokens: 67200
+      runtime_diet_remaining_context_tokens: 60800
+      runtime_diet_route_scoped_tools: true
+      runtime_diet_workflow_context: strict
+      trace_events: ["context.compact", "runtime.diet", "workflow.judgment", "workflow.plan", "tool.done"]
       tool_sequence: ["file_read", "file_edit"]
 
   - id: git-diff-before-final

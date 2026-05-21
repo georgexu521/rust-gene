@@ -272,7 +272,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         title: "Compaction boundary",
         phase: "Phase 12",
         user_task: "force context pressure, compact with provenance, then resume the task",
-        status: ReplayStatus::RuntimeMapped,
+        status: ReplayStatus::ReplayFixtureReady,
         external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
         evidence: COMPACTION_BOUNDARY_EVIDENCE,
     },
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn external_baseline_stays_deferred_until_replays_are_ready() {
         let summary = scenario_matrix_summary();
-        assert_eq!(summary.replay_ready, 3);
+        assert_eq!(summary.replay_ready, 4);
         assert!(!summary.external_baseline_ready);
         assert!(deterministic_scenarios()
             .iter()
@@ -446,7 +446,8 @@ mod tests {
             vec![
                 ScenarioKind::FileEditRewind,
                 ScenarioKind::BashBackgroundTask,
-                ScenarioKind::PermissionDenialRetry
+                ScenarioKind::PermissionDenialRetry,
+                ScenarioKind::CompactionBoundary
             ]
         );
     }

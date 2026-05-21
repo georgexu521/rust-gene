@@ -72,6 +72,16 @@ pub struct EvalExpect {
     pub rewind_command: Option<String>,
     pub rewind_checkpoint_id: Option<String>,
     pub rewind_restored_files: Option<usize>,
+    pub context_compaction_count: Option<usize>,
+    pub context_boundary_id: Option<String>,
+    pub context_compaction_strategy: Option<String>,
+    pub context_before_tokens: Option<usize>,
+    pub context_after_tokens: Option<usize>,
+    pub context_preserved_tail_count: Option<usize>,
+    pub runtime_diet_total_request_tokens: Option<u64>,
+    pub runtime_diet_remaining_context_tokens: Option<u64>,
+    pub runtime_diet_route_scoped_tools: Option<bool>,
+    pub runtime_diet_workflow_context: Option<String>,
     #[serde(default)]
     pub available_tools: Vec<String>,
     #[serde(default)]
@@ -108,6 +118,10 @@ pub struct EvalReplay {
     pub file_changes: Vec<EvalFileChangeReplay>,
     #[serde(default)]
     pub rewind: Option<EvalRewindReplay>,
+    #[serde(default)]
+    pub context_compactions: Vec<EvalContextCompactionReplay>,
+    #[serde(default)]
+    pub runtime_diet: Option<EvalRuntimeDietReplay>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +220,66 @@ pub struct EvalRewindReplay {
     pub removed_files: Vec<String>,
     #[serde(default)]
     pub failed_files: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EvalContextCompactionReplay {
+    pub before_tokens: usize,
+    pub after_tokens: usize,
+    pub strategy: String,
+    #[serde(default)]
+    pub boundary_id: Option<String>,
+    #[serde(default)]
+    pub sequence: Option<u32>,
+    #[serde(default)]
+    pub messages_before: Option<usize>,
+    #[serde(default)]
+    pub messages_after: Option<usize>,
+    #[serde(default)]
+    pub preserved_tail_count: Option<usize>,
+    #[serde(default)]
+    pub provenance: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalRuntimeDietReplay {
+    pub prompt_tokens: u64,
+    pub tool_schema_tokens: u64,
+    #[serde(default)]
+    pub total_request_tokens: u64,
+    #[serde(default)]
+    pub max_context_tokens: Option<u64>,
+    #[serde(default)]
+    pub remaining_context_tokens: Option<u64>,
+    #[serde(default)]
+    pub tool_result_chars: usize,
+    #[serde(default)]
+    pub tool_result_tokens: u64,
+    #[serde(default)]
+    pub truncated_tool_results: usize,
+    #[serde(default)]
+    pub tool_result_artifacts: usize,
+    pub exposed_tools: usize,
+    #[serde(default)]
+    pub memory_snapshot_chars: usize,
+    #[serde(default)]
+    pub memory_snapshot_tokens: u64,
+    #[serde(default)]
+    pub retrieval_items: usize,
+    #[serde(default)]
+    pub retrieval_tokens: u64,
+    #[serde(default)]
+    pub skill_list_chars: usize,
+    #[serde(default)]
+    pub skill_list_tokens: u64,
+    #[serde(default = "default_true")]
+    pub route_scoped_tools: bool,
+    #[serde(default = "default_workflow_context")]
+    pub workflow_context: String,
+    #[serde(default = "default_closeout_visibility")]
+    pub closeout_visibility: String,
+    #[serde(default = "default_validation_evidence")]
+    pub validation_evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +537,7 @@ impl EvalRunner {
 
         self.check_terminal_task_replay(scenario, &mut failures);
         self.check_file_rewind_replay(scenario, &mut failures);
+        self.check_context_compaction_replay(trace, scenario, &mut failures);
         self.check_feature_reality(scenario, &mut failures);
 
         failures
@@ -533,6 +608,60 @@ impl EvalRunner {
                     expect.rewind_command,
                     expect.rewind_checkpoint_id,
                     expect.rewind_restored_files
+                ),
+            });
+        }
+    }
+
+    fn check_context_compaction_replay(
+        &self,
+        trace: &TurnTrace,
+        scenario: &EvalScenario,
+        failures: &mut Vec<EvalFailure>,
+    ) {
+        let expect = &scenario.expect;
+        if let Some(expected) = expect.context_compaction_count {
+            let actual = trace
+                .events
+                .iter()
+                .filter(|event| matches!(event, TraceEvent::ContextCompacted { .. }))
+                .count();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!(
+                        "context_compaction_count expected {}, got {}",
+                        expected, actual
+                    ),
+                });
+            }
+        }
+
+        if has_context_compaction_expectation(expect)
+            && !trace_has_matching_context_compaction(trace, expect)
+        {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching context compaction boundary={:?} strategy={:?} before={:?} after={:?} preserved_tail={:?}",
+                    expect.context_boundary_id,
+                    expect.context_compaction_strategy,
+                    expect.context_before_tokens,
+                    expect.context_after_tokens,
+                    expect.context_preserved_tail_count
+                ),
+            });
+        }
+
+        if has_runtime_diet_expectation(expect) && !trace_has_matching_runtime_diet(trace, expect) {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching runtime diet total={:?} remaining={:?} route_scoped={:?} workflow={:?}",
+                    expect.runtime_diet_total_request_tokens,
+                    expect.runtime_diet_remaining_context_tokens,
+                    expect.runtime_diet_route_scoped_tools,
+                    expect.runtime_diet_workflow_context
                 ),
             });
         }
@@ -989,6 +1118,45 @@ fn trace_from_route(session_id: &str, scenario: &EvalScenario, route: &IntentRou
 }
 
 fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: &str) {
+    for compaction in &scenario.replay.context_compactions {
+        trace.events.push(TraceEvent::ContextCompacted {
+            before_tokens: compaction.before_tokens,
+            after_tokens: compaction.after_tokens,
+            strategy: compaction.strategy.clone(),
+            boundary_id: compaction.boundary_id.clone(),
+            sequence: compaction.sequence,
+            messages_before: compaction.messages_before,
+            messages_after: compaction.messages_after,
+            preserved_tail_count: compaction.preserved_tail_count,
+            provenance: compaction.provenance.clone(),
+        });
+    }
+
+    if let Some(diet) = &scenario.replay.runtime_diet {
+        trace.events.push(TraceEvent::RuntimeDietReport {
+            prompt_tokens: diet.prompt_tokens,
+            tool_schema_tokens: diet.tool_schema_tokens,
+            total_request_tokens: diet.total_request_tokens,
+            max_context_tokens: diet.max_context_tokens,
+            remaining_context_tokens: diet.remaining_context_tokens,
+            tool_result_chars: diet.tool_result_chars,
+            tool_result_tokens: diet.tool_result_tokens,
+            truncated_tool_results: diet.truncated_tool_results,
+            tool_result_artifacts: diet.tool_result_artifacts,
+            exposed_tools: diet.exposed_tools,
+            memory_snapshot_chars: diet.memory_snapshot_chars,
+            memory_snapshot_tokens: diet.memory_snapshot_tokens,
+            retrieval_items: diet.retrieval_items,
+            retrieval_tokens: diet.retrieval_tokens,
+            skill_list_chars: diet.skill_list_chars,
+            skill_list_tokens: diet.skill_list_tokens,
+            route_scoped_tools: diet.route_scoped_tools,
+            workflow_context: diet.workflow_context.clone(),
+            closeout_visibility: diet.closeout_visibility.clone(),
+            validation_evidence: diet.validation_evidence.clone(),
+        });
+    }
+
     for (idx, call) in scenario.replay.tool_calls.iter().enumerate() {
         let call_id = format!("eval-tool-{}", idx + 1);
         trace.events.push(TraceEvent::ToolStarted {
@@ -1300,6 +1468,84 @@ fn replay_has_matching_rewind(replay: &EvalReplay, expect: &EvalExpect) -> bool 
         && rewind.failed_files.is_empty()
 }
 
+fn has_context_compaction_expectation(expect: &EvalExpect) -> bool {
+    expect.context_boundary_id.is_some()
+        || expect.context_compaction_strategy.is_some()
+        || expect.context_before_tokens.is_some()
+        || expect.context_after_tokens.is_some()
+        || expect.context_preserved_tail_count.is_some()
+}
+
+fn trace_has_matching_context_compaction(trace: &TurnTrace, expect: &EvalExpect) -> bool {
+    trace.events.iter().any(|event| {
+        let TraceEvent::ContextCompacted {
+            before_tokens,
+            after_tokens,
+            strategy,
+            boundary_id,
+            preserved_tail_count,
+            ..
+        } = event
+        else {
+            return false;
+        };
+
+        expect
+            .context_boundary_id
+            .as_deref()
+            .is_none_or(|expected| boundary_id.as_deref() == Some(expected))
+            && expect
+                .context_compaction_strategy
+                .as_deref()
+                .is_none_or(|expected| strategy == expected)
+            && expect
+                .context_before_tokens
+                .is_none_or(|expected| *before_tokens == expected)
+            && expect
+                .context_after_tokens
+                .is_none_or(|expected| *after_tokens == expected)
+            && expect
+                .context_preserved_tail_count
+                .is_none_or(|expected| *preserved_tail_count == Some(expected))
+    })
+}
+
+fn has_runtime_diet_expectation(expect: &EvalExpect) -> bool {
+    expect.runtime_diet_total_request_tokens.is_some()
+        || expect.runtime_diet_remaining_context_tokens.is_some()
+        || expect.runtime_diet_route_scoped_tools.is_some()
+        || expect.runtime_diet_workflow_context.is_some()
+}
+
+fn trace_has_matching_runtime_diet(trace: &TurnTrace, expect: &EvalExpect) -> bool {
+    trace.events.iter().any(|event| {
+        let TraceEvent::RuntimeDietReport {
+            total_request_tokens,
+            remaining_context_tokens,
+            route_scoped_tools,
+            workflow_context,
+            ..
+        } = event
+        else {
+            return false;
+        };
+
+        expect
+            .runtime_diet_total_request_tokens
+            .is_none_or(|expected| *total_request_tokens == expected)
+            && expect
+                .runtime_diet_remaining_context_tokens
+                .is_none_or(|expected| *remaining_context_tokens == Some(expected))
+            && expect
+                .runtime_diet_route_scoped_tools
+                .is_none_or(|expected| *route_scoped_tools == expected)
+            && expect
+                .runtime_diet_workflow_context
+                .as_deref()
+                .is_none_or(|expected| workflow_context == expected)
+    })
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1314,6 +1560,18 @@ fn default_running_status() -> String {
 
 fn default_rewind_command() -> String {
     "/rewind".to_string()
+}
+
+fn default_workflow_context() -> String {
+    "normal".to_string()
+}
+
+fn default_closeout_visibility() -> String {
+    "standard".to_string()
+}
+
+fn default_validation_evidence() -> String {
+    "none".to_string()
 }
 
 fn is_evalset_file(path: &Path) -> bool {
@@ -1670,6 +1928,85 @@ scenarios:
                     rewind_restored_files: Some(1),
                     available_commands: vec!["/rewind".to_string(), "/checkpoints".to_string()],
                     trace_events: vec!["tool.start".to_string(), "tool.done".to_string()],
+                    ..Default::default()
+                },
+            }],
+        };
+
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_runner_replays_compaction_boundary_and_runtime_diet() {
+        let set = EvalSet {
+            name: "compaction_boundary".to_string(),
+            description: String::new(),
+            scenarios: vec![EvalScenario {
+                id: "compaction-boundary".to_string(),
+                prompt: "长会话压缩后继续执行当前修复".to_string(),
+                replay: EvalReplay {
+                    context_compactions: vec![EvalContextCompactionReplay {
+                        before_tokens: 122_000,
+                        after_tokens: 64_000,
+                        strategy: "semantic_boundary".to_string(),
+                        boundary_id: Some("cb-eval-1".to_string()),
+                        sequence: Some(7),
+                        messages_before: Some(48),
+                        messages_after: Some(19),
+                        preserved_tail_count: Some(6),
+                        provenance: vec![
+                            "summary:project_state".to_string(),
+                            "tail:latest_tool_results".to_string(),
+                        ],
+                    }],
+                    runtime_diet: Some(EvalRuntimeDietReplay {
+                        prompt_tokens: 64_000,
+                        tool_schema_tokens: 3_200,
+                        total_request_tokens: 67_200,
+                        max_context_tokens: Some(128_000),
+                        remaining_context_tokens: Some(60_800),
+                        tool_result_chars: 4_096,
+                        tool_result_tokens: 1_024,
+                        truncated_tool_results: 1,
+                        tool_result_artifacts: 1,
+                        exposed_tools: 12,
+                        memory_snapshot_chars: 0,
+                        memory_snapshot_tokens: 0,
+                        retrieval_items: 2,
+                        retrieval_tokens: 720,
+                        skill_list_chars: 0,
+                        skill_list_tokens: 0,
+                        route_scoped_tools: true,
+                        workflow_context: "strict".to_string(),
+                        closeout_visibility: "full".to_string(),
+                        validation_evidence: "pending".to_string(),
+                    }),
+                    tool_calls: vec![EvalToolCall {
+                        tool: "file_read".to_string(),
+                        success: true,
+                        output: "compacted context retained target".to_string(),
+                        permission: None,
+                    }],
+                    ..Default::default()
+                },
+                expect: EvalExpect {
+                    context_compaction_count: Some(1),
+                    context_boundary_id: Some("cb-eval-1".to_string()),
+                    context_compaction_strategy: Some("semantic_boundary".to_string()),
+                    context_before_tokens: Some(122_000),
+                    context_after_tokens: Some(64_000),
+                    context_preserved_tail_count: Some(6),
+                    runtime_diet_total_request_tokens: Some(67_200),
+                    runtime_diet_remaining_context_tokens: Some(60_800),
+                    runtime_diet_route_scoped_tools: Some(true),
+                    runtime_diet_workflow_context: Some("strict".to_string()),
+                    tool_sequence: vec!["file_read".to_string()],
+                    trace_events: vec![
+                        "context.compact".to_string(),
+                        "runtime.diet".to_string(),
+                        "tool.done".to_string(),
+                    ],
                     ..Default::default()
                 },
             }],

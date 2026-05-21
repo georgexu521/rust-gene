@@ -1613,6 +1613,14 @@ Progress, 2026-05-21 follow-up:
   `evalsets/coding_replay_matrix.yaml`; it now asserts that `file_edit`
   produces a checkpoint-backed file-change record and that `/rewind
   <file_change_id>` restores through the same checkpoint.
+- Promoted `compaction_boundary` to replay-ready as the fourth Phase 12
+  fixture.
+- Extended deterministic eval replay with `ContextCompacted` and
+  `RuntimeDietReport` trace records.
+- Upgraded `context-compaction-safe` in
+  `evalsets/coding_replay_matrix.yaml`; it now asserts `boundary_id`,
+  compaction strategy, token counts, preserved-tail count, runtime diet budget,
+  route-scoped tools, and workflow-context evidence.
 
 ## First Ten Code Batches
 
