@@ -82,6 +82,27 @@ pub struct EvalExpect {
     pub runtime_diet_remaining_context_tokens: Option<u64>,
     pub runtime_diet_route_scoped_tools: Option<bool>,
     pub runtime_diet_workflow_context: Option<String>,
+    pub subagent_count: Option<usize>,
+    pub subagent_agent_id: Option<String>,
+    pub subagent_profile: Option<String>,
+    pub subagent_role: Option<String>,
+    pub subagent_status: Option<String>,
+    pub subagent_context_mode: Option<String>,
+    pub subagent_allowed_tools: Option<usize>,
+    pub isolated_worktree_path: Option<String>,
+    pub isolated_worktree_branch: Option<String>,
+    pub recursive_fork_guard: Option<bool>,
+    pub fork_placeholder_complete: Option<bool>,
+    pub fork_message_count: Option<usize>,
+    pub agent_worktree_action_count: Option<usize>,
+    pub agent_worktree_review_command: Option<String>,
+    pub agent_worktree_merge_command: Option<String>,
+    pub agent_worktree_cleanup_command: Option<String>,
+    pub agent_worktree_review_status: Option<String>,
+    pub agent_worktree_merge_status: Option<String>,
+    pub agent_worktree_cleanup_status: Option<String>,
+    pub agent_worktree_merge_kind: Option<String>,
+    pub agent_worktree_cleanup_deleted_branch: Option<bool>,
     #[serde(default)]
     pub available_tools: Vec<String>,
     #[serde(default)]
@@ -122,6 +143,10 @@ pub struct EvalReplay {
     pub context_compactions: Vec<EvalContextCompactionReplay>,
     #[serde(default)]
     pub runtime_diet: Option<EvalRuntimeDietReplay>,
+    #[serde(default)]
+    pub subagents: Vec<EvalSubagentReplay>,
+    #[serde(default)]
+    pub agent_worktree_actions: Vec<EvalAgentWorktreeActionReplay>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -280,6 +305,67 @@ pub struct EvalRuntimeDietReplay {
     pub closeout_visibility: String,
     #[serde(default = "default_validation_evidence")]
     pub validation_evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalSubagentReplay {
+    pub agent_id: String,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default = "default_agent_role")]
+    pub role: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_agent_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub allowed_tools: usize,
+    #[serde(default = "default_agent_status")]
+    pub status: String,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub output_chars: usize,
+    #[serde(default)]
+    pub tools_used: usize,
+    #[serde(default)]
+    pub context_mode: Option<String>,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
+    #[serde(default)]
+    pub worktree_branch: Option<String>,
+    #[serde(default)]
+    pub recursive_fork_guard: bool,
+    #[serde(default)]
+    pub placeholder_complete: bool,
+    #[serde(default)]
+    pub fork_message_count: Option<usize>,
+    #[serde(default)]
+    pub parent_tool_call_ids: Vec<String>,
+    #[serde(default)]
+    pub cleanup_hooks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalAgentWorktreeActionReplay {
+    pub action: String,
+    pub agent_id: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default = "default_action_status")]
+    pub status: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub commits_ahead: Option<usize>,
+    #[serde(default)]
+    pub merge_kind: Option<String>,
+    #[serde(default)]
+    pub cleanup: bool,
+    #[serde(default)]
+    pub delete_branch: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -538,6 +624,7 @@ impl EvalRunner {
         self.check_terminal_task_replay(scenario, &mut failures);
         self.check_file_rewind_replay(scenario, &mut failures);
         self.check_context_compaction_replay(trace, scenario, &mut failures);
+        self.check_subagent_worktree_replay(scenario, &mut failures);
         self.check_feature_reality(scenario, &mut failures);
 
         failures
@@ -662,6 +749,118 @@ impl EvalRunner {
                     expect.runtime_diet_remaining_context_tokens,
                     expect.runtime_diet_route_scoped_tools,
                     expect.runtime_diet_workflow_context
+                ),
+            });
+        }
+    }
+
+    fn check_subagent_worktree_replay(
+        &self,
+        scenario: &EvalScenario,
+        failures: &mut Vec<EvalFailure>,
+    ) {
+        let expect = &scenario.expect;
+        if let Some(expected) = expect.subagent_count {
+            let actual = scenario.replay.subagents.len();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!("subagent_count expected {}, got {}", expected, actual),
+                });
+            }
+        }
+
+        if has_subagent_expectation(expect)
+            && !replay_has_matching_subagent(&scenario.replay, expect)
+        {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching subagent id={:?} profile={:?} role={:?} status={:?} context={:?} worktree={:?} branch={:?} fork_guard={:?}",
+                    expect.subagent_agent_id,
+                    expect.subagent_profile,
+                    expect.subagent_role,
+                    expect.subagent_status,
+                    expect.subagent_context_mode,
+                    expect.isolated_worktree_path,
+                    expect.isolated_worktree_branch,
+                    expect.recursive_fork_guard
+                ),
+            });
+        }
+
+        if let Some(expected) = expect.agent_worktree_action_count {
+            let actual = scenario.replay.agent_worktree_actions.len();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!(
+                        "agent_worktree_action_count expected {}, got {}",
+                        expected, actual
+                    ),
+                });
+            }
+        }
+
+        self.check_agent_worktree_action(
+            scenario,
+            failures,
+            "agent_review",
+            expect.agent_worktree_review_command.as_deref(),
+            expect.agent_worktree_review_status.as_deref(),
+        );
+        self.check_agent_worktree_action(
+            scenario,
+            failures,
+            "agent_merge",
+            expect.agent_worktree_merge_command.as_deref(),
+            expect.agent_worktree_merge_status.as_deref(),
+        );
+        self.check_agent_worktree_action(
+            scenario,
+            failures,
+            "agent_cleanup",
+            expect.agent_worktree_cleanup_command.as_deref(),
+            expect.agent_worktree_cleanup_status.as_deref(),
+        );
+
+        if (expect.agent_worktree_merge_kind.is_some()
+            || expect.agent_worktree_cleanup_deleted_branch.is_some())
+            && !replay_has_matching_agent_worktree_metadata(&scenario.replay, expect)
+        {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching agent worktree metadata merge_kind={:?} cleanup_deleted_branch={:?}",
+                    expect.agent_worktree_merge_kind,
+                    expect.agent_worktree_cleanup_deleted_branch
+                ),
+            });
+        }
+    }
+
+    fn check_agent_worktree_action(
+        &self,
+        scenario: &EvalScenario,
+        failures: &mut Vec<EvalFailure>,
+        action: &str,
+        expected_command: Option<&str>,
+        expected_status: Option<&str>,
+    ) {
+        if expected_command.is_none() && expected_status.is_none() {
+            return;
+        }
+        if !replay_has_agent_worktree_action(
+            &scenario.replay,
+            action,
+            expected_command,
+            expected_status,
+        ) {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected agent worktree action {} command={:?} status={:?}",
+                    action, expected_command, expected_status
                 ),
             });
         }
@@ -1157,6 +1356,24 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
         });
     }
 
+    for subagent in &scenario.replay.subagents {
+        trace.events.push(TraceEvent::SubagentStarted {
+            agent_id: subagent.agent_id.clone(),
+            profile: subagent.profile.clone(),
+            role: subagent.role.clone(),
+            description: subagent.description.clone(),
+            timeout_secs: subagent.timeout_secs,
+            allowed_tools: subagent.allowed_tools,
+        });
+        trace.events.push(TraceEvent::SubagentCompleted {
+            agent_id: subagent.agent_id.clone(),
+            status: subagent.status.clone(),
+            duration_ms: subagent.duration_ms,
+            output_chars: subagent.output_chars,
+            tools_used: subagent.tools_used,
+        });
+    }
+
     for (idx, call) in scenario.replay.tool_calls.iter().enumerate() {
         let call_id = format!("eval-tool-{}", idx + 1);
         trace.events.push(TraceEvent::ToolStarted {
@@ -1546,6 +1763,99 @@ fn trace_has_matching_runtime_diet(trace: &TurnTrace, expect: &EvalExpect) -> bo
     })
 }
 
+fn has_subagent_expectation(expect: &EvalExpect) -> bool {
+    expect.subagent_agent_id.is_some()
+        || expect.subagent_profile.is_some()
+        || expect.subagent_role.is_some()
+        || expect.subagent_status.is_some()
+        || expect.subagent_context_mode.is_some()
+        || expect.subagent_allowed_tools.is_some()
+        || expect.isolated_worktree_path.is_some()
+        || expect.isolated_worktree_branch.is_some()
+        || expect.recursive_fork_guard.is_some()
+        || expect.fork_placeholder_complete.is_some()
+        || expect.fork_message_count.is_some()
+}
+
+fn replay_has_matching_subagent(replay: &EvalReplay, expect: &EvalExpect) -> bool {
+    replay.subagents.iter().any(|subagent| {
+        expect
+            .subagent_agent_id
+            .as_deref()
+            .is_none_or(|expected| subagent.agent_id == expected)
+            && expect
+                .subagent_profile
+                .as_deref()
+                .is_none_or(|expected| subagent.profile.as_deref() == Some(expected))
+            && expect
+                .subagent_role
+                .as_deref()
+                .is_none_or(|expected| subagent.role == expected)
+            && expect
+                .subagent_status
+                .as_deref()
+                .is_none_or(|expected| subagent.status == expected)
+            && expect
+                .subagent_context_mode
+                .as_deref()
+                .is_none_or(|expected| subagent.context_mode.as_deref() == Some(expected))
+            && expect
+                .subagent_allowed_tools
+                .is_none_or(|expected| subagent.allowed_tools == expected)
+            && expect
+                .isolated_worktree_path
+                .as_deref()
+                .is_none_or(|expected| subagent.worktree_path.as_deref() == Some(expected))
+            && expect
+                .isolated_worktree_branch
+                .as_deref()
+                .is_none_or(|expected| subagent.worktree_branch.as_deref() == Some(expected))
+            && expect
+                .recursive_fork_guard
+                .is_none_or(|expected| subagent.recursive_fork_guard == expected)
+            && expect
+                .fork_placeholder_complete
+                .is_none_or(|expected| subagent.placeholder_complete == expected)
+            && expect
+                .fork_message_count
+                .is_none_or(|expected| subagent.fork_message_count == Some(expected))
+    })
+}
+
+fn replay_has_agent_worktree_action(
+    replay: &EvalReplay,
+    action: &str,
+    expected_command: Option<&str>,
+    expected_status: Option<&str>,
+) -> bool {
+    replay.agent_worktree_actions.iter().any(|record| {
+        record.action == action
+            && expected_command.is_none_or(|expected| record.command.as_deref() == Some(expected))
+            && expected_status.is_none_or(|expected| record.status == expected)
+    })
+}
+
+fn replay_has_matching_agent_worktree_metadata(replay: &EvalReplay, expect: &EvalExpect) -> bool {
+    let merge_matches = expect
+        .agent_worktree_merge_kind
+        .as_deref()
+        .is_none_or(|expected| {
+            replay.agent_worktree_actions.iter().any(|record| {
+                record.action == "agent_merge" && record.merge_kind.as_deref() == Some(expected)
+            })
+        });
+    let cleanup_matches = expect
+        .agent_worktree_cleanup_deleted_branch
+        .is_none_or(|expected| {
+            replay
+                .agent_worktree_actions
+                .iter()
+                .any(|record| record.action == "agent_cleanup" && record.delete_branch == expected)
+        });
+
+    merge_matches && cleanup_matches
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1572,6 +1882,22 @@ fn default_closeout_visibility() -> String {
 
 fn default_validation_evidence() -> String {
     "none".to_string()
+}
+
+fn default_agent_role() -> String {
+    "specialist".to_string()
+}
+
+fn default_agent_timeout_secs() -> u64 {
+    120
+}
+
+fn default_agent_status() -> String {
+    "completed".to_string()
+}
+
+fn default_action_status() -> String {
+    "success".to_string()
 }
 
 fn is_evalset_file(path: &Path) -> bool {
@@ -2005,6 +2331,167 @@ scenarios:
                     trace_events: vec![
                         "context.compact".to_string(),
                         "runtime.diet".to_string(),
+                        "tool.done".to_string(),
+                    ],
+                    ..Default::default()
+                },
+            }],
+        };
+
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_runner_replays_subagent_isolated_worktree_review_merge_cleanup() {
+        let set = EvalSet {
+            name: "subagent_worktree".to_string(),
+            description: String::new(),
+            scenarios: vec![EvalScenario {
+                id: "subagent-worktree-worker".to_string(),
+                prompt: "派子 agent 在隔离 worktree 里修改路由，然后 review/merge/cleanup"
+                    .to_string(),
+                replay: EvalReplay {
+                    subagents: vec![EvalSubagentReplay {
+                        agent_id: "agent_eval_1".to_string(),
+                        profile: Some("implementer".to_string()),
+                        role: "specialist".to_string(),
+                        description: "Implement scoped route repair".to_string(),
+                        timeout_secs: 300,
+                        allowed_tools: 4,
+                        status: "completed".to_string(),
+                        duration_ms: 1_200,
+                        output_chars: 512,
+                        tools_used: 3,
+                        context_mode: Some("isolated_worktree_fork".to_string()),
+                        worktree_path: Some(
+                            "/tmp/priority-agent/.claude/worktrees/agent-route-fix-eval"
+                                .to_string(),
+                        ),
+                        worktree_branch: Some("codex/agent-eval1".to_string()),
+                        recursive_fork_guard: true,
+                        placeholder_complete: true,
+                        fork_message_count: Some(4),
+                        parent_tool_call_ids: vec!["parent_call_1".to_string()],
+                        cleanup_hooks: vec!["worktree_cleanup".to_string()],
+                    }],
+                    agent_worktree_actions: vec![
+                        EvalAgentWorktreeActionReplay {
+                            action: "agent_review".to_string(),
+                            agent_id: "agent_eval_1".to_string(),
+                            command: Some("/agents worktree review agent_eval_1".to_string()),
+                            status: "success".to_string(),
+                            path: Some(
+                                "/tmp/priority-agent/.claude/worktrees/agent-route-fix-eval"
+                                    .to_string(),
+                            ),
+                            branch: Some("codex/agent-eval1".to_string()),
+                            commits_ahead: Some(1),
+                            merge_kind: None,
+                            cleanup: false,
+                            delete_branch: false,
+                        },
+                        EvalAgentWorktreeActionReplay {
+                            action: "agent_merge".to_string(),
+                            agent_id: "agent_eval_1".to_string(),
+                            command: Some("/agents worktree merge agent_eval_1 --yes".to_string()),
+                            status: "success".to_string(),
+                            path: Some(
+                                "/tmp/priority-agent/.claude/worktrees/agent-route-fix-eval"
+                                    .to_string(),
+                            ),
+                            branch: Some("codex/agent-eval1".to_string()),
+                            commits_ahead: Some(1),
+                            merge_kind: Some("branch".to_string()),
+                            cleanup: false,
+                            delete_branch: false,
+                        },
+                        EvalAgentWorktreeActionReplay {
+                            action: "agent_cleanup".to_string(),
+                            agent_id: "agent_eval_1".to_string(),
+                            command: Some(
+                                "/agents worktree cleanup agent_eval_1 --yes --delete-branch"
+                                    .to_string(),
+                            ),
+                            status: "success".to_string(),
+                            path: Some(
+                                "/tmp/priority-agent/.claude/worktrees/agent-route-fix-eval"
+                                    .to_string(),
+                            ),
+                            branch: Some("codex/agent-eval1".to_string()),
+                            commits_ahead: None,
+                            merge_kind: None,
+                            cleanup: true,
+                            delete_branch: true,
+                        },
+                    ],
+                    tool_calls: vec![
+                        EvalToolCall {
+                            tool: "agent".to_string(),
+                            success: true,
+                            output: "agent_eval_1 completed in isolated worktree".to_string(),
+                            permission: None,
+                        },
+                        EvalToolCall {
+                            tool: "worktree".to_string(),
+                            success: true,
+                            output: "Agent worktree review: agent_eval_1".to_string(),
+                            permission: None,
+                        },
+                        EvalToolCall {
+                            tool: "worktree".to_string(),
+                            success: true,
+                            output: "Merged branch: codex/agent-eval1".to_string(),
+                            permission: None,
+                        },
+                        EvalToolCall {
+                            tool: "worktree".to_string(),
+                            success: true,
+                            output: "Removed agent worktree".to_string(),
+                            permission: None,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                expect: EvalExpect {
+                    subagent_count: Some(1),
+                    subagent_agent_id: Some("agent_eval_1".to_string()),
+                    subagent_profile: Some("implementer".to_string()),
+                    subagent_role: Some("specialist".to_string()),
+                    subagent_status: Some("completed".to_string()),
+                    subagent_context_mode: Some("isolated_worktree_fork".to_string()),
+                    subagent_allowed_tools: Some(4),
+                    isolated_worktree_path: Some(
+                        "/tmp/priority-agent/.claude/worktrees/agent-route-fix-eval".to_string(),
+                    ),
+                    isolated_worktree_branch: Some("codex/agent-eval1".to_string()),
+                    recursive_fork_guard: Some(true),
+                    fork_placeholder_complete: Some(true),
+                    fork_message_count: Some(4),
+                    agent_worktree_action_count: Some(3),
+                    agent_worktree_review_command: Some(
+                        "/agents worktree review agent_eval_1".to_string(),
+                    ),
+                    agent_worktree_merge_command: Some(
+                        "/agents worktree merge agent_eval_1 --yes".to_string(),
+                    ),
+                    agent_worktree_cleanup_command: Some(
+                        "/agents worktree cleanup agent_eval_1 --yes --delete-branch".to_string(),
+                    ),
+                    agent_worktree_review_status: Some("success".to_string()),
+                    agent_worktree_merge_status: Some("success".to_string()),
+                    agent_worktree_cleanup_status: Some("success".to_string()),
+                    agent_worktree_merge_kind: Some("branch".to_string()),
+                    agent_worktree_cleanup_deleted_branch: Some(true),
+                    tool_sequence: vec![
+                        "agent".to_string(),
+                        "worktree".to_string(),
+                        "worktree".to_string(),
+                        "worktree".to_string(),
+                    ],
+                    trace_events: vec![
+                        "subagent.start".to_string(),
+                        "subagent.done".to_string(),
                         "tool.done".to_string(),
                     ],
                     ..Default::default()

@@ -247,6 +247,86 @@ scenarios:
       failed_tool: agent
       tool_sequence: ["agent"]
 
+  - id: subagent-worktree-worker-review-merge
+    prompt: "派子 agent 在隔离 worktree 里修改路由，然后 review、merge、cleanup"
+    replay:
+      subagents:
+        - agent_id: agent_eval_1
+          profile: implementer
+          role: specialist
+          description: "Implement scoped route repair"
+          timeout_secs: 300
+          allowed_tools: 4
+          status: completed
+          duration_ms: 1200
+          output_chars: 512
+          tools_used: 3
+          context_mode: isolated_worktree_fork
+          worktree_path: /tmp/priority-agent/.claude/worktrees/agent-route-fix-eval
+          worktree_branch: codex/agent-eval1
+          recursive_fork_guard: true
+          placeholder_complete: true
+          fork_message_count: 4
+          parent_tool_call_ids: ["parent_call_1"]
+          cleanup_hooks: ["worktree_cleanup"]
+      agent_worktree_actions:
+        - action: agent_review
+          agent_id: agent_eval_1
+          command: "/agents worktree review agent_eval_1"
+          status: success
+          path: /tmp/priority-agent/.claude/worktrees/agent-route-fix-eval
+          branch: codex/agent-eval1
+          commits_ahead: 1
+        - action: agent_merge
+          agent_id: agent_eval_1
+          command: "/agents worktree merge agent_eval_1 --yes"
+          status: success
+          path: /tmp/priority-agent/.claude/worktrees/agent-route-fix-eval
+          branch: codex/agent-eval1
+          commits_ahead: 1
+          merge_kind: branch
+        - action: agent_cleanup
+          agent_id: agent_eval_1
+          command: "/agents worktree cleanup agent_eval_1 --yes --delete-branch"
+          status: success
+          path: /tmp/priority-agent/.claude/worktrees/agent-route-fix-eval
+          branch: codex/agent-eval1
+          cleanup: true
+          delete_branch: true
+      tool_calls:
+        - tool: agent
+          output: "agent_eval_1 completed in isolated worktree"
+        - tool: worktree
+          output: "Agent worktree review: agent_eval_1"
+        - tool: worktree
+          output: "Merged branch: codex/agent-eval1"
+        - tool: worktree
+          output: "Removed agent worktree"
+    expect:
+      subagent_count: 1
+      subagent_agent_id: agent_eval_1
+      subagent_profile: implementer
+      subagent_role: specialist
+      subagent_status: completed
+      subagent_context_mode: isolated_worktree_fork
+      subagent_allowed_tools: 4
+      isolated_worktree_path: /tmp/priority-agent/.claude/worktrees/agent-route-fix-eval
+      isolated_worktree_branch: codex/agent-eval1
+      recursive_fork_guard: true
+      fork_placeholder_complete: true
+      fork_message_count: 4
+      agent_worktree_action_count: 3
+      agent_worktree_review_command: "/agents worktree review agent_eval_1"
+      agent_worktree_merge_command: "/agents worktree merge agent_eval_1 --yes"
+      agent_worktree_cleanup_command: "/agents worktree cleanup agent_eval_1 --yes --delete-branch"
+      agent_worktree_review_status: success
+      agent_worktree_merge_status: success
+      agent_worktree_cleanup_status: success
+      agent_worktree_merge_kind: branch
+      agent_worktree_cleanup_deleted_branch: true
+      tool_sequence: ["agent", "worktree", "worktree", "worktree"]
+      trace_events: ["subagent.start", "subagent.done", "tool.done"]
+
   - id: mcp-resource-read
     prompt: "读取 MCP resource 并纳入上下文"
     replay:

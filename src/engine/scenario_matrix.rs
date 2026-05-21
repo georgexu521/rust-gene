@@ -282,7 +282,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         title: "Subagent isolated worktree worker",
         phase: "Phase 12",
         user_task: "fork a child worker into an isolated worktree, review output, and clean up",
-        status: ReplayStatus::RuntimeMapped,
+        status: ReplayStatus::ReplayFixtureReady,
         external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
         evidence: SUBAGENT_WORKTREE_EVIDENCE,
     },
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn external_baseline_stays_deferred_until_replays_are_ready() {
         let summary = scenario_matrix_summary();
-        assert_eq!(summary.replay_ready, 4);
+        assert_eq!(summary.replay_ready, 5);
         assert!(!summary.external_baseline_ready);
         assert!(deterministic_scenarios()
             .iter()
@@ -447,7 +447,8 @@ mod tests {
                 ScenarioKind::FileEditRewind,
                 ScenarioKind::BashBackgroundTask,
                 ScenarioKind::PermissionDenialRetry,
-                ScenarioKind::CompactionBoundary
+                ScenarioKind::CompactionBoundary,
+                ScenarioKind::SubagentWorktreeWorker,
             ]
         );
     }

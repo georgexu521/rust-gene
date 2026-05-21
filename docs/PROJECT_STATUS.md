@@ -70,19 +70,21 @@ Current stage:
 - Phase 12 verification work has started with a deterministic scenario matrix
   skeleton: `src/engine/scenario_matrix.rs` declares the six required parity
   scenarios and maps each one to concrete runtime/trace/recovery evidence, with
-  `/eval matrix` exposing the current readout. The first four replay-ready
+  `/eval matrix` exposing the current readout. The first five replay-ready
   fixtures are now `file_edit_rewind`, `bash_background_task`,
-  `permission_denial_retry`, and `compaction_boundary`: deterministic eval
-  replay can emit permission request/resolution and recovery-plan trace events,
-  terminal task records for background shell handles, `bash_output`, and
-  `bash_cancel` paths, file-change/checkpoint records with rewind restore
-  assertions, plus `ContextCompacted` and `RuntimeDietReport` records with
-  boundary and budget assertions.
+  `permission_denial_retry`, `compaction_boundary`, and
+  `subagent_worktree_worker`: deterministic eval replay can emit permission
+  request/resolution and recovery-plan trace events, terminal task records for
+  background shell handles, `bash_output`, and `bash_cancel` paths,
+  file-change/checkpoint records with rewind restore assertions,
+  `ContextCompacted` and `RuntimeDietReport` records with boundary and budget
+  assertions, plus subagent task-state and isolated worktree review, merge, and
+  cleanup records.
   `evalsets/coding_replay_matrix.yaml` includes
   `file-edit-rewind-checkpoint`, `bash-background-task-handle`,
-  `permission-denial-retry-recovery`, and upgraded `context-compaction-safe`.
-  The other Phase 12 replay fixtures and external Claude/Codex baselines are
-  still pending.
+  `permission-denial-retry-recovery`, upgraded `context-compaction-safe`, and
+  `subagent-worktree-worker-review-merge`. The remaining Phase 12 replay
+  fixture and external Claude/Codex baselines are still pending.
 
 The recent closure plan is complete:
 

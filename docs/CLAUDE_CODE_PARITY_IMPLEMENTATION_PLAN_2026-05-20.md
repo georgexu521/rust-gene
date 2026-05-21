@@ -1621,6 +1621,15 @@ Progress, 2026-05-21 follow-up:
   `evalsets/coding_replay_matrix.yaml`; it now asserts `boundary_id`,
   compaction strategy, token counts, preserved-tail count, runtime diet budget,
   route-scoped tools, and workflow-context evidence.
+- Promoted `subagent_worktree_worker` to replay-ready as the fifth Phase 12
+  fixture.
+- Extended deterministic eval replay with subagent task-state and agent
+  worktree action records.
+- Added `subagent-worktree-worker-review-merge` to
+  `evalsets/coding_replay_matrix.yaml`; it now asserts
+  `isolated_worktree_fork`, isolated worktree path/branch metadata,
+  recursive-fork guard and placeholder completion, `/agents worktree review`,
+  `agent_merge`, and `agent_cleanup` evidence.
 
 ## First Ten Code Batches
 
