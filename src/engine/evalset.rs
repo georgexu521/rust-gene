@@ -58,6 +58,12 @@ pub struct EvalExpect {
     pub recovery_category: Option<String>,
     pub recovery_suggested_command: Option<String>,
     pub recovery_safe_retry: Option<bool>,
+    pub terminal_task_count: Option<usize>,
+    pub terminal_task_id: Option<String>,
+    pub terminal_task_status: Option<String>,
+    pub terminal_task_read_tool: Option<String>,
+    pub terminal_task_cancel_tool: Option<String>,
+    pub backgrounded_tool: Option<String>,
     #[serde(default)]
     pub available_tools: Vec<String>,
     #[serde(default)]
@@ -88,6 +94,8 @@ pub struct EvalReplay {
     pub failed_commands: Vec<String>,
     #[serde(default)]
     pub recovery_plans: Vec<EvalRecoveryPlan>,
+    #[serde(default)]
+    pub terminal_tasks: Vec<EvalTerminalTaskReplay>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +138,29 @@ pub struct EvalRecoveryPlan {
     pub suggested_command: Option<String>,
     #[serde(default = "default_recovery_status")]
     pub status: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EvalTerminalTaskReplay {
+    pub id: String,
+    #[serde(default)]
+    pub source_tool: String,
+    #[serde(default = "default_running_status")]
+    pub status: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub handle: Option<String>,
+    #[serde(default)]
+    pub read_tool: Option<String>,
+    #[serde(default)]
+    pub cancel_tool: Option<String>,
+    #[serde(default)]
+    pub cancel_handle: Option<String>,
+    #[serde(default)]
+    pub output_path: Option<String>,
+    #[serde(default)]
+    pub backgrounded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,9 +416,39 @@ impl EvalRunner {
             });
         }
 
+        self.check_terminal_task_replay(scenario, &mut failures);
         self.check_feature_reality(scenario, &mut failures);
 
         failures
+    }
+
+    fn check_terminal_task_replay(&self, scenario: &EvalScenario, failures: &mut Vec<EvalFailure>) {
+        let expect = &scenario.expect;
+        if let Some(expected) = expect.terminal_task_count {
+            let actual = scenario.replay.terminal_tasks.len();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!("terminal_task_count expected {}, got {}", expected, actual),
+                });
+            }
+        }
+
+        if has_terminal_task_expectation(expect)
+            && !replay_has_matching_terminal_task(&scenario.replay, expect)
+        {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching terminal task id={:?} status={:?} read_tool={:?} cancel_tool={:?} backgrounded_tool={:?}",
+                    expect.terminal_task_id,
+                    expect.terminal_task_status,
+                    expect.terminal_task_read_tool,
+                    expect.terminal_task_cancel_tool,
+                    expect.backgrounded_tool
+                ),
+            });
+        }
     }
 
     fn check_feature_reality(&self, scenario: &EvalScenario, failures: &mut Vec<EvalFailure>) {
@@ -1066,12 +1127,49 @@ fn trace_has_matching_recovery_plan(
     })
 }
 
+fn has_terminal_task_expectation(expect: &EvalExpect) -> bool {
+    expect.terminal_task_id.is_some()
+        || expect.terminal_task_status.is_some()
+        || expect.terminal_task_read_tool.is_some()
+        || expect.terminal_task_cancel_tool.is_some()
+        || expect.backgrounded_tool.is_some()
+}
+
+fn replay_has_matching_terminal_task(replay: &EvalReplay, expect: &EvalExpect) -> bool {
+    replay.terminal_tasks.iter().any(|task| {
+        expect
+            .terminal_task_id
+            .as_deref()
+            .is_none_or(|expected| task.id == expected)
+            && expect
+                .terminal_task_status
+                .as_deref()
+                .is_none_or(|expected| task.status == expected)
+            && expect
+                .terminal_task_read_tool
+                .as_deref()
+                .is_none_or(|expected| task.read_tool.as_deref() == Some(expected))
+            && expect
+                .terminal_task_cancel_tool
+                .as_deref()
+                .is_none_or(|expected| task.cancel_tool.as_deref() == Some(expected))
+            && expect
+                .backgrounded_tool
+                .as_deref()
+                .is_none_or(|expected| task.backgrounded && task.source_tool == expected)
+    })
+}
+
 fn default_true() -> bool {
     true
 }
 
 fn default_recovery_status() -> String {
     "Planned".to_string()
+}
+
+fn default_running_status() -> String {
+    "running".to_string()
 }
 
 fn is_evalset_file(path: &Path) -> bool {
@@ -1315,6 +1413,62 @@ scenarios:
                         "permission.resolve".to_string(),
                         "recovery.plan".to_string(),
                     ],
+                    ..Default::default()
+                },
+            }],
+        };
+
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_runner_replays_background_terminal_task() {
+        let set = EvalSet {
+            name: "background_terminal".to_string(),
+            description: String::new(),
+            scenarios: vec![EvalScenario {
+                id: "bash-background-task".to_string(),
+                prompt: "启动后台服务并读取一段输出".to_string(),
+                replay: EvalReplay {
+                    tool_calls: vec![
+                        EvalToolCall {
+                            tool: "bash".to_string(),
+                            success: true,
+                            output: "Started background shell command. Handle: shell-bg-eval-1"
+                                .to_string(),
+                            permission: None,
+                        },
+                        EvalToolCall {
+                            tool: "bash_output".to_string(),
+                            success: true,
+                            output: "server ready".to_string(),
+                            permission: None,
+                        },
+                    ],
+                    terminal_tasks: vec![EvalTerminalTaskReplay {
+                        id: "shell-bg-eval-1".to_string(),
+                        source_tool: "bash".to_string(),
+                        status: "running".to_string(),
+                        command: Some("npm run dev".to_string()),
+                        handle: Some("shell-bg-eval-1".to_string()),
+                        read_tool: Some("bash_output".to_string()),
+                        cancel_tool: Some("bash_cancel".to_string()),
+                        cancel_handle: Some("shell-bg-eval-1".to_string()),
+                        output_path: None,
+                        backgrounded: true,
+                    }],
+                    ..Default::default()
+                },
+                expect: EvalExpect {
+                    tool_sequence: vec!["bash".to_string(), "bash_output".to_string()],
+                    terminal_task_count: Some(1),
+                    terminal_task_id: Some("shell-bg-eval-1".to_string()),
+                    terminal_task_status: Some("running".to_string()),
+                    terminal_task_read_tool: Some("bash_output".to_string()),
+                    terminal_task_cancel_tool: Some("bash_cancel".to_string()),
+                    backgrounded_tool: Some("bash".to_string()),
+                    trace_events: vec!["tool.start".to_string(), "tool.done".to_string()],
                     ..Default::default()
                 },
             }],

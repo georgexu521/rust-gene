@@ -49,6 +49,34 @@ scenarios:
       verification_passed: true
       repair_required: false
 
+  - id: bash-background-task-handle
+    prompt: "启动后台构建任务，读取输出，不要阻塞主会话"
+    replay:
+      tool_calls:
+        - tool: bash
+          output: "Started background shell command. Handle: shell-bg-eval-1"
+        - tool: bash_output
+          output: "server ready"
+      terminal_tasks:
+        - id: shell-bg-eval-1
+          source_tool: bash
+          status: running
+          command: "npm run dev"
+          handle: shell-bg-eval-1
+          read_tool: bash_output
+          cancel_tool: bash_cancel
+          cancel_handle: shell-bg-eval-1
+          backgrounded: true
+    expect:
+      tool_sequence: ["bash", "bash_output"]
+      terminal_task_count: 1
+      terminal_task_id: shell-bg-eval-1
+      terminal_task_status: running
+      terminal_task_read_tool: bash_output
+      terminal_task_cancel_tool: bash_cancel
+      backgrounded_tool: bash
+      trace_events: ["tool.start", "tool.done"]
+
   - id: npm-test-fail-repair-needed
     prompt: "前端改动后 npm test 报错，继续修"
     replay:

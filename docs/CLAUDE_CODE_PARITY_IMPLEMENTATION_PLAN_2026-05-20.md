@@ -1597,6 +1597,15 @@ Progress, 2026-05-21 follow-up:
   `evalsets/coding_replay_matrix.yaml`; it now asserts rejected permission,
   `/permissions explain` recovery, unsafe retry classification, and a safe
   read-only continuation path.
+- Promoted `bash_background_task` to replay-ready as the second Phase 12
+  fixture.
+- Extended deterministic eval replay with terminal task records and assertions
+  for backgrounded source tool, task id/status, `bash_output` read path, and
+  `bash_cancel` cancellation path.
+- Added `bash-background-task-handle` to
+  `evalsets/coding_replay_matrix.yaml`; it now asserts that background shell
+  work returns a handle, remains visible as a terminal task, and can be polled
+  without blocking the main turn.
 
 ## First Ten Code Batches
 

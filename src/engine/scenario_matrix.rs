@@ -252,7 +252,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         title: "Bash background task",
         phase: "Phase 12",
         user_task: "start a long-running shell command, poll output, then cancel or close out",
-        status: ReplayStatus::RuntimeMapped,
+        status: ReplayStatus::ReplayFixtureReady,
         external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
         evidence: BASH_BACKGROUND_EVIDENCE,
     },
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn external_baseline_stays_deferred_until_replays_are_ready() {
         let summary = scenario_matrix_summary();
-        assert_eq!(summary.replay_ready, 1);
+        assert_eq!(summary.replay_ready, 2);
         assert!(!summary.external_baseline_ready);
         assert!(deterministic_scenarios()
             .iter()
@@ -434,14 +434,20 @@ mod tests {
     }
 
     #[test]
-    fn permission_denial_scenario_is_first_replay_fixture() {
+    fn replay_ready_scenarios_are_tracked() {
         let replay_ready = deterministic_scenarios()
             .iter()
             .filter(|scenario| scenario.status == ReplayStatus::ReplayFixtureReady)
             .map(|scenario| scenario.kind)
             .collect::<Vec<_>>();
 
-        assert_eq!(replay_ready, vec![ScenarioKind::PermissionDenialRetry]);
+        assert_eq!(
+            replay_ready,
+            vec![
+                ScenarioKind::BashBackgroundTask,
+                ScenarioKind::PermissionDenialRetry
+            ]
+        );
     }
 
     #[test]
