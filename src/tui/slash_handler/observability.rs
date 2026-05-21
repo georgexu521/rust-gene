@@ -159,6 +159,7 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
     let action = parts.next().unwrap_or("list");
 
     match action {
+        "matrix" | "scenarios" => crate::engine::scenario_matrix::format_scenario_matrix(),
         "list" => match crate::engine::evalset::load_evalsets_from_dir(&eval_dir) {
             Ok(sets) if sets.is_empty() => {
                 format!("No evalsets found in {}.", eval_dir.display())
@@ -231,7 +232,7 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Eval trend failed: {}", e),
             }
         }
-        _ => "Usage: /eval [list|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
+        _ => "Usage: /eval [list|matrix|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
             .to_string(),
     }
 }
@@ -498,5 +499,15 @@ mod tests {
         assert_eq!(traces.len(), 2);
         assert_eq!(traces[0].turn_index, 4);
         assert_eq!(traces[1].turn_index, 3);
+    }
+
+    #[test]
+    fn eval_matrix_output_lists_phase_12_scenarios() {
+        let output = crate::engine::scenario_matrix::format_scenario_matrix();
+
+        assert!(output.contains("Phase 12 Deterministic Scenario Matrix"));
+        assert!(output.contains("file_edit_rewind"));
+        assert!(output.contains("mcp_auth_repair"));
+        assert!(output.contains("External baseline: deferred"));
     }
 }

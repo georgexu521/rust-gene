@@ -67,6 +67,11 @@ Current stage:
   failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
   classified as hook runtime failures, and permission denials emit
   `/permissions explain` recovery plans in trace.
+- Phase 12 verification work has started with a deterministic scenario matrix
+  skeleton: `src/engine/scenario_matrix.rs` declares the six required parity
+  scenarios and maps each one to concrete runtime/trace/recovery evidence, with
+  `/eval matrix` exposing the current readout. Replay fixtures and external
+  Claude/Codex baselines are still pending.
 
 The recent closure plan is complete:
 

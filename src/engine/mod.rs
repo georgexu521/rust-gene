@@ -44,6 +44,7 @@ pub mod reflection_pass;
 pub mod repair_spec;
 pub mod resource_policy;
 pub mod retrieval_context;
+pub mod scenario_matrix;
 pub mod session_goal;
 pub mod skill_evolution;
 pub mod socratic;

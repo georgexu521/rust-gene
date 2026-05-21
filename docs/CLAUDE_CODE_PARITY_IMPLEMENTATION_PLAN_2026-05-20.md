@@ -1575,6 +1575,18 @@ Tasks:
 3. Compare the same task set against Claude Code and Codex when available.
 4. Update `docs/PROJECT_STATUS.md` only after the evidence is current.
 
+Progress, 2026-05-21:
+
+- Added the first Phase 12 deterministic scenario matrix skeleton in
+  `src/engine/scenario_matrix.rs`.
+- The matrix declares the six required product scenarios and maps each one to
+  concrete local evidence surfaces: trace events, runtime panels, recovery
+  plans, tool metadata, slash commands, or session-store records.
+- Added `/eval matrix` as a lightweight readout so the runtime can show the
+  current scenario coverage without starting a full replay or live benchmark.
+- External Claude/Codex baselines remain deferred until these six mapped cases
+  become deterministic replay fixtures.
+
 ## First Ten Code Batches
 
 These are the concrete next implementation batches after this planning pass:
