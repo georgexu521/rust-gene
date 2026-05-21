@@ -103,6 +103,20 @@ pub struct EvalExpect {
     pub agent_worktree_cleanup_status: Option<String>,
     pub agent_worktree_merge_kind: Option<String>,
     pub agent_worktree_cleanup_deleted_branch: Option<bool>,
+    pub mcp_resource_count: Option<usize>,
+    pub mcp_resource_success_count: Option<usize>,
+    pub mcp_resource_failure_count: Option<usize>,
+    pub mcp_resource_server: Option<String>,
+    pub mcp_resource_uri: Option<String>,
+    pub mcp_resource_action: Option<String>,
+    pub mcp_resource_success: Option<bool>,
+    pub mcp_resource_content_chars: Option<usize>,
+    pub mcp_repair_count: Option<usize>,
+    pub mcp_repair_server: Option<String>,
+    pub mcp_repair_category: Option<String>,
+    pub mcp_repair_command: Option<String>,
+    pub mcp_repair_status: Option<String>,
+    pub mcp_panel_command: Option<String>,
     #[serde(default)]
     pub available_tools: Vec<String>,
     #[serde(default)]
@@ -147,6 +161,10 @@ pub struct EvalReplay {
     pub subagents: Vec<EvalSubagentReplay>,
     #[serde(default)]
     pub agent_worktree_actions: Vec<EvalAgentWorktreeActionReplay>,
+    #[serde(default)]
+    pub mcp_resources: Vec<EvalMcpResourceReplay>,
+    #[serde(default)]
+    pub mcp_repairs: Vec<EvalMcpRepairReplay>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +384,32 @@ pub struct EvalAgentWorktreeActionReplay {
     pub cleanup: bool,
     #[serde(default)]
     pub delete_branch: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalMcpResourceReplay {
+    pub server: String,
+    #[serde(default = "default_mcp_uri")]
+    pub uri: String,
+    #[serde(default = "default_mcp_resource_action")]
+    pub action: String,
+    #[serde(default = "default_true")]
+    pub success: bool,
+    #[serde(default)]
+    pub content_chars: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalMcpRepairReplay {
+    pub server: String,
+    pub category: String,
+    pub command: String,
+    #[serde(default = "default_mcp_panel_command")]
+    pub panel_command: String,
+    #[serde(default = "default_recovery_status")]
+    pub status: String,
+    #[serde(default)]
+    pub safe_retry: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -625,6 +669,7 @@ impl EvalRunner {
         self.check_file_rewind_replay(scenario, &mut failures);
         self.check_context_compaction_replay(trace, scenario, &mut failures);
         self.check_subagent_worktree_replay(scenario, &mut failures);
+        self.check_mcp_auth_repair_replay(trace, scenario, &mut failures);
         self.check_feature_reality(scenario, &mut failures);
 
         failures
@@ -861,6 +906,109 @@ impl EvalRunner {
                 message: format!(
                     "expected agent worktree action {} command={:?} status={:?}",
                     action, expected_command, expected_status
+                ),
+            });
+        }
+    }
+
+    fn check_mcp_auth_repair_replay(
+        &self,
+        trace: &TurnTrace,
+        scenario: &EvalScenario,
+        failures: &mut Vec<EvalFailure>,
+    ) {
+        let expect = &scenario.expect;
+        if let Some(expected) = expect.mcp_resource_count {
+            let actual = trace
+                .events
+                .iter()
+                .filter(|event| matches!(event, TraceEvent::McpResourceAccessed { .. }))
+                .count();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!("mcp_resource_count expected {}, got {}", expected, actual),
+                });
+            }
+        }
+
+        if let Some(expected) = expect.mcp_resource_success_count {
+            let actual = trace
+                .events
+                .iter()
+                .filter(|event| {
+                    matches!(event, TraceEvent::McpResourceAccessed { success: true, .. })
+                })
+                .count();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!(
+                        "mcp_resource_success_count expected {}, got {}",
+                        expected, actual
+                    ),
+                });
+            }
+        }
+
+        if let Some(expected) = expect.mcp_resource_failure_count {
+            let actual = trace
+                .events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        TraceEvent::McpResourceAccessed { success: false, .. }
+                    )
+                })
+                .count();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!(
+                        "mcp_resource_failure_count expected {}, got {}",
+                        expected, actual
+                    ),
+                });
+            }
+        }
+
+        if has_mcp_resource_expectation(expect) && !trace_has_matching_mcp_resource(trace, expect) {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching mcp resource server={:?} uri={:?} action={:?} success={:?} chars={:?}",
+                    expect.mcp_resource_server,
+                    expect.mcp_resource_uri,
+                    expect.mcp_resource_action,
+                    expect.mcp_resource_success,
+                    expect.mcp_resource_content_chars
+                ),
+            });
+        }
+
+        if let Some(expected) = expect.mcp_repair_count {
+            let actual = scenario.replay.mcp_repairs.len();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!("mcp_repair_count expected {}, got {}", expected, actual),
+                });
+            }
+        }
+
+        if has_mcp_repair_expectation(expect)
+            && !replay_has_matching_mcp_repair(&scenario.replay, expect)
+        {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching mcp repair server={:?} category={:?} command={:?} status={:?} panel={:?}",
+                    expect.mcp_repair_server,
+                    expect.mcp_repair_category,
+                    expect.mcp_repair_command,
+                    expect.mcp_repair_status,
+                    expect.mcp_panel_command
                 ),
             });
         }
@@ -1374,6 +1522,32 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
         });
     }
 
+    for resource in &scenario.replay.mcp_resources {
+        trace.events.push(TraceEvent::McpResourceAccessed {
+            server: resource.server.clone(),
+            uri: resource.uri.clone(),
+            action: resource.action.clone(),
+            success: resource.success,
+            content_chars: resource.content_chars,
+        });
+    }
+
+    for (idx, repair) in scenario.replay.mcp_repairs.iter().enumerate() {
+        trace.events.push(TraceEvent::RecoveryPlan {
+            plan_id: format!("eval-mcp-repair-{}", idx + 1),
+            source: "mcp".to_string(),
+            category: format!("mcp_{}_required", repair.category),
+            action: format!(
+                "run {} then retry MCP resource access on {}",
+                repair.command, repair.server
+            ),
+            retryable: true,
+            safe_retry: repair.safe_retry,
+            suggested_command: Some(repair.command.clone()),
+            status: repair.status.clone(),
+        });
+    }
+
     for (idx, call) in scenario.replay.tool_calls.iter().enumerate() {
         let call_id = format!("eval-tool-{}", idx + 1);
         trace.events.push(TraceEvent::ToolStarted {
@@ -1856,6 +2030,81 @@ fn replay_has_matching_agent_worktree_metadata(replay: &EvalReplay, expect: &Eva
     merge_matches && cleanup_matches
 }
 
+fn has_mcp_resource_expectation(expect: &EvalExpect) -> bool {
+    expect.mcp_resource_server.is_some()
+        || expect.mcp_resource_uri.is_some()
+        || expect.mcp_resource_action.is_some()
+        || expect.mcp_resource_success.is_some()
+        || expect.mcp_resource_content_chars.is_some()
+}
+
+fn trace_has_matching_mcp_resource(trace: &TurnTrace, expect: &EvalExpect) -> bool {
+    trace.events.iter().any(|event| {
+        let TraceEvent::McpResourceAccessed {
+            server,
+            uri,
+            action,
+            success,
+            content_chars,
+        } = event
+        else {
+            return false;
+        };
+
+        expect
+            .mcp_resource_server
+            .as_deref()
+            .is_none_or(|expected| server == expected)
+            && expect
+                .mcp_resource_uri
+                .as_deref()
+                .is_none_or(|expected| uri == expected)
+            && expect
+                .mcp_resource_action
+                .as_deref()
+                .is_none_or(|expected| action == expected)
+            && expect
+                .mcp_resource_success
+                .is_none_or(|expected| *success == expected)
+            && expect
+                .mcp_resource_content_chars
+                .is_none_or(|expected| *content_chars == expected)
+    })
+}
+
+fn has_mcp_repair_expectation(expect: &EvalExpect) -> bool {
+    expect.mcp_repair_server.is_some()
+        || expect.mcp_repair_category.is_some()
+        || expect.mcp_repair_command.is_some()
+        || expect.mcp_repair_status.is_some()
+        || expect.mcp_panel_command.is_some()
+}
+
+fn replay_has_matching_mcp_repair(replay: &EvalReplay, expect: &EvalExpect) -> bool {
+    replay.mcp_repairs.iter().any(|repair| {
+        expect
+            .mcp_repair_server
+            .as_deref()
+            .is_none_or(|expected| repair.server == expected)
+            && expect
+                .mcp_repair_category
+                .as_deref()
+                .is_none_or(|expected| repair.category == expected)
+            && expect
+                .mcp_repair_command
+                .as_deref()
+                .is_none_or(|expected| repair.command == expected)
+            && expect
+                .mcp_repair_status
+                .as_deref()
+                .is_none_or(|expected| repair.status == expected)
+            && expect
+                .mcp_panel_command
+                .as_deref()
+                .is_none_or(|expected| repair.panel_command == expected)
+    })
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1898,6 +2147,18 @@ fn default_agent_status() -> String {
 
 fn default_action_status() -> String {
     "success".to_string()
+}
+
+fn default_mcp_uri() -> String {
+    "*".to_string()
+}
+
+fn default_mcp_resource_action() -> String {
+    "read".to_string()
+}
+
+fn default_mcp_panel_command() -> String {
+    "/panel mcp".to_string()
 }
 
 fn is_evalset_file(path: &Path) -> bool {
@@ -2492,6 +2753,100 @@ scenarios:
                     trace_events: vec![
                         "subagent.start".to_string(),
                         "subagent.done".to_string(),
+                        "tool.done".to_string(),
+                    ],
+                    ..Default::default()
+                },
+            }],
+        };
+
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eval_runner_replays_mcp_auth_repair_and_retry() {
+        let set = EvalSet {
+            name: "mcp_auth_repair".to_string(),
+            description: String::new(),
+            scenarios: vec![EvalScenario {
+                id: "mcp-auth-repair".to_string(),
+                prompt: "MCP server 未批准时提示修复，然后批准并重试 resource read".to_string(),
+                replay: EvalReplay {
+                    mcp_resources: vec![
+                        EvalMcpResourceReplay {
+                            server: "filesystem".to_string(),
+                            uri: "file:///repo/README.md".to_string(),
+                            action: "read".to_string(),
+                            success: false,
+                            content_chars: 0,
+                        },
+                        EvalMcpResourceReplay {
+                            server: "filesystem".to_string(),
+                            uri: "file:///repo/README.md".to_string(),
+                            action: "read".to_string(),
+                            success: true,
+                            content_chars: 128,
+                        },
+                    ],
+                    mcp_repairs: vec![EvalMcpRepairReplay {
+                        server: "filesystem".to_string(),
+                        category: "approval".to_string(),
+                        command: "/mcp approve filesystem".to_string(),
+                        panel_command: "/panel mcp".to_string(),
+                        status: "Planned".to_string(),
+                        safe_retry: false,
+                    }],
+                    tool_calls: vec![
+                        EvalToolCall {
+                            tool: "read_mcp_resource".to_string(),
+                            success: false,
+                            output: "MCP server 'filesystem' is pending approval".to_string(),
+                            permission: None,
+                        },
+                        EvalToolCall {
+                            tool: "mcp".to_string(),
+                            success: true,
+                            output: "MCP server 'filesystem' approved.".to_string(),
+                            permission: None,
+                        },
+                        EvalToolCall {
+                            tool: "read_mcp_resource".to_string(),
+                            success: true,
+                            output: "resource content after approval".to_string(),
+                            permission: None,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                expect: EvalExpect {
+                    failed_tool: Some("read_mcp_resource".to_string()),
+                    tool_sequence: vec![
+                        "read_mcp_resource".to_string(),
+                        "mcp".to_string(),
+                        "read_mcp_resource".to_string(),
+                    ],
+                    mcp_resource_count: Some(2),
+                    mcp_resource_failure_count: Some(1),
+                    mcp_resource_success_count: Some(1),
+                    mcp_resource_server: Some("filesystem".to_string()),
+                    mcp_resource_uri: Some("file:///repo/README.md".to_string()),
+                    mcp_resource_action: Some("read".to_string()),
+                    mcp_resource_success: Some(true),
+                    mcp_resource_content_chars: Some(128),
+                    mcp_repair_count: Some(1),
+                    mcp_repair_server: Some("filesystem".to_string()),
+                    mcp_repair_category: Some("approval".to_string()),
+                    mcp_repair_command: Some("/mcp approve filesystem".to_string()),
+                    mcp_repair_status: Some("Planned".to_string()),
+                    mcp_panel_command: Some("/panel mcp".to_string()),
+                    recovery_category: Some("mcp_approval_required".to_string()),
+                    recovery_suggested_command: Some("/mcp approve filesystem".to_string()),
+                    recovery_safe_retry: Some(false),
+                    available_commands: vec!["/mcp".to_string(), "/panel".to_string()],
+                    trace_events: vec![
+                        "mcp.resource".to_string(),
+                        "recovery.plan".to_string(),
                         "tool.done".to_string(),
                     ],
                     ..Default::default()

@@ -1630,6 +1630,14 @@ Progress, 2026-05-21 follow-up:
   `isolated_worktree_fork`, isolated worktree path/branch metadata,
   recursive-fork guard and placeholder completion, `/agents worktree review`,
   `agent_merge`, and `agent_cleanup` evidence.
+- Promoted `mcp_auth_repair` to replay-ready as the sixth Phase 12 fixture,
+  completing the local deterministic replay matrix.
+- Extended deterministic eval replay with MCP resource access and MCP repair
+  records.
+- Added `mcp-auth-repair-approval-retry` to
+  `evalsets/coding_replay_matrix.yaml`; it now asserts failed MCP resource
+  access, `/mcp approve <server>` repair guidance, `/panel mcp` visibility, and
+  successful resource retry after approval.
 
 ## First Ten Code Batches
 

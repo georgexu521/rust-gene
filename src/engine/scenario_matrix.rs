@@ -292,7 +292,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         title: "MCP auth repair",
         phase: "Phase 12",
         user_task: "hit an MCP auth/server failure, surface repair, then retry after approval",
-        status: ReplayStatus::RuntimeMapped,
+        status: ReplayStatus::ReplayFixtureReady,
         external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
         evidence: MCP_AUTH_REPAIR_EVIDENCE,
     },
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn external_baseline_stays_deferred_until_replays_are_ready() {
         let summary = scenario_matrix_summary();
-        assert_eq!(summary.replay_ready, 5);
+        assert_eq!(summary.replay_ready, 6);
         assert!(!summary.external_baseline_ready);
         assert!(deterministic_scenarios()
             .iter()
@@ -449,6 +449,7 @@ mod tests {
                 ScenarioKind::PermissionDenialRetry,
                 ScenarioKind::CompactionBoundary,
                 ScenarioKind::SubagentWorktreeWorker,
+                ScenarioKind::McpAuthRepair,
             ]
         );
     }

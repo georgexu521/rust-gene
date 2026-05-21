@@ -336,6 +336,58 @@ scenarios:
     expect:
       tool_sequence: ["read_mcp_resource"]
 
+  - id: mcp-auth-repair-approval-retry
+    prompt: "MCP server 未批准时提示修复，然后批准并重试 resource read"
+    replay:
+      mcp_resources:
+        - server: filesystem
+          uri: file:///repo/README.md
+          action: read
+          success: false
+          content_chars: 0
+        - server: filesystem
+          uri: file:///repo/README.md
+          action: read
+          success: true
+          content_chars: 128
+      mcp_repairs:
+        - server: filesystem
+          category: approval
+          command: "/mcp approve filesystem"
+          panel_command: "/panel mcp"
+          status: Planned
+          safe_retry: false
+      tool_calls:
+        - tool: read_mcp_resource
+          success: false
+          output: "MCP server 'filesystem' is pending approval"
+        - tool: mcp
+          output: "MCP server 'filesystem' approved."
+        - tool: read_mcp_resource
+          output: "resource content after approval"
+    expect:
+      failed_tool: read_mcp_resource
+      tool_sequence: ["read_mcp_resource", "mcp", "read_mcp_resource"]
+      mcp_resource_count: 2
+      mcp_resource_failure_count: 1
+      mcp_resource_success_count: 1
+      mcp_resource_server: filesystem
+      mcp_resource_uri: file:///repo/README.md
+      mcp_resource_action: read
+      mcp_resource_success: true
+      mcp_resource_content_chars: 128
+      mcp_repair_count: 1
+      mcp_repair_server: filesystem
+      mcp_repair_category: approval
+      mcp_repair_command: "/mcp approve filesystem"
+      mcp_repair_status: Planned
+      mcp_panel_command: "/panel mcp"
+      recovery_category: mcp_approval_required
+      recovery_suggested_command: "/mcp approve filesystem"
+      recovery_safe_retry: false
+      available_commands: ["/mcp", "/panel"]
+      trace_events: ["mcp.resource", "recovery.plan", "tool.done"]
+
   - id: memory-retrieval-routing
     prompt: "根据之前记忆继续规划这个项目"
     expect:
