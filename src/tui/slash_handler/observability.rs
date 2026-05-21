@@ -242,7 +242,26 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Eval baseline failed: {}", e),
             }
         }
-        _ => "Usage: /eval [list|matrix|baseline [provider|all]|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
+        "baseline-template" | "baseline-draft" => {
+            let provider = parts.next().unwrap_or("external-agent");
+            let model = parts.next();
+            crate::engine::evalset::format_external_baseline_template(provider, model)
+                .unwrap_or_else(|e| format!("Eval baseline template failed: {}", e))
+        }
+        "baseline-write" => {
+            let provider = parts.next().unwrap_or("external-agent");
+            let model = parts.next();
+            let baseline_dir = eval_dir.join("external_baselines");
+            match crate::engine::evalset::write_external_baseline_template(
+                &baseline_dir,
+                provider,
+                model,
+            ) {
+                Ok(path) => format!("External baseline template written: {}", path.display()),
+                Err(e) => format!("Eval baseline write failed: {}", e),
+            }
+        }
+        _ => "Usage: /eval [list|matrix|baseline [provider|all]|baseline-template <provider> [model]|baseline-write <provider> [model]|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
             .to_string(),
     }
 }

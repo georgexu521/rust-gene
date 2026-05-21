@@ -1215,11 +1215,11 @@ pub struct EvalBaselineSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalExternalBaselineSet {
     pub provider: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_at: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default)]
     pub scenarios: Vec<EvalExternalBaselineScenario>,
@@ -1229,17 +1229,17 @@ pub struct EvalExternalBaselineSet {
 pub struct EvalExternalBaselineScenario {
     pub id: String,
     pub outcome: EvalExternalBaselineOutcome,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<usize>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_turns: Option<usize>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_passed: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_evidence_backed: Option<bool>,
 }
 
@@ -1326,6 +1326,76 @@ pub fn load_external_baseline(path: impl AsRef<Path>) -> Result<EvalExternalBase
         .with_context(|| format!("failed to read external baseline {}", path.display()))?;
     serde_yaml::from_str(&content)
         .with_context(|| format!("failed to parse external baseline {}", path.display()))
+}
+
+pub fn external_baseline_template(provider: &str, model: Option<&str>) -> EvalExternalBaselineSet {
+    let provider = provider.trim();
+    let provider = if provider.is_empty() {
+        "external-agent"
+    } else {
+        provider
+    };
+    EvalExternalBaselineSet {
+        provider: provider.to_string(),
+        generated_at: Some(chrono::Utc::now().to_rfc3339()),
+        model: model
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        source: Some("TODO: replace with run artifact path or manual baseline notes".to_string()),
+        scenarios: crate::engine::scenario_matrix::deterministic_scenarios()
+            .iter()
+            .map(|scenario| EvalExternalBaselineScenario {
+                id: scenario.id.to_string(),
+                outcome: EvalExternalBaselineOutcome::NotRun,
+                evidence: Some(
+                    "TODO: record concrete diff, command, trace, or transcript evidence"
+                        .to_string(),
+                ),
+                notes: Some(scenario.user_task.to_string()),
+                tool_calls: None,
+                repair_turns: None,
+                validation_passed: None,
+                final_evidence_backed: None,
+            })
+            .collect(),
+    }
+}
+
+pub fn format_external_baseline_template(provider: &str, model: Option<&str>) -> Result<String> {
+    serde_yaml::to_string(&external_baseline_template(provider, model))
+        .context("failed to serialize external baseline template")
+}
+
+pub fn write_external_baseline_template(
+    dir: impl AsRef<Path>,
+    provider: &str,
+    model: Option<&str>,
+) -> Result<PathBuf> {
+    let dir = dir.as_ref();
+    fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create external baseline dir {}", dir.display()))?;
+    let provider_for_path = if provider.trim().is_empty() {
+        "external-agent"
+    } else {
+        provider
+    };
+    let safe_provider = safe_eval_report_label(provider_for_path);
+    let path = dir.join(format!("baseline-{}.yaml", safe_provider));
+    if path.exists() {
+        anyhow::bail!(
+            "external baseline template already exists at {}; refusing to overwrite",
+            path.display()
+        );
+    }
+    let yaml = format_external_baseline_template(provider, model)?;
+    fs::write(&path, yaml).with_context(|| {
+        format!(
+            "failed to write external baseline template {}",
+            path.display()
+        )
+    })?;
+    Ok(path)
 }
 
 pub fn load_external_baselines_from_dir(
@@ -3339,5 +3409,40 @@ scenarios:
 
         assert!(rendered.contains("No external baseline found for provider 'codex'"));
         assert!(rendered.contains("evalsets/external_baselines"));
+    }
+
+    #[test]
+    fn external_baseline_template_covers_required_phase_12_ids() {
+        let yaml = format_external_baseline_template("codex", Some("gpt-5.2")).unwrap();
+        let parsed: EvalExternalBaselineSet = serde_yaml::from_str(&yaml).unwrap();
+
+        assert_eq!(parsed.provider, "codex");
+        assert_eq!(parsed.model.as_deref(), Some("gpt-5.2"));
+        assert_eq!(
+            parsed.scenarios.len(),
+            crate::engine::scenario_matrix::deterministic_scenarios().len()
+        );
+        assert!(parsed
+            .scenarios
+            .iter()
+            .all(|scenario| scenario.outcome == EvalExternalBaselineOutcome::NotRun));
+        assert!(parsed
+            .scenarios
+            .iter()
+            .any(|scenario| scenario.id == "mcp_auth_repair"));
+    }
+
+    #[test]
+    fn write_external_baseline_template_refuses_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let path = write_external_baseline_template(dir.path(), "claude-code", None).unwrap();
+        let err = write_external_baseline_template(dir.path(), "claude-code", None).unwrap_err();
+
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("baseline-claude-code.yaml")
+        );
+        assert!(err.to_string().contains("refusing to overwrite"));
     }
 }

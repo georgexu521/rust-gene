@@ -4,6 +4,13 @@ Place Claude Code, Codex, or other external-agent baseline results here as
 YAML or JSON files. `/eval baseline [provider|all]` loads this directory and
 compares each provider against the Phase 12 deterministic scenario ids.
 
+Create a not-run template with:
+
+```text
+/eval baseline-template claude-code claude-opus
+/eval baseline-write claude-code claude-opus
+```
+
 Minimal shape:
 
 ```yaml

@@ -1645,6 +1645,10 @@ Progress, 2026-05-21 follow-up:
   scenario ids.
 - Added `evalsets/external_baselines/README.md` as the durable schema and
   staging location for real Claude Code/Codex baseline artifacts.
+- Added `/eval baseline-template <provider> [model]` and
+  `/eval baseline-write <provider> [model]`; both generate complete `not_run`
+  templates covering all six Phase 12 scenario ids so real external runs do not
+  drift from the matrix.
 
 ## First Ten Code Batches
 

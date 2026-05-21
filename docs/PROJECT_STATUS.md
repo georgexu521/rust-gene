@@ -89,7 +89,9 @@ Current stage:
   pending, but the import/compare path now exists: `/eval baseline
   [provider|all]` loads YAML/JSON files from `evalsets/external_baselines/`
   and reports provider coverage, pass/fail/blocked/not-run counts, missing
-  scenario ids, and per-scenario evidence metadata.
+  scenario ids, and per-scenario evidence metadata. `/eval baseline-template
+  <provider> [model]` and `/eval baseline-write <provider> [model]` generate
+  complete `not_run` templates for the six scenario ids.
 
 The recent closure plan is complete:
 
@@ -518,9 +520,9 @@ current passing run with a real code diff.
 - Evalsets include a deterministic coding replay matrix, JSON report output,
   `/eval record <name|all>` persisted report files for pass/fail trend
   collection, and `/eval baseline [provider|all]` external-provider comparison
-  for Phase 12 parity scenarios. `/eval trend [limit]` summarizes recent
-  persisted reports, deltas against the previous run, and optional external
-  baseline metadata when present.
+  plus template generation for Phase 12 parity scenarios. `/eval trend [limit]`
+  summarizes recent persisted reports, deltas against the previous run, and
+  optional external baseline metadata when present.
 - The layered workflow gates now cover focused, standard, full-local, and
   opt-in live-smoke validation; the latest live smoke exercised the real
   code-change repair path and passed with full-suite validation.

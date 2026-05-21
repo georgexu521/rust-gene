@@ -203,6 +203,9 @@ Status: initial matrix landed.
 - `/eval baseline [provider|all]` loads external Claude/Codex-style baseline
   files from `evalsets/external_baselines/` and reports scenario coverage,
   pass/fail/blocked/not-run counts, and per-scenario evidence metadata.
+- `/eval baseline-template <provider> [model]` and `/eval baseline-write
+  <provider> [model]` generate complete `not_run` baseline templates for all
+  Phase 12 scenario ids.
 - Persisted eval report JSON is backward compatible and can carry optional
   external baseline metadata for Claude/Codex-style comparisons.
 - Git tool execution now honors `ToolContext.working_dir` and returns
