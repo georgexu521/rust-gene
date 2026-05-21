@@ -187,6 +187,8 @@ pub struct ConversationLoop {
     allowed_tools: Option<HashSet<String>>,
     /// Optional per-loop working directory override for isolated workers.
     working_dir_override: Option<PathBuf>,
+    /// Optional MCP server allowlist for scoped sub-agent runs.
+    allowed_mcp_servers: Option<Vec<String>>,
     /// 本轮是否已触发过 Workflow（每轮最多一次）
     workflow_triggered_this_turn: std::sync::atomic::AtomicBool,
     /// Workflow 策略（默认从环境变量读取，可覆盖）
@@ -244,6 +246,7 @@ impl ConversationLoop {
             approval_channel: None,
             allowed_tools: None,
             working_dir_override: None,
+            allowed_mcp_servers: None,
             workflow_triggered_this_turn: std::sync::atomic::AtomicBool::new(false),
             workflow_policy: WorkflowPolicy::from_env(),
             agent_mode: crate::engine::agent_mode::AgentMode::Auto,
@@ -346,6 +349,18 @@ impl ConversationLoop {
         self
     }
 
+    pub fn with_allowed_mcp_servers(mut self, servers: Vec<String>) -> Self {
+        let servers = servers
+            .into_iter()
+            .map(|server| server.trim().to_string())
+            .filter(|server| !server.is_empty())
+            .collect::<Vec<_>>();
+        if !servers.is_empty() {
+            self.allowed_mcp_servers = Some(servers);
+        }
+        self
+    }
+
     pub fn with_workflow_policy(mut self, policy: WorkflowPolicy) -> Self {
         self.workflow_policy = policy;
         self
@@ -400,6 +415,10 @@ impl ConversationLoop {
         }
         if let Some(ref wt) = self.worktree_manager {
             ctx = ctx.with_worktree_manager(wt.clone());
+        }
+        if let Some(servers) = self.allowed_mcp_servers.as_ref() {
+            ctx.metadata
+                .insert("allowed_mcp_servers".to_string(), servers.join(","));
         }
         ctx = ctx.with_llm_provider(self.provider.clone());
         ctx = ctx.with_model(&self.model);

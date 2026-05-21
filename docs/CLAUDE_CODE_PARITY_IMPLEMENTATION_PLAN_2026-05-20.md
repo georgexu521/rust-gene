@@ -1338,26 +1338,49 @@ Expected files:
   the forked context, loads file context from the isolated checkout, and runs
   the child `ConversationLoop` with a per-agent working-directory override
   instead of switching the parent session's shared worktree state.
+- Completed isolated agent worktrees can now be handled through reusable
+  `worktree` tool actions and `/agents worktree ...` slash commands:
+  `agent_review` summarizes status/diff/branch-ahead state, `agent_merge`
+  merges committed agent branches or applies tracked uncommitted diffs back to
+  the target worktree with clean-target safeguards, and `agent_cleanup` removes
+  the isolated worktree with optional safe `codex/agent-*` branch deletion.
+- Agent definitions now drive runtime tool/MCP resolution instead of only
+  prompt metadata: profile `disallowed_tools` are removed from the child
+  whitelist, configured `mcp_servers` automatically expose the MCP resource/tool
+  commands, and child `ToolContext` metadata constrains MCP tools to those
+  declared servers.
+- `/agents` now renders richer durable task state details from runtime
+  producers, including in-progress tool and permission counts, cleanup hooks,
+  isolated worktree path/branch, and fork-context placeholder status.
 - Latest targeted validation: `cargo test -q profiles`,
   `cargo test -q agent_tool`, `cargo test -q query_options`,
-  `cargo test -q forked_context`, `cargo fmt --check`,
+  `cargo test -q forked_context`, `cargo test -q worktree_tool`,
+  `cargo test -q session_store`, `cargo test -q commands`,
+  `cargo test -q mcp_tool`, `cargo test -q agents`, `cargo fmt --check`,
   `git diff --check`, and `cargo check -q`.
 
 Remaining Phase 8 work:
 
-- Add merge/review/cleanup commands for completed isolated agent worktrees.
-- Add agent-specific MCP/tool resolution beyond static definition metadata.
-- Teach the visible panel richer permission/tool-in-progress state once runtime
-  producers exist.
+- No known Phase 8 implementation items remain in this plan snapshot.
 
 ### Phase 9: TUI Product Surface Pass
 
 Why ninth: the UI should now have real runtime data to render.
 
+Current code status:
+
+- Status bar now renders from a synchronous `RuntimeStatusSnapshot` selector
+  projection, including active tool count, failed/backgrounded tools, terminal
+  task state, MCP availability/repair counts, pending approval labels, and
+  message count.
+- Tool output viewer now has a slash command surface:
+  `/tool-output [list|latest|<tool_id>]` and alias `/tool`, backed by visible
+  tool run records with full output details.
+
 Tasks:
 
-1. Status line from runtime state.
-2. Tool output viewer from execution records.
+1. Status line from runtime state. (done)
+2. Tool output viewer from execution records. (initial slash surface done)
 3. Diff/approval/context/task/MCP panels.
 4. Command maturity cleanup.
 5. High-use command flows made production-grade.

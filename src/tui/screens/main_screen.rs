@@ -3,7 +3,7 @@
 //! 包含聊天区、输入区、状态栏的渲染
 
 use crate::{
-    state::{MessageItem, MessageRole},
+    state::{MessageItem, MessageRole, RuntimeStatusSnapshot},
     tui::{
         app::{StatusBarDensity, TuiApp},
         components::message,
@@ -253,26 +253,25 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
 /// 渲染状态栏（Claude Code 风格：单行，简洁，· 分隔）
 pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut parts = Vec::new();
+    let runtime = app.runtime_status_snapshot_now();
 
     // 左侧：状态
-    if app.is_querying {
+    if runtime.is_querying {
         let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let ch = frames[app.tick_count % frames.len()];
-        let label = app
-            .current_tool_status_label()
-            .unwrap_or_else(|| "Thinking".to_string());
+        let label = runtime.current_tool_label.as_deref().unwrap_or("Thinking");
         parts.push(Span::styled(
             format!("{} {}...", ch, label),
             Style::default().fg(app.theme.status_thinking),
         ));
-        let active_tools = app.active_tool_count();
+        let active_tools = runtime.active_tool_count;
         if active_tools > 0 {
             parts.push(Span::styled(
                 format!("{} tools", active_tools),
                 Style::default().fg(app.theme.text_dim),
             ));
         }
-        if let Some(label) = app.terminal_task_status_label() {
+        if let Some(label) = terminal_status_from_runtime(&runtime) {
             parts.push(Span::styled(label, Style::default().fg(app.theme.text_dim)));
         }
         if let Some(usage) = app.stream_usage_label() {
@@ -282,7 +281,7 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             "esc to interrupt",
             Style::default().fg(app.theme.text_dim),
         ));
-    } else if let Some(ref error) = app.error_message {
+    } else if let Some(ref error) = runtime.last_error {
         parts.push(Span::styled(
             format!("✗ {}", error),
             Style::default().fg(app.theme.error),
@@ -320,7 +319,7 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             ));
         }
         StatusBarDensity::Normal | StatusBarDensity::Debug => {
-            push_normal_status_parts(app, &mut parts);
+            push_normal_status_parts(app, &runtime, &mut parts);
             if app.status_bar_density == StatusBarDensity::Debug {
                 parts.push(Span::styled(
                     format!("density:{}", app.status_bar_density.name()),
@@ -338,7 +337,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
                     Style::default().fg(app.theme.text_dim),
                 ));
                 parts.push(Span::styled(
-                    format!("tools:{}", app.active_tool_count()),
+                    format!(
+                        "tools:{}/{}",
+                        runtime.active_tool_count, runtime.total_tools
+                    ),
                     Style::default().fg(app.theme.text_dim),
                 ));
             }
@@ -364,7 +366,11 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-fn push_normal_status_parts<'a>(app: &'a TuiApp, parts: &mut Vec<Span<'a>>) {
+fn push_normal_status_parts<'a>(
+    app: &'a TuiApp,
+    runtime: &RuntimeStatusSnapshot,
+    parts: &mut Vec<Span<'a>>,
+) {
     if app.vim_mode {
         parts.push(Span::styled(
             "vim",
@@ -394,6 +400,40 @@ fn push_normal_status_parts<'a>(app: &'a TuiApp, parts: &mut Vec<Span<'a>>) {
     if let Some(label) = app.current_goal_label() {
         parts.push(Span::styled(label, Style::default().fg(app.theme.info)));
     }
+    if let Some(pending) = runtime.pending_permission.as_ref() {
+        parts.push(Span::styled(
+            format!("approval:{}", compact_status_value(pending, 32)),
+            Style::default().fg(app.theme.warning),
+        ));
+    }
+    if runtime.failed_tool_count > 0 {
+        parts.push(Span::styled(
+            format!("failed tools:{}", runtime.failed_tool_count),
+            Style::default().fg(app.theme.error),
+        ));
+    }
+    if runtime.backgrounded_tool_count > 0 {
+        parts.push(Span::styled(
+            format!("background:{}", runtime.backgrounded_tool_count),
+            Style::default().fg(app.theme.info),
+        ));
+    }
+    if runtime.mcp_server_count > 0 {
+        let label = if runtime.mcp_repair_hints.is_empty() {
+            format!(
+                "mcp:{}/{}",
+                runtime.mcp_available_count, runtime.mcp_server_count
+            )
+        } else {
+            format!(
+                "mcp:{}/{} repair:{}",
+                runtime.mcp_available_count,
+                runtime.mcp_server_count,
+                runtime.mcp_repair_hints.len()
+            )
+        };
+        parts.push(Span::styled(label, Style::default().fg(app.theme.text_dim)));
+    }
     let pasted_blocks = app.pasted_block_count();
     if pasted_blocks > 0 {
         parts.push(Span::styled(
@@ -415,7 +455,7 @@ fn push_normal_status_parts<'a>(app: &'a TuiApp, parts: &mut Vec<Span<'a>>) {
         Style::default().fg(app.theme.text_dim),
     ));
     parts.push(Span::styled(
-        format!("{} msgs", app.message_count()),
+        format!("{} msgs", runtime.messages),
         Style::default().fg(app.theme.text_dim),
     ));
     if !app.is_querying {
@@ -426,9 +466,33 @@ fn push_normal_status_parts<'a>(app: &'a TuiApp, parts: &mut Vec<Span<'a>>) {
             ));
         }
     }
-    if let Some(label) = app.terminal_task_status_label() {
+    if let Some(label) = terminal_status_from_runtime(runtime) {
         parts.push(Span::styled(label, Style::default().fg(app.theme.text_dim)));
     }
+}
+
+fn terminal_status_from_runtime(runtime: &RuntimeStatusSnapshot) -> Option<String> {
+    if runtime.terminal_task_count == 0 && runtime.backgrounded_tool_count == 0 {
+        return None;
+    }
+    let mut parts = vec![format!(
+        "terminal:{}",
+        runtime
+            .terminal_task_count
+            .max(runtime.backgrounded_tool_count)
+    )];
+    if runtime.running_terminal_task_count > 0 || runtime.backgrounded_tool_count > 0 {
+        parts.push(format!(
+            "running:{}",
+            runtime
+                .running_terminal_task_count
+                .max(runtime.backgrounded_tool_count)
+        ));
+    }
+    if runtime.pty_terminal_task_count > 0 {
+        parts.push(format!("pty:{}", runtime.pty_terminal_task_count));
+    }
+    Some(parts.join(" "))
 }
 
 fn compact_status_value(value: &str, max_chars: usize) -> String {
@@ -2286,6 +2350,45 @@ mod tests {
         assert!(rendered.contains("density:debug"));
         assert!(rendered.contains("tools:1"));
         assert!(rendered.contains("? shortcuts"));
+    }
+
+    #[test]
+    fn render_status_bar_projects_runtime_failures_and_background_tools() {
+        let mut app = TuiApp::new();
+        let mut failed = ToolRunView::new("tool_1".to_string(), "bash".to_string());
+        failed.mark_complete("Result: ERROR\nfailed".to_string());
+        let mut pty = ToolRunView::new("tool_2".to_string(), "bash".to_string());
+        pty.mark_complete_with_metadata(
+            "Started pty shell command".to_string(),
+            Some(serde_json::json!({
+                "terminal_task": {
+                    "task_id": "term_1",
+                    "status": "running",
+                    "terminal_kind": "pty_shell"
+                }
+            })),
+        );
+        let mut background = ToolRunView::new("tool_3".to_string(), "bash".to_string());
+        background.mark_complete_with_metadata(
+            "Started background shell command".to_string(),
+            Some(serde_json::json!({
+                "terminal_task": {
+                    "task_id": "term_2",
+                    "status": "running",
+                    "terminal_kind": "background_shell"
+                }
+            })),
+        );
+        app.tool_runs_snapshot.push(failed);
+        app.tool_runs_snapshot.push(pty);
+        app.tool_runs_snapshot.push(background);
+
+        let rendered = render_status_bar_text(&app);
+
+        assert!(rendered.contains("failed tools:1"));
+        assert!(rendered.contains("background:1"));
+        assert!(rendered.contains("terminal:2"));
+        assert!(rendered.contains("pty:1"));
     }
 
     #[test]

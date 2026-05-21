@@ -130,6 +130,7 @@ pub struct ConversationLoopBuilder {
     approval_channel: Option<std::sync::Arc<self::conversation_loop::ToolApprovalChannel>>,
     allowed_tools: Option<std::collections::HashSet<String>>,
     working_dir_override: Option<std::path::PathBuf>,
+    allowed_mcp_servers: Option<Vec<String>>,
     trace_store: Option<std::sync::Arc<self::trace::TraceStore>>,
     goal_manager: Option<std::sync::Arc<self::session_goal::SessionGoalManager>>,
     session_store: Option<std::sync::Arc<crate::session_store::SessionStore>>,
@@ -165,6 +166,7 @@ impl ConversationLoopBuilder {
             approval_channel: None,
             allowed_tools: None,
             working_dir_override: None,
+            allowed_mcp_servers: None,
             trace_store: None,
             goal_manager: None,
             session_store: None,
@@ -257,6 +259,18 @@ impl ConversationLoopBuilder {
         self
     }
 
+    pub fn with_allowed_mcp_servers(mut self, servers: Vec<String>) -> Self {
+        let servers = servers
+            .into_iter()
+            .map(|server| server.trim().to_string())
+            .filter(|server| !server.is_empty())
+            .collect::<Vec<_>>();
+        if !servers.is_empty() {
+            self.allowed_mcp_servers = Some(servers);
+        }
+        self
+    }
+
     pub fn with_trace_store(mut self, store: std::sync::Arc<self::trace::TraceStore>) -> Self {
         self.trace_store = Some(store);
         self
@@ -342,6 +356,9 @@ impl ConversationLoopBuilder {
         }
         if let Some(working_dir) = self.working_dir_override {
             lp = lp.with_working_dir(working_dir);
+        }
+        if let Some(servers) = self.allowed_mcp_servers {
+            lp = lp.with_allowed_mcp_servers(servers);
         }
         if let Some(trace_store) = self.trace_store {
             lp = lp.with_trace_store(trace_store);

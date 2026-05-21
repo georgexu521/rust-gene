@@ -6,6 +6,36 @@ use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 
+fn scoped_mcp_servers(context: &ToolContext) -> Option<Vec<String>> {
+    let value = context.metadata.get("allowed_mcp_servers")?;
+    let servers = value
+        .split(',')
+        .map(str::trim)
+        .filter(|server| !server.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if servers.is_empty() {
+        None
+    } else {
+        Some(servers)
+    }
+}
+
+fn ensure_mcp_server_allowed(context: &ToolContext, server_name: &str) -> Result<(), ToolResult> {
+    let Some(servers) = scoped_mcp_servers(context) else {
+        return Ok(());
+    };
+    if servers.iter().any(|server| server == server_name) {
+        Ok(())
+    } else {
+        Err(ToolResult::error(format!(
+            "MCP server '{}' is outside this agent's allowed MCP scope: {}",
+            server_name,
+            servers.join(", ")
+        )))
+    }
+}
+
 /// 直接调用 MCP 工具
 pub struct MCPTool;
 
@@ -48,6 +78,9 @@ impl Tool for MCPTool {
 
         if server_name.is_empty() || tool_name.is_empty() {
             return ToolResult::error("server_name and tool_name are required");
+        }
+        if let Err(result) = ensure_mcp_server_allowed(&context, server_name) {
+            return result;
         }
 
         let manager = match &context.mcp_manager {
@@ -104,6 +137,9 @@ impl Tool for McpAuthTool {
         let server_name = params["server_name"].as_str().unwrap_or("");
         if server_name.is_empty() {
             return ToolResult::error("server_name is required");
+        }
+        if let Err(result) = ensure_mcp_server_allowed(&context, server_name) {
+            return result;
         }
 
         let manager = match &context.mcp_manager {
@@ -165,6 +201,16 @@ impl Tool for ListMcpResourcesTool {
         };
 
         let server_name = params["server_name"].as_str();
+        if let Some(name) = server_name {
+            if let Err(result) = ensure_mcp_server_allowed(&context, name) {
+                return result;
+            }
+        } else if let Some(servers) = scoped_mcp_servers(&context) {
+            return ToolResult::error(format!(
+                "This agent is scoped to MCP servers: {}. Pass server_name explicitly.",
+                servers.join(", ")
+            ));
+        }
 
         let resources = if let Some(name) = server_name {
             if !manager.is_server_approved(name) {
@@ -271,6 +317,9 @@ impl Tool for ReadMcpResourceTool {
         if server_name.is_empty() || uri.is_empty() {
             return ToolResult::error("server_name and uri are required");
         }
+        if let Err(result) = ensure_mcp_server_allowed(&context, server_name) {
+            return result;
+        }
 
         let manager = match &context.mcp_manager {
             Some(m) => m,
@@ -321,5 +370,17 @@ mod tests {
         assert_eq!(McpAuthTool.name(), "mcp_auth");
         assert_eq!(ListMcpResourcesTool.name(), "list_mcp_resources");
         assert_eq!(ReadMcpResourceTool.name(), "read_mcp_resource");
+    }
+
+    #[test]
+    fn mcp_scope_allows_only_declared_servers() {
+        let mut context = ToolContext::new(".", "test");
+        context.metadata.insert(
+            "allowed_mcp_servers".to_string(),
+            "filesystem,github".to_string(),
+        );
+        assert!(ensure_mcp_server_allowed(&context, "filesystem").is_ok());
+        assert!(ensure_mcp_server_allowed(&context, "github").is_ok());
+        assert!(ensure_mcp_server_allowed(&context, "slack").is_err());
     }
 }

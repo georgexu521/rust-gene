@@ -112,6 +112,11 @@ impl TuiSessionManager {
         self.current_session_id.as_deref()
     }
 
+    /// 获取底层会话存储，供工具上下文复用当前 TUI 会话数据。
+    pub fn store(&self) -> Arc<SessionStore> {
+        self.store.clone()
+    }
+
     /// 获取当前会话标题
     pub fn current_session_title(&self) -> &str {
         &self.current_session_title

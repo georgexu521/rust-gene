@@ -882,6 +882,50 @@ impl SessionStore {
         })?;
         rows.collect()
     }
+
+    pub fn agent_task_state(
+        &self,
+        session_id: &str,
+        agent_id_or_task_id: &str,
+    ) -> SqlResult<Option<AgentTaskStateRecord>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, task_id, agent_id, profile, role, status, description,
+                    transcript_path, tool_ids_in_progress, permission_requests,
+                    result_artifact_id, cleanup_hooks, payload, created_at, updated_at
+             FROM agent_task_states
+             WHERE session_id = ?1 AND (agent_id = ?2 OR task_id = ?2)
+             ORDER BY updated_at DESC, id DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![session_id, agent_id_or_task_id])?;
+        if let Some(row) = rows.next()? {
+            let tool_ids: String = row.get(9)?;
+            let permission_requests: String = row.get(10)?;
+            let cleanup_hooks: String = row.get(12)?;
+            let payload_text: String = row.get(13)?;
+            Ok(Some(AgentTaskStateRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                task_id: row.get(2)?,
+                agent_id: row.get(3)?,
+                profile: row.get(4)?,
+                role: row.get(5)?,
+                status: row.get(6)?,
+                description: row.get(7)?,
+                transcript_path: row.get(8)?,
+                tool_ids_in_progress: serde_json::from_str(&tool_ids).unwrap_or_default(),
+                permission_requests: serde_json::from_str(&permission_requests).unwrap_or_default(),
+                result_artifact_id: row.get(11)?,
+                cleanup_hooks: serde_json::from_str(&cleanup_hooks).unwrap_or_default(),
+                payload: serde_json::from_str(&payload_text).unwrap_or_default(),
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 /// 数据库统计
@@ -1093,7 +1137,7 @@ mod tests {
 
         let state = AgentTaskStateUpsert {
             session_id: "s1".to_string(),
-            task_id: "agent_123".to_string(),
+            task_id: "task_123".to_string(),
             agent_id: "agent_123".to_string(),
             profile: Some("implementer".to_string()),
             role: "specialist".to_string(),
@@ -1133,6 +1177,12 @@ mod tests {
         assert_eq!(states[0].result_artifact_id, Some(artifact_id));
         assert_eq!(states[0].cleanup_hooks, vec!["worktree_cleanup"]);
         assert_eq!(states[0].payload["context_mode"], "full_fork");
+
+        let by_agent = store.agent_task_state("s1", "agent_123").unwrap().unwrap();
+        assert_eq!(by_agent.status, "completed");
+        let by_task = store.agent_task_state("s1", "task_123").unwrap().unwrap();
+        assert_eq!(by_task.agent_id, "agent_123");
+        assert!(store.agent_task_state("s1", "missing").unwrap().is_none());
     }
 
     #[test]

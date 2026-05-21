@@ -5,7 +5,7 @@
 use crate::agent::agent::AgentConfig;
 use crate::agent::envelope::{AgentTaskEnvelope, AgentTaskPriority};
 use crate::agent::manager::AgentResult as ManagerAgentResult;
-use crate::agent::profiles::{AgentContextMode, AgentDefinition};
+use crate::agent::profiles::{AgentContextMode, AgentDefinition, AgentProfile};
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
 use crate::tools::{Tool, ToolContext, ToolResult};
@@ -349,6 +349,11 @@ async fn spawn_single_agent(
         .with_max_turns(max_turns)
         .with_allowed_tools(allowed_tools.to_vec())
         .with_working_dir(execution_working_dir.to_path_buf())
+        .with_mcp_servers(
+            definition
+                .map(|definition| definition.mcp_servers.clone())
+                .unwrap_or_default(),
+        )
         .with_context_messages(
             forked_context
                 .as_ref()
@@ -545,10 +550,15 @@ fn persist_agent_task_state(
     let Some(store) = context.session_store.as_ref() else {
         return;
     };
-    let cleanup_hooks = definition
-        .filter(|definition| definition.context_mode.requires_isolated_worktree())
-        .map(|_| vec!["worktree_cleanup".to_string()])
-        .unwrap_or_default();
+    let requires_worktree_cleanup = definition
+        .map(|definition| definition.context_mode.requires_isolated_worktree())
+        .unwrap_or(false)
+        || payload.get("isolated_worktree").is_some();
+    let cleanup_hooks = if requires_worktree_cleanup {
+        vec!["worktree_cleanup".to_string()]
+    } else {
+        Vec::new()
+    };
     let mut payload = payload;
     if let Some(definition) = definition {
         payload["agent_definition"] = json!({
@@ -711,6 +721,55 @@ fn default_subagent_allowed_tools(role: AgentRole, template: Option<AgentTemplat
         },
     };
     names.iter().map(|name| (*name).to_string()).collect()
+}
+
+fn push_unique_tool(tools: &mut Vec<String>, tool: impl Into<String>) {
+    let tool = tool.into();
+    if !tools.iter().any(|item| item == &tool) {
+        tools.push(tool);
+    }
+}
+
+fn resolve_subagent_allowed_tools(
+    requested_tools: Vec<String>,
+    profile: Option<&AgentProfile>,
+    definition: Option<&AgentDefinition>,
+    role: AgentRole,
+    template: Option<AgentTemplate>,
+) -> Vec<String> {
+    let mut tools = if !requested_tools.is_empty() {
+        requested_tools
+    } else {
+        profile
+            .filter(|profile| !profile.allowed_tools.is_empty())
+            .map(|profile| profile.allowed_tools.clone())
+            .unwrap_or_else(|| default_subagent_allowed_tools(role, template))
+    };
+    let Some(definition) = definition else {
+        let mut deduped = Vec::with_capacity(tools.len());
+        for tool in tools {
+            push_unique_tool(&mut deduped, tool);
+        }
+        return deduped;
+    };
+    if !definition.mcp_servers.is_empty() {
+        push_unique_tool(&mut tools, "mcp_tool");
+        push_unique_tool(&mut tools, "list_mcp_resources");
+        push_unique_tool(&mut tools, "read_mcp_resource");
+    }
+    if !definition.disallowed_tools.is_empty() {
+        tools.retain(|tool| {
+            !definition
+                .disallowed_tools
+                .iter()
+                .any(|blocked| blocked == tool)
+        });
+    }
+    let mut deduped = Vec::with_capacity(tools.len());
+    for tool in tools {
+        push_unique_tool(&mut deduped, tool);
+    }
+    deduped
 }
 
 /// 处理恢复已有代理
@@ -1299,7 +1358,7 @@ impl Tool for AgentTool {
             },
             None => None,
         };
-        let mut allowed_tools: Vec<String> = params["allowed_tools"]
+        let requested_tools: Vec<String> = params["allowed_tools"]
             .as_array()
             .map(|arr| {
                 arr.iter()
@@ -1307,18 +1366,18 @@ impl Tool for AgentTool {
                     .collect()
             })
             .unwrap_or_default();
-        if allowed_tools.is_empty() {
-            allowed_tools = profile
-                .as_ref()
-                .filter(|profile| !profile.allowed_tools.is_empty())
-                .map(|profile| profile.allowed_tools.clone())
-                .unwrap_or_else(|| default_subagent_allowed_tools(role, template));
-        }
         let max_turns = profile
             .as_ref()
             .and_then(|profile| profile.max_turns)
             .unwrap_or(max_turns);
         let max_cost_usd = max_cost_usd.or_else(|| profile.as_ref().and_then(|p| p.max_cost_usd));
+        let allowed_tools = resolve_subagent_allowed_tools(
+            requested_tools,
+            profile.as_ref(),
+            definition.as_ref(),
+            role,
+            template,
+        );
         if let Some(definition) = definition.as_mut() {
             definition.role = role;
             definition.tools = allowed_tools.clone();
@@ -1451,6 +1510,29 @@ mod tests {
         assert!(planner.contains(&"plan".to_string()));
         assert!(planner.contains(&"todo_write".to_string()));
         assert!(!planner.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn resolved_subagent_tools_apply_definition_scope() {
+        let mut profile = crate::agent::profiles::find_profile(".", "default").unwrap();
+        profile.allowed_tools = vec!["file_read".to_string(), "agent".to_string()];
+        profile.disallowed_tools = vec!["agent".to_string()];
+        profile.mcp_servers = vec!["github".to_string()];
+        let definition = AgentDefinition::from_profile(&profile);
+
+        let tools = resolve_subagent_allowed_tools(
+            Vec::new(),
+            Some(&profile),
+            Some(&definition),
+            profile.role,
+            None,
+        );
+
+        assert!(tools.contains(&"file_read".to_string()));
+        assert!(tools.contains(&"mcp_tool".to_string()));
+        assert!(tools.contains(&"list_mcp_resources".to_string()));
+        assert!(tools.contains(&"read_mcp_resource".to_string()));
+        assert!(!tools.contains(&"agent".to_string()));
     }
 
     #[tokio::test]

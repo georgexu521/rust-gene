@@ -6,8 +6,8 @@ use crate::engine::agent_mode::AgentMode;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::{PermissionMode, PermissionRules, RuleSource, SourcedRule};
 use crate::state::{
-    select_runtime_status, select_tool_viewer_tool_id, AppContext, MessageItem, MessageRole,
-    RuntimeAppState, RuntimeMcpState, RuntimePermissionState, RuntimeStatusSnapshot,
+    select_runtime_status, select_tool_viewer_tool_id, AppContext, AppState, MessageItem,
+    MessageRole, RuntimeAppState, RuntimeMcpState, RuntimePermissionState, RuntimeStatusSnapshot,
     RuntimeTerminalTask, RuntimeToolStatus, RuntimeToolUse, TaskItem,
 };
 use crate::tui::components::input::InputState;
@@ -234,6 +234,19 @@ fn runtime_terminal_task_from_view(run: &ToolRunView) -> Option<RuntimeTerminalT
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
     })
+}
+
+fn tool_run_status_label(status: ToolRunStatus) -> &'static str {
+    match status {
+        ToolRunStatus::Queued => "queued",
+        ToolRunStatus::Running => "running",
+        ToolRunStatus::Backgrounded => "backgrounded",
+        ToolRunStatus::WaitingPermission => "waiting_permission",
+        ToolRunStatus::TimedOut => "timed_out",
+        ToolRunStatus::Cancelled => "cancelled",
+        ToolRunStatus::Completed => "completed",
+        ToolRunStatus::Failed => "failed",
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2121,6 +2134,7 @@ impl TuiApp {
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
         };
         let mut context = crate::tools::ToolContext::new(working_dir, session_id);
+        context = context.with_session_store(self.session_manager.store());
         if let Some(ref lsp) = self.lsp_manager {
             context = context.with_lsp_manager(lsp.clone());
         }
@@ -2616,6 +2630,27 @@ impl TuiApp {
                 }
             }
             "/status" => slash::handle_status(self).await,
+            "/tool-output" | "/tool" => {
+                let args = args.trim();
+                if args.is_empty() || args == "latest" {
+                    if self.open_tool_viewer() {
+                        String::new()
+                    } else {
+                        "No tool output to view yet.".to_string()
+                    }
+                } else if args == "list" {
+                    let lines = self.tool_output_index_lines();
+                    if lines.is_empty() {
+                        "No tool output to view yet.".to_string()
+                    } else {
+                        format!("Tool outputs:\n{}", lines.join("\n"))
+                    }
+                } else if self.open_tool_viewer_for(args) {
+                    String::new()
+                } else {
+                    format!("Tool output '{}' not found. Use /tool-output list.", args)
+                }
+            }
             "/statusbar" => {
                 let args = args.trim();
                 if args.is_empty() {
@@ -2701,7 +2736,7 @@ impl TuiApp {
                 )
             }
             "/tasks" => slash::handle_tasks(self).await,
-            "/agents" => slash::handle_agents(self).await,
+            "/agents" => slash::handle_agents(self, args).await,
             "/doctor" => slash::handle_doctor(self, args).await,
             "/audit" => slash::handle_audit(self, args).await,
             "/permissions" | "/perm" => slash::handle_permissions(self, args),
@@ -3301,6 +3336,18 @@ impl TuiApp {
         select_runtime_status(&state)
     }
 
+    pub fn runtime_status_snapshot_now(&self) -> RuntimeStatusSnapshot {
+        let mut state = AppState::new();
+        state.messages = self.messages.clone();
+        state.is_querying = self.is_querying;
+        state.last_error = self.error_message.clone();
+        state.runtime = self.build_runtime_state_snapshot();
+        for task in &self.tasks {
+            state.tasks.insert(task.id.clone(), task.clone());
+        }
+        select_runtime_status(&state)
+    }
+
     pub fn current_goal_label(&self) -> Option<String> {
         self.streaming_engine
             .as_ref()
@@ -3459,6 +3506,34 @@ impl TuiApp {
         self.tool_viewer_scroll_offset = 0;
         self.mode = AppMode::ToolViewer;
         true
+    }
+
+    pub fn open_tool_viewer_for(&mut self, id: &str) -> bool {
+        let Some((title, content)) = self
+            .find_visible_tool_run(id)
+            .map(|run| (run.summary(), run.full_details()))
+        else {
+            return false;
+        };
+        self.tool_viewer_title = title;
+        self.tool_viewer_content = content;
+        self.tool_viewer_scroll_offset = 0;
+        self.mode = AppMode::ToolViewer;
+        true
+    }
+
+    pub fn tool_output_index_lines(&self) -> Vec<String> {
+        self.visible_tool_runs()
+            .into_iter()
+            .map(|run| {
+                format!(
+                    "- {} [{}] {}",
+                    run.id,
+                    tool_run_status_label(run.status),
+                    run.summary()
+                )
+            })
+            .collect()
     }
 
     fn find_visible_tool_run(&self, id: &str) -> Option<&ToolRunView> {
@@ -4030,6 +4105,31 @@ mod tests {
         app.expanded_tool_run_id = Some("tool_1".to_string());
         assert!(app.open_tool_viewer());
         assert!(app.tool_viewer_content.contains("first"));
+    }
+
+    #[test]
+    fn test_tool_output_index_and_open_by_id() {
+        let mut app = TuiApp::new();
+        let user = MessageItem {
+            id: "user_1".to_string(),
+            role: MessageRole::User,
+            content: "run tools".to_string(),
+            timestamp: std::time::SystemTime::now(),
+            metadata: Default::default(),
+        };
+        app.messages.push(user);
+        let mut first = ToolRunView::new("tool_1".to_string(), "bash".to_string());
+        first.mark_complete("Result: OK\nfirst\n".to_string());
+        app.tool_runs_by_message_id
+            .insert("user_1".to_string(), vec![first]);
+
+        let lines = app.tool_output_index_lines();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("tool_1"));
+        assert!(lines[0].contains("[completed]"));
+        assert!(app.open_tool_viewer_for("tool_1"));
+        assert!(app.tool_viewer_content.contains("first"));
+        assert!(!app.open_tool_viewer_for("missing"));
     }
 
     #[test]

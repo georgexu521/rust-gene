@@ -203,6 +203,7 @@ impl QueryEngine {
         info!("Starting query with tools: {}", preview);
         let context_ref = options.context_messages.as_deref();
         let working_dir = options.working_dir.clone();
+        let allowed_mcp_servers = options.allowed_mcp_servers.clone();
 
         // 构建消息
         let system_prompt =
@@ -219,6 +220,9 @@ impl QueryEngine {
             .with_max_iterations(options.max_tool_iterations.unwrap_or(self.max_iterations));
         if let Some(working_dir) = working_dir {
             lp = lp.with_working_dir(working_dir);
+        }
+        if let Some(servers) = allowed_mcp_servers {
+            lp = lp.with_allowed_mcp_servers(servers);
         }
         let result = lp.run(messages).await?;
 
@@ -277,6 +281,8 @@ pub struct QueryOptions {
     pub allowed_tools: Option<Vec<String>>,
     /// Optional working directory override for isolated agent/worktree runs.
     pub working_dir: Option<PathBuf>,
+    /// Optional MCP server allowlist for scoped sub-agent runs.
+    pub allowed_mcp_servers: Option<Vec<String>>,
 }
 
 impl Default for QueryOptions {
@@ -287,6 +293,7 @@ impl Default for QueryOptions {
             temperature: Some(0.2),
             allowed_tools: None,
             working_dir: None,
+            allowed_mcp_servers: None,
         }
     }
 }
@@ -315,6 +322,17 @@ impl QueryOptions {
         self.working_dir = Some(working_dir.into());
         self
     }
+
+    pub fn with_allowed_mcp_servers(mut self, servers: Vec<String>) -> Self {
+        self.allowed_mcp_servers = Some(
+            servers
+                .into_iter()
+                .map(|server| server.trim().to_string())
+                .filter(|server| !server.is_empty())
+                .collect(),
+        );
+        self
+    }
 }
 
 /// 查询结果
@@ -335,10 +353,15 @@ mod tests {
     fn test_query_options() {
         let opts = QueryOptions::new()
             .with_max_iterations(5)
-            .with_working_dir("/tmp/isolated-agent");
+            .with_working_dir("/tmp/isolated-agent")
+            .with_allowed_mcp_servers(vec!["filesystem".to_string()]);
 
         assert_eq!(opts.max_tool_iterations, Some(5));
         assert_eq!(opts.working_dir, Some(PathBuf::from("/tmp/isolated-agent")));
+        assert_eq!(
+            opts.allowed_mcp_servers,
+            Some(vec!["filesystem".to_string()])
+        );
     }
 
     #[test]

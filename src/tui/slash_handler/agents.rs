@@ -395,7 +395,12 @@ pub async fn handle_tasks(app: &TuiApp) -> String {
         "Task manager unavailable (no engine connected).".to_string()
     }
 }
-pub async fn handle_agents(app: &TuiApp) -> String {
+pub async fn handle_agents(app: &TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if !args.is_empty() {
+        return handle_agent_worktree_command(app, args).await;
+    }
+
     let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let definitions = crate::agent::profiles::load_definitions(&working_dir);
     let profile_line = if definitions.is_empty() {
@@ -419,29 +424,7 @@ pub async fn handle_agents(app: &TuiApp) -> String {
         .session_manager
         .recent_agent_task_states(8)
         .unwrap_or_default();
-    let task_state_lines = if recent_task_states.is_empty() {
-        vec!["Durable task states: none for current session".to_string()]
-    } else {
-        let mut lines = vec![format!(
-            "Durable task states ({}):",
-            recent_task_states.len()
-        )];
-        for state in recent_task_states {
-            lines.push(format!(
-                "- {} [{}] profile={} role={} artifact={} {}",
-                state.agent_id,
-                state.status,
-                state.profile.as_deref().unwrap_or("none"),
-                state.role,
-                state
-                    .result_artifact_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "none".to_string()),
-                state.description
-            ));
-        }
-        lines
-    };
+    let task_state_lines = format_agent_task_state_lines(&recent_task_states);
     let artifact_lines = if recent_artifacts.is_empty() {
         vec!["Recent artifacts: none for current session".to_string()]
     } else {
@@ -515,6 +498,121 @@ pub async fn handle_agents(app: &TuiApp) -> String {
         lines.extend(artifact_lines);
         lines.join("\n")
     }
+}
+
+fn format_agent_task_state_lines(
+    states: &[crate::session_store::AgentTaskStateRecord],
+) -> Vec<String> {
+    if states.is_empty() {
+        return vec!["Durable task states: none for current session".to_string()];
+    }
+
+    let mut lines = vec![format!("Durable task states ({}):", states.len())];
+    for state in states {
+        let artifact = state
+            .result_artifact_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let cleanup = if state.cleanup_hooks.is_empty() {
+            "none".to_string()
+        } else {
+            state.cleanup_hooks.join(",")
+        };
+        lines.push(format!(
+            "- {} [{}] profile={} role={} artifact={} tools={} permissions={} cleanup={} {}",
+            state.agent_id,
+            state.status,
+            state.profile.as_deref().unwrap_or("none"),
+            state.role,
+            artifact,
+            state.tool_ids_in_progress.len(),
+            state.permission_requests.len(),
+            cleanup,
+            state.description
+        ));
+        if let Some(worktree) = state.payload.get("isolated_worktree") {
+            let path = worktree
+                .get("path")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            let branch = worktree
+                .get("branch")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            lines.push(format!("  worktree: {} ({})", path, branch));
+        }
+        if let Some(fork) = state.payload.get("fork_context") {
+            let message_count = fork
+                .get("message_count")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let placeholder_complete = fork
+                .get("placeholder_complete")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            lines.push(format!(
+                "  fork_context: messages={} placeholder_complete={}",
+                message_count, placeholder_complete
+            ));
+        }
+    }
+    lines
+}
+
+async fn handle_agent_worktree_command(app: &TuiApp, args: &str) -> String {
+    let mut parts = args.split_whitespace();
+    if parts.next() != Some("worktree") {
+        return agent_worktree_usage();
+    }
+    let Some(command) = parts.next() else {
+        return agent_worktree_usage();
+    };
+    let Some(agent_id) = parts.next() else {
+        return agent_worktree_usage();
+    };
+    let flags: Vec<&str> = parts.collect();
+    let yes = flags.contains(&"--yes");
+    let force = flags.contains(&"--force");
+    let delete_branch = flags.contains(&"--delete-branch");
+    let cleanup = flags.contains(&"--cleanup");
+    let allow_dirty_parent = flags.contains(&"--allow-dirty-parent");
+    let action = match command {
+        "review" => "agent_review",
+        "merge" => {
+            if !yes {
+                return "Agent worktree merge mutates the target worktree.\nUsage: /agents worktree merge <agent_id> --yes [--cleanup] [--delete-branch] [--force] [--allow-dirty-parent]".to_string();
+            }
+            "agent_merge"
+        }
+        "cleanup" => {
+            if !yes {
+                return "Agent worktree cleanup removes a git worktree.\nUsage: /agents worktree cleanup <agent_id> --yes [--force] [--delete-branch]".to_string();
+            }
+            "agent_cleanup"
+        }
+        _ => return agent_worktree_usage(),
+    };
+    let params = serde_json::json!({
+        "action": action,
+        "agent_id": agent_id,
+        "force": force,
+        "delete_branch": delete_branch,
+        "cleanup": cleanup,
+        "allow_dirty_parent": allow_dirty_parent,
+    });
+    let tool = crate::tools::WorktreeTool;
+    let result = tool.execute(params, app.build_tool_context().await).await;
+    if result.success {
+        result.content
+    } else {
+        result
+            .error
+            .unwrap_or_else(|| "Agent worktree command failed".to_string())
+    }
+}
+
+fn agent_worktree_usage() -> String {
+    "Usage:\n  /agents\n  /agents worktree review <agent_id>\n  /agents worktree merge <agent_id> --yes [--cleanup] [--delete-branch] [--force] [--allow-dirty-parent]\n  /agents worktree cleanup <agent_id> --yes [--force] [--delete-branch]".to_string()
 }
 pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
     let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -2261,5 +2359,44 @@ mod tests {
 
         assert!(route.reason.contains("recent failure"));
         assert!(allowlist.contains("bash"));
+    }
+
+    #[test]
+    fn agent_task_state_lines_include_runtime_details() {
+        let states = vec![crate::session_store::AgentTaskStateRecord {
+            id: 1,
+            session_id: "s1".to_string(),
+            task_id: "task_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "completed".to_string(),
+            description: "edit code".to_string(),
+            transcript_path: None,
+            tool_ids_in_progress: vec!["tool_1".to_string()],
+            permission_requests: vec!["file_write".to_string()],
+            result_artifact_id: Some(9),
+            cleanup_hooks: vec!["worktree_cleanup".to_string()],
+            payload: serde_json::json!({
+                "isolated_worktree": {
+                    "path": "/tmp/agent-worktree",
+                    "branch": "codex/agent-1234"
+                },
+                "fork_context": {
+                    "message_count": 3,
+                    "placeholder_complete": true
+                }
+            }),
+            created_at: "now".to_string(),
+            updated_at: "now".to_string(),
+        }];
+
+        let rendered = format_agent_task_state_lines(&states).join("\n");
+
+        assert!(rendered.contains("tools=1"));
+        assert!(rendered.contains("permissions=1"));
+        assert!(rendered.contains("cleanup=worktree_cleanup"));
+        assert!(rendered.contains("worktree: /tmp/agent-worktree (codex/agent-1234)"));
+        assert!(rendered.contains("fork_context: messages=3 placeholder_complete=true"));
     }
 }

@@ -542,6 +542,14 @@ pub const CMD_STATUSBAR: CommandDef = CommandDef::new(
 pub const CMD_TOOLS: CommandDef =
     CommandDef::new("/tools", &[], "Info", "/tools", "List available tools");
 
+pub const CMD_TOOL_OUTPUT: CommandDef = CommandDef::new(
+    "/tool-output",
+    &["/tool"],
+    "Info",
+    "/tool-output [list|latest|<tool_id>]",
+    "Open or list captured tool outputs",
+);
+
 pub const CMD_TASKS: CommandDef = CommandDef::new(
     "/tasks",
     &[],
@@ -554,8 +562,8 @@ pub const CMD_AGENTS: CommandDef = CommandDef::new(
     "/agents",
     &[],
     "Info",
-    "/agents",
-    "List active/known agents and status",
+    "/agents [worktree review|merge|cleanup <agent_id>]",
+    "List active/known agents and manage isolated worktrees",
 );
 
 pub const CMD_CHECKPOINTS: CommandDef = CommandDef::new(
@@ -1459,6 +1467,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_STATUS);
     registry.register(&CMD_STATUSBAR);
     registry.register(&CMD_TOOLS);
+    registry.register(&CMD_TOOL_OUTPUT);
     registry.register(&CMD_TASKS);
     registry.register(&CMD_AGENTS);
     registry.register(&CMD_CHECKPOINTS);
@@ -1646,6 +1655,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_STATUS,
     &CMD_STATUSBAR,
     &CMD_TOOLS,
+    &CMD_TOOL_OUTPUT,
     &CMD_TASKS,
     &CMD_AGENTS,
     &CMD_CHECKPOINTS,
@@ -1775,6 +1785,8 @@ mod tests {
         let registry = default_command_registry();
         assert!(registry.get("/help").is_some());
         assert!(registry.get("/h").is_some()); // alias
+        assert!(registry.get("/tool-output").is_some());
+        assert!(registry.get("/tool").is_some()); // alias
         assert!(registry.get("/quit").is_some());
         assert!(registry.get("/exit").is_some()); // alias
         assert!(registry.get("/nonexistent").is_none());

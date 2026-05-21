@@ -34,6 +34,8 @@ pub struct AgentConfig {
     pub role: AgentRole,
     /// 允许的工具白名单（None 表示不限制）
     pub allowed_tools: Option<Vec<String>>,
+    /// MCP servers this agent may access when MCP tools are exposed.
+    pub mcp_servers: Vec<String>,
     /// Initial context inherited by forked subagents.
     pub context_messages: Vec<Message>,
     /// Optional isolated working directory for this agent.
@@ -53,6 +55,7 @@ impl Default for AgentConfig {
             max_cost_usd: None,
             role: AgentRole::default(),
             allowed_tools: None,
+            mcp_servers: Vec::new(),
             context_messages: Vec::new(),
             working_dir: None,
         }
@@ -110,6 +113,15 @@ impl AgentConfig {
         if !tools.is_empty() {
             self.allowed_tools = Some(tools);
         }
+        self
+    }
+
+    pub fn with_mcp_servers(mut self, servers: Vec<String>) -> Self {
+        self.mcp_servers = servers
+            .into_iter()
+            .map(|server| server.trim().to_string())
+            .filter(|server| !server.is_empty())
+            .collect();
         self
     }
 
@@ -321,6 +333,9 @@ impl Agent {
             .with_max_iterations(self.config.max_turns.min(self.config.max_tool_calls));
         if let Some(ref allowed) = self.config.allowed_tools {
             options = options.with_allowed_tools(allowed.clone());
+        }
+        if !self.config.mcp_servers.is_empty() {
+            options = options.with_allowed_mcp_servers(self.config.mcp_servers.clone());
         }
         let fork_context_active = crate::agent::forked_context::messages_contain_fork_boilerplate(
             &self.config.context_messages,
