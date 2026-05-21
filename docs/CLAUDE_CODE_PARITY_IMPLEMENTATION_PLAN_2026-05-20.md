@@ -1333,13 +1333,19 @@ Expected files:
   `ToolContext`; `AgentConfig` can carry inherited context messages; and the
   `agent` tool uses those messages for `full_fork` definitions and explicit
   `fork_branches`.
-- Validated with `cargo test -q profiles`, `cargo test -q agent_tool`,
-  `cargo test -q session_store`, `cargo test -q forked_context`,
-  `cargo fmt --check`, and `cargo check -q`.
+- `isolated_worktree_fork` now creates a dedicated git worktree/branch before
+  spawning the child agent, injects a worktree path-translation notice into
+  the forked context, loads file context from the isolated checkout, and runs
+  the child `ConversationLoop` with a per-agent working-directory override
+  instead of switching the parent session's shared worktree state.
+- Latest targeted validation: `cargo test -q profiles`,
+  `cargo test -q agent_tool`, `cargo test -q query_options`,
+  `cargo test -q forked_context`, `cargo fmt --check`,
+  `git diff --check`, and `cargo check -q`.
 
 Remaining Phase 8 work:
 
-- Build the isolated worktree execution path for `isolated_worktree_fork`.
+- Add merge/review/cleanup commands for completed isolated agent worktrees.
 - Add agent-specific MCP/tool resolution beyond static definition metadata.
 - Teach the visible panel richer permission/tool-in-progress state once runtime
   producers exist.

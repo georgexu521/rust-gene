@@ -61,7 +61,11 @@ impl TurnSetupController {
         Self::record_route(&trace, context.conversation, &route);
         let resource_policy = ResourcePolicy::from_route(&route);
         Self::record_resource_policy(&trace, &resource_policy);
-        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let working_dir = context
+            .conversation
+            .working_dir_override
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let destructive_scope =
             DestructiveScopeContract::from_user_request(&last_user_preview, &working_dir);
 

@@ -23,6 +23,7 @@ use crate::tools::{ToolContext, ToolContextRetainedContext, ToolRegistry, ToolRe
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -329,6 +330,7 @@ struct ToolExecutionGate<'a> {
     action_checkpoint_lookup_count: usize,
     has_changes_before_tools: bool,
     destructive_scope: &'a DestructiveScopeContract,
+    working_dir: &'a Path,
     trace: &'a Option<TraceCollector>,
     runtime_context: &'a ToolRuntimeContext,
 }
@@ -372,10 +374,9 @@ impl<'a> ToolExecutionGate<'a> {
             return ToolExecutionGateOutcome::Deny(tool_not_allowed_result(tool_call));
         }
 
-        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let destructive_check = self
             .destructive_scope
-            .check_tool_call(tool_call, &working_dir);
+            .check_tool_call(tool_call, self.working_dir);
         if destructive_check.applies {
             if let Some(ref trace) = self.trace {
                 trace.record(TraceEvent::DestructiveScopeChecked {
@@ -927,6 +928,7 @@ impl ToolExecutionController {
             action_checkpoint_lookup_count,
             has_changes_before_tools,
             destructive_scope,
+            working_dir: execution.base_tool_context.working_dir.as_path(),
             trace: &trace,
             runtime_context: &runtime_context,
         };

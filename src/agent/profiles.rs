@@ -28,6 +28,16 @@ impl std::fmt::Display for AgentContextMode {
 }
 
 impl AgentContextMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "minimal" => Some(Self::Minimal),
+            "inherit" | "inherited_summary" => Some(Self::InheritedSummary),
+            "fork" | "full_fork" => Some(Self::FullFork),
+            "isolated" | "worktree" | "isolated_worktree_fork" => Some(Self::IsolatedWorktreeFork),
+            _ => None,
+        }
+    }
+
     pub fn inherits_parent_context(self) -> bool {
         !matches!(self, AgentContextMode::Minimal)
     }
@@ -604,6 +614,23 @@ context = "fork"
         )
         .unwrap();
         assert_eq!(forked.context, Some(AgentContextMode::FullFork));
+    }
+
+    #[test]
+    fn context_mode_parse_accepts_runtime_aliases() {
+        assert_eq!(
+            AgentContextMode::parse("inherit"),
+            Some(AgentContextMode::InheritedSummary)
+        );
+        assert_eq!(
+            AgentContextMode::parse("fork"),
+            Some(AgentContextMode::FullFork)
+        );
+        assert_eq!(
+            AgentContextMode::parse("worktree"),
+            Some(AgentContextMode::IsolatedWorktreeFork)
+        );
+        assert_eq!(AgentContextMode::parse("unknown"), None);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::services::api::{ChatRequest, LlmProvider, Message};
 use crate::tools::ToolRegistry;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
@@ -201,6 +202,7 @@ impl QueryEngine {
         let preview: String = user_msg.chars().take(50).collect();
         info!("Starting query with tools: {}", preview);
         let context_ref = options.context_messages.as_deref();
+        let working_dir = options.working_dir.clone();
 
         // 构建消息
         let system_prompt =
@@ -212,9 +214,12 @@ impl QueryEngine {
         messages.push(Message::user(user_msg));
 
         // 委托给统一对话循环（非流式）
-        let lp = self
+        let mut lp = self
             .create_loop_with_allowed_tools(options.allowed_tools.clone())
             .with_max_iterations(options.max_tool_iterations.unwrap_or(self.max_iterations));
+        if let Some(working_dir) = working_dir {
+            lp = lp.with_working_dir(working_dir);
+        }
         let result = lp.run(messages).await?;
 
         Ok(QueryResult {
@@ -270,6 +275,8 @@ pub struct QueryOptions {
     pub temperature: Option<f32>,
     /// 允许的工具白名单（None 表示不限制）
     pub allowed_tools: Option<Vec<String>>,
+    /// Optional working directory override for isolated agent/worktree runs.
+    pub working_dir: Option<PathBuf>,
 }
 
 impl Default for QueryOptions {
@@ -279,6 +286,7 @@ impl Default for QueryOptions {
             context_messages: None,
             temperature: Some(0.2),
             allowed_tools: None,
+            working_dir: None,
         }
     }
 }
@@ -302,6 +310,11 @@ impl QueryOptions {
         self.allowed_tools = Some(tools);
         self
     }
+
+    pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(working_dir.into());
+        self
+    }
 }
 
 /// 查询结果
@@ -320,9 +333,12 @@ mod tests {
 
     #[test]
     fn test_query_options() {
-        let opts = QueryOptions::new().with_max_iterations(5);
+        let opts = QueryOptions::new()
+            .with_max_iterations(5)
+            .with_working_dir("/tmp/isolated-agent");
 
         assert_eq!(opts.max_tool_iterations, Some(5));
+        assert_eq!(opts.working_dir, Some(PathBuf::from("/tmp/isolated-agent")));
     }
 
     #[test]

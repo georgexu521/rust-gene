@@ -6,6 +6,7 @@ use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType, AgentStatus};
 use crate::engine::QueryEngine;
 use crate::services::api::Message;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
@@ -35,6 +36,8 @@ pub struct AgentConfig {
     pub allowed_tools: Option<Vec<String>>,
     /// Initial context inherited by forked subagents.
     pub context_messages: Vec<Message>,
+    /// Optional isolated working directory for this agent.
+    pub working_dir: Option<PathBuf>,
 }
 
 impl Default for AgentConfig {
@@ -51,6 +54,7 @@ impl Default for AgentConfig {
             role: AgentRole::default(),
             allowed_tools: None,
             context_messages: Vec::new(),
+            working_dir: None,
         }
     }
 }
@@ -111,6 +115,11 @@ impl AgentConfig {
 
     pub fn with_context_messages(mut self, messages: Vec<Message>) -> Self {
         self.context_messages = messages;
+        self
+    }
+
+    pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(working_dir.into());
         self
     }
 
@@ -318,6 +327,9 @@ impl Agent {
         );
         if !self.config.context_messages.is_empty() {
             options = options.with_context(self.config.context_messages.clone());
+        }
+        if let Some(working_dir) = self.config.working_dir.clone() {
+            options = options.with_working_dir(working_dir);
         }
         let agent_system_prompt = self.config.build_system_prompt();
         let cost_before = self.query_engine.estimated_cost_usd().await;

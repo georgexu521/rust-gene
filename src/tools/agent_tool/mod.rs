@@ -5,13 +5,13 @@
 use crate::agent::agent::AgentConfig;
 use crate::agent::envelope::{AgentTaskEnvelope, AgentTaskPriority};
 use crate::agent::manager::AgentResult as ManagerAgentResult;
-use crate::agent::profiles::AgentDefinition;
+use crate::agent::profiles::{AgentContextMode, AgentDefinition};
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 /// 子代理模板
@@ -203,6 +203,49 @@ fn build_system_prompt(
     }
 }
 
+#[derive(Debug, Clone)]
+struct IsolatedAgentWorktree {
+    path: PathBuf,
+    branch: String,
+}
+
+async fn create_isolated_agent_worktree(
+    context: &ToolContext,
+    description: &str,
+) -> anyhow::Result<IsolatedAgentWorktree> {
+    let manager = context
+        .worktree_manager
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("isolated_worktree_fork requires a WorktreeManager"))?;
+    let uuid = uuid::Uuid::new_v4().simple().to_string();
+    let suffix = &uuid[..8];
+    let slug = isolated_worktree_slug(description);
+    let name = format!("agent-{}-{}", slug, suffix);
+    let branch = format!("codex/agent-{}", suffix);
+    let path = manager.create(&name, Some(&branch)).await?;
+    Ok(IsolatedAgentWorktree { path, branch })
+}
+
+fn isolated_worktree_slug(description: &str) -> String {
+    let mut slug = String::new();
+    for ch in description.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+        if slug.len() >= 32 {
+            break;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "worker".to_string()
+    } else {
+        slug.to_string()
+    }
+}
+
 /// 创建并等待单个子 Agent 完成
 #[allow(clippy::too_many_arguments)]
 async fn spawn_single_agent(
@@ -217,11 +260,26 @@ async fn spawn_single_agent(
     role: AgentRole,
     template: Option<AgentTemplate>,
     definition: Option<&AgentDefinition>,
+    context_mode_override: Option<AgentContextMode>,
     force_fork_context: bool,
     context: &ToolContext,
 ) -> anyhow::Result<ManagerAgentResult> {
     let started_at = std::time::Instant::now();
-    let file_context = load_file_context(files, &context.working_dir).await;
+    let effective_context_mode =
+        context_mode_override.or_else(|| definition.map(|definition| definition.context_mode));
+    let isolated_worktree = if effective_context_mode
+        .map(|mode| mode.requires_isolated_worktree())
+        .unwrap_or(false)
+    {
+        Some(create_isolated_agent_worktree(context, description).await?)
+    } else {
+        None
+    };
+    let execution_working_dir = isolated_worktree
+        .as_ref()
+        .map(|worktree| worktree.path.as_path())
+        .unwrap_or(context.working_dir.as_path());
+    let file_context = load_file_context(files, execution_working_dir).await;
     let mut system_prompt = build_system_prompt(template, role, description, prompt, &file_context);
     if let Some(definition) = definition {
         if !definition.system_prompt.trim().is_empty() {
@@ -238,10 +296,15 @@ async fn spawn_single_agent(
                 system_prompt
             );
         }
+    } else if let Some(context_mode) = effective_context_mode {
+        system_prompt = format!(
+            "Sub-agent definition contract:\nContext mode: {}\n\n{}",
+            context_mode, system_prompt
+        );
     }
     let should_build_fork_context = force_fork_context
-        || definition
-            .map(|definition| definition.context_mode.copies_full_history())
+        || effective_context_mode
+            .map(|mode| mode.copies_full_history())
             .unwrap_or(false);
     let forked_context = if should_build_fork_context {
         if crate::agent::forked_context::text_contains_fork_boilerplate(description)
@@ -251,11 +314,18 @@ async fn spawn_single_agent(
                 "recursive fork blocked: task already contains fork boilerplate"
             ));
         }
-        let request = crate::agent::forked_context::ForkedContextBuildRequest::new(
+        let mut request = crate::agent::forked_context::ForkedContextBuildRequest::new(
             prompt,
             context.parent_assistant_tool_calls.clone(),
         )
         .with_parent_assistant_content(context.parent_assistant_content.clone());
+        if let Some(worktree) = isolated_worktree.as_ref() {
+            request =
+                request.with_worktree_notice(crate::agent::forked_context::build_worktree_notice(
+                    &context.working_dir,
+                    &worktree.path,
+                ));
+        }
         let built = crate::agent::forked_context::build_forked_context(request)
             .map_err(|err| anyhow::anyhow!(err))?;
         system_prompt = format!(
@@ -278,6 +348,7 @@ async fn spawn_single_agent(
         .with_system_prompt(system_prompt)
         .with_max_turns(max_turns)
         .with_allowed_tools(allowed_tools.to_vec())
+        .with_working_dir(execution_working_dir.to_path_buf())
         .with_context_messages(
             forked_context
                 .as_ref()
@@ -307,6 +378,11 @@ async fn spawn_single_agent(
             "timeout_secs": timeout_secs,
             "max_turns": max_turns,
             "allowed_tools": allowed_tools,
+            "context_mode": effective_context_mode.map(|mode| mode.to_string()),
+            "isolated_worktree": isolated_worktree.as_ref().map(|worktree| json!({
+                "path": worktree.path.to_string_lossy().to_string(),
+                "branch": worktree.branch.clone(),
+            })),
             "fork_context": forked_context.as_ref().map(|fork| json!({
                 "message_count": fork.messages.len(),
                 "placeholder_complete": fork.is_placeholder_complete(),
@@ -573,6 +649,7 @@ struct ExecuteParams<'a> {
     role: AgentRole,
     template: Option<AgentTemplate>,
     definition: Option<AgentDefinition>,
+    context_mode_override: Option<AgentContextMode>,
 }
 
 fn default_subagent_allowed_tools(role: AgentRole, template: Option<AgentTemplate>) -> Vec<String> {
@@ -720,6 +797,7 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
             ctx.role,
             ctx.template,
             ctx.definition.as_ref(),
+            ctx.context_mode_override,
             true,
             ctx.context,
         )
@@ -848,6 +926,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     ctx.role,
                     ctx.template,
                     ctx.definition.as_ref(),
+                    ctx.context_mode_override,
                     false,
                     ctx.context,
                 )
@@ -882,6 +961,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             ctx.role,
             ctx.template,
             ctx.definition.as_ref(),
+            ctx.context_mode_override,
             false,
             ctx.context,
         )
@@ -947,6 +1027,7 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
         ctx.role,
         ctx.template,
         ctx.definition.as_ref(),
+        ctx.context_mode_override,
         false,
         ctx.context,
     )
@@ -966,6 +1047,11 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
             } else {
                 format!("\nRelevant files: {}", files.join(", "))
             };
+            let effective_context_mode = ctx.context_mode_override.or_else(|| {
+                ctx.definition
+                    .as_ref()
+                    .map(|definition| definition.context_mode)
+            });
 
             // Handle memory operations
             let memory_manager = crate::agent::memory::global_memory_manager();
@@ -1004,7 +1090,7 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
                     "template": ctx.params["template"].as_str().unwrap_or(""),
                     "profile": ctx.definition.as_ref().map(|definition| definition.name.clone()),
                     "agent_definition": ctx.definition.as_ref(),
-                    "context_mode": ctx.definition.as_ref().map(|definition| definition.context_mode.to_string()),
+                    "context_mode": effective_context_mode.map(|mode| mode.to_string()),
                     "permission_mode": ctx.definition.as_ref().map(|definition| definition.permission_mode.to_string()),
                     "risk_policy": ctx.definition.as_ref().map(|definition| definition.risk_policy.to_string()),
                     "output_contract": ctx.definition.as_ref().map(|definition| definition.output_contract.to_string()),
@@ -1080,6 +1166,11 @@ impl Tool for AgentTool {
                     "type": "string",
                     "description": "Named agent profile: default, explorer, verifier, planner, implementer, or a project profile from .priority-agent/agents/*.toml."
                 },
+                "context_mode": {
+                    "type": "string",
+                    "enum": ["minimal", "inherited_summary", "full_fork", "isolated_worktree_fork"],
+                    "description": "Optional context override for this sub-agent. Use isolated_worktree_fork when the child may edit files in its own git worktree."
+                },
                 "role": {
                     "type": "string",
                     "enum": ["default", "plan", "verification", "guide", "advisor", "fast", "teammate", "specialist", "dream_task"],
@@ -1144,6 +1235,7 @@ impl Tool for AgentTool {
         let desc = params["description"].as_str().unwrap_or("");
         let role = params["role"].as_str().unwrap_or("default");
         let template = params["template"].as_str().unwrap_or("");
+        let context_mode = params["context_mode"].as_str().unwrap_or("");
         let prompt = params["prompt"].as_str().unwrap_or("");
         let prompt_summary = if prompt.len() > 60 {
             format!("{}...", &prompt[..60])
@@ -1151,8 +1243,8 @@ impl Tool for AgentTool {
             prompt.to_string()
         };
         format!(
-            "agent: role={} template={} desc='{}' prompt='{}'",
-            role, template, desc, prompt_summary
+            "agent: role={} template={} context_mode={} desc='{}' prompt='{}'",
+            role, template, context_mode, desc, prompt_summary
         )
     }
 
@@ -1195,6 +1287,18 @@ impl Tool for AgentTool {
         let template = params["template"]
             .as_str()
             .and_then(AgentTemplate::from_str);
+        let context_mode_override = match params["context_mode"].as_str() {
+            Some(value) => match AgentContextMode::parse(value) {
+                Some(mode) => Some(mode),
+                None => {
+                    return ToolResult::error(format!(
+                        "Invalid context_mode '{}'. Expected one of: minimal, inherited_summary, full_fork, isolated_worktree_fork",
+                        value
+                    ));
+                }
+            },
+            None => None,
+        };
         let mut allowed_tools: Vec<String> = params["allowed_tools"]
             .as_array()
             .map(|arr| {
@@ -1220,6 +1324,9 @@ impl Tool for AgentTool {
             definition.tools = allowed_tools.clone();
             definition.max_turns = max_turns;
             definition.timeout_secs = timeout_secs;
+            if let Some(context_mode) = context_mode_override {
+                definition.context_mode = context_mode;
+            }
         }
 
         let ctx = ExecuteParams {
@@ -1233,6 +1340,7 @@ impl Tool for AgentTool {
             role,
             template,
             definition,
+            context_mode_override,
         };
 
         // 2. Fork branches with memory inheritance
@@ -1271,9 +1379,15 @@ impl Tool for AgentTool {
         }
         let desc = params["description"].as_str().unwrap_or("(no description)");
         let role = params["role"].as_str().unwrap_or("default");
+        let isolated_notice = params["context_mode"]
+            .as_str()
+            .and_then(AgentContextMode::parse)
+            .filter(|mode| mode.requires_isolated_worktree())
+            .map(|_| " in an isolated worktree")
+            .unwrap_or("");
         Some(format!(
-            "This will create a '{}' sub-agent to handle:\n{}\n\nContinue?",
-            role, desc
+            "This will create a '{}' sub-agent{} to handle:\n{}\n\nContinue?",
+            role, isolated_notice, desc
         ))
     }
 
@@ -1303,6 +1417,12 @@ mod tests {
                 .as_str()
                 .unwrap_or("")
                 .contains("narrow tasks")
+        );
+        assert!(
+            tool.parameters()["properties"]["context_mode"]["description"]
+                .as_str()
+                .unwrap_or("")
+                .contains("isolated_worktree_fork")
         );
     }
 
@@ -1435,6 +1555,20 @@ mod tests {
         assert!(AgentTemplate::from_str("review").is_some());
         assert!(AgentTemplate::from_str("debug").is_some());
         assert!(AgentTemplate::from_str("unknown").is_none());
+    }
+
+    #[test]
+    fn isolated_worktree_slug_is_stable_and_safe() {
+        assert_eq!(
+            isolated_worktree_slug("Edit src/agent profiles.rs now"),
+            "edit-src-agent-profiles-rs-now"
+        );
+        assert_eq!(isolated_worktree_slug("///"), "worker");
+        assert!(
+            isolated_worktree_slug("A very long isolated worker description that should be capped")
+                .len()
+                <= 32
+        );
     }
 
     #[tokio::test]

@@ -137,6 +137,7 @@ use crate::services::api::{LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
@@ -184,6 +185,8 @@ pub struct ConversationLoop {
     approval_channel: Option<Arc<ToolApprovalChannel>>,
     /// 工具白名单（用于子 Agent 隔离；None 表示不限制）
     allowed_tools: Option<HashSet<String>>,
+    /// Optional per-loop working directory override for isolated workers.
+    working_dir_override: Option<PathBuf>,
     /// 本轮是否已触发过 Workflow（每轮最多一次）
     workflow_triggered_this_turn: std::sync::atomic::AtomicBool,
     /// Workflow 策略（默认从环境变量读取，可覆盖）
@@ -240,6 +243,7 @@ impl ConversationLoop {
             llm_memory_extraction: false,
             approval_channel: None,
             allowed_tools: None,
+            working_dir_override: None,
             workflow_triggered_this_turn: std::sync::atomic::AtomicBool::new(false),
             workflow_policy: WorkflowPolicy::from_env(),
             agent_mode: crate::engine::agent_mode::AgentMode::Auto,
@@ -337,6 +341,11 @@ impl ConversationLoop {
         self
     }
 
+    pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
+        self.working_dir_override = Some(working_dir.into());
+        self
+    }
+
     pub fn with_workflow_policy(mut self, policy: WorkflowPolicy) -> Self {
         self.workflow_policy = policy;
         self
@@ -372,7 +381,11 @@ impl ConversationLoop {
 
     /// 创建工具执行上下文
     fn create_tool_context(&self) -> ToolContext {
-        let mut ctx = ToolContext::new(".", self.session_id.clone());
+        let working_dir = self
+            .working_dir_override
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
+        let mut ctx = ToolContext::new(working_dir, self.session_id.clone());
         if let Some(ref manager) = self.agent_manager {
             ctx = ctx.with_agent_manager(manager.clone());
         }

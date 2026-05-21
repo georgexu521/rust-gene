@@ -129,6 +129,7 @@ pub struct ConversationLoopBuilder {
     llm_memory_extraction: bool,
     approval_channel: Option<std::sync::Arc<self::conversation_loop::ToolApprovalChannel>>,
     allowed_tools: Option<std::collections::HashSet<String>>,
+    working_dir_override: Option<std::path::PathBuf>,
     trace_store: Option<std::sync::Arc<self::trace::TraceStore>>,
     goal_manager: Option<std::sync::Arc<self::session_goal::SessionGoalManager>>,
     session_store: Option<std::sync::Arc<crate::session_store::SessionStore>>,
@@ -163,6 +164,7 @@ impl ConversationLoopBuilder {
             llm_memory_extraction: false,
             approval_channel: None,
             allowed_tools: None,
+            working_dir_override: None,
             trace_store: None,
             goal_manager: None,
             session_store: None,
@@ -250,6 +252,11 @@ impl ConversationLoopBuilder {
         self
     }
 
+    pub fn with_working_dir(mut self, working_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.working_dir_override = Some(working_dir.into());
+        self
+    }
+
     pub fn with_trace_store(mut self, store: std::sync::Arc<self::trace::TraceStore>) -> Self {
         self.trace_store = Some(store);
         self
@@ -332,6 +339,9 @@ impl ConversationLoopBuilder {
         }
         if let Some(allowed_tools) = self.allowed_tools {
             lp = lp.with_allowed_tools(allowed_tools);
+        }
+        if let Some(working_dir) = self.working_dir_override {
+            lp = lp.with_working_dir(working_dir);
         }
         if let Some(trace_store) = self.trace_store {
             lp = lp.with_trace_store(trace_store);
