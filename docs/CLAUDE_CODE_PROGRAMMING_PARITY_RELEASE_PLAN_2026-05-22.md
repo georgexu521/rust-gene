@@ -1276,6 +1276,25 @@ Primary files:
 - `install.sh`
 - `Cargo.toml`
 - `scripts/`
+
+Progress on 2026-05-22:
+
+- `scripts/install.sh` now supports `--version` for package version reporting
+  and `--dry-run` for install-plan/dependency diagnostics without writing files.
+- Installer output now reports Cargo/Rustc versions, binary/config targets, and
+  rejects unsafe empty/root install prefixes.
+- Installer binary replacement now backs up an existing binary and restores it
+  if the install or shortcut step fails.
+
+Validation so far:
+
+- `bash -n scripts/install.sh` - passed.
+- `scripts/install.sh --version` - passed, reported `0.1.0`.
+- `scripts/install.sh --dry-run --release --features experimental-api-server --prefix /tmp/priority-agent-install-smoke`
+  - passed without writing files.
+- `cargo fmt --check` - passed.
+- `cargo check -q` - passed.
+- `git diff --check` - passed.
 - `.github/workflows/`
 - `docs/`
 - `src/tui/slash_handler/diagnostics.rs`
