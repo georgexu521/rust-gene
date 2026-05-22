@@ -1,3 +1,4 @@
+import { AlertCircle, CheckCircle2, RefreshCw } from "lucide-react";
 import { DesktopDiagnostic } from "../../runtime/desktopApi";
 
 type DiagnosticsPanelProps = {
@@ -16,11 +17,18 @@ export function DiagnosticsPanel({ diagnostics, onRefresh }: DiagnosticsPanelPro
     <section className={`diagnostics-panel ${summary.status}`}>
       <div className="diagnostics-heading">
         <div>
-          <div className="diagnostics-title">Environment diagnostics</div>
+          <div className="diagnostics-title">
+            {summary.status === "ok" ? (
+              <CheckCircle2 aria-hidden="true" size={16} />
+            ) : (
+              <AlertCircle aria-hidden="true" size={16} />
+            )}
+            <span>Environment diagnostics</span>
+          </div>
           <div className="diagnostics-summary">{summary.text}</div>
         </div>
-        <button type="button" onClick={onRefresh}>
-          Refresh
+        <button aria-label="Refresh diagnostics" type="button" onClick={onRefresh}>
+          <RefreshCw aria-hidden="true" size={15} />
         </button>
       </div>
       <div className="diagnostics-list">

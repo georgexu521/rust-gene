@@ -1,3 +1,4 @@
+import { FolderOpen, RefreshCw, Terminal, X } from "lucide-react";
 import {
   DesktopDiagnostic,
   DesktopSettings,
@@ -49,8 +50,8 @@ export function SettingsDrawer({
           <div className="settings-eyebrow">Settings</div>
           <h2>Desktop state</h2>
         </div>
-        <button type="button" onClick={onClose}>
-          Close
+        <button aria-label="Close settings" type="button" onClick={onClose}>
+          <X aria-hidden="true" size={16} />
         </button>
       </div>
 
@@ -73,10 +74,12 @@ export function SettingsDrawer({
           </dl>
           <div className="settings-actions">
             <button type="button" onClick={onRefresh}>
-              Refresh
+              <RefreshCw aria-hidden="true" size={14} />
+              <span>Refresh</span>
             </button>
             <button type="button" onClick={onOpenSettingsFolder}>
-              Open settings folder
+              <FolderOpen aria-hidden="true" size={14} />
+              <span>Open settings folder</span>
             </button>
           </div>
         </section>
@@ -195,10 +198,12 @@ function ProviderSetupGuide({
       </ol>
       <div className="settings-actions">
         <button type="button" onClick={onOpenShellProfile}>
-          Open shell profile
+          <Terminal aria-hidden="true" size={14} />
+          <span>Open shell profile</span>
         </button>
         <button type="button" onClick={onRefresh}>
-          Refresh diagnostics
+          <RefreshCw aria-hidden="true" size={14} />
+          <span>Refresh diagnostics</span>
         </button>
       </div>
     </div>

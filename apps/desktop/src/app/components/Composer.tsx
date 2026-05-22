@@ -1,4 +1,5 @@
 import { FormEvent } from "react";
+import { ArrowUp, FolderOpen, RotateCcw } from "lucide-react";
 import { ProviderModelStatus } from "../../runtime/desktopApi";
 
 type ComposerProps = {
@@ -37,25 +38,19 @@ export function Composer({
         onChange={(event) => onComposerChange(event.target.value)}
         placeholder="Ask Liz to inspect, edit, or verify this project..."
       />
-      <div className="composer-controls">
+      <div className="composer-toolbar">
         <input
           aria-label="Project path"
           value={projectPath}
           onChange={(event) => onProjectPathChange(event.target.value)}
         />
-        <button type="button" onClick={onSelectProject}>
-          Select
+        <button aria-label="Apply project path" title="Apply project path" type="button" onClick={onSelectProject}>
+          <RotateCcw aria-hidden="true" size={16} />
         </button>
-        <button type="button" onClick={onBrowseProject}>
-          Browse
+        <button aria-label="Browse project" title="Browse project" type="button" onClick={onBrowseProject}>
+          <FolderOpen aria-hidden="true" size={16} />
         </button>
-        <button disabled={isRunning || composer.trim().length === 0} type="submit">
-          {isRunning ? "Running" : "Send"}
-        </button>
-      </div>
-      <div className="runtime-selectors" aria-label="Runtime selectors">
-        <label>
-          <span>Provider</span>
+        <div className="runtime-selectors" aria-label="Runtime selectors">
           <select
             aria-label="Provider"
             value={activeProvider}
@@ -82,9 +77,6 @@ export function Composer({
               </option>
             ))}
           </select>
-        </label>
-        <label>
-          <span>Model</span>
           <select
             aria-label="Model"
             disabled={!activeProvider || providerStatus?.models.length === 0}
@@ -105,12 +97,21 @@ export function Composer({
               </option>
             ))}
           </select>
-        </label>
+        </div>
         <div className="runtime-status">
           {providerStatus
             ? `${providerStatus.configured_count} configured · ${activeModel}`
             : "Checking provider"}
         </div>
+        <button
+          aria-label="Send message"
+          className="send-button"
+          disabled={isRunning || composer.trim().length === 0}
+          title="Send message"
+          type="submit"
+        >
+          <ArrowUp aria-hidden="true" size={18} />
+        </button>
       </div>
     </form>
   );

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { Activity, MoreHorizontal, PanelRight } from "lucide-react";
 import {
   DesktopDiagnostic,
   DesktopHealth,
@@ -248,18 +249,31 @@ export function App() {
 
       <section className="workspace">
         <header className="topbar">
-          <div>
+          <div className="title-cluster">
+            <div className="topbar-title-row">
+              <h1>What should we build in rust-agent?</h1>
+              <button
+                aria-label="More conversation actions"
+                className="title-icon-button"
+                type="button"
+              >
+                <MoreHorizontal aria-hidden="true" size={18} />
+              </button>
+            </div>
             <div className="eyebrow">Priority Agent</div>
-            <h1>What should we build in rust-agent?</h1>
           </div>
           <div className="health">
-            <span>{health ? `${health.status} · ${health.version}` : "Starting..."}</span>
+            <span className="health-status">
+              <Activity aria-hidden="true" size={14} />
+              {health ? `${health.status} · ${health.version}` : "Starting..."}
+            </span>
             <button
               className="trace-toggle"
               type="button"
               onClick={() => setIsTraceOpen((open) => !open)}
             >
-              Trace
+              <PanelRight aria-hidden="true" size={15} />
+              <span>Trace</span>
             </button>
           </div>
         </header>
