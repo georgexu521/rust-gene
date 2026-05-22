@@ -4,9 +4,12 @@
 
 pub mod provider_health;
 
+use crate::plugins::{self, PluginRuntimeStatus};
+use crate::services::api::provider_protocol::ProviderRuntimeFacts;
+use crate::services::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 检查结果状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,8 +137,14 @@ pub async fn run_full_diagnostics(working_dir: &Path) -> DiagnosticReport {
     checks.push(check_network_connectivity().await);
     checks.push(check_toolchain());
     checks.push(check_config());
+    checks.push(check_provider_runtime_config());
     checks.push(check_permissions_config(working_dir));
     checks.push(check_session_store());
+    checks.push(check_state_dirs_writable());
+    checks.push(check_git_worktree(working_dir));
+    checks.push(check_plugin_runtime(working_dir));
+    checks.push(check_bridge_runtime());
+    checks.push(check_remote_runtime());
 
     DiagnosticReport::new(checks)
         .with_metadata("working_dir", working_dir.display().to_string())
@@ -260,6 +269,92 @@ pub fn check_config() -> CheckResult {
     }
 }
 
+/// Detect active provider protocol behavior from config/env.
+pub fn check_provider_runtime_config() -> CheckResult {
+    let (base_url, model, config_note) = match AppConfig::load() {
+        Ok(config) => (
+            first_non_empty(vec![
+                config.api.base_url,
+                std::env::var("OPENAI_BASE_URL").unwrap_or_default(),
+                std::env::var("MOONSHOT_BASE_URL").unwrap_or_default(),
+                std::env::var("MINIMAX_BASE_URL").unwrap_or_default(),
+            ]),
+            first_non_empty(vec![
+                config.api.model,
+                std::env::var("OPENAI_MODEL").unwrap_or_default(),
+                std::env::var("MOONSHOT_MODEL").unwrap_or_default(),
+                std::env::var("MINIMAX_MODEL").unwrap_or_default(),
+            ]),
+            None,
+        ),
+        Err(e) => (
+            first_non_empty(vec![
+                std::env::var("OPENAI_BASE_URL").unwrap_or_default(),
+                std::env::var("MOONSHOT_BASE_URL").unwrap_or_default(),
+                std::env::var("MINIMAX_BASE_URL").unwrap_or_default(),
+            ]),
+            first_non_empty(vec![
+                std::env::var("OPENAI_MODEL").unwrap_or_default(),
+                std::env::var("MOONSHOT_MODEL").unwrap_or_default(),
+                std::env::var("MINIMAX_MODEL").unwrap_or_default(),
+            ]),
+            Some(e.to_string()),
+        ),
+    };
+
+    if model.is_empty() && base_url.is_empty() {
+        return CheckResult::warn(
+            "provider_runtime",
+            "No provider model/base URL configured for protocol detection",
+            "Set PRIORITY_AGENT_API_MODEL and PRIORITY_AGENT_API_BASE_URL, or provider-specific env vars",
+        );
+    }
+
+    let facts = ProviderRuntimeFacts::detect(&base_url, &model);
+    let mut traits = Vec::new();
+    if facts.supports_streaming_tool_calls {
+        traits.push("streaming");
+    }
+    if facts.supports_tool_calls {
+        traits.push("tools");
+    }
+    if facts.supports_reasoning_tokens {
+        traits.push("reasoning_tokens");
+    }
+    if facts.requires_nonstreaming_tool_calls {
+        traits.push("nonstreaming_tools");
+    }
+    if facts.requires_tool_result_adjacency {
+        traits.push("tool_adjacency");
+    }
+
+    let message = format!(
+        "family={:?}; model={}; traits={}; normalization={}",
+        facts.protocol_family,
+        if facts.model.is_empty() {
+            "<unset>"
+        } else {
+            facts.model.as_str()
+        },
+        if traits.is_empty() {
+            "none".to_string()
+        } else {
+            traits.join(",")
+        },
+        facts.normalization.join(",")
+    );
+
+    if let Some(note) = config_note {
+        CheckResult::warn(
+            "provider_runtime",
+            format!("{}; config load warning: {}", message, note),
+            "Fix config.toml or rely on provider-specific environment variables",
+        )
+    } else {
+        CheckResult::ok("provider_runtime", message)
+    }
+}
+
 /// 检测权限配置文件
 pub fn check_permissions_config(working_dir: &Path) -> CheckResult {
     let global = dirs::home_dir()
@@ -296,6 +391,226 @@ pub fn check_session_store() -> CheckResult {
             format!("Session store not yet created at {:?}", db_path),
         )
     }
+}
+
+pub fn check_state_dirs_writable() -> CheckResult {
+    let config_dir = dirs::config_dir()
+        .map(|d| d.join("priority-agent"))
+        .unwrap_or_else(|| PathBuf::from(".priority-agent"));
+    let data_dir = dirs::data_dir()
+        .map(|d| d.join("priority-agent"))
+        .unwrap_or_else(|| PathBuf::from(".priority-agent"));
+    let cache_dir = dirs::cache_dir()
+        .map(|d| d.join("priority-agent"))
+        .unwrap_or_else(|| PathBuf::from(".priority-agent-cache"));
+
+    check_state_dirs_writable_for_paths(&[config_dir, data_dir, cache_dir])
+}
+
+fn check_state_dirs_writable_for_paths(paths: &[PathBuf]) -> CheckResult {
+    let mut checked = Vec::new();
+    let mut failures = Vec::new();
+
+    for path in paths {
+        match probe_writable_dir(path) {
+            Ok(()) => checked.push(path.display().to_string()),
+            Err(e) => failures.push(format!("{} ({})", path.display(), e)),
+        }
+    }
+
+    if failures.is_empty() {
+        CheckResult::ok(
+            "state_dirs",
+            format!("Writable state directories: {}", checked.join("; ")),
+        )
+    } else {
+        CheckResult::error(
+            "state_dirs",
+            format!("State directory write failures: {}", failures.join("; ")),
+            "Fix directory permissions or set XDG config/data/cache directories to writable paths",
+        )
+    }
+}
+
+fn probe_writable_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)?;
+    let probe = path.join(format!(".doctor-write-test-{}", uuid::Uuid::new_v4()));
+    std::fs::write(&probe, b"ok")?;
+    std::fs::remove_file(probe)?;
+    Ok(())
+}
+
+pub fn check_git_worktree(working_dir: &Path) -> CheckResult {
+    let inside = std::process::Command::new("git")
+        .arg("-C")
+        .arg(working_dir)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output();
+
+    match inside {
+        Ok(output) if output.status.success() => {
+            let worktree_count = std::process::Command::new("git")
+                .arg("-C")
+                .arg(working_dir)
+                .args(["worktree", "list", "--porcelain"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| {
+                    String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .filter(|line| line.starts_with("worktree "))
+                        .count()
+                })
+                .unwrap_or(0);
+
+            CheckResult::ok(
+                "git_worktree",
+                format!(
+                    "Current directory is a git worktree; registered worktrees={}",
+                    worktree_count
+                ),
+            )
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            CheckResult::warn(
+                "git_worktree",
+                if stderr.is_empty() {
+                    "Current directory is not inside a git worktree".to_string()
+                } else {
+                    format!("Current directory is not inside a git worktree: {}", stderr)
+                },
+                "Run priority-agent from a git project for coding-agent diff and worktree features",
+            )
+        }
+        Err(e) => CheckResult::error(
+            "git_worktree",
+            format!("Failed to run git worktree check: {}", e),
+            "Install git and ensure it is available in PATH",
+        ),
+    }
+}
+
+pub fn check_plugin_runtime(working_dir: &Path) -> CheckResult {
+    let roots = plugins::default_plugin_roots(working_dir);
+    let trust_mode = AppConfig::load()
+        .map(|config| plugins::trust::TrustMode::parse_lossy(&config.features.plugin_trust_mode))
+        .unwrap_or(plugins::trust::TrustMode::Warn);
+    check_plugin_runtime_for_roots(&roots, trust_mode)
+}
+
+fn check_plugin_runtime_for_roots(
+    roots: &[PathBuf],
+    trust_mode: plugins::trust::TrustMode,
+) -> CheckResult {
+    let discovered = plugins::discover_plugins(roots);
+    if discovered.is_empty() {
+        return CheckResult::info(
+            "plugin_runtime",
+            format!(
+                "No plugins discovered; roots={}",
+                roots
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        );
+    }
+
+    let facts = plugins::runtime_facts(&discovered, trust_mode);
+    let ready = facts
+        .iter()
+        .filter(|f| f.status == PluginRuntimeStatus::Ready)
+        .count();
+    let disabled = facts
+        .iter()
+        .filter(|f| f.status == PluginRuntimeStatus::Disabled)
+        .count();
+    let warnings = facts
+        .iter()
+        .filter(|f| f.status == PluginRuntimeStatus::UsableWithWarnings)
+        .count();
+    let blocked = facts
+        .iter()
+        .filter(|f| f.status == PluginRuntimeStatus::Blocked)
+        .count();
+    let message = format!(
+        "plugins={} ready={} warnings={} disabled={} blocked={} trust_mode={}",
+        facts.len(),
+        ready,
+        warnings,
+        disabled,
+        blocked,
+        trust_mode.as_str()
+    );
+
+    if blocked > 0 {
+        CheckResult::warn(
+            "plugin_runtime",
+            message,
+            "Run plugin_manage action=status or plugin_manage action=validate to inspect blocked plugins",
+        )
+    } else {
+        CheckResult::ok("plugin_runtime", message)
+    }
+}
+
+pub fn check_bridge_runtime() -> CheckResult {
+    let snapshot = crate::bridge::runtime_snapshot();
+    match snapshot.status {
+        crate::bridge::BridgeRuntimeStatus::Ready => CheckResult::ok(
+            "bridge_runtime",
+            format!(
+                "{}; cursors={}; tenant={}",
+                snapshot.diagnostic,
+                snapshot.cursor_count,
+                snapshot.tenant_id.as_deref().unwrap_or("<unset>")
+            ),
+        ),
+        crate::bridge::BridgeRuntimeStatus::ConfiguredWithoutAuth => CheckResult::warn(
+            "bridge_runtime",
+            format!("{}; cursors={}", snapshot.diagnostic, snapshot.cursor_count),
+            "Set PRIORITY_AGENT_BRIDGE_TOKEN when using remote bridge features",
+        ),
+        crate::bridge::BridgeRuntimeStatus::NotConfigured => CheckResult::info(
+            "bridge_runtime",
+            format!("{}; cursors={}", snapshot.diagnostic, snapshot.cursor_count),
+        ),
+    }
+}
+
+pub fn check_remote_runtime() -> CheckResult {
+    let env = crate::remote::RemoteEnvDetector::detect();
+    let snapshot = crate::remote::RemoteSessionManager::new().runtime_snapshot(env);
+    let message = format!(
+        "env={}; remote={}; saved_sessions={}; connected={}; errors={}; {}",
+        snapshot.env.env_type,
+        snapshot.env.is_remote,
+        snapshot.saved_session_count,
+        snapshot.connected_session_count,
+        snapshot.error_session_count,
+        snapshot.diagnostics.join("; ")
+    );
+
+    if snapshot.error_session_count > 0 {
+        CheckResult::warn(
+            "remote_runtime",
+            message,
+            "Inspect remote sessions and reconnect or remove failed entries",
+        )
+    } else {
+        CheckResult::info("remote_runtime", message)
+    }
+}
+
+fn first_non_empty(values: Vec<String>) -> String {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -361,6 +676,81 @@ mod tests {
             result.status == CheckStatus::Ok || result.status == CheckStatus::Info,
             "session_store check should return ok or info"
         );
+    }
+
+    #[test]
+    fn test_check_provider_runtime_config_returns_result() {
+        let result = check_provider_runtime_config();
+        assert!(
+            matches!(
+                result.status,
+                CheckStatus::Ok | CheckStatus::Warning | CheckStatus::Error | CheckStatus::Info
+            ),
+            "provider runtime check should return a valid status"
+        );
+    }
+
+    #[test]
+    fn test_check_state_dirs_writable_for_temp_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-doctor-state-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let paths = vec![root.join("config"), root.join("data"), root.join("cache")];
+
+        let result = check_state_dirs_writable_for_paths(&paths);
+
+        assert_eq!(result.status, CheckStatus::Ok);
+        assert!(result.message.contains("Writable state directories"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_check_git_worktree_warns_for_plain_temp_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-doctor-git-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+
+        let result = check_git_worktree(&root);
+
+        assert!(matches!(
+            result.status,
+            CheckStatus::Warning | CheckStatus::Error
+        ));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_check_plugin_runtime_reports_blocked_plugin() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-doctor-plugin-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let plugin_dir = root.join("blocked");
+        std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            r#"
+name = "blocked"
+version = "0.1.0"
+enabled = true
+"#,
+        )
+        .expect("write plugin manifest");
+
+        let result = check_plugin_runtime_for_roots(
+            std::slice::from_ref(&root),
+            plugins::trust::TrustMode::Off,
+        );
+
+        assert_eq!(result.status, CheckStatus::Warning);
+        assert!(result.message.contains("blocked=1"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

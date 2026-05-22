@@ -1276,6 +1276,7 @@ Primary files:
 - `install.sh`
 - `Cargo.toml`
 - `scripts/`
+- `src/diagnostics/mod.rs`
 
 Progress on 2026-05-22:
 
@@ -1285,6 +1286,14 @@ Progress on 2026-05-22:
   rejects unsafe empty/root install prefixes.
 - Installer binary replacement now backs up an existing binary and restores it
   if the install or shortcut step fails.
+- `/doctor` full diagnostics now include provider protocol facts, writable
+  state-directory probes, git worktree availability, plugin runtime health,
+  bridge runtime state, and remote-environment/session facts.
+- Plugin diagnostics classify discovered plugins into ready, warning, disabled,
+  and blocked buckets using the same runtime facts exposed by `plugin_manage`.
+- Provider diagnostics report detected protocol family, tool/streaming/reasoning
+  traits, and message-normalization requirements from the shared provider
+  capability detector.
 
 Validation so far:
 
@@ -1292,8 +1301,11 @@ Validation so far:
 - `scripts/install.sh --version` - passed, reported `0.1.0`.
 - `scripts/install.sh --dry-run --release --features experimental-api-server --prefix /tmp/priority-agent-install-smoke`
   - passed without writing files.
+- `cargo test -q diagnostics` - passed, 22 tests.
+- `cargo test -q doctor` - passed, 4 tests.
 - `cargo fmt --check` - passed.
 - `cargo check -q` - passed.
+- `cargo clippy --all-features -- -D warnings` - passed.
 - `git diff --check` - passed.
 - `.github/workflows/`
 - `docs/`
