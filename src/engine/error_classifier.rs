@@ -7,6 +7,17 @@
 
 use std::fmt;
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProviderRecoveryFacts {
+    pub category: String,
+    pub action: String,
+    pub retryable: bool,
+    pub attempt: u32,
+    pub should_retry: bool,
+    pub backoff_ms: u64,
+    pub next_step: String,
+}
+
 /// 错误恢复策略
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecoveryAction {
@@ -145,6 +156,36 @@ impl ClassifiedError {
         // 指数退避
         let ms = base_ms * 2u64.pow(self.attempt.min(5));
         std::time::Duration::from_millis(ms)
+    }
+
+    pub fn recovery_facts(&self) -> ProviderRecoveryFacts {
+        let next_step = match &self.action {
+            RecoveryAction::Retry => "retry provider request".to_string(),
+            RecoveryAction::RetryWithBackoff { .. } => {
+                "wait for backoff, then retry provider request".to_string()
+            }
+            RecoveryAction::CompressAndRetry => {
+                "compact context, then retry provider request".to_string()
+            }
+            RecoveryAction::RotateCredential => {
+                "check provider credentials or rotate API key".to_string()
+            }
+            RecoveryAction::FallbackModel => "switch to fallback model".to_string(),
+            RecoveryAction::ReduceTokensAndRetry => {
+                "reduce requested output tokens, then retry".to_string()
+            }
+            RecoveryAction::Abort => "stop automatic retry and surface error".to_string(),
+        };
+
+        ProviderRecoveryFacts {
+            category: self.category.to_string(),
+            action: self.action.to_string(),
+            retryable: self.retryable,
+            attempt: self.attempt,
+            should_retry: self.should_retry(),
+            backoff_ms: self.backoff_duration().as_millis() as u64,
+            next_step,
+        }
     }
 }
 
@@ -417,6 +458,10 @@ mod tests {
             ErrorClassifier::from_http(400, "This model's maximum context length is 128000 tokens");
         assert_eq!(err.category, ErrorCategory::ContextOverflow);
         assert_eq!(err.action, RecoveryAction::CompressAndRetry);
+        let facts = err.recovery_facts();
+        assert_eq!(facts.category, "context_overflow");
+        assert_eq!(facts.action, "compress and retry");
+        assert!(facts.next_step.contains("compact context"));
     }
 
     #[test]
@@ -428,6 +473,9 @@ mod tests {
         assert_eq!(err.category, ErrorCategory::ProviderProtocol);
         assert_eq!(err.action, RecoveryAction::Abort);
         assert!(!err.retryable);
+        let facts = err.recovery_facts();
+        assert_eq!(facts.category, "provider_protocol");
+        assert_eq!(facts.next_step, "stop automatic retry and surface error");
     }
 
     #[test]

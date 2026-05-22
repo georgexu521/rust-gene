@@ -4,8 +4,10 @@
 //! providers accept before the request is serialized.
 
 use crate::services::api::{normalize_tool_message_sequence, Message};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderProtocolFamily {
     OpenAiCompatible,
     MiniMax,
@@ -26,7 +28,7 @@ impl ProviderProtocolFamily {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderCapabilities {
     pub protocol_family: ProviderProtocolFamily,
     pub supports_tool_calls: bool,
@@ -113,6 +115,65 @@ impl ProviderCapabilities {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRuntimeFacts {
+    pub model: String,
+    pub protocol_family: ProviderProtocolFamily,
+    pub supports_tool_calls: bool,
+    pub supports_streaming_tool_calls: bool,
+    pub supports_streaming_usage: bool,
+    pub supports_reasoning_tokens: bool,
+    pub requires_nonstreaming_tool_calls: bool,
+    pub requires_merged_system_messages: bool,
+    pub requires_tool_result_adjacency: bool,
+    pub normalization: Vec<String>,
+    pub diagnostics: Vec<String>,
+}
+
+impl ProviderRuntimeFacts {
+    pub fn detect(base_url: &str, model: &str) -> Self {
+        Self::from_capabilities(model, ProviderCapabilities::detect(base_url, model))
+    }
+
+    pub fn from_capabilities(model: &str, capabilities: ProviderCapabilities) -> Self {
+        let mut normalization = vec!["tool_result_sequence:sanitize".to_string()];
+        if capabilities.requires_merged_system_messages {
+            normalization.push("system_messages:merge".to_string());
+        }
+        if capabilities.requires_tool_result_adjacency {
+            normalization.push("tool_results:adjacent_to_tool_calls".to_string());
+        }
+
+        let mut diagnostics = Vec::new();
+        if capabilities.requires_nonstreaming_tool_calls {
+            diagnostics.push("tool calls require non-streaming request path".to_string());
+        }
+        if !capabilities.supports_streaming_usage {
+            diagnostics.push("streaming usage deltas unavailable".to_string());
+        }
+        if capabilities.supports_reasoning_tokens {
+            diagnostics.push("reasoning token accounting supported".to_string());
+        }
+        if diagnostics.is_empty() {
+            diagnostics.push("provider uses standard OpenAI-compatible streaming path".to_string());
+        }
+
+        Self {
+            model: model.to_string(),
+            protocol_family: capabilities.protocol_family,
+            supports_tool_calls: capabilities.supports_tool_calls,
+            supports_streaming_tool_calls: capabilities.supports_streaming_tool_calls,
+            supports_streaming_usage: capabilities.supports_streaming_usage,
+            supports_reasoning_tokens: capabilities.supports_reasoning_tokens,
+            requires_nonstreaming_tool_calls: capabilities.requires_nonstreaming_tool_calls,
+            requires_merged_system_messages: capabilities.requires_merged_system_messages,
+            requires_tool_result_adjacency: capabilities.requires_tool_result_adjacency,
+            normalization,
+            diagnostics,
+        }
+    }
+}
+
 pub fn normalize_messages_for_provider(
     family: ProviderProtocolFamily,
     messages: Vec<Message>,
@@ -192,6 +253,40 @@ mod tests {
         assert!(!capabilities.supports_streaming_tool_calls);
         assert!(capabilities.requires_nonstreaming_tool_calls);
         assert!(capabilities.requires_merged_system_messages);
+    }
+
+    #[test]
+    fn provider_runtime_facts_explain_minimax_constraints() {
+        let facts = ProviderRuntimeFacts::detect("https://api.minimaxi.com/v1", "MiniMax-M2.7");
+
+        assert_eq!(facts.protocol_family, ProviderProtocolFamily::MiniMax);
+        assert!(facts.requires_nonstreaming_tool_calls);
+        assert!(facts.requires_merged_system_messages);
+        assert!(facts
+            .normalization
+            .contains(&"system_messages:merge".to_string()));
+        assert!(facts
+            .diagnostics
+            .iter()
+            .any(|line| line.contains("non-streaming")));
+    }
+
+    #[test]
+    fn provider_runtime_facts_describe_standard_openai_path() {
+        let facts = ProviderRuntimeFacts::detect("https://api.openai.com/v1", "gpt-4.1");
+
+        assert_eq!(
+            facts.protocol_family,
+            ProviderProtocolFamily::OpenAiCompatible
+        );
+        assert!(facts.supports_streaming_tool_calls);
+        assert!(facts
+            .normalization
+            .contains(&"tool_result_sequence:sanitize".to_string()));
+        assert!(facts
+            .diagnostics
+            .iter()
+            .any(|line| line.contains("standard OpenAI-compatible")));
     }
 
     #[test]

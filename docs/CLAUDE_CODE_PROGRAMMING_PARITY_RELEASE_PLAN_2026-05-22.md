@@ -1185,6 +1185,13 @@ Progress on 2026-05-22:
 - Remote runtime snapshots now summarize detected environment, saved session
   count, connected/error session counts, sorted session ids, and retry-oriented
   diagnostics without attempting network connections.
+- Provider protocol capabilities now produce runtime facts for detected family,
+  tool/streaming/reasoning support, provider-specific normalization
+  requirements, and diagnostic notes such as non-streaming tool-call
+  requirements.
+- Classified provider errors now expose structured recovery facts with category,
+  action, retryability, backoff, and concrete next-step guidance for context,
+  protocol, rate-limit, auth, and transient failures.
 
 Validation so far:
 
@@ -1207,6 +1214,14 @@ Validation so far:
 - `cargo test -q remote_trigger` - passed, 4 tests after bridge snapshot support.
 - `cargo test -q runtime_bridge_state` - passed, 0 matching tests but compiled
   the filter target.
+- `cargo test -q provider_runtime_facts` - passed, 2 tests for provider
+  capability diagnostics.
+- `cargo test -q provider_protocol` - passed, 14 tests after provider runtime
+  facts support.
+- `cargo test -q error_classifier` - passed, 10 tests after recovery-facts
+  support.
+- `cargo test -q provider` - passed, 51 tests after provider runtime-facts
+  support.
 - `cargo check -q` - passed.
 
 ## Phase 10: Release Hardening
