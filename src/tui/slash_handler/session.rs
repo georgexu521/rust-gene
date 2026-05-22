@@ -7,7 +7,7 @@ use super::utils::*;
 use crate::agent::agent::AgentConfig;
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
-use crate::engine::checkpoint::{FileChangeRecord, RestoreResult};
+use crate::engine::checkpoint::{FileChangeRecord, FileChangeRoundSummary, RestoreResult};
 use crate::tools::Tool;
 use crate::tui::app::TuiApp;
 use tokio::process::Command;
@@ -73,10 +73,11 @@ pub async fn handle_rewind(app: &mut TuiApp, args: &str) -> String {
         crate::engine::checkpoint::get_checkpoint_manager(&checkpoint_session_id).await;
     let checkpoint_guard = checkpoint_manager.lock().await;
     let file_changes = checkpoint_guard.list_file_changes().to_vec();
+    let file_change_rounds = checkpoint_guard.list_file_change_rounds();
 
     if trimmed.is_empty() {
         if !file_changes.is_empty() {
-            return format_rewind_file_history(&file_changes);
+            return format_rewind_file_history(&file_changes, &file_change_rounds);
         }
         match app.session_manager.list_edits(&raw_session_id) {
             Ok(edits) => {
@@ -138,16 +139,18 @@ pub async fn handle_rewind(app: &mut TuiApp, args: &str) -> String {
         }
         results.join("\n")
     } else if matches!(trimmed, "last-round" | "latest-round") {
+        let summary = checkpoint_guard.latest_file_change_round();
         match checkpoint_guard.restore_latest_tool_round().await {
-            Ok(result) => format_rewind_round_restore_result(result),
+            Ok(result) => format_rewind_round_restore_result(result, summary),
             Err(err) => format!(
                 "Failed to rewind latest tool round: {}\nUse /checkpoints to list recent file changes.",
                 err
             ),
         }
     } else if trimmed.starts_with("round_") {
+        let summary = checkpoint_guard.file_change_round(trimmed);
         match checkpoint_guard.restore_tool_round(trimmed).await {
-            Ok(result) => format_rewind_round_restore_result(result),
+            Ok(result) => format_rewind_round_restore_result(result, summary),
             Err(err) => format!(
                 "Failed to rewind tool round {}: {}\nUse /checkpoints to list recent file changes.",
                 trimmed, err
@@ -230,6 +233,7 @@ async fn checkpoint_diff_for_target(app: &TuiApp, target: &str) -> Option<(Strin
         crate::engine::checkpoint::get_checkpoint_manager(&checkpoint_session_id).await;
     let checkpoint_guard = checkpoint_manager.lock().await;
     let file_changes = checkpoint_guard.list_file_changes();
+    let file_change_rounds = checkpoint_guard.list_file_change_rounds();
     if file_changes.is_empty() {
         return None;
     }
@@ -237,8 +241,21 @@ async fn checkpoint_diff_for_target(app: &TuiApp, target: &str) -> Option<(Strin
     if target == "history" {
         return Some((
             "File change history".to_string(),
-            format_rewind_file_history(file_changes),
+            format_rewind_file_history(file_changes, &file_change_rounds),
         ));
+    }
+
+    if target.is_empty() || matches!(target, "last-round" | "latest-round") {
+        if let Some(summary) = file_change_rounds.last() {
+            return Some(format_tool_round_diff(summary));
+        }
+    } else if target.starts_with("round_") {
+        if let Some(summary) = file_change_rounds
+            .iter()
+            .find(|summary| summary.tool_round_id.as_deref() == Some(target))
+        {
+            return Some(format_tool_round_diff(summary));
+        }
     }
 
     let change = if target.is_empty() || matches!(target, "last-file" | "latest-file") {
@@ -271,8 +288,30 @@ fn looks_like_git_diff_target(target: &str) -> bool {
         || target.starts_with('-')
 }
 
-fn format_rewind_file_history(file_changes: &[FileChangeRecord]) -> String {
+fn format_rewind_file_history(
+    file_changes: &[FileChangeRecord],
+    file_change_rounds: &[FileChangeRoundSummary],
+) -> String {
     let mut lines = vec!["Recent checkpoint-backed file changes:".to_string()];
+    if !file_change_rounds.is_empty() {
+        lines.push("Recent tool rounds:".to_string());
+        for (idx, summary) in file_change_rounds.iter().rev().take(10).enumerate() {
+            let round = summary
+                .tool_round_id
+                .as_deref()
+                .unwrap_or("<single change>");
+            lines.push(format!(
+                "{}. {} | {} change(s), {} file(s), {} bytes",
+                idx + 1,
+                round,
+                summary.change_count,
+                summary.paths.len(),
+                summary.total_bytes_written
+            ));
+        }
+        lines.push(String::new());
+        lines.push("Recent file changes:".to_string());
+    }
     for (idx, change) in file_changes.iter().rev().enumerate().take(10) {
         let before = change
             .before_hash
@@ -306,6 +345,32 @@ fn format_rewind_file_history(file_changes: &[FileChangeRecord]) -> String {
             .to_string(),
     );
     lines.join("\n")
+}
+
+fn format_tool_round_diff(summary: &FileChangeRoundSummary) -> (String, String) {
+    let title = format!(
+        "Tool round diff: {}",
+        summary
+            .tool_round_id
+            .as_deref()
+            .unwrap_or("<single change>")
+    );
+    let content = summary
+        .combined_diff
+        .clone()
+        .filter(|diff| !diff.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "No stored diff for tool round {}.\nChanges: {}\nFiles: {}",
+                summary
+                    .tool_round_id
+                    .as_deref()
+                    .unwrap_or("<single change>"),
+                summary.change_count,
+                summary.paths.join(", ")
+            )
+        });
+    (title, content)
 }
 
 fn latest_file_change_for_path<'a>(
@@ -361,6 +426,7 @@ fn format_rewind_restore_result(result: RestoreResult) -> String {
 
 fn format_rewind_round_restore_result(
     result: crate::engine::checkpoint::ToolRoundRestoreResult,
+    summary: Option<FileChangeRoundSummary>,
 ) -> String {
     let mut lines = vec![format!(
         "Rewound {} file change(s) from tool round.",
@@ -368,6 +434,13 @@ fn format_rewind_round_restore_result(
     )];
     if let Some(round_id) = result.tool_round_id.as_deref() {
         lines.push(format!("Tool round: {}", round_id));
+    }
+    if let Some(summary) = summary.as_ref() {
+        lines.push(format!(
+            "Round summary: {} file(s), {} bytes.",
+            summary.paths.len(),
+            summary.total_bytes_written
+        ));
     }
     for restore in result.results {
         lines.push(format_rewind_restore_result(restore));
@@ -684,6 +757,25 @@ pub async fn handle_checkpoints(app: &TuiApp) -> String {
 
     let file_changes = cp.list_file_changes();
     if !file_changes.is_empty() {
+        let file_change_rounds = cp.list_file_change_rounds();
+        if !file_change_rounds.is_empty() {
+            lines.push(String::new());
+            lines.push("Recent tool rounds:".to_string());
+            for summary in file_change_rounds.iter().rev().take(10) {
+                let round = summary
+                    .tool_round_id
+                    .as_deref()
+                    .unwrap_or("<single change>");
+                lines.push(format!(
+                    "{} | {} change(s), {} file(s), {} bytes | {}",
+                    round,
+                    summary.change_count,
+                    summary.paths.len(),
+                    summary.total_bytes_written,
+                    summary.paths.join(", ")
+                ));
+            }
+        }
         lines.push(String::new());
         lines.push("Recent file changes:".to_string());
         for change in file_changes.iter().rev().take(10) {

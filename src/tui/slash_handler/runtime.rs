@@ -2,7 +2,7 @@
 
 use super::utils::*;
 
-use crate::engine::checkpoint::RestoreResult;
+use crate::engine::checkpoint::{FileChangeRoundSummary, RestoreResult};
 use crate::tools::Tool;
 use crate::tui::app::TuiApp;
 
@@ -203,8 +203,9 @@ async fn handle_file_change_rollback(app: &TuiApp, target: &str) -> String {
     let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
     let cp = mgr.lock().await;
     if matches!(target, "last-round" | "latest-round") {
+        let summary = cp.latest_file_change_round();
         return match cp.restore_latest_tool_round().await {
-            Ok(result) => format_tool_round_rollback_result(result),
+            Ok(result) => format_tool_round_rollback_result(result, summary),
             Err(err) => format!(
                 "Failed to rollback tool round: {}\nUse /checkpoints to list recent file changes.",
                 err
@@ -212,8 +213,9 @@ async fn handle_file_change_rollback(app: &TuiApp, target: &str) -> String {
         };
     }
     if target.starts_with("round_") {
+        let summary = cp.file_change_round(target);
         return match cp.restore_tool_round(target).await {
-            Ok(result) => format_tool_round_rollback_result(result),
+            Ok(result) => format_tool_round_rollback_result(result, summary),
             Err(err) => format!(
                 "Failed to rollback tool round: {}\nUse /checkpoints to list recent file changes.",
                 err
@@ -238,6 +240,7 @@ async fn handle_file_change_rollback(app: &TuiApp, target: &str) -> String {
 
 fn format_tool_round_rollback_result(
     result: crate::engine::checkpoint::ToolRoundRestoreResult,
+    summary: Option<FileChangeRoundSummary>,
 ) -> String {
     let mut lines = vec![format!(
         "Restored {} file change(s) from tool round.",
@@ -245,6 +248,13 @@ fn format_tool_round_rollback_result(
     )];
     if let Some(round_id) = result.tool_round_id.as_deref() {
         lines.push(format!("Tool round: {}", round_id));
+    }
+    if let Some(summary) = summary.as_ref() {
+        lines.push(format!(
+            "Round summary: {} file(s), {} bytes.",
+            summary.paths.len(),
+            summary.total_bytes_written
+        ));
     }
     for restore in result.results {
         lines.push(format_file_change_rollback_result(restore));

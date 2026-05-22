@@ -1377,6 +1377,11 @@ The next concrete batches should be:
      whole-round `rewind` results include the same round summary metadata.
 5. **TUI product pass for coding loop.**
    Polish status, tool output, diff, approval, tasks, agents, and context panels.
+   - Progress on 2026-05-22: TUI slash-command paths now surface the same
+     checkpoint-backed tool-round summaries: `/rewind` history lists recent
+     rounds, whole-round rewind/rollback reports include round file/byte totals,
+     `/checkpoints` lists recent rounds before individual file changes, and
+     `/diff last-round` shows the combined stored diff for the latest round.
 6. **Subagent lifecycle hardening.**
    Make worker progress, output, cancellation, merge, and cleanup reliable.
 7. **Context/memory long-session pass.**
