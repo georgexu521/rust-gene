@@ -1200,6 +1200,7 @@ Validation so far:
 - `cargo test -q mcp_status_action` - passed, 1 test for structured CLI status
   data.
 - `cargo test -q mcp` - passed, 29 tests after MCP runtime-facts support.
+- `cargo test -q mcp_tool` - passed, 4 tests after MCP runtime-facts support.
 - `cargo test -q runtime_facts` - passed, 4 tests including plugin runtime
   readiness classification.
 - `cargo test -q plugin_manage_status` - passed, 1 test for structured plugin
@@ -1222,6 +1223,7 @@ Validation so far:
   support.
 - `cargo test -q provider` - passed, 51 tests after provider runtime-facts
   support.
+- `cargo check --features experimental-api-server -q` - passed.
 - `cargo check -q` - passed.
 
 ## Phase 10: Release Hardening
