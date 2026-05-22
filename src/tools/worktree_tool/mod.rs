@@ -850,4 +850,50 @@ mod tests {
         assert_eq!(agent.branch.as_deref(), Some("codex/agent-1234"));
         assert_eq!(agent.path, PathBuf::from("/tmp/agent-worktree"));
     }
+
+    #[test]
+    fn worktree_status_helpers_detect_dirty_and_untracked_paths() {
+        assert!(!status_is_dirty(""));
+        assert!(!status_is_dirty("\n\n"));
+        assert!(status_is_dirty(" M src/main.rs\n"));
+        assert_eq!(
+            untracked_paths("?? tmp/new.rs\n M src/main.rs\n?? docs/note.md\n"),
+            vec!["tmp/new.rs".to_string(), "docs/note.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn branch_delete_safety_only_allows_agent_branches() {
+        assert!(is_safe_agent_branch("codex/agent-1234"));
+        assert!(is_safe_agent_branch("refs/heads/codex/agent-1234"));
+        assert!(!is_safe_agent_branch("main"));
+        assert!(!is_safe_agent_branch("codex/feature"));
+        assert!(!is_safe_agent_branch("refs/heads/codex/feature"));
+    }
+
+    #[test]
+    fn rejects_non_isolated_agent_task_for_worktree_actions() {
+        let state = crate::session_store::AgentTaskStateRecord {
+            id: 1,
+            session_id: "s1".to_string(),
+            task_id: "task_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("explorer".to_string()),
+            role: "plan".to_string(),
+            status: "completed".to_string(),
+            description: "inspect code".to_string(),
+            transcript_path: None,
+            tool_ids_in_progress: Vec::new(),
+            permission_requests: Vec::new(),
+            result_artifact_id: None,
+            cleanup_hooks: Vec::new(),
+            payload: json!({}),
+            created_at: "now".to_string(),
+            updated_at: "now".to_string(),
+        };
+
+        let err = extract_agent_worktree(&state).expect_err("non-isolated task should fail");
+
+        assert!(err.contains("not an isolated worktree task"));
+    }
 }
