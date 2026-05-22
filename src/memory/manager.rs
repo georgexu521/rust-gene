@@ -48,6 +48,84 @@ fn normalized_contains(existing: &str, candidate: &str) -> bool {
     !normalized_candidate.is_empty() && normalized_existing.contains(&normalized_candidate)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct BackgroundMemoryWriteDecision {
+    source: String,
+    status: MemoryStatus,
+    quality_score: Option<f32>,
+    wrote: bool,
+    duplicate: bool,
+    reason: String,
+}
+
+fn write_background_memory_candidate(
+    path: &Path,
+    candidate: &str,
+    source: &str,
+) -> BackgroundMemoryWriteDecision {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let assessment = match assess_memory_candidate(candidate, "learned", &existing, false) {
+        Ok(assessment) => assessment,
+        Err(issue) => {
+            return BackgroundMemoryWriteDecision {
+                source: source.to_string(),
+                status: MemoryStatus::Rejected,
+                quality_score: None,
+                wrote: false,
+                duplicate: false,
+                reason: format!("blocked_by_safety:{issue:?}"),
+            };
+        }
+    };
+
+    if assessment.duplication >= 0.85 || normalized_contains(&existing, candidate) {
+        return BackgroundMemoryWriteDecision {
+            source: source.to_string(),
+            status: assessment.status,
+            quality_score: Some(assessment.score),
+            wrote: false,
+            duplicate: true,
+            reason: "duplicate_memory".to_string(),
+        };
+    }
+
+    if assessment.status != MemoryStatus::Accepted {
+        return BackgroundMemoryWriteDecision {
+            source: source.to_string(),
+            status: assessment.status,
+            quality_score: Some(assessment.score),
+            wrote: false,
+            duplicate: false,
+            reason: assessment.reason,
+        };
+    }
+
+    let entry = format!(
+        "- [{}] {}\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M"),
+        candidate
+    );
+    let new_content = format!("{}{}", existing, entry);
+    match write_memory_file_atomically(path, &new_content) {
+        Ok(()) => BackgroundMemoryWriteDecision {
+            source: source.to_string(),
+            status: MemoryStatus::Accepted,
+            quality_score: Some(assessment.score),
+            wrote: true,
+            duplicate: false,
+            reason: assessment.reason,
+        },
+        Err(error) => BackgroundMemoryWriteDecision {
+            source: source.to_string(),
+            status: MemoryStatus::Accepted,
+            quality_score: Some(assessment.score),
+            wrote: false,
+            duplicate: false,
+            reason: format!("write_failed:{error}"),
+        },
+    }
+}
+
 fn collect_memory_key_values(
     content: &str,
     out: &mut std::collections::HashMap<String, HashSet<String>>,
@@ -814,31 +892,18 @@ impl MemoryManager {
             if forked_mode && !heuristic.is_empty() {
                 // Forked 模式：先写启发式结果（作为 cache hit）
                 for learning in &heuristic {
-                    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-                    let Ok(assessment) =
-                        assess_memory_candidate(learning, "learned", &existing, false)
-                    else {
-                        debug!("Background heuristic memory blocked by safety scanner");
-                        continue;
-                    };
-                    if assessment.status != MemoryStatus::Accepted {
+                    let decision =
+                        write_background_memory_candidate(&path, learning, "background_heuristic");
+                    if decision.wrote {
                         debug!(
-                            "Background heuristic memory skipped ({:?}): {}",
-                            assessment.status, assessment.reason
+                            "Background heuristic memory accepted (quality={:?})",
+                            decision.quality_score
                         );
-                        continue;
-                    }
-                    if normalized_contains(&existing, learning) {
-                        continue;
-                    }
-                    let entry = format!(
-                        "- [{}] {}\n",
-                        chrono::Local::now().format("%Y-%m-%d %H:%M"),
-                        learning
-                    );
-                    let new_content = format!("{}{}", existing, entry);
-                    if let Err(e) = write_memory_file_atomically(&path, &new_content) {
-                        debug!("Failed to write heuristic memory: {}", e);
+                    } else {
+                        debug!(
+                            "Background heuristic memory skipped ({:?}, duplicate={}): {}",
+                            decision.status, decision.duplicate, decision.reason
+                        );
                     }
                 }
                 debug!(
@@ -895,31 +960,18 @@ Return exactly the word NONE if there is nothing critical to remember.";
 
                         // 写入文件（不依赖 MemoryManager 内部状态）
                         for bullet in bullets {
-                            let existing = std::fs::read_to_string(&path).unwrap_or_default();
-                            let Ok(assessment) =
-                                assess_memory_candidate(&bullet, "learned", &existing, false)
-                            else {
-                                debug!("Background LLM memory blocked by safety scanner");
-                                continue;
-                            };
-                            if assessment.status != MemoryStatus::Accepted {
+                            let decision =
+                                write_background_memory_candidate(&path, &bullet, "background_llm");
+                            if decision.wrote {
                                 debug!(
-                                    "Background LLM memory skipped ({:?}): {}",
-                                    assessment.status, assessment.reason
+                                    "Background LLM memory accepted (quality={:?})",
+                                    decision.quality_score
                                 );
-                                continue;
-                            }
-                            if normalized_contains(&existing, &bullet) {
-                                continue;
-                            }
-                            let entry = format!(
-                                "- [{}] {}\n",
-                                chrono::Local::now().format("%Y-%m-%d %H:%M"),
-                                bullet
-                            );
-                            let new_content = format!("{}{}", existing, entry);
-                            if let Err(e) = write_memory_file_atomically(&path, &new_content) {
-                                debug!("Failed to write LLM memory: {}", e);
+                            } else {
+                                debug!(
+                                    "Background LLM memory skipped ({:?}, duplicate={}): {}",
+                                    decision.status, decision.duplicate, decision.reason
+                                );
                             }
                         }
                     }
@@ -3322,6 +3374,46 @@ Always check logs first.
             !user_memory.contains("sk-123456789012345678901234"),
             "blocked sensitive content must not be written to USER.md"
         );
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_background_memory_candidate_applies_safety_gate() {
+        let base = temp_memory_base("background-memory-quality-gate");
+        let path = base.join("MEMORY.md");
+        let sensitive = "The API token is sk-123456789012345678901234";
+
+        let decision = write_background_memory_candidate(&path, sensitive, "background_heuristic");
+
+        assert!(!decision.wrote);
+        assert_eq!(decision.status, MemoryStatus::Rejected);
+        assert!(decision.quality_score.is_none());
+        assert!(decision.reason.contains("blocked_by_safety"));
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .contains("sk-123456789012345678901234"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_background_memory_candidate_skips_duplicate_after_quality_gate() {
+        let base = temp_memory_base("background-memory-duplicate-gate");
+        let path = base.join("MEMORY.md");
+        let content =
+            "Project convention: run cargo test --quiet before committing Rust workflow changes.";
+
+        let first = write_background_memory_candidate(&path, content, "background_llm");
+        let before = std::fs::read_to_string(&path).unwrap_or_default();
+        let second = write_background_memory_candidate(&path, content, "background_llm");
+        let after = std::fs::read_to_string(&path).unwrap_or_default();
+
+        assert!(first.wrote);
+        assert!(!second.wrote);
+        assert!(second.duplicate);
+        assert_eq!(second.reason, "duplicate_memory");
+        assert_eq!(before, after);
 
         let _ = std::fs::remove_dir_all(base);
     }

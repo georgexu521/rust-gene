@@ -1076,6 +1076,10 @@ Progress on 2026-05-22:
 - The `context` tool now supports `action=explain`, which reports retained
   memory/retrieval items and skill triggers with inclusion reasons, provenance,
   trust, conflict status, and token estimates.
+- Background memory extraction now writes through a single quality/safety
+  decision path that records source, status, quality score, duplicate status,
+  write outcome, and reason before any background heuristic or LLM bullet is
+  appended.
 
 Validation so far:
 
@@ -1088,6 +1092,9 @@ Validation so far:
 - `cargo test -q context_budget_controller` - passed, 5 tests.
 - `cargo test -q memory_sync_controller` - passed, 4 tests.
 - `cargo test -q retained_context` - passed, 1 test.
+- `cargo test -q background_memory_candidate` - passed, 2 tests.
+- `cargo test -q memory::manager` - passed, 38 tests after background memory
+  write-gate consolidation.
 
 ## Phase 9: MCP, Plugins, Bridge, Remote, And Providers
 

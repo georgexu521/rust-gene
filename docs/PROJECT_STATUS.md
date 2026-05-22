@@ -102,7 +102,10 @@ Current stage:
   compact boundaries, and session-memory signals. The `context` tool now has an
   `action=explain` path that reports retained memory/retrieval and skill
   inclusion reasons with provenance, trust, conflict status, and token
-  estimates.
+  estimates. Background heuristic and LLM memory extraction now share one
+  strict write-gate decision path before appending bullets, with source, status,
+  quality score, duplicate status, write outcome, and reason captured in the
+  decision.
 - Phase 12 verification work has completed its local deterministic replay and
   external-baseline ingestion surfaces: `src/engine/scenario_matrix.rs`
   declares the six required parity scenarios and maps each one to concrete
