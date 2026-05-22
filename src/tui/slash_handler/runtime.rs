@@ -187,7 +187,11 @@ pub async fn handle_rollback(app: &mut TuiApp, args: &str) -> String {
 }
 
 fn is_file_change_rollback_target(target: &str) -> bool {
-    matches!(target, "last-file" | "latest-file") || target.starts_with("fc_")
+    matches!(
+        target,
+        "last-file" | "latest-file" | "last-round" | "latest-round"
+    ) || target.starts_with("fc_")
+        || target.starts_with("round_")
 }
 
 async fn handle_file_change_rollback(app: &TuiApp, target: &str) -> String {
@@ -198,6 +202,25 @@ async fn handle_file_change_rollback(app: &TuiApp, target: &str) -> String {
 
     let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
     let cp = mgr.lock().await;
+    if matches!(target, "last-round" | "latest-round") {
+        return match cp.restore_latest_tool_round().await {
+            Ok(result) => format_tool_round_rollback_result(result),
+            Err(err) => format!(
+                "Failed to rollback tool round: {}\nUse /checkpoints to list recent file changes.",
+                err
+            ),
+        };
+    }
+    if target.starts_with("round_") {
+        return match cp.restore_tool_round(target).await {
+            Ok(result) => format_tool_round_rollback_result(result),
+            Err(err) => format!(
+                "Failed to rollback tool round: {}\nUse /checkpoints to list recent file changes.",
+                err
+            ),
+        };
+    }
+
     let result = if matches!(target, "last-file" | "latest-file") {
         cp.restore_latest_file_change().await
     } else {
@@ -211,6 +234,22 @@ async fn handle_file_change_rollback(app: &TuiApp, target: &str) -> String {
             err
         ),
     }
+}
+
+fn format_tool_round_rollback_result(
+    result: crate::engine::checkpoint::ToolRoundRestoreResult,
+) -> String {
+    let mut lines = vec![format!(
+        "Restored {} file change(s) from tool round.",
+        result.restored_changes.len()
+    )];
+    if let Some(round_id) = result.tool_round_id.as_deref() {
+        lines.push(format!("Tool round: {}", round_id));
+    }
+    for restore in result.results {
+        lines.push(format_file_change_rollback_result(restore));
+    }
+    lines.join("\n")
 }
 
 fn format_file_change_rollback_result(result: RestoreResult) -> String {

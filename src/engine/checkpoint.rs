@@ -76,6 +76,9 @@ pub struct FileChangeRecord {
     pub tool_name: String,
     /// Provider/model tool call ID when available.
     pub tool_call_id: Option<String>,
+    /// Stable ID for the assistant tool-call round that produced this change.
+    #[serde(default)]
+    pub tool_round_id: Option<String>,
     /// Mutation time.
     pub timestamp: DateTime<Local>,
     /// Mutated file path.
@@ -98,6 +101,7 @@ pub struct FileChangeInput {
     pub checkpoint_id: String,
     pub tool_name: String,
     pub tool_call_id: Option<String>,
+    pub tool_round_id: Option<String>,
     pub path: String,
     pub existed_before: bool,
     pub before_hash: Option<String>,
@@ -386,6 +390,7 @@ impl CheckpointManager {
             session_id: self.session_id.clone(),
             tool_name: input.tool_name,
             tool_call_id: input.tool_call_id,
+            tool_round_id: input.tool_round_id,
             timestamp: Local::now(),
             path: input.path,
             existed_before: input.existed_before,
@@ -552,6 +557,55 @@ impl CheckpointManager {
             .ok_or_else(|| "No file changes recorded for this session".to_string())?;
 
         self.restore_checkpoint(checkpoint_id).await
+    }
+
+    /// Restore all file changes from the latest assistant tool-call round.
+    pub async fn restore_latest_tool_round(&self) -> Result<ToolRoundRestoreResult, String> {
+        let latest = self
+            .file_changes
+            .last()
+            .ok_or_else(|| "No file changes recorded for this session".to_string())?;
+        let Some(round_id) = latest.tool_round_id.as_deref() else {
+            let result = self.restore_checkpoint(&latest.checkpoint_id).await?;
+            return Ok(ToolRoundRestoreResult {
+                tool_round_id: None,
+                restored_changes: vec![latest.id.clone()],
+                results: vec![result],
+            });
+        };
+
+        self.restore_tool_round(round_id).await
+    }
+
+    /// Restore all file changes from a specific assistant tool-call round.
+    pub async fn restore_tool_round(
+        &self,
+        tool_round_id: impl AsRef<str>,
+    ) -> Result<ToolRoundRestoreResult, String> {
+        let tool_round_id = tool_round_id.as_ref();
+        let mut changes = self
+            .file_changes
+            .iter()
+            .filter(|record| record.tool_round_id.as_deref() == Some(tool_round_id))
+            .collect::<Vec<_>>();
+        if changes.is_empty() {
+            return Err(format!("Tool round {} not found", tool_round_id));
+        }
+        changes.sort_by_key(|record| std::cmp::Reverse(record.checkpoint_sequence));
+
+        let mut results = Vec::new();
+        let mut restored_changes = Vec::new();
+        for change in changes {
+            let result = self.restore_checkpoint(&change.checkpoint_id).await?;
+            restored_changes.push(change.id.clone());
+            results.push(result);
+        }
+
+        Ok(ToolRoundRestoreResult {
+            tool_round_id: Some(tool_round_id.to_string()),
+            restored_changes,
+            results,
+        })
     }
 
     /// 查找更早的 backup（用于当前 checkpoint 的 backup 文件缺失时回退）
@@ -727,6 +781,14 @@ pub struct RestoreResult {
     pub restored_files: Vec<String>,
     pub failed_files: Vec<(String, String)>,
     pub removed_files: Vec<String>,
+}
+
+/// Restore result for all file changes in one assistant tool-call round.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolRoundRestoreResult {
+    pub tool_round_id: Option<String>,
+    pub restored_changes: Vec<String>,
+    pub results: Vec<RestoreResult>,
 }
 
 /// 文件 diff 状态
@@ -906,6 +968,7 @@ mod tests {
                 checkpoint_id: cp.id.clone(),
                 tool_name: "file_edit".to_string(),
                 tool_call_id: Some("call_1".to_string()),
+                tool_round_id: Some("round_1".to_string()),
                 path: test_file.to_string_lossy().to_string(),
                 existed_before: true,
                 before_hash: Some("before-hash".to_string()),
@@ -948,6 +1011,7 @@ mod tests {
                 checkpoint_id: cp.id.clone(),
                 tool_name: "file_write".to_string(),
                 tool_call_id: None,
+                tool_round_id: None,
                 path: test_file.to_string_lossy().to_string(),
                 existed_before: false,
                 before_hash: None,
@@ -974,6 +1038,80 @@ mod tests {
         let restored = loaded.restore_file_change(&record.id).await.unwrap();
         assert_eq!(restored.removed_files.len(), 1);
         assert!(!test_file.exists());
+    }
+
+    #[tokio::test]
+    async fn test_restore_latest_tool_round_restores_all_round_changes() {
+        let temp = TempDir::new().unwrap();
+        let first = temp.path().join("first.txt");
+        let second = temp.path().join("second.txt");
+        std::fs::write(&first, "first-before").unwrap();
+        std::fs::write(&second, "second-before").unwrap();
+
+        let session_id = format!("test_tool_round_{}", Uuid::new_v4().simple());
+        let mut mgr = CheckpointManager::new(&session_id).await;
+        mgr.checkpoints_dir = temp.path().join("checkpoints").join(&session_id);
+        mgr.checkpoints.clear();
+        mgr.tracked_files.clear();
+        mgr.file_changes.clear();
+        mgr.sequence_counter = 0;
+
+        let round_id = Some("round_same".to_string());
+        let first_cp = mgr
+            .create_checkpoint(
+                "file_edit",
+                None,
+                Some("call_1".to_string()),
+                &[first.clone()],
+            )
+            .await
+            .unwrap();
+        std::fs::write(&first, "first-after").unwrap();
+        mgr.record_file_change(FileChangeInput {
+            checkpoint_id: first_cp.id,
+            tool_name: "file_edit".to_string(),
+            tool_call_id: Some("call_1".to_string()),
+            tool_round_id: round_id.clone(),
+            path: first.to_string_lossy().to_string(),
+            existed_before: true,
+            before_hash: Some("first-before".to_string()),
+            after_hash: Some("first-after".to_string()),
+            diff: Some("first diff".to_string()),
+            bytes_written: 11,
+        })
+        .await
+        .unwrap();
+
+        let second_cp = mgr
+            .create_checkpoint(
+                "file_edit",
+                None,
+                Some("call_2".to_string()),
+                &[second.clone()],
+            )
+            .await
+            .unwrap();
+        std::fs::write(&second, "second-after").unwrap();
+        mgr.record_file_change(FileChangeInput {
+            checkpoint_id: second_cp.id,
+            tool_name: "file_edit".to_string(),
+            tool_call_id: Some("call_2".to_string()),
+            tool_round_id: round_id.clone(),
+            path: second.to_string_lossy().to_string(),
+            existed_before: true,
+            before_hash: Some("second-before".to_string()),
+            after_hash: Some("second-after".to_string()),
+            diff: Some("second diff".to_string()),
+            bytes_written: 12,
+        })
+        .await
+        .unwrap();
+
+        let restored = mgr.restore_latest_tool_round().await.unwrap();
+        assert_eq!(restored.tool_round_id, round_id);
+        assert_eq!(restored.restored_changes.len(), 2);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "first-before");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "second-before");
     }
 
     #[tokio::test]

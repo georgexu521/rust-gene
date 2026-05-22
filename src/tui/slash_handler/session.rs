@@ -137,6 +137,22 @@ pub async fn handle_rewind(app: &mut TuiApp, args: &str) -> String {
             }
         }
         results.join("\n")
+    } else if matches!(trimmed, "last-round" | "latest-round") {
+        match checkpoint_guard.restore_latest_tool_round().await {
+            Ok(result) => format_rewind_round_restore_result(result),
+            Err(err) => format!(
+                "Failed to rewind latest tool round: {}\nUse /checkpoints to list recent file changes.",
+                err
+            ),
+        }
+    } else if trimmed.starts_with("round_") {
+        match checkpoint_guard.restore_tool_round(trimmed).await {
+            Ok(result) => format_rewind_round_restore_result(result),
+            Err(err) => format!(
+                "Failed to rewind tool round {}: {}\nUse /checkpoints to list recent file changes.",
+                trimmed, err
+            ),
+        }
     } else if matches!(trimmed, "last-file" | "latest-file") {
         match checkpoint_guard.restore_latest_file_change().await {
             Ok(result) => format_rewind_restore_result(result),
@@ -268,19 +284,25 @@ fn format_rewind_file_history(file_changes: &[FileChangeRecord]) -> String {
             .as_deref()
             .map(short_hash)
             .unwrap_or("unknown");
+        let round = change
+            .tool_round_id
+            .as_deref()
+            .map(|round| format!(" | round {}", round))
+            .unwrap_or_default();
         lines.push(format!(
-            "{}. {} [{}] {} bytes {} -> {} | {}",
+            "{}. {} [{}] {} bytes {} -> {} | {}{}",
             idx + 1,
             change.id,
             change.tool_name,
             change.bytes_written,
             before,
             after,
-            change.path
+            change.path,
+            round
         ));
     }
     lines.push(
-        "\nUse /rewind 1, /rewind last-file, /rewind <file_change_id>, or /rewind <file_path>."
+        "\nUse /rewind 1, /rewind last-file, /rewind last-round, /rewind <file_change_id>, /rewind <tool_round_id>, or /rewind <file_path>."
             .to_string(),
     );
     lines.join("\n")
@@ -333,6 +355,22 @@ fn format_rewind_restore_result(result: RestoreResult) -> String {
                 .iter()
                 .map(|(path, err)| format!("  {}: {}", path, err)),
         );
+    }
+    lines.join("\n")
+}
+
+fn format_rewind_round_restore_result(
+    result: crate::engine::checkpoint::ToolRoundRestoreResult,
+) -> String {
+    let mut lines = vec![format!(
+        "Rewound {} file change(s) from tool round.",
+        result.restored_changes.len()
+    )];
+    if let Some(round_id) = result.tool_round_id.as_deref() {
+        lines.push(format!("Tool round: {}", round_id));
+    }
+    for restore in result.results {
+        lines.push(format_rewind_restore_result(restore));
     }
     lines.join("\n")
 }
@@ -659,13 +697,24 @@ pub async fn handle_checkpoints(app: &TuiApp) -> String {
                 .as_deref()
                 .map(short_hash)
                 .unwrap_or("unknown");
+            let round = change
+                .tool_round_id
+                .as_deref()
+                .map(|round| format!(" | round {}", round))
+                .unwrap_or_default();
             lines.push(format!(
-                "{} [{}] {} bytes {} -> {} | {}",
-                change.id, change.tool_name, change.bytes_written, before, after, change.path
+                "{} [{}] {} bytes {} -> {} | {}{}",
+                change.id,
+                change.tool_name,
+                change.bytes_written,
+                before,
+                after,
+                change.path,
+                round
             ));
         }
         lines.push(
-            "\nUse /rollback last-file --yes to restore the newest file change, or /rollback <file_change_id> --yes."
+            "\nUse /rollback last-file --yes, /rollback last-round --yes, /rollback <file_change_id> --yes, or /rollback <tool_round_id> --yes."
                 .to_string(),
         );
     }

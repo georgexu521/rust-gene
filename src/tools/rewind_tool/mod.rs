@@ -2,7 +2,7 @@
 //!
 //! Restore checkpoint-backed file changes from the shared file history.
 
-use crate::engine::checkpoint::{FileChangeRecord, RestoreResult};
+use crate::engine::checkpoint::{FileChangeRecord, RestoreResult, ToolRoundRestoreResult};
 use crate::tools::Tool;
 use crate::tools::ToolContext;
 use crate::tools::ToolResult;
@@ -18,7 +18,7 @@ impl Tool for RewindTool {
     }
 
     fn description(&self) -> &str {
-        "Rewind checkpoint-backed file changes. Supports latest_file_change, file_change_id, checkpoint_id, path, or legacy steps=1."
+        "Rewind checkpoint-backed file changes. Supports latest_file_change, latest_tool_round, tool_round_id, file_change_id, checkpoint_id, path, or legacy steps=1."
     }
 
     fn parameters(&self) -> Value {
@@ -27,12 +27,12 @@ impl Tool for RewindTool {
             "properties": {
                 "target": {
                     "type": "string",
-                    "enum": ["latest_file_change", "file_change_id", "checkpoint_id", "path"],
+                    "enum": ["latest_file_change", "latest_tool_round", "tool_round_id", "file_change_id", "checkpoint_id", "path"],
                     "description": "What to restore. Defaults to latest_file_change."
                 },
                 "id": {
                     "type": "string",
-                    "description": "File change ID (fc_...) or checkpoint ID (cp_...), depending on target."
+                    "description": "File change ID (fc_...), checkpoint ID (cp_...), or tool round ID (round_...), depending on target."
                 },
                 "path": {
                     "type": "string",
@@ -57,6 +57,22 @@ impl Tool for RewindTool {
             .get("target")
             .and_then(|v| v.as_str())
             .unwrap_or("latest_file_change");
+
+        if target == "latest_tool_round" {
+            return match checkpoint_guard.restore_latest_tool_round().await {
+                Ok(result) => rewind_round_success_result(result),
+                Err(err) => ToolResult::error(format!("Failed to rewind tool round: {}", err)),
+            };
+        }
+        if target == "tool_round_id" {
+            let Some(id) = params.get("id").and_then(|v| v.as_str()) else {
+                return ToolResult::error("id is required for target=tool_round_id");
+            };
+            return match checkpoint_guard.restore_tool_round(id).await {
+                Ok(result) => rewind_round_success_result(result),
+                Err(err) => ToolResult::error(format!("Failed to rewind tool round: {}", err)),
+            };
+        }
 
         let restore_result = match target {
             "latest_file_change" => {
@@ -156,6 +172,59 @@ fn rewind_success_result(result: RestoreResult) -> ToolResult {
     )
 }
 
+fn rewind_round_success_result(result: ToolRoundRestoreResult) -> ToolResult {
+    let restored_files = result
+        .results
+        .iter()
+        .map(|restore| restore.restored_files.len())
+        .sum::<usize>();
+    let removed_files = result
+        .results
+        .iter()
+        .map(|restore| restore.removed_files.len())
+        .sum::<usize>();
+    let failed_files = result
+        .results
+        .iter()
+        .flat_map(|restore| {
+            restore
+                .failed_files
+                .iter()
+                .map(|(path, error)| json!({ "path": path, "error": error }))
+        })
+        .collect::<Vec<_>>();
+    let mut lines = vec![format!(
+        "Rewound {} file change(s) from tool round.",
+        result.restored_changes.len()
+    )];
+    if let Some(round_id) = result.tool_round_id.as_deref() {
+        lines.push(format!("Tool round: {}", round_id));
+    }
+    if restored_files > 0 {
+        lines.push(format!("Restored {} file(s).", restored_files));
+    }
+    if removed_files > 0 {
+        lines.push(format!(
+            "Removed {} file(s) that did not exist before the round.",
+            removed_files
+        ));
+    }
+    if !failed_files.is_empty() {
+        lines.push(format!("Failed to restore {} file(s).", failed_files.len()));
+    }
+
+    ToolResult::success_with_data(
+        lines.join("\n"),
+        json!({
+            "tool_round_id": result.tool_round_id,
+            "restored_changes": result.restored_changes,
+            "results": result.results,
+            "failed_files": failed_files,
+            "success": failed_files.is_empty(),
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +251,7 @@ mod tests {
                 checkpoint_id: checkpoint.id,
                 tool_name: "file_write".to_string(),
                 tool_call_id: None,
+                tool_round_id: None,
                 path: file.to_string_lossy().to_string(),
                 existed_before: true,
                 before_hash: Some("before_hash".to_string()),

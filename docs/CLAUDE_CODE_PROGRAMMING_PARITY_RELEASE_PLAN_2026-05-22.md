@@ -681,12 +681,16 @@ Progress on 2026-05-22:
   `/rollback last-file` now use the actual active TUI session ID when reading
   checkpoints instead of a prefixed derived ID, matching the session ID used by
   file tools when they create file history.
+- File change records now include a `tool_round_id` derived from the parent
+  assistant tool-call round. `rewind` and TUI slash rollback can restore the
+  latest tool round or a specified round ID, giving Phase 4 a practical
+  whole-turn rollback path for multi-tool file changes.
 
 Validation so far:
 
 - `cargo test -q rewind_tool` - passed, 1 test.
 - `cargo test -q diff_tool` - passed, 3 tests.
-- `cargo test -q checkpoint` - passed, 33 tests.
+- `cargo test -q checkpoint` - passed, 34 tests.
 - `cargo test -q slash_handler` - passed, 49 tests.
 - `cargo check -q` - passed.
 - `cargo fmt --check` - passed.

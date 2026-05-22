@@ -66,6 +66,7 @@ pub(super) async fn record_file_change(
         checkpoint_id: checkpoint.id.clone(),
         tool_name: request.tool_name.to_string(),
         tool_call_id: context.metadata.get("tool_call_id").cloned(),
+        tool_round_id: tool_round_id(context),
         path: request.path.to_string_lossy().to_string(),
         existed_before: request.existed_before,
         before_hash: request.before_content.map(stable_text_hash),
@@ -110,6 +111,7 @@ fn file_change_record_json(record: &FileChangeRecord) -> Value {
         "session_id": record.session_id.clone(),
         "tool_name": record.tool_name.clone(),
         "tool_call_id": record.tool_call_id.clone(),
+        "tool_round_id": record.tool_round_id.clone(),
         "timestamp": record.timestamp.to_rfc3339(),
         "path": record.path.clone(),
         "existed_before": record.existed_before,
@@ -118,6 +120,23 @@ fn file_change_record_json(record: &FileChangeRecord) -> Value {
         "diff": record.diff.clone(),
         "bytes_written": record.bytes_written,
     })
+}
+
+fn tool_round_id(context: &ToolContext) -> Option<String> {
+    if context.parent_assistant_tool_calls.is_empty() {
+        return context
+            .metadata
+            .get("tool_call_id")
+            .map(|id| format!("round_{}", stable_text_hash(id)));
+    }
+
+    let mut ids = context
+        .parent_assistant_tool_calls
+        .iter()
+        .map(|tool_call| tool_call.id.as_str())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    Some(format!("round_{}", stable_text_hash(&ids.join("|"))))
 }
 
 fn stable_text_hash(content: &str) -> String {

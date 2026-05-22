@@ -178,13 +178,19 @@ async fn checkpoint_history_result(context: &ToolContext) -> ToolResult {
 
     let mut lines = vec!["Recent checkpoint-backed file changes:".to_string()];
     for (idx, change) in file_changes.iter().rev().take(20).enumerate() {
+        let round = change
+            .tool_round_id
+            .as_deref()
+            .map(|round| format!(" | round {}", round))
+            .unwrap_or_default();
         lines.push(format!(
-            "{}. {} [{}] {} bytes | {}",
+            "{}. {} [{}] {} bytes | {}{}",
             idx + 1,
             change.id,
             change.tool_name,
             change.bytes_written,
-            change.path
+            change.path,
+            round
         ));
     }
     ToolResult::success_with_data(
@@ -300,6 +306,7 @@ mod tests {
                 checkpoint_id: checkpoint.id,
                 tool_name: "file_write".to_string(),
                 tool_call_id: None,
+                tool_round_id: None,
                 path: file.to_string_lossy().to_string(),
                 existed_before: true,
                 before_hash: Some("before_hash".to_string()),
