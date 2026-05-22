@@ -72,10 +72,11 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-expandable-preview summary", { hasText: "Output preview" })).toBeVisible();
     await page.locator(".timeline-expandable-preview summary", { hasText: "Output preview" }).click();
     await expect(page.locator(".timeline-output-preview", { hasText: "timeline_cards_show_diff_preview" })).toBeVisible();
+    await expect(page.locator(".timeline-event.usage", { hasText: "Token usage" })).toBeVisible();
     await expect(page.locator(".timeline-event.permission", { hasText: "Allow git push" })).toBeVisible();
     await page.locator(".timeline-event.permission .timeline-actions button", { hasText: "Approve" }).click();
     await expect(page.locator(".timeline-event.permission", { hasText: "Permission approved" })).toBeVisible();
-    await page.locator(".timeline-event", { hasText: "Pnpm Test" }).getByRole("button", { name: "Debug" }).click();
+    await page.locator(".timeline-event", { hasText: "Pnpm Test" }).getByRole("button", { name: "Open trace for Pnpm Test" }).click();
     await expect(page.getByRole("complementary", { name: "Run trace" })).toBeVisible();
     await expect(page.locator(".trace-item.active", { hasText: "Tool completed" })).toBeVisible();
     await page.getByRole("complementary", { name: "Run trace" }).getByRole("button", { name: "Close" }).click();

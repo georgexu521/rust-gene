@@ -126,6 +126,29 @@ function TimelineEvent({
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenTrace?: (traceId: string) => void;
 }) {
+  if (item.kind === "usage") {
+    return (
+      <article className="timeline-event usage">
+        <Clock3 aria-hidden="true" size={13} />
+        <div className="timeline-usage-content">
+          <span>{item.title}</span>
+          {item.detail ? <span>{item.detail}</span> : null}
+        </div>
+        {item.traceId && onOpenTrace ? (
+          <button
+            aria-label={`Open trace for ${item.title}`}
+            className="timeline-debug-link"
+            title="Open trace"
+            type="button"
+            onClick={() => onOpenTrace(item.traceId!)}
+          >
+            Trace
+          </button>
+        ) : null}
+      </article>
+    );
+  }
+
   return (
     <article className={`timeline-event ${item.kind} ${item.status || "info"}`}>
       <div className="timeline-icon" aria-hidden="true">
@@ -159,12 +182,14 @@ function TimelineEvent({
         ) : null}
         {item.traceId && onOpenTrace ? (
           <button
+            aria-label={`Open trace for ${item.title}`}
             className="timeline-debug-link"
+            title="Open trace"
             type="button"
             onClick={() => onOpenTrace(item.traceId!)}
           >
-            <Bug aria-hidden="true" size={13} />
-            <span>Debug</span>
+            <Bug aria-hidden="true" size={12} />
+            <span>Trace</span>
           </button>
         ) : null}
       </div>

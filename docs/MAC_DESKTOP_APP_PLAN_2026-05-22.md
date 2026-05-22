@@ -646,7 +646,8 @@ states, so normal transcript reading no longer depends on opening trace first.
 It also aggregates multi-tool runs into compact stats for tool count, failures,
 file changes, validations, and recovery guidance. Assistant replies that follow
 run/tool activity are now marked as final answers, giving conclusions a clearer
-visual rhythm after the process timeline.
+visual rhythm after the process timeline. Low-value usage and trace controls are
+now visually quieter so the main transcript reads less like a debug log.
 
 #### Track C - Session And Project Ergonomics
 
