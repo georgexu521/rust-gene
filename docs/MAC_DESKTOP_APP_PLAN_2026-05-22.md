@@ -683,6 +683,11 @@ cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
 cargo check -q
 ```
 
+Status: started. `apps/desktop/tests/run-event-state.spec.ts` now covers the
+core pure state transitions for user submit, run completion, assistant delta
+coalescing, shell/file timeline summaries, permission answers, and session
+message loading.
+
 #### Track E - Release-Quality Desktop Hardening
 
 - Add app-level crash/log diagnostics and a visible way to open diagnostic logs.
