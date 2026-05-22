@@ -42,6 +42,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-run-stats span", { hasText: "3 tools" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();
+    await expect(page.locator(".message.assistant.final", { hasText: "Final answer" })).toBeVisible();
     await expect(page.locator(".timeline-title", { hasText: "Pnpm Test" })).toBeVisible();
     await expect(
       page.locator(".timeline-summary code", {

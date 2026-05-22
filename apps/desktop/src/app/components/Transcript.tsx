@@ -47,8 +47,16 @@ export function Transcript({
               onOpenTrace={onOpenTrace}
             />
           ) : (
-            <article className={`message ${item.role}`} key={item.id}>
-              <div className="message-label">{formatRole(item.role)}</div>
+            <article
+              className={`message ${item.role}${item.role === "assistant" && item.variant === "final" ? " final" : ""}`}
+              key={item.id}
+            >
+              <div className="message-label">
+                <span>{formatRole(item.role)}</span>
+                {item.role === "assistant" && item.variant === "final" ? (
+                  <span className="message-badge">Final answer</span>
+                ) : null}
+              </div>
               <div className="message-body">{item.text}</div>
             </article>
           ),

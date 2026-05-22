@@ -455,10 +455,25 @@ function appendAssistantDelta(
 ): TranscriptItem[] {
   const last = items[items.length - 1];
   if (last?.role === "assistant") {
-    return [...items.slice(0, -1), { ...last, text: last.text + text }];
+    return [
+      ...items.slice(0, -1),
+      {
+        ...last,
+        text: last.text + text,
+        variant: last.variant || (hasRunActivitySinceLastUser(items) ? "final" : undefined),
+      },
+    ];
   }
 
-  return [...items, { id: createId(), role: "assistant", text }];
+  return [
+    ...items,
+    {
+      id: createId(),
+      role: "assistant",
+      text,
+      variant: hasRunActivitySinceLastUser(items) ? "final" : undefined,
+    },
+  ];
 }
 
 function appendToolNote(
@@ -605,24 +620,24 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
   }
   if (index < 0) {
     return [
-      ...items,
+      ...markLatestAssistantAsFinal(items),
       timelineEvent({
         id: `run-completed-${Date.now()}`,
         kind: "run",
         title: "Agent run",
-      summary: {
-        kind: "run",
-        stage: "completed",
-        headline: "Run completed",
-        detail: "No active run was found in the transcript",
-        stats: runStats(items),
-      },
+        summary: {
+          kind: "run",
+          stage: "completed",
+          headline: "Run completed",
+          detail: "No active run was found in the transcript",
+          stats: runStats(items),
+        },
         status: "completed",
       }),
     ];
   }
 
-  const nextItems = [...items];
+  const nextItems = [...markLatestAssistantAsFinal(items)];
   const item = nextItems[index];
   if (item.role === "timeline") {
     nextItems[index] = {
@@ -640,6 +655,48 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
     };
   }
   return nextItems;
+}
+
+function markLatestAssistantAsFinal(items: TranscriptItem[]): TranscriptItem[] {
+  const lastAssistantIndex = findLatestIndex(items, (item) => item.role === "assistant");
+  if (lastAssistantIndex < 0 || !hasRunActivitySinceLastUser(items)) {
+    return items;
+  }
+
+  const nextItems = [...items];
+  const item = nextItems[lastAssistantIndex];
+  if (item.role === "assistant") {
+    nextItems[lastAssistantIndex] = {
+      ...item,
+      variant: "final",
+    };
+  }
+  return nextItems;
+}
+
+function hasRunActivitySinceLastUser(items: TranscriptItem[]): boolean {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.role === "user") {
+      return false;
+    }
+    if (item.role === "timeline" && (item.kind === "run" || item.kind === "tool")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findLatestIndex(
+  items: TranscriptItem[],
+  predicate: (item: TranscriptItem) => boolean,
+): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function runCompletionDetail(items: TranscriptItem[]): string {

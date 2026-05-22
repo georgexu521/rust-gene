@@ -643,12 +643,32 @@ h1 {
   background: #f7f8fa;
 }
 
+.message.assistant.final {
+  margin-top: 8px;
+  padding: 12px 0 4px;
+  border-top: 1px solid #dfe5ec;
+}
+
 .message-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin-bottom: 4px;
   color: var(--text-soft);
   font-size: 10px;
   font-weight: 750;
   text-transform: uppercase;
+}
+
+.message-badge {
+  padding: 2px 6px;
+  border: 1px solid #d9e1ea;
+  border-radius: 999px;
+  color: #56606c;
+  background: #f8fafc;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .message-body {
@@ -658,6 +678,12 @@ h1 {
 
 .message.assistant .message-body {
   font-size: 15px;
+}
+
+.message.assistant.final .message-body {
+  color: #20252c;
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 .message.assistant .message-label {

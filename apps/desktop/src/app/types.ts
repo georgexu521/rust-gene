@@ -2,7 +2,7 @@ import { DesktopRunEvent } from "../runtime/desktopApi";
 
 export type TranscriptItem =
   | { id: string; role: "user"; text: string }
-  | { id: string; role: "assistant"; text: string }
+  | { id: string; role: "assistant"; text: string; variant?: "final" }
   | { id: string; role: "tool"; text: string }
   | {
       id: string;

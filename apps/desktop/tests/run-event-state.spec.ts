@@ -201,6 +201,63 @@ test.describe("run event state", () => {
     ]);
   });
 
+  test("marks assistant text after tool activity as the final answer", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+    }).state;
+    const toolStarted = applyRunEvent(started, {
+      type: "tool_started",
+      id: "tool-1",
+      name: "bash",
+    }).state;
+    const toolCompleted = applyRunEvent(toolStarted, {
+      type: "tool_completed",
+      id: "tool-1",
+      result_preview: "ok",
+      metadata: {
+        tool: "bash",
+        success: true,
+      },
+    }).state;
+    const firstDelta = applyRunEvent(
+      toolCompleted,
+      { type: "assistant_delta", text: "Done" },
+      ids("assistant-1"),
+    ).state;
+    const secondDelta = applyRunEvent(firstDelta, {
+      type: "assistant_delta",
+      text: ".",
+    }).state;
+
+    expect(secondDelta.items).toContainEqual({
+      id: "assistant-1",
+      role: "assistant",
+      text: "Done.",
+      variant: "final",
+    });
+  });
+
+  test("marks an existing assistant answer as final when the run completes", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+    }).state;
+    const answered = applyRunEvent(
+      started,
+      { type: "assistant_delta", text: "Summary" },
+      ids("assistant-1"),
+    ).state;
+    const completed = applyRunEvent(answered, { type: "run_completed" }).state;
+
+    expect(completed.items).toContainEqual({
+      id: "assistant-1",
+      role: "assistant",
+      text: "Summary",
+      variant: "final",
+    });
+  });
+
   test("renders shell validation metadata as a specialized timeline summary", () => {
     const started = applyRunEvent(initialRunViewState, {
       type: "tool_started",
