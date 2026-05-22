@@ -105,7 +105,9 @@ Current stage:
   estimates. Background heuristic and LLM memory extraction now share one
   strict write-gate decision path before appending bullets, with source, status,
   quality score, duplicate status, write outcome, and reason captured in the
-  decision.
+  decision. Skill matching now produces compact activation evidence for matched
+  keywords and fields, and `skills_list action=explain` reports why a skill
+  matched without loading full skill bodies into the prompt.
 - Phase 12 verification work has completed its local deterministic replay and
   external-baseline ingestion surfaces: `src/engine/scenario_matrix.rs`
   declares the six required parity scenarios and maps each one to concrete

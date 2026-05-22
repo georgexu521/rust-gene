@@ -85,26 +85,75 @@ pub struct Skill {
     pub modified: Option<std::time::SystemTime>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SkillMatchEvidence {
+    pub skill: String,
+    pub description: String,
+    pub matched_keywords: Vec<String>,
+    pub matched_fields: Vec<String>,
+    pub triggers: Vec<String>,
+    pub provenance: String,
+}
+
 impl Skill {
     /// 检查 skill 是否匹配给定关键词
     pub fn matches(&self, keywords: &[String]) -> bool {
+        self.match_evidence(keywords).is_some()
+    }
+
+    pub fn match_evidence(&self, keywords: &[String]) -> Option<SkillMatchEvidence> {
         if keywords.is_empty() {
-            return false;
+            return None;
         }
         let lower_name = self.meta.name.to_lowercase();
         let lower_desc = self.meta.description.to_lowercase();
         let lower_content = self.content.to_lowercase();
+        let lower_triggers = self
+            .meta
+            .triggers
+            .iter()
+            .map(|trigger| trigger.to_lowercase())
+            .collect::<Vec<_>>();
 
-        keywords.iter().any(|kw| {
-            let kw_lower = kw.to_lowercase();
-            lower_name.contains(&kw_lower)
-                || lower_desc.contains(&kw_lower)
-                || self
-                    .meta
-                    .triggers
-                    .iter()
-                    .any(|t| t.to_lowercase().contains(&kw_lower))
-                || lower_content.contains(&kw_lower)
+        let mut matched_keywords = Vec::new();
+        let mut matched_fields = Vec::new();
+        for keyword in keywords {
+            let kw_lower = keyword.to_lowercase();
+            let mut fields = Vec::new();
+            if lower_name.contains(&kw_lower) {
+                fields.push("name");
+            }
+            if lower_desc.contains(&kw_lower) {
+                fields.push("description");
+            }
+            if lower_triggers
+                .iter()
+                .any(|trigger| trigger.contains(&kw_lower))
+            {
+                fields.push("trigger");
+            }
+            if lower_content.contains(&kw_lower) {
+                fields.push("body");
+            }
+            if !fields.is_empty() {
+                matched_keywords.push(keyword.clone());
+                for field in fields {
+                    if !matched_fields.iter().any(|existing| existing == field) {
+                        matched_fields.push(field.to_string());
+                    }
+                }
+            }
+        }
+        if matched_keywords.is_empty() {
+            return None;
+        }
+        Some(SkillMatchEvidence {
+            skill: self.meta.name.clone(),
+            description: self.meta.description.clone(),
+            matched_keywords,
+            matched_fields,
+            triggers: self.meta.triggers.clone(),
+            provenance: format!("skill_match:{}", self.skill_dir.display()),
         })
     }
 

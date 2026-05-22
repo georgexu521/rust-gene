@@ -1,7 +1,7 @@
 //! Runtime skill registry used by the Priority Agent CLI and tools.
 
 use super::registry::SkillRegistry;
-use super::types::Skill;
+use super::types::{Skill, SkillMatchEvidence};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -63,10 +63,7 @@ impl SkillRuntime {
     }
 
     pub fn search(&self, query: &str) -> Vec<&Skill> {
-        let keywords = query
-            .split_whitespace()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
+        let keywords = query_keywords(query);
         if keywords.is_empty() {
             return self.list();
         }
@@ -77,6 +74,20 @@ impl SkillRuntime {
             .collect::<Vec<_>>();
         matches.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
         matches
+    }
+
+    pub fn explain_matches(&self, query: &str, limit: usize) -> Vec<SkillMatchEvidence> {
+        let keywords = query_keywords(query);
+        if keywords.is_empty() {
+            return Vec::new();
+        }
+        let mut matches = self
+            .skills
+            .values()
+            .filter_map(|skill| skill.match_evidence(&keywords))
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.skill.cmp(&b.skill));
+        matches.into_iter().take(limit).collect()
     }
 
     pub fn discovery_summary(&self, query: &str, limit: usize) -> String {
@@ -113,6 +124,15 @@ impl SkillRuntime {
         self.invocation(name, task)
             .map(|invocation| invocation.prompt)
     }
+}
+
+fn query_keywords(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|keyword| !keyword.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>()
 }
 
 fn load_skills(project_root: &Path) -> HashMap<String, Skill> {

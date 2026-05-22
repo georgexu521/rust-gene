@@ -79,6 +79,12 @@ Always write meaningful commit messages."#;
         assert!(skill.matches(&["commit".to_string()]));
         assert!(skill.matches(&["git".to_string()]));
         assert!(!skill.matches(&["docker".to_string()]));
+
+        let evidence = skill.match_evidence(&["commit".to_string()]).unwrap();
+        assert_eq!(evidence.skill, "git-commit");
+        assert!(evidence.matched_fields.contains(&"name".to_string()));
+        assert!(evidence.matched_fields.contains(&"trigger".to_string()));
+        assert_eq!(evidence.matched_keywords, vec!["commit".to_string()]);
     }
 
     #[test]

@@ -1080,6 +1080,10 @@ Progress on 2026-05-22:
   decision path that records source, status, quality score, duplicate status,
   write outcome, and reason before any background heuristic or LLM bullet is
   appended.
+- Skill matching now produces compact activation evidence, including matched
+  keywords, matched fields (`name`, `description`, `trigger`, or `body`),
+  trigger metadata, and provenance. `skills_list action=explain` exposes those
+  reasons without loading full skill bodies into the prompt.
 
 Validation so far:
 
@@ -1095,6 +1099,8 @@ Validation so far:
 - `cargo test -q background_memory_candidate` - passed, 2 tests.
 - `cargo test -q memory::manager` - passed, 38 tests after background memory
   write-gate consolidation.
+- `cargo test -q skills` - passed, 14 tests after skill match evidence support.
+- `cargo test -q skill` - passed, 33 tests after `skills_list action=explain`.
 
 ## Phase 9: MCP, Plugins, Bridge, Remote, And Providers
 

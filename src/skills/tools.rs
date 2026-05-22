@@ -249,6 +249,11 @@ impl crate::tools::Tool for SkillListTool {
                 "query": {
                     "type": "string",
                     "description": "Optional search query to filter skills"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "explain"],
+                    "description": "list returns compact discovery summaries; explain returns why skills matched the query"
                 }
             }
         })
@@ -261,6 +266,46 @@ impl crate::tools::Tool for SkillListTool {
     ) -> crate::tools::ToolResult {
         let runtime = crate::skills::SkillRuntime::load(&context.working_dir);
         let query = params["query"].as_str().unwrap_or("").trim();
+        let action = params["action"].as_str().unwrap_or("list");
+        if action == "explain" {
+            if query.is_empty() {
+                return crate::tools::ToolResult::error("query is required for skills explain");
+            }
+            let evidence = runtime.explain_matches(query, 30);
+            if evidence.is_empty() {
+                return crate::tools::ToolResult::success_with_data(
+                    "No matching skills found.".to_string(),
+                    serde_json::json!({
+                        "query": query,
+                        "matches": [],
+                    }),
+                );
+            }
+            let mut lines = vec![format!(
+                "Skill inclusion reasons for '{}': {} match(es)",
+                query,
+                evidence.len()
+            )];
+            for item in &evidence {
+                lines.push(format!(
+                    "- {}: matched keywords [{}] in [{}]",
+                    item.skill,
+                    item.matched_keywords.join(", "),
+                    item.matched_fields.join(", ")
+                ));
+                if !item.triggers.is_empty() {
+                    lines.push(format!("  triggers={}", item.triggers.join(", ")));
+                }
+                lines.push(format!("  provenance={}", item.provenance));
+            }
+            return crate::tools::ToolResult::success_with_data(
+                lines.join("\n"),
+                serde_json::json!({
+                    "query": query,
+                    "matches": evidence,
+                }),
+            );
+        }
         let skills = runtime.search(query);
         if skills.is_empty() {
             return crate::tools::ToolResult::success("No matching skills found.".to_string());
@@ -355,5 +400,23 @@ mod tests {
         assert!(tool.description().contains("compact skill discovery"));
         assert!(tool.description().contains("when to load"));
         assert!(tool.description().contains("current task"));
+    }
+
+    #[tokio::test]
+    async fn skills_list_explain_reports_match_evidence_without_body() {
+        let tool = SkillListTool;
+        let result = tool
+            .execute(
+                serde_json::json!({"action": "explain", "query": "karpathy coding"}),
+                crate::tools::ToolContext::new(".", "s1"),
+            )
+            .await;
+
+        assert!(result.success, "skills explain failed: {:?}", result.error);
+        assert!(result.content.contains("Skill inclusion reasons"));
+        assert!(result.content.contains("karpathy-guidelines"));
+        assert!(result.content.contains("matched keywords"));
+        assert!(!result.content.contains("<skill-context>"));
+        assert_eq!(result.data.unwrap()["query"], "karpathy coding");
     }
 }
