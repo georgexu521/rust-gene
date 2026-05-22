@@ -35,6 +35,18 @@ impl Tool for ToolSearchTool {
         })
     }
 
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("load deferred tool schemas")
+    }
+
+    fn always_load(&self) -> bool {
+        true
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let query = params["query"].as_str().unwrap_or("").to_lowercase();
         let max_results = params["max_results"].as_u64().unwrap_or(5) as usize;
@@ -44,20 +56,31 @@ impl Tool for ToolSearchTool {
         }
 
         // Check for select: prefix — direct tool selection
-        if let Some(name) = query.strip_prefix("select:") {
-            let name = name.trim();
+        if let Some(names) = query.strip_prefix("select:") {
+            let requested: Vec<&str> = names
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .collect();
             let registry = crate::tools::ToolRegistry::default_registry();
-            if registry.has(name) {
-                return ToolResult::success_with_data(
-                    format!("Selected tool: {}", name),
-                    json!({ "matches": [name], "query": query }),
-                );
-            } else {
-                return ToolResult::success_with_data(
-                    format!("Tool '{}' not found", name),
-                    json!({ "matches": [], "query": query }),
-                );
+            let mut matches = Vec::new();
+            for name in requested {
+                if let Some(tool) = registry.get(name) {
+                    let canonical = tool.name().to_string();
+                    if !matches.iter().any(|item| item == &canonical) {
+                        matches.push(canonical);
+                    }
+                }
             }
+            let tools = tool_match_facts(&registry, &matches);
+            return ToolResult::success_with_data(
+                format!("Selected {} tool(s)", matches.len()),
+                json!({
+                    "matches": matches,
+                    "query": query,
+                    "tools": tools,
+                }),
+            );
         }
 
         let registry = crate::tools::ToolRegistry::default_registry();
@@ -70,6 +93,8 @@ impl Tool for ToolSearchTool {
             }
             let name = tool.name().to_lowercase();
             let desc = tool.description().to_lowercase();
+            let aliases = tool.aliases().join(" ").to_lowercase();
+            let search_hint = tool.search_hint().unwrap_or("").to_lowercase();
             let mut score = 0;
 
             for term in &terms {
@@ -77,6 +102,12 @@ impl Tool for ToolSearchTool {
                     score += 20;
                 } else if name.contains(term) {
                     score += 10;
+                } else if aliases.split_whitespace().any(|alias| alias == *term) {
+                    score += 15;
+                } else if aliases.contains(term) {
+                    score += 8;
+                } else if search_hint.contains(term) {
+                    score += 7;
                 } else if desc.contains(term) {
                     score += 5;
                 }
@@ -87,7 +118,7 @@ impl Tool for ToolSearchTool {
             }
         }
 
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let mut matches: Vec<String> = scored
             .into_iter()
             .map(|(name, _)| name)
@@ -123,11 +154,13 @@ impl Tool for ToolSearchTool {
             }
         }
 
+        let tools = tool_match_facts(&registry, &matches);
         ToolResult::success_with_data(
             format!("Found {} matching tools", matches.len()),
             json!({
                 "matches": matches,
                 "query": query,
+                "tools": tools,
                 "total_tools": registry.tool_names().len(),
                 "mcp_matches": mcp_matches,
                 "pending_mcp_servers": pending_mcp_servers,
@@ -136,6 +169,26 @@ impl Tool for ToolSearchTool {
             }),
         )
     }
+}
+
+fn tool_match_facts(
+    registry: &crate::tools::ToolRegistry,
+    matches: &[String],
+) -> Vec<serde_json::Value> {
+    matches
+        .iter()
+        .map(|name| match registry.get(name) {
+            Some(tool) => json!({
+                "name": tool.name(),
+                "aliases": tool.aliases(),
+                "search_hint": tool.search_hint(),
+                "should_defer": tool.should_defer(),
+                "always_load": tool.always_load(),
+                "strict_schema": tool.strict_schema(),
+            }),
+            None => json!({ "name": name }),
+        })
+        .collect()
 }
 
 async fn search_mcp_tools(
@@ -207,7 +260,7 @@ mod tests {
         let tool = ToolSearchTool;
         let result = tool
             .execute(
-                json!({"query": "select:file_read"}),
+                json!({"query": "select:read,file_edit"}),
                 ToolContext::new(".", "test"),
             )
             .await;
@@ -215,5 +268,27 @@ mod tests {
         let data = result.data.unwrap();
         let matches = data["matches"].as_array().unwrap();
         assert_eq!(matches[0], "file_read");
+        assert!(matches
+            .iter()
+            .any(|value| value.as_str() == Some("file_edit")));
+        assert_eq!(data["tools"][0]["aliases"], serde_json::json!(["read"]));
+        assert_eq!(data["tools"][0]["strict_schema"], true);
+    }
+
+    #[tokio::test]
+    async fn test_tool_search_uses_search_hints() {
+        let tool = ToolSearchTool;
+        let result = tool
+            .execute(
+                json!({"query": "directory entries", "max_results": 3}),
+                ToolContext::new(".", "test"),
+            )
+            .await;
+        assert!(result.success);
+        let data = result.data.unwrap();
+        let matches = data["matches"].as_array().unwrap();
+        assert!(matches
+            .iter()
+            .any(|value| value.as_str() == Some("file_read")));
     }
 }

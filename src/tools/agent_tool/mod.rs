@@ -8,7 +8,7 @@ use crate::agent::manager::AgentResult as ManagerAgentResult;
 use crate::agent::profiles::{AgentContextMode, AgentDefinition, AgentProfile};
 use crate::agent::roles::AgentRole;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -1305,6 +1305,29 @@ impl Tool for AgentTool {
             "agent: role={} template={} context_mode={} desc='{}' prompt='{}'",
             role, template, context_mode, desc, prompt_summary
         )
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("delegate subagent fork worktree")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Task
+    }
+
+    fn input_paths(&self, params: &serde_json::Value) -> Vec<String> {
+        params["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .map(str::to_string)
+            .collect()
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {

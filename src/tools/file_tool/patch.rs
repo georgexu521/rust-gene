@@ -105,6 +105,18 @@ impl Tool for FilePatchTool {
         format!("file_patch: {count} operation(s)")
     }
 
+    fn aliases(&self) -> &'static [&'static str] {
+        &["patch"]
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("coordinated multi file patch")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
     fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
         ToolOperationKind::Patch
     }
@@ -120,6 +132,17 @@ impl Tool for FilePatchTool {
     fn tool_use_summary(&self, params: &Value) -> Option<String> {
         let operations = params["operations"].as_array()?;
         Some(format!("{} operation(s)", operations.len()))
+    }
+
+    fn input_paths(&self, params: &Value) -> Vec<String> {
+        params["operations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|operation| operation.get("path").and_then(Value::as_str))
+            .filter(|path| !path.trim().is_empty())
+            .map(str::to_string)
+            .collect()
     }
 
     async fn execute(&self, params: Value, context: ToolContext) -> ToolResult {

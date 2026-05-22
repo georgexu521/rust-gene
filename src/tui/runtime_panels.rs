@@ -726,6 +726,13 @@ mod tests {
             latest_progress: None,
             result_preview: None,
             elapsed_ms: Some(1500),
+            operation_kind: Some("shell".to_string()),
+            ui_render_kind: Some("shell".to_string()),
+            read_only: Some(false),
+            concurrency_safe: Some(false),
+            destructive: Some(false),
+            input_paths: Vec::new(),
+            transcript_summary: Some("cargo test".to_string()),
         });
         app.runtime_state_snapshot
             .terminal_tasks

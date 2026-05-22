@@ -1,4 +1,4 @@
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -44,6 +44,18 @@ impl Tool for TodoWriteTool {
             },
             "required": ["todos"]
         })
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("update task checklist")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {

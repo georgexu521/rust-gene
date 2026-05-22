@@ -6,7 +6,9 @@ mod background;
 pub mod command_classifier;
 mod pty;
 
-use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolOperationKind, ToolResult};
+use crate::tools::{
+    Tool, ToolContext, ToolErrorCode, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics,
+};
 use async_trait::async_trait;
 use background::{background_shell_result_data, background_started_content};
 pub use background::{BashCancelTool, BashOutputTool, BashTasksTool};
@@ -713,6 +715,18 @@ impl Tool for BashTool {
         format!("bash: {}", cmd)
     }
 
+    fn aliases(&self) -> &'static [&'static str] {
+        &["shell"]
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("shell validation git package managers")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
     fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
         let command = params["command"].as_str().unwrap_or("");
         match classify_command(command).category {
@@ -737,6 +751,38 @@ impl Tool for BashTool {
     fn is_destructive(&self, params: &serde_json::Value) -> bool {
         let command = params["command"].as_str().unwrap_or("");
         classify_command(command).category == ShellCommandCategory::Destructive
+    }
+
+    fn is_search_or_read_command(&self, params: &serde_json::Value) -> ToolSearchOrReadSemantics {
+        let command = params["command"].as_str().unwrap_or("");
+        match classify_command(command).category {
+            ShellCommandCategory::Search => ToolSearchOrReadSemantics {
+                is_search: true,
+                ..Default::default()
+            },
+            ShellCommandCategory::Read => ToolSearchOrReadSemantics {
+                is_read: true,
+                ..Default::default()
+            },
+            ShellCommandCategory::List => ToolSearchOrReadSemantics {
+                is_list: true,
+                ..Default::default()
+            },
+            _ => ToolSearchOrReadSemantics::default(),
+        }
+    }
+
+    fn input_paths(&self, params: &serde_json::Value) -> Vec<String> {
+        let command = params["command"].as_str().unwrap_or("");
+        classify_command(command).path_patterns
+    }
+
+    fn permission_matcher_input(&self, params: &serde_json::Value) -> Option<String> {
+        params["command"]
+            .as_str()
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+            .map(str::to_string)
     }
 
     fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {

@@ -2,7 +2,7 @@
 //!
 //! 提供文件读取、写入、编辑功能
 
-use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde_json::json;
@@ -685,6 +685,18 @@ impl Tool for FileReadTool {
         format!("file_read: {}", path)
     }
 
+    fn aliases(&self) -> &'static [&'static str] {
+        &["read"]
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("view file contents directory entries")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
     fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
         ToolOperationKind::Read
     }
@@ -695,6 +707,13 @@ impl Tool for FileReadTool {
 
     fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
         true
+    }
+
+    fn is_search_or_read_command(&self, _params: &serde_json::Value) -> ToolSearchOrReadSemantics {
+        ToolSearchOrReadSemantics {
+            is_read: true,
+            ..Default::default()
+        }
     }
 
     fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
@@ -939,6 +958,18 @@ impl Tool for FileWriteTool {
         let path = params["path"].as_str().unwrap_or("");
         let content_len = params["content"].as_str().map(|s| s.len()).unwrap_or(0);
         format!("file_write: {} ({} bytes)", path, content_len)
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["write"]
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("create overwrite files")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
     }
 
     fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
@@ -1462,6 +1493,18 @@ impl Tool for FileEditTool {
             "insert"
         };
         format!("file_edit: {} ({})", path, mode)
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["edit"]
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("replace insert file text")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
     }
 
     fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {

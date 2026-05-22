@@ -263,6 +263,38 @@ pub enum ToolOperationKind {
     Other,
 }
 
+/// How the runtime should handle a new user message while a tool is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolInterruptBehavior {
+    #[default]
+    Block,
+    Cancel,
+}
+
+/// Compact UI/search semantics for read-like tool calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ToolSearchOrReadSemantics {
+    pub is_search: bool,
+    pub is_read: bool,
+    pub is_list: bool,
+}
+
+/// Preferred rendering lane for tool rows and future TUI panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolUiRenderKind {
+    #[default]
+    Generic,
+    File,
+    Shell,
+    Search,
+    Task,
+    Network,
+    Mcp,
+    Diff,
+}
+
 /// 工具元数据（schema 标准化）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolSchema {
@@ -286,6 +318,20 @@ pub struct ToolSchema {
     pub input_schema: Option<Value>,
     /// 输出定义
     pub output_schema: Option<Value>,
+    /// Backward-compatible tool names.
+    pub aliases: Vec<String>,
+    /// Keyword hint for deferred tool search.
+    pub search_hint: Option<String>,
+    /// Whether the tool should be hidden behind tool_search when supported.
+    pub should_defer: bool,
+    /// Whether the tool must always be present in the initial schema list.
+    pub always_load: bool,
+    /// Whether providers that support strict tool schemas should enable it.
+    pub strict_schema: bool,
+    /// Interrupt behavior for long-running invocations.
+    pub interrupt_behavior: ToolInterruptBehavior,
+    /// Whether a real user interaction is part of the tool contract.
+    pub requires_user_interaction: bool,
 }
 
 impl ToolSchema {
@@ -302,6 +348,17 @@ impl ToolSchema {
             estimated_duration_ms: tool.estimated_duration_ms(),
             input_schema: None,
             output_schema: tool.output_schema(),
+            aliases: tool
+                .aliases()
+                .iter()
+                .map(|alias| alias.to_string())
+                .collect(),
+            search_hint: tool.search_hint().map(str::to_string),
+            should_defer: tool.should_defer(),
+            always_load: tool.always_load(),
+            strict_schema: tool.strict_schema(),
+            interrupt_behavior: tool.interrupt_behavior(),
+            requires_user_interaction: tool.requires_user_interaction(),
         }
     }
 }
@@ -386,6 +443,109 @@ pub trait Tool: Send + Sync {
             ToolOperationKind::Network
         } else {
             ToolOperationKind::Other
+        }
+    }
+
+    /// Backward-compatible names that should resolve to this tool.
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Short keyword phrase used by tool_search when this tool is deferred.
+    fn search_hint(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Whether this tool should be hidden behind tool_search when available.
+    fn should_defer(&self) -> bool {
+        false
+    }
+
+    /// Whether this tool must always be sent even when tool search is active.
+    fn always_load(&self) -> bool {
+        false
+    }
+
+    /// Whether compatible providers should request strict schema adherence.
+    fn strict_schema(&self) -> bool {
+        false
+    }
+
+    /// How to handle user interruption while this tool is running.
+    fn interrupt_behavior(&self) -> ToolInterruptBehavior {
+        ToolInterruptBehavior::Block
+    }
+
+    /// Whether execution requires a user-facing interaction.
+    fn requires_user_interaction(&self) -> bool {
+        false
+    }
+
+    /// Whether this invocation can reach outside a bounded local context.
+    fn is_open_world(&self, params: &Value) -> bool {
+        matches!(self.operation_kind(params), ToolOperationKind::Network)
+    }
+
+    /// Whether this invocation should be treated as search/read/list UI evidence.
+    fn is_search_or_read_command(&self, params: &Value) -> ToolSearchOrReadSemantics {
+        match self.operation_kind(params) {
+            ToolOperationKind::Search => ToolSearchOrReadSemantics {
+                is_search: true,
+                ..Default::default()
+            },
+            ToolOperationKind::Read => ToolSearchOrReadSemantics {
+                is_read: true,
+                ..Default::default()
+            },
+            ToolOperationKind::List => ToolSearchOrReadSemantics {
+                is_list: true,
+                ..Default::default()
+            },
+            _ => ToolSearchOrReadSemantics::default(),
+        }
+    }
+
+    /// Paths or path-like arguments referenced by this invocation.
+    fn input_paths(&self, params: &Value) -> Vec<String> {
+        ["path", "file_path", "directory", "working_dir"]
+            .iter()
+            .filter_map(|key| params.get(*key).and_then(Value::as_str))
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Stable input used by permission matchers and permission summaries.
+    fn permission_matcher_input(&self, params: &Value) -> Option<String> {
+        let paths = self.input_paths(params);
+        if paths.is_empty() {
+            let classifier_input = self.to_classifier_input(params);
+            (!classifier_input.trim().is_empty()).then_some(classifier_input)
+        } else {
+            Some(paths.join(","))
+        }
+    }
+
+    /// Mutates an observer-only copy of input before hooks/transcript metadata.
+    fn backfill_observable_input(&self, _input: &mut Value) {}
+
+    /// Tool invocation text for transcript search and compact history.
+    fn transcript_summary(&self, params: &Value) -> Option<String> {
+        self.tool_use_summary(params)
+    }
+
+    /// Preferred UI rendering lane for this invocation.
+    fn ui_render_kind(&self, params: &Value) -> ToolUiRenderKind {
+        match self.operation_kind(params) {
+            ToolOperationKind::Read
+            | ToolOperationKind::Write
+            | ToolOperationKind::Edit
+            | ToolOperationKind::Patch => ToolUiRenderKind::File,
+            ToolOperationKind::Shell => ToolUiRenderKind::Shell,
+            ToolOperationKind::Search | ToolOperationKind::List => ToolUiRenderKind::Search,
+            ToolOperationKind::Task => ToolUiRenderKind::Task,
+            ToolOperationKind::Network => ToolUiRenderKind::Network,
+            ToolOperationKind::Other => ToolUiRenderKind::Generic,
         }
     }
 
@@ -1092,13 +1252,19 @@ impl ToolRegistry {
 
     /// 获取工具
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.get(name).map(|t| t.as_ref())
+        if let Some(tool) = self.tools.get(name) {
+            return Some(tool.as_ref());
+        }
+        self.tools
+            .values()
+            .find(|tool| tool.aliases().iter().any(|alias| alias == &name))
+            .map(|tool| tool.as_ref())
     }
 
     /// 检查工具是否存在
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn has(&self, name: &str) -> bool {
-        self.tools.contains_key(name)
+        self.get(name).is_some()
     }
 
     /// 获取所有工具名称
@@ -1255,7 +1421,7 @@ impl ToolRegistry {
                     name: tool.name().to_string(),
                     description: Some(tool.description().to_string()),
                     parameters: Some(tool.parameters()),
-                    strict: None,
+                    strict: tool.strict_schema().then_some(true),
                 },
             })
             .collect()
@@ -1439,7 +1605,22 @@ mod tests {
         registry.register(BashTool);
 
         assert!(registry.has("bash"));
+        assert!(registry.has("shell"));
+        assert_eq!(registry.get("shell").map(|tool| tool.name()), Some("bash"));
         assert!(!registry.has("nonexistent"));
+    }
+
+    #[test]
+    fn tool_schema_includes_contract_metadata() {
+        let schema = FileReadTool.schema();
+        assert_eq!(schema.aliases, vec!["read"]);
+        assert_eq!(
+            schema.search_hint.as_deref(),
+            Some("view file contents directory entries")
+        );
+        assert!(schema.strict_schema);
+        assert_eq!(schema.interrupt_behavior, ToolInterruptBehavior::Block);
+        assert!(!schema.requires_user_interaction);
     }
 
     /// 一致性测试：确保所有核心工具在默认注册表中可用

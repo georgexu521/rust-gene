@@ -41,6 +41,18 @@ impl Tool for GlobTool {
         })
     }
 
+    fn aliases(&self) -> &'static [&'static str] {
+        &["file_search"]
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("glob file discovery")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
     fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
         ToolOperationKind::Search
     }

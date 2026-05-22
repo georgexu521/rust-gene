@@ -395,6 +395,90 @@ Acceptance:
 - A tool's runtime behavior, permission review, UI summary, and final evidence
   come from structured tool facts, not string parsing.
 
+Progress, 2026-05-22:
+
+Claude reference:
+
+- Inspected `/Users/georgexu/Desktop/claude/src/Tool.ts`,
+  `/Users/georgexu/Desktop/claude/src/tools/ToolSearchTool/prompt.ts`,
+  `/Users/georgexu/Desktop/claude/src/services/api/claude.ts`,
+  `/Users/georgexu/Desktop/claude/src/utils/api.ts`,
+  `/Users/georgexu/Desktop/claude/src/services/tools/StreamingToolExecutor.ts`,
+  and `/Users/georgexu/Desktop/claude/src/services/tools/toolHooks.ts`.
+- Extracted behavior: tools carry aliases, search hints, defer/always-load
+  visibility, strict-schema capability, interrupt behavior,
+  user-interaction gating, search/read/list semantics, open-world hints,
+  observer-only input backfill, and provider/UI metadata separate from the
+  raw executor.
+
+Priority Agent implementation:
+
+- Added Tool Contract V2 completion fields to `Tool`/`ToolSchema`: aliases,
+  search hints, `should_defer`, `always_load`, `strict_schema`,
+  `interrupt_behavior`, `requires_user_interaction`, `is_open_world`,
+  `is_search_or_read_command`, path extraction, permission matcher input,
+  observable input backfill, transcript summary, and UI render kind.
+- `ToolRegistry` now resolves aliases, and `tool_search` ranks aliases plus
+  search hints and supports `select:a,b` canonical lookup.
+- Core tools deepened in this batch:
+  - `file_read`, `file_write`, `file_edit`, `file_patch`
+  - `bash`, `bash_output`, `bash_cancel`, `bash_tasks`
+  - `grep`, `glob`
+  - `todo_write`
+  - `agent`
+  - `task_create`, `task_get`, `task_list`, `task_update`, `task_stop`,
+    `task_output`
+  - `ask_user`, `exit_plan_mode`, `tool_search`
+- Tool contract metadata is now attached to both `tool_contract` and compact
+  `tool_summary` records; `EvidenceLedger::ToolExecutionRecord` preserves the
+  same facts for closeout/repair/replay consumers.
+- Permission request metadata now records the structured matcher input, input
+  paths, open-world flag, search/read/list classification, and UI render kind.
+- Provider API tool definitions now preserve strict-schema intent; actual
+  OpenAI-compatible/Kimi strict emission is gated behind
+  `PRIORITY_AGENT_ENABLE_STRICT_TOOL_SCHEMA` until provider/schema support is
+  proven broadly enough for a safe default.
+- Runtime/TUI state now carries operation kind, UI render kind, read-only,
+  concurrency-safe, destructive, input paths, and transcript summary from
+  tool metadata.
+
+Intentional divergences:
+
+- Priority Agent keeps provider-specific `defer_loading` as internal
+  visibility metadata for now. The project does not yet send Anthropic beta
+  `defer_loading` tool schemas because the active provider abstraction is
+  OpenAI-compatible/Kimi-oriented.
+- Strict tool schema emission is also opt-in for now; Claude gates this by
+  provider/model support and feature flags, while Priority Agent still needs a
+  schema-normalization pass before enabling it by default.
+- Existing polished TUI summaries remain in place for core tools; structured
+  metadata is now available in runtime state and records without replacing all
+  hand-tuned text in one batch.
+
+Validation:
+
+- `cargo test -q tool_contract` - passed, 6 tests.
+- `cargo test -q tool_metadata` - passed, 8 tests.
+- `cargo test -q tool_search` - passed, 3 tests.
+- `cargo test -q evidence_ledger` - passed, 20 tests.
+- `cargo test -q tool_result` - passed, 33 tests.
+- `cargo test -q closeout` - passed, 23 tests.
+- `cargo test -q command_classifier` - passed, 7 tests.
+- `cargo test -q bash_tool` - passed, 30 tests.
+- `cargo test -q task_tool` - passed, 2 tests.
+- `cargo test -q agent_tool` - passed, 11 tests.
+- `cargo test -q permission_controller` - passed, 8 tests.
+- `cargo test -q openai_compat` - passed, 7 tests.
+- `cargo test -q kimi` - passed, 4 tests.
+- `cargo test -q runtime_state` - passed, 4 tests.
+- `cargo test -q runtime_panels` - passed, 5 tests.
+- `cargo test -q test_runtime_snapshot_keeps_terminal_task_metadata` - passed.
+- `cargo test -q tool_execution` - passed, 24 tests.
+- `cargo check -q` - passed.
+- `cargo clippy -q -- -D warnings` - passed.
+- `cargo fmt --check` - passed.
+- `git diff --check` - passed.
+
 ## Phase 3: Bash And Terminal Productization
 
 Purpose: make shell execution safe, visible, and reliable enough for daily

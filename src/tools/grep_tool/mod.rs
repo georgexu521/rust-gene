@@ -81,6 +81,18 @@ impl Tool for GrepTool {
         })
     }
 
+    fn aliases(&self) -> &'static [&'static str] {
+        &["search"]
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("regex content search")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
     fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
         ToolOperationKind::Search
     }

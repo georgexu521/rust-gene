@@ -32,6 +32,32 @@ pub struct ToolExecutionRecord {
     pub read_only: Option<bool>,
     pub concurrency_safe: Option<bool>,
     pub destructive: Option<bool>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub search_hint: Option<String>,
+    #[serde(default)]
+    pub should_defer: Option<bool>,
+    #[serde(default)]
+    pub always_load: Option<bool>,
+    #[serde(default)]
+    pub strict_schema: Option<bool>,
+    #[serde(default)]
+    pub interrupt_behavior: Option<String>,
+    #[serde(default)]
+    pub requires_user_interaction: Option<bool>,
+    #[serde(default)]
+    pub open_world: Option<bool>,
+    #[serde(default)]
+    pub search_or_read: ToolSearchOrReadRecord,
+    #[serde(default)]
+    pub input_paths: Vec<String>,
+    #[serde(default)]
+    pub permission_matcher_input: Option<String>,
+    #[serde(default)]
+    pub transcript_summary: Option<String>,
+    #[serde(default)]
+    pub ui_render_kind: Option<String>,
     pub status: ToolExecutionStatus,
     pub arguments_hash: String,
     pub duration_ms: Option<u64>,
@@ -62,6 +88,13 @@ pub enum ToolExecutionStatus {
     Completed,
     Failed,
     Denied,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolSearchOrReadRecord {
+    pub is_search: bool,
+    pub is_read: bool,
+    pub is_list: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -771,6 +804,19 @@ impl EvidenceLedger {
         let read_only = summary_bool(summary, "read_only");
         let concurrency_safe = summary_bool(summary, "concurrency_safe");
         let destructive = summary_bool(summary, "destructive");
+        let aliases = summary_string_array(summary, "aliases");
+        let search_hint = summary_string(summary, "search_hint");
+        let should_defer = summary_bool(summary, "should_defer");
+        let always_load = summary_bool(summary, "always_load");
+        let strict_schema = summary_bool(summary, "strict_schema");
+        let interrupt_behavior = summary_string(summary, "interrupt_behavior");
+        let requires_user_interaction = summary_bool(summary, "requires_user_interaction");
+        let open_world = summary_bool(summary, "open_world");
+        let search_or_read = summary_search_or_read(summary);
+        let input_paths = summary_string_array(summary, "input_paths");
+        let permission_matcher_input = summary_string(summary, "permission_matcher_input");
+        let transcript_summary = summary_string(summary, "transcript_summary");
+        let ui_render_kind = summary_string(summary, "ui_render_kind");
         let safe_for_closeout = summary
             .and_then(|summary| summary.get("safe_for_closeout"))
             .and_then(serde_json::Value::as_bool);
@@ -799,6 +845,19 @@ impl EvidenceLedger {
             read_only,
             concurrency_safe,
             destructive,
+            aliases,
+            search_hint,
+            should_defer,
+            always_load,
+            strict_schema,
+            interrupt_behavior,
+            requires_user_interaction,
+            open_world,
+            search_or_read,
+            input_paths,
+            permission_matcher_input,
+            transcript_summary,
+            ui_render_kind,
             status,
             arguments_hash: tool_arguments_hash(&tool_call.arguments),
             duration_ms: result.duration_ms,
@@ -965,6 +1024,26 @@ fn summary_bool(summary: Option<&serde_json::Value>, key: &str) -> Option<bool> 
     summary
         .and_then(|summary| summary.get(key))
         .and_then(serde_json::Value::as_bool)
+}
+
+fn summary_search_or_read(summary: Option<&serde_json::Value>) -> ToolSearchOrReadRecord {
+    let Some(value) = summary.and_then(|summary| summary.get("search_or_read")) else {
+        return ToolSearchOrReadRecord::default();
+    };
+    ToolSearchOrReadRecord {
+        is_search: value
+            .get("is_search")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        is_read: value
+            .get("is_read")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        is_list: value
+            .get("is_list")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    }
 }
 
 fn tool_permission_record(result: &ToolResult) -> Option<ToolPermissionRecord> {
@@ -1864,6 +1943,27 @@ mod tests {
                     "validation_family": "cargo_test",
                     "path_patterns": ["src/lib.rs"],
                     "safe_for_closeout": true,
+                    "operation_kind": "shell",
+                    "read_only": false,
+                    "concurrency_safe": false,
+                    "destructive": false,
+                    "aliases": ["shell"],
+                    "search_hint": "shell validation git package managers",
+                    "should_defer": false,
+                    "always_load": false,
+                    "strict_schema": true,
+                    "interrupt_behavior": "block",
+                    "requires_user_interaction": false,
+                    "open_world": false,
+                    "search_or_read": {
+                        "is_search": false,
+                        "is_read": false,
+                        "is_list": false
+                    },
+                    "input_paths": ["src/lib.rs"],
+                    "permission_matcher_input": "cargo test -q",
+                    "transcript_summary": "cargo test -q",
+                    "ui_render_kind": "shell",
                     "terminal_task": {
                         "task_id": "shell_foreground_123",
                         "status": "completed",
@@ -1921,6 +2021,30 @@ mod tests {
         assert_eq!(records[0].validation_family.as_deref(), Some("cargo_test"));
         assert_eq!(records[0].path_patterns, vec!["src/lib.rs"]);
         assert_eq!(records[0].safe_for_closeout, Some(true));
+        assert_eq!(records[0].operation_kind.as_deref(), Some("shell"));
+        assert_eq!(records[0].read_only, Some(false));
+        assert_eq!(records[0].concurrency_safe, Some(false));
+        assert_eq!(records[0].destructive, Some(false));
+        assert_eq!(records[0].aliases, vec!["shell"]);
+        assert_eq!(
+            records[0].search_hint.as_deref(),
+            Some("shell validation git package managers")
+        );
+        assert_eq!(records[0].strict_schema, Some(true));
+        assert_eq!(records[0].interrupt_behavior.as_deref(), Some("block"));
+        assert_eq!(records[0].requires_user_interaction, Some(false));
+        assert_eq!(records[0].open_world, Some(false));
+        assert!(!records[0].search_or_read.is_search);
+        assert_eq!(records[0].input_paths, vec!["src/lib.rs"]);
+        assert_eq!(
+            records[0].permission_matcher_input.as_deref(),
+            Some("cargo test -q")
+        );
+        assert_eq!(
+            records[0].transcript_summary.as_deref(),
+            Some("cargo test -q")
+        );
+        assert_eq!(records[0].ui_render_kind.as_deref(), Some("shell"));
         assert_eq!(
             records[0].relevance,
             ToolExecutionRelevance {

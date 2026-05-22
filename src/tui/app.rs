@@ -183,7 +183,41 @@ fn runtime_tool_use_from_view(run: &ToolRunView) -> RuntimeToolUse {
         latest_progress: run.progress.last().cloned(),
         result_preview: run.result_preview.clone(),
         elapsed_ms: u64::try_from(run.elapsed().as_millis()).ok(),
+        operation_kind: metadata_string(run.metadata.as_ref(), "operation_kind"),
+        ui_render_kind: metadata_string(run.metadata.as_ref(), "ui_render_kind"),
+        read_only: metadata_bool(run.metadata.as_ref(), "read_only"),
+        concurrency_safe: metadata_bool(run.metadata.as_ref(), "concurrency_safe"),
+        destructive: metadata_bool(run.metadata.as_ref(), "destructive"),
+        input_paths: metadata_string_array(run.metadata.as_ref(), "input_paths"),
+        transcript_summary: metadata_string(run.metadata.as_ref(), "transcript_summary"),
     }
+}
+
+fn metadata_string(metadata: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    metadata?
+        .get(key)?
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn metadata_bool(metadata: Option<&serde_json::Value>, key: &str) -> Option<bool> {
+    metadata?.get(key)?.as_bool()
+}
+
+fn metadata_string_array(metadata: Option<&serde_json::Value>, key: &str) -> Vec<String> {
+    metadata
+        .and_then(|metadata| metadata.get(key))
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn runtime_terminal_task_from_view(run: &ToolRunView) -> Option<RuntimeTerminalTask> {
@@ -4298,12 +4332,29 @@ mod tests {
                     "handle": "shell_bg_1",
                     "read_tool": "bash_output",
                     "cancel_handle": "shell_bg_1"
-                }
+                },
+                "operation_kind": "shell",
+                "ui_render_kind": "shell",
+                "read_only": false,
+                "concurrency_safe": false,
+                "destructive": false,
+                "input_paths": ["package.json"],
+                "transcript_summary": "npm run dev"
             })),
         );
         app.tool_runs_snapshot.push(run);
         app.runtime_state_snapshot = app.build_runtime_state_snapshot();
 
+        assert_eq!(
+            app.runtime_state_snapshot.tool_uses[0]
+                .operation_kind
+                .as_deref(),
+            Some("shell")
+        );
+        assert_eq!(
+            app.runtime_state_snapshot.tool_uses[0].input_paths,
+            vec!["package.json"]
+        );
         assert_eq!(app.runtime_state_snapshot.terminal_tasks.len(), 1);
         assert_eq!(
             app.terminal_task_status_label().as_deref(),

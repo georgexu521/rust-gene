@@ -87,6 +87,10 @@ impl Tool for ExitPlanModeTool {
         })
     }
 
+    fn requires_user_interaction(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
         let rejected = params["rejected"].as_bool().unwrap_or(false);
         self.manager.exit(rejected).await;

@@ -4,7 +4,7 @@
 
 use crate::state::{TaskItem, TaskStatus, TaskType};
 use crate::task_manager::TaskManager;
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -54,6 +54,18 @@ impl Tool for TaskCreateTool {
             },
             "required": ["description"]
         })
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("create tracked task")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
@@ -144,6 +156,26 @@ impl Tool for TaskGetTool {
         })
     }
 
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("read tracked task")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Read
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
         let task_id = params["task_id"].as_str().unwrap_or("");
         if task_id.is_empty() {
@@ -195,6 +227,26 @@ impl Tool for TaskListTool {
                 }
             }
         })
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("list tracked tasks")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::List
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        true
     }
 
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
@@ -262,6 +314,18 @@ impl Tool for TaskUpdateTool {
         })
     }
 
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("update tracked task status")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Task
+    }
+
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
         let task_id = params["task_id"].as_str().unwrap_or("");
         let status_str = params["status"].as_str().unwrap_or("");
@@ -313,6 +377,18 @@ impl Tool for TaskStopTool {
         })
     }
 
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("cancel tracked task")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Task
+    }
+
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
         let task_id = params["task_id"].as_str().unwrap_or("");
         if task_id.is_empty() {
@@ -361,6 +437,30 @@ impl Tool for TaskOutputTool {
             },
             "required": ["task_id"]
         })
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("read append task output")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
+        if params["action"].as_str() == Some("append") {
+            ToolOperationKind::Task
+        } else {
+            ToolOperationKind::Read
+        }
+    }
+
+    fn is_read_only(&self, params: &serde_json::Value) -> bool {
+        self.operation_kind(params) == ToolOperationKind::Read
+    }
+
+    fn is_concurrency_safe(&self, params: &serde_json::Value) -> bool {
+        self.is_read_only(params)
     }
 
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {

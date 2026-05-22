@@ -165,6 +165,7 @@ mod tests {
                 },
                 "required": ["command"]
             }),
+            strict_schema: false,
         }
     }
 

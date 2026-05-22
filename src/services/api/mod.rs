@@ -230,6 +230,7 @@ pub struct Tool {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
+    pub strict_schema: bool,
 }
 
 impl Tool {
@@ -241,6 +242,7 @@ impl Tool {
                 "type": "object",
                 "properties": {}
             }),
+            strict_schema: false,
         }
     }
 

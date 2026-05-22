@@ -162,6 +162,7 @@ mod tests {
             name: name.to_string(),
             description: String::new(),
             parameters: serde_json::json!({}),
+            strict_schema: false,
         }
     }
 

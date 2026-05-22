@@ -19,6 +19,7 @@ use async_openai::types::{
 };
 
 pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletionRequest {
+    let strict_tool_schema = strict_tool_schema_enabled();
     let messages: Vec<ChatCompletionRequestMessage> = normalize_messages_for_capabilities(
         ProviderCapabilities::for_family(ProviderProtocolFamily::OpenAiCompatible),
         request.messages,
@@ -51,7 +52,7 @@ pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletio
                         name: t.name,
                         description: Some(t.description),
                         parameters: Some(t.parameters),
-                        strict: None,
+                        strict: (strict_tool_schema && t.strict_schema).then_some(true),
                     },
                 })
                 .collect(),
@@ -59,6 +60,17 @@ pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletio
     }
 
     req
+}
+
+pub(crate) fn strict_tool_schema_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_ENABLE_STRICT_TOOL_SCHEMA")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 pub(crate) fn convert_tool_choice(choice: ToolChoice) -> ChatCompletionToolChoiceOption {
@@ -238,10 +250,12 @@ mod tests {
                     },
                     "required": ["value"]
                 }),
+                strict_schema: true,
             }])
             .with_tool_choice(ToolChoice::Function("provider_health_echo".to_string()));
 
         let converted = convert_request(request, "fallback-model");
+        assert_eq!(converted.tools.as_ref().unwrap()[0].function.strict, None);
 
         match converted.tool_choice {
             Some(ChatCompletionToolChoiceOption::Named(choice)) => {

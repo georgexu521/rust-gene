@@ -161,6 +161,11 @@ impl PermissionController {
             permission_command_classification(tool_name, &tool_call.arguments);
         let remote_classification =
             permission_remote_classification(tool_name, &tool_call.arguments);
+        let search_or_read =
+            serde_json::to_value(tool.is_search_or_read_command(&tool_call.arguments))
+                .unwrap_or(serde_json::Value::Null);
+        let ui_render_kind = serde_json::to_value(tool.ui_render_kind(&tool_call.arguments))
+            .unwrap_or(serde_json::Value::Null);
         let record = PermissionRequestRecord {
             id: tool_call.id.clone(),
             session_id: session_id.to_string(),
@@ -176,6 +181,11 @@ impl PermissionController {
                 "permission_family": family.as_str(),
                 "permission_decision": format!("{:?}", permission_explanation.decision),
                 "risk_level": format!("{:?}", permission_explanation.risk_level),
+                "permission_matcher_input": tool.permission_matcher_input(&tool_call.arguments),
+                "input_paths": tool.input_paths(&tool_call.arguments),
+                "open_world": tool.is_open_world(&tool_call.arguments),
+                "search_or_read": search_or_read,
+                "ui_render_kind": ui_render_kind,
                 "command_classification": command_classification,
                 "remote_classification": remote_classification,
                 "warnings": permission_explanation.warnings,
@@ -626,10 +636,7 @@ mod tests {
         let evaluation = PermissionController::evaluate_tool_permission(
             "session-1",
             &tool_call,
-            &NamedTool {
-                name: "bash",
-                requires_confirmation: false,
-            },
+            &crate::tools::BashTool,
             &context,
             &DriftCheck::ok(),
         );
@@ -648,6 +655,15 @@ mod tests {
         assert_eq!(
             metadata["command_classification"]["requires_pty"],
             serde_json::Value::Bool(false)
+        );
+        assert_eq!(
+            metadata["permission_matcher_input"],
+            "npm run dev -- --host 0.0.0.0"
+        );
+        assert_eq!(metadata["ui_render_kind"], "shell");
+        assert_eq!(
+            metadata["search_or_read"],
+            serde_json::json!({"is_search": false, "is_read": false, "is_list": false})
         );
     }
 

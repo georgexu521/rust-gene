@@ -234,6 +234,7 @@ Rules:
             name: file_edit_tool.name().to_string(),
             description: file_edit_tool.description().to_string(),
             parameters: file_edit_tool.parameters(),
+            strict_schema: file_edit_tool.strict_schema(),
         };
         let tool_system = r#"You are now in forced patch application mode.
 Use the file_edit tool to apply the smallest safe patch from the evidence.

@@ -1010,26 +1010,31 @@ mod tests {
                 name: "file_edit".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
+                strict_schema: false,
             },
             crate::services::api::Tool {
                 name: "file_patch".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
+                strict_schema: false,
             },
             crate::services::api::Tool {
                 name: "file_read".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
+                strict_schema: false,
             },
             crate::services::api::Tool {
                 name: "grep".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
+                strict_schema: false,
             },
             crate::services::api::Tool {
                 name: "bash".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
+                strict_schema: false,
             },
         ];
 

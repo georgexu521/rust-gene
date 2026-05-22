@@ -421,11 +421,27 @@ pub(super) fn attach_tool_contract_metadata(
     result: &mut ToolResult,
 ) {
     let params = &tool_call.arguments;
+    let mut observable_input = params.clone();
+    tool.backfill_observable_input(&mut observable_input);
     let contract = serde_json::json!({
         "operation_kind": serde_json::to_value(tool.operation_kind(params)).unwrap_or(serde_json::Value::Null),
         "read_only": tool.is_read_only(params),
         "concurrency_safe": tool.is_concurrency_safe(params),
         "destructive": tool.is_destructive(params),
+        "aliases": tool.aliases(),
+        "search_hint": tool.search_hint(),
+        "should_defer": tool.should_defer(),
+        "always_load": tool.always_load(),
+        "strict_schema": tool.strict_schema(),
+        "interrupt_behavior": serde_json::to_value(tool.interrupt_behavior()).unwrap_or(serde_json::Value::Null),
+        "requires_user_interaction": tool.requires_user_interaction(),
+        "open_world": tool.is_open_world(params),
+        "search_or_read": serde_json::to_value(tool.is_search_or_read_command(params)).unwrap_or(serde_json::Value::Null),
+        "input_paths": tool.input_paths(params),
+        "permission_matcher_input": tool.permission_matcher_input(params),
+        "observable_input": observable_input,
+        "transcript_summary": tool.transcript_summary(params),
+        "ui_render_kind": serde_json::to_value(tool.ui_render_kind(params)).unwrap_or(serde_json::Value::Null),
         "user_facing_name": tool.user_facing_name(params),
         "tool_use_summary": tool.tool_use_summary(params),
         "activity_description": tool.activity_description(params),
@@ -446,6 +462,19 @@ pub(super) fn attach_tool_contract_metadata(
         "read_only",
         "concurrency_safe",
         "destructive",
+        "aliases",
+        "search_hint",
+        "should_defer",
+        "always_load",
+        "strict_schema",
+        "interrupt_behavior",
+        "requires_user_interaction",
+        "open_world",
+        "search_or_read",
+        "input_paths",
+        "permission_matcher_input",
+        "transcript_summary",
+        "ui_render_kind",
         "user_facing_name",
         "tool_use_summary",
         "activity_description",
@@ -695,7 +724,7 @@ mod tests {
         let call = ToolCall {
             id: "call_1".to_string(),
             name: "bash".to_string(),
-            arguments: serde_json::json!({"command": "ls -la"}),
+            arguments: serde_json::json!({"command": "ls -la src"}),
         };
         let mut result = ToolResult::success("listed files");
 
@@ -706,11 +735,31 @@ mod tests {
         assert_eq!(data["tool_contract"]["operation_kind"], "list");
         assert_eq!(data["tool_contract"]["read_only"], true);
         assert_eq!(data["tool_contract"]["concurrency_safe"], true);
+        assert_eq!(
+            data["tool_contract"]["aliases"],
+            serde_json::json!(["shell"])
+        );
+        assert_eq!(data["tool_contract"]["strict_schema"], true);
+        assert_eq!(data["tool_contract"]["interrupt_behavior"], "block");
+        assert_eq!(
+            data["tool_contract"]["search_or_read"],
+            serde_json::json!({"is_search": false, "is_read": false, "is_list": true})
+        );
+        assert_eq!(
+            data["tool_contract"]["input_paths"],
+            serde_json::json!(["src"])
+        );
+        assert_eq!(
+            data["tool_contract"]["permission_matcher_input"],
+            "ls -la src"
+        );
+        assert_eq!(data["tool_contract"]["ui_render_kind"], "search");
         assert_eq!(data["tool_summary"]["operation_kind"], "list");
         assert_eq!(data["tool_summary"]["read_only"], true);
         assert_eq!(
             data["tool_summary"]["activity_description"],
-            "Inspecting: ls -la"
+            "Inspecting: ls -la src"
         );
+        assert_eq!(data["tool_summary"]["ui_render_kind"], "search");
     }
 }

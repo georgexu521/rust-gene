@@ -37,6 +37,20 @@ pub struct RuntimeToolUse {
     pub result_preview: Option<String>,
     #[serde(default)]
     pub elapsed_ms: Option<u64>,
+    #[serde(default)]
+    pub operation_kind: Option<String>,
+    #[serde(default)]
+    pub ui_render_kind: Option<String>,
+    #[serde(default)]
+    pub read_only: Option<bool>,
+    #[serde(default)]
+    pub concurrency_safe: Option<bool>,
+    #[serde(default)]
+    pub destructive: Option<bool>,
+    #[serde(default)]
+    pub input_paths: Vec<String>,
+    #[serde(default)]
+    pub transcript_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,6 +329,13 @@ mod tests {
             latest_progress: None,
             result_preview: None,
             elapsed_ms: Some(1200),
+            operation_kind: Some("shell".to_string()),
+            ui_render_kind: Some("shell".to_string()),
+            read_only: Some(false),
+            concurrency_safe: Some(false),
+            destructive: Some(false),
+            input_paths: Vec::new(),
+            transcript_summary: Some("cargo check".to_string()),
         });
         state.runtime.terminal_tasks.push(RuntimeTerminalTask {
             id: "shell_1".to_string(),
@@ -368,6 +389,13 @@ mod tests {
                     latest_progress: None,
                     result_preview: None,
                     elapsed_ms: None,
+                    operation_kind: Some("search".to_string()),
+                    ui_render_kind: Some("search".to_string()),
+                    read_only: Some(true),
+                    concurrency_safe: Some(true),
+                    destructive: Some(false),
+                    input_paths: vec!["src".to_string()],
+                    transcript_summary: Some("Search".to_string()),
                 },
                 RuntimeToolUse {
                     id: "second".to_string(),
@@ -379,6 +407,13 @@ mod tests {
                     latest_progress: None,
                     result_preview: None,
                     elapsed_ms: None,
+                    operation_kind: Some("shell".to_string()),
+                    ui_render_kind: Some("shell".to_string()),
+                    read_only: Some(false),
+                    concurrency_safe: Some(false),
+                    destructive: Some(false),
+                    input_paths: Vec::new(),
+                    transcript_summary: Some("Check".to_string()),
                 },
             ],
             ..RuntimeAppState::default()

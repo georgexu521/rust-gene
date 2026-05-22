@@ -2,7 +2,7 @@ use super::{
     classification_data, kill_process_tree, preview_text, sanitize_agent_runtime_env,
     shell_output_artifact_path, BashExecutionBackend,
 };
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -575,6 +575,26 @@ impl Tool for BashOutputTool {
         })
     }
 
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("read background shell output")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Read
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let handle = params["handle"].as_str().unwrap_or("");
         if handle.trim().is_empty() {
@@ -623,6 +643,26 @@ impl Tool for BashCancelTool {
         })
     }
 
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("stop background shell command")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Task
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let handle = params["handle"].as_str().unwrap_or("");
         if handle.trim().is_empty() {
@@ -667,6 +707,26 @@ impl Tool for BashTasksTool {
             "type": "object",
             "properties": {}
         })
+    }
+
+    fn search_hint(&self) -> Option<&'static str> {
+        Some("list background shell commands")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::List
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        true
     }
 
     async fn execute(&self, _params: serde_json::Value, _context: ToolContext) -> ToolResult {

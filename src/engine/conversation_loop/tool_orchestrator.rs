@@ -21,6 +21,7 @@ impl ConversationLoop {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 parameters: t.parameters(),
+                strict_schema: t.strict_schema(),
             })
             .collect()
     }

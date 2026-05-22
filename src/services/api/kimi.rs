@@ -332,6 +332,7 @@ fn convert_request_for_kimi(
         req.max_completion_tokens = Some(budget);
     }
 
+    let strict_tool_schema = super::openai_compat::strict_tool_schema_enabled();
     if let Some(tools) = request.tools {
         req.tools = Some(
             tools
@@ -342,7 +343,7 @@ fn convert_request_for_kimi(
                         name: t.name,
                         description: Some(t.description),
                         parameters: Some(t.parameters),
-                        strict: None,
+                        strict: (strict_tool_schema && t.strict_schema).then_some(true),
                     },
                 })
                 .collect(),

@@ -90,6 +90,14 @@ impl Tool for AskUserQuestionTool {
         })
     }
 
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn requires_user_interaction(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
         let question = params["question"].as_str().unwrap_or("").to_string();
         if question.is_empty() {
