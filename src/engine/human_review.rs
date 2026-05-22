@@ -128,6 +128,82 @@ pub struct PermissionReview {
     pub options: Vec<PermissionReviewOption>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HumanReviewAuditRecord {
+    pub kind: HumanReviewKind,
+    pub title: String,
+    pub risk: HumanReviewRisk,
+    pub subject: String,
+    pub reason: String,
+    pub tool_call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub input_summary: String,
+    pub risk_facts: Vec<String>,
+    pub matched_rules: Vec<String>,
+    pub classifier_result: Option<serde_json::Value>,
+    pub hook_decision: Option<String>,
+    pub user_decision: Option<String>,
+    pub persistence_scope: Option<String>,
+    pub saved_config_path: Option<String>,
+    pub recovery_hint: Option<String>,
+}
+
+impl HumanReviewAuditRecord {
+    pub fn permission_requested(
+        review: &PermissionReview,
+        metadata: &serde_json::Value,
+        matched_rules: Vec<String>,
+        recovery_hint: Option<String>,
+    ) -> Self {
+        let classifier_result = metadata
+            .get("command_classification")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .or_else(|| {
+                metadata
+                    .get("remote_classification")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+            });
+        Self {
+            kind: review.request.kind,
+            title: review.request.title.clone(),
+            risk: review.request.risk,
+            subject: review.request.subject.clone(),
+            reason: review.request.reason.clone(),
+            tool_call_id: Some(review.tool_call_id.clone()),
+            tool_name: Some(review.tool_name.clone()),
+            input_summary: review.request.subject.clone(),
+            risk_facts: permission_risk_facts(metadata),
+            matched_rules,
+            classifier_result,
+            hook_decision: None,
+            user_decision: None,
+            persistence_scope: review
+                .request
+                .persistence_scope
+                .clone()
+                .or_else(|| Some("this_call".to_string())),
+            saved_config_path: None,
+            recovery_hint,
+        }
+    }
+
+    pub fn with_resolution(
+        mut self,
+        user_decision: Option<String>,
+        persistence_scope: Option<String>,
+        saved_config_path: Option<String>,
+    ) -> Self {
+        self.user_decision = user_decision;
+        if persistence_scope.is_some() {
+            self.persistence_scope = persistence_scope;
+        }
+        self.saved_config_path = saved_config_path;
+        self
+    }
+}
+
 impl PermissionReview {
     pub fn from_tool_call(tool_call: &ToolCall, prompt: &str) -> Self {
         Self {
@@ -380,6 +456,73 @@ fn tool_subject(tool_call: &ToolCall) -> String {
     }
 }
 
+fn permission_risk_facts(metadata: &serde_json::Value) -> Vec<String> {
+    let mut facts = Vec::new();
+    push_string_fact(&mut facts, "family", metadata.get("permission_family"));
+    push_string_fact(&mut facts, "decision", metadata.get("permission_decision"));
+    push_string_fact(&mut facts, "risk", metadata.get("risk_level"));
+    if let Some(warnings) = metadata.get("warnings").and_then(|value| value.as_array()) {
+        for warning in warnings.iter().filter_map(|value| value.as_str()) {
+            facts.push(format!("warning:{}", warning));
+        }
+    }
+    if let Some(classification) = metadata.get("command_classification") {
+        push_string_fact(
+            &mut facts,
+            "command_category",
+            classification.get("command_category"),
+        );
+        push_string_fact(
+            &mut facts,
+            "command_kind",
+            classification.get("command_kind"),
+        );
+        push_bool_fact(
+            &mut facts,
+            "network_access",
+            classification.get("network_access"),
+        );
+        push_bool_fact(
+            &mut facts,
+            "external_path_access",
+            classification.get("external_path_access"),
+        );
+        push_bool_fact(
+            &mut facts,
+            "requires_pty",
+            classification.get("requires_pty"),
+        );
+        push_bool_fact(
+            &mut facts,
+            "risky_shell_wrapper",
+            classification.get("risky_shell_wrapper"),
+        );
+    }
+    if let Some(classification) = metadata.get("remote_classification") {
+        push_string_fact(
+            &mut facts,
+            "remote_effect",
+            classification.get("remote_effect"),
+        );
+        push_string_fact(&mut facts, "remote_risk", classification.get("risk_level"));
+    }
+    facts
+}
+
+fn push_string_fact(facts: &mut Vec<String>, key: &str, value: Option<&serde_json::Value>) {
+    if let Some(value) = value.and_then(|value| value.as_str()) {
+        if !value.is_empty() {
+            facts.push(format!("{}:{}", key, value));
+        }
+    }
+}
+
+fn push_bool_fact(facts: &mut Vec<String>, key: &str, value: Option<&serde_json::Value>) {
+    if matches!(value.and_then(|value| value.as_bool()), Some(true)) {
+        facts.push(format!("{}:true", key));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,6 +599,43 @@ mod tests {
             Some("global")
         );
         assert!(!review.option_for_key("n").unwrap().decision.approved());
+    }
+
+    #[test]
+    fn permission_audit_record_extracts_risk_facts() {
+        let review = PermissionReview::from_tool_call(
+            &tool("bash", serde_json::json!({"command": "npm run dev"})),
+            "Allow bash?",
+        );
+        let audit = HumanReviewAuditRecord::permission_requested(
+            &review,
+            &serde_json::json!({
+                "permission_family": "shell",
+                "permission_decision": "Ask",
+                "risk_level": "Medium",
+                "warnings": ["SHELL_NETWORK_ACCESS"],
+                "command_classification": {
+                    "command_category": "dev_server",
+                    "command_kind": "unknown",
+                    "network_access": true,
+                    "external_path_access": false,
+                    "requires_pty": false,
+                    "risky_shell_wrapper": false
+                }
+            }),
+            vec!["bash:npm run dev".to_string()],
+            Some("Ask the user before retrying.".to_string()),
+        );
+
+        assert_eq!(audit.tool_name.as_deref(), Some("bash"));
+        assert!(audit.risk_facts.contains(&"family:shell".to_string()));
+        assert!(audit
+            .risk_facts
+            .contains(&"command_category:dev_server".to_string()));
+        assert!(audit
+            .risk_facts
+            .contains(&"network_access:true".to_string()));
+        assert_eq!(audit.matched_rules, vec!["bash:npm run dev"]);
     }
 
     #[test]

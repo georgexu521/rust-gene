@@ -767,6 +767,31 @@ Acceptance:
 - Hooks can block, allow, annotate, or ask without bypassing explicit deny
   policy.
 
+Progress on 2026-05-22:
+
+- Added `HumanReviewAuditRecord` as a durable review snapshot for permission
+  requests. It captures input summary, risk facts, matched rules, classifier
+  output, user decision, persistence scope, saved config path, and recovery
+  hints.
+- Permission request records now embed the human review audit snapshot, and
+  denied tool results return it in structured `permission_request` metadata.
+- `PermissionRequested` and `PermissionResolved` trace events now carry the
+  audit snapshot while keeping the existing prompt/decision fields compatible.
+- `StreamEvent::PermissionRequest` can carry the same audit snapshot for UI and
+  future panel rendering.
+
+Validation so far:
+
+- `cargo test -q human_review` - passed, 8 tests.
+- `cargo test -q permission_controller` - passed, 8 tests.
+- `cargo test -q hooks` - passed, 8 tests.
+- `cargo test -q trace` - passed, 37 tests.
+- `cargo test -q recovery_plan` - passed, 13 tests.
+- `cargo check -q` - passed.
+- `cargo fmt --check` - passed.
+- `cargo clippy -q -- -D warnings` - passed.
+- `git diff --check` - passed.
+
 ## Phase 6: TUI Product Experience
 
 Purpose: make the product feel stable instead of debug-heavy.

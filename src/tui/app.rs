@@ -1724,6 +1724,7 @@ impl TuiApp {
                             tool_name,
                             arguments,
                             prompt: _,
+                            ..
                         } => {
                             let mut runs = tool_runs_clone.lock().await;
                             with_tool_run(&mut runs, &id, |run| {

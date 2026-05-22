@@ -293,6 +293,7 @@ async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
                 tool_name,
                 arguments,
                 prompt,
+                ..
             } => {
                 let answered = answer_pending_approval(&components.streaming_engine, false).await;
                 write_eval_event(

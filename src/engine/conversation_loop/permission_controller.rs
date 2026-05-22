@@ -1,5 +1,6 @@
 use super::approval::{ToolApprovalChannel, ToolApprovalRequest};
 use crate::engine::goal_drift::DriftCheck;
+use crate::engine::human_review::{HumanReviewAuditRecord, PermissionReview};
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
@@ -58,6 +59,7 @@ pub(super) struct PermissionRequestRecord {
     pub(super) patterns: Vec<String>,
     pub(super) metadata: serde_json::Value,
     pub(super) allowed_always_rules: Vec<String>,
+    pub(super) review: HumanReviewAuditRecord,
     pub(super) rejection_feedback: String,
     pub(super) recovery_feedback: String,
 }
@@ -71,6 +73,7 @@ impl PermissionRequestRecord {
             "patterns": self.patterns,
             "metadata": self.metadata,
             "allowed_always_rules": self.allowed_always_rules,
+            "review": self.review,
             "rejection_feedback": self.rejection_feedback,
             "recovery_feedback": self.recovery_feedback,
         })
@@ -166,34 +169,43 @@ impl PermissionController {
                 .unwrap_or(serde_json::Value::Null);
         let ui_render_kind = serde_json::to_value(tool.ui_render_kind(&tool_call.arguments))
             .unwrap_or(serde_json::Value::Null);
+        let metadata = serde_json::json!({
+            "tool_name": tool_name,
+            "arguments": tool_call.arguments,
+            "permission_requires": permission_requires,
+            "tool_requires": tool_requires,
+            "raw_tool_requires": raw_tool_requires,
+            "drift_requires_approval": drift_requires_approval,
+            "permission_family": family.as_str(),
+            "permission_decision": format!("{:?}", permission_explanation.decision),
+            "risk_level": format!("{:?}", permission_explanation.risk_level),
+            "permission_matcher_input": tool.permission_matcher_input(&tool_call.arguments),
+            "input_paths": tool.input_paths(&tool_call.arguments),
+            "open_world": tool.is_open_world(&tool_call.arguments),
+            "search_or_read": search_or_read,
+            "ui_render_kind": ui_render_kind,
+            "command_classification": command_classification,
+            "remote_classification": remote_classification,
+            "warnings": permission_explanation.warnings,
+            "reasons": permission_explanation.reasons,
+            "drift_reason": drift_check.reason,
+            "drift_suggested_action": drift_check.suggested_action,
+        });
+        let permission_review = PermissionReview::from_tool_call(tool_call, &prompt);
+        let review = HumanReviewAuditRecord::permission_requested(
+            &permission_review,
+            &metadata,
+            patterns.clone(),
+            Some(recovery_feedback.clone()),
+        );
         let record = PermissionRequestRecord {
             id: tool_call.id.clone(),
             session_id: session_id.to_string(),
             kind,
             patterns,
-            metadata: serde_json::json!({
-                "tool_name": tool_name,
-                "arguments": tool_call.arguments,
-                "permission_requires": permission_requires,
-                "tool_requires": tool_requires,
-                "raw_tool_requires": raw_tool_requires,
-                "drift_requires_approval": drift_requires_approval,
-                "permission_family": family.as_str(),
-                "permission_decision": format!("{:?}", permission_explanation.decision),
-                "risk_level": format!("{:?}", permission_explanation.risk_level),
-                "permission_matcher_input": tool.permission_matcher_input(&tool_call.arguments),
-                "input_paths": tool.input_paths(&tool_call.arguments),
-                "open_world": tool.is_open_world(&tool_call.arguments),
-                "search_or_read": search_or_read,
-                "ui_render_kind": ui_render_kind,
-                "command_classification": command_classification,
-                "remote_classification": remote_classification,
-                "warnings": permission_explanation.warnings,
-                "reasons": permission_explanation.reasons,
-                "drift_reason": drift_check.reason,
-                "drift_suggested_action": drift_check.suggested_action,
-            }),
+            metadata,
             allowed_always_rules,
+            review,
             rejection_feedback,
             recovery_feedback,
         };
@@ -223,6 +235,10 @@ impl PermissionController {
                     tool_name: tool_call.name.clone(),
                     arguments: tool_call.arguments.clone(),
                     prompt: prompt.clone(),
+                    review: evaluation
+                        .record
+                        .as_ref()
+                        .map(|record| Box::new(record.review.clone())),
                 })
                 .await;
             if let Some(ref trace) = trace {
@@ -230,6 +246,10 @@ impl PermissionController {
                     tool: tool_call.name.clone(),
                     call_id: tool_call.id.clone(),
                     prompt: prompt.clone(),
+                    review: evaluation
+                        .record
+                        .as_ref()
+                        .map(|record| record.review.clone()),
                 });
             }
             let request = ToolApprovalRequest {
@@ -262,6 +282,19 @@ impl PermissionController {
                     persisted_path: approval_response
                         .as_ref()
                         .and_then(|response| response.persisted_path.clone()),
+                    review: evaluation.record.as_ref().map(|record| {
+                        record.review.clone().with_resolution(
+                            approval_response
+                                .as_ref()
+                                .and_then(|response| response.decision_label().map(str::to_string)),
+                            approval_response
+                                .as_ref()
+                                .and_then(|response| response.persistence_scope.clone()),
+                            approval_response
+                                .as_ref()
+                                .and_then(|response| response.persisted_path.clone()),
+                        )
+                    }),
                 });
             }
         }
@@ -571,6 +604,24 @@ mod tests {
             patterns: vec!["git".to_string()],
             metadata: json!({"tool_name": "git"}),
             allowed_always_rules: Vec::new(),
+            review: HumanReviewAuditRecord {
+                kind: crate::engine::human_review::HumanReviewKind::ToolPermission,
+                title: "Tool approval".to_string(),
+                risk: crate::engine::human_review::HumanReviewRisk::Medium,
+                subject: "git".to_string(),
+                reason: "Allow git mutation?".to_string(),
+                tool_call_id: Some("call_1".to_string()),
+                tool_name: Some("git".to_string()),
+                input_summary: "git".to_string(),
+                risk_facts: Vec::new(),
+                matched_rules: vec!["git".to_string()],
+                classifier_result: None,
+                hook_decision: None,
+                user_decision: None,
+                persistence_scope: Some("this_call".to_string()),
+                saved_config_path: None,
+                recovery_hint: Some("Ask the user to approve 'git' before retrying.".to_string()),
+            },
             rejection_feedback: "Permission denied: 'git' requires user confirmation.".to_string(),
             recovery_feedback: "Ask the user to approve 'git' before retrying.".to_string(),
         };

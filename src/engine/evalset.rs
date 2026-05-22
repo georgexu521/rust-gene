@@ -2350,6 +2350,7 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
                 } else {
                     permission.prompt.clone()
                 },
+                review: None,
             });
             trace.events.push(TraceEvent::PermissionResolved {
                 tool: call.tool.clone(),
@@ -2359,6 +2360,7 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
                 persistence_scope: permission.persistence_scope.clone(),
                 rule_pattern: permission.rule_pattern.clone(),
                 persisted_path: permission.persisted_path.clone(),
+                review: None,
             });
         }
         trace.events.push(TraceEvent::ToolCompleted {

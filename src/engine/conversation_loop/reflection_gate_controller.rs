@@ -93,12 +93,14 @@ impl ReflectionGateController {
                     tool_name: review_call.name.clone(),
                     arguments: review_call.arguments.clone(),
                     prompt: review_prompt.clone(),
+                    review: None,
                 })
                 .await;
             trace.record(TraceEvent::PermissionRequested {
                 tool: review_call.name.clone(),
                 call_id: review_call.id.clone(),
                 prompt: review_prompt.clone(),
+                review: None,
             });
             match channel
                 .submit(ToolApprovalRequest {
@@ -125,6 +127,7 @@ impl ReflectionGateController {
                 persistence_scope: None,
                 rule_pattern: None,
                 persisted_path: None,
+                review: None,
             });
         } else {
             approved = true;

@@ -289,6 +289,8 @@ pub enum TraceEvent {
         tool: String,
         call_id: String,
         prompt: String,
+        #[serde(default)]
+        review: Option<crate::engine::human_review::HumanReviewAuditRecord>,
     },
     PermissionResolved {
         tool: String,
@@ -302,6 +304,8 @@ pub enum TraceEvent {
         rule_pattern: Option<String>,
         #[serde(default)]
         persisted_path: Option<String>,
+        #[serde(default)]
+        review: Option<crate::engine::human_review::HumanReviewAuditRecord>,
     },
     ToolCompleted {
         tool: String,
@@ -894,12 +898,26 @@ impl TraceEvent {
                 tool,
                 call_id,
                 prompt,
-            } => format!(
-                "{} {} requested permission: {}",
-                tool,
-                short_id(call_id),
-                preview(prompt)
-            ),
+                review,
+            } => {
+                let mut summary = format!(
+                    "{} {} requested permission: {}",
+                    tool,
+                    short_id(call_id),
+                    preview(prompt)
+                );
+                if let Some(review) = review {
+                    summary.push_str(&format!(
+                        " review={:?}/{}",
+                        review.kind,
+                        review.risk.as_str()
+                    ));
+                    if !review.risk_facts.is_empty() {
+                        summary.push_str(&format!(" facts={}", review.risk_facts.join(",")));
+                    }
+                }
+                summary
+            }
             TraceEvent::PermissionResolved {
                 tool,
                 call_id,
@@ -908,6 +926,7 @@ impl TraceEvent {
                 persistence_scope,
                 rule_pattern,
                 persisted_path,
+                review,
             } => {
                 let mut summary = format!(
                     "{} {} permission {}",
@@ -926,6 +945,14 @@ impl TraceEvent {
                 }
                 if let Some(path) = persisted_path {
                     summary.push_str(&format!(" saved={}", path));
+                }
+                if let Some(review) = review {
+                    if let Some(user_decision) = review.user_decision.as_deref() {
+                        summary.push_str(&format!(" user_decision={}", user_decision));
+                    }
+                    if let Some(hint) = review.recovery_hint.as_deref() {
+                        summary.push_str(&format!(" recovery={}", preview(hint)));
+                    }
                 }
                 summary
             }
