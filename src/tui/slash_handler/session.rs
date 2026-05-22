@@ -66,7 +66,7 @@ pub async fn handle_rewind(app: &mut TuiApp, args: &str) -> String {
         Some(id) => id.to_string(),
         None => return "No active session.".to_string(),
     };
-    let checkpoint_session_id = format!("session-{}", raw_session_id);
+    let checkpoint_session_id = raw_session_id.to_string();
     let trimmed = args.trim();
 
     let checkpoint_manager =
@@ -209,7 +209,7 @@ async fn checkpoint_diff_for_target(app: &TuiApp, target: &str) -> Option<(Strin
         return None;
     }
     let raw_session_id = app.session_manager.current_session_id()?;
-    let checkpoint_session_id = format!("session-{}", raw_session_id);
+    let checkpoint_session_id = raw_session_id.to_string();
     let checkpoint_manager =
         crate::engine::checkpoint::get_checkpoint_manager(&checkpoint_session_id).await;
     let checkpoint_guard = checkpoint_manager.lock().await;
@@ -594,7 +594,7 @@ pub async fn handle_batch(_app: &mut TuiApp, args: &str) -> String {
 
 pub async fn handle_checkpoints(app: &TuiApp) -> String {
     let session_id = match app.session_manager.current_session_id() {
-        Some(id) => format!("session-{}", id),
+        Some(id) => id.to_string(),
         None => return "No active session. Start a conversation first.".to_string(),
     };
 
@@ -684,7 +684,7 @@ pub async fn handle_restore(app: &mut TuiApp, args: &str) -> String {
     }
 
     let session_id = match app.session_manager.current_session_id() {
-        Some(id) => format!("session-{}", id),
+        Some(id) => id.to_string(),
         None => return "No active session.".to_string(),
     };
 

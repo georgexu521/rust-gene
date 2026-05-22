@@ -192,7 +192,7 @@ fn is_file_change_rollback_target(target: &str) -> bool {
 
 async fn handle_file_change_rollback(app: &TuiApp, target: &str) -> String {
     let session_id = match app.session_manager.current_session_id() {
-        Some(id) => format!("session-{}", id),
+        Some(id) => id.to_string(),
         None => return "No active session.".to_string(),
     };
 

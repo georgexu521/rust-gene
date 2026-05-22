@@ -664,6 +664,35 @@ Acceptance:
 - Final closeout can cite exact changed files and validation evidence from
   records.
 
+Progress on 2026-05-22:
+
+- The model-facing `rewind` tool now performs real checkpoint-backed restore
+  operations instead of returning a placeholder success message. It can restore
+  the latest file change, the Nth most recent file change through the legacy
+  `steps` parameter, an explicit `file_change_id`, an explicit `checkpoint_id`,
+  or the latest tracked change for a path.
+- `rewind` uses the same `CheckpointManager` / `file_history.json` source as
+  file tools and slash-command rewind, and returns structured restore metadata
+  including restored, removed, and failed files.
+- The model-facing `diff` tool now reads checkpoint-backed file history through
+  `history` and `file_change` actions, so slash `/diff`, file tools, and tool
+  calls share the same durable file-change source for recent mutation diffs.
+- TUI slash paths for `/diff`, `/rewind`, `/checkpoints`, `/restore`, and
+  `/rollback last-file` now use the actual active TUI session ID when reading
+  checkpoints instead of a prefixed derived ID, matching the session ID used by
+  file tools when they create file history.
+
+Validation so far:
+
+- `cargo test -q rewind_tool` - passed, 1 test.
+- `cargo test -q diff_tool` - passed, 3 tests.
+- `cargo test -q checkpoint` - passed, 33 tests.
+- `cargo test -q slash_handler` - passed, 49 tests.
+- `cargo check -q` - passed.
+- `cargo fmt --check` - passed.
+- `cargo clippy -q -- -D warnings` - passed.
+- `git diff --check` - passed.
+
 ## Phase 5: Permission, Hook, And Human Review Runtime
 
 Purpose: make safety review one coherent product path.
