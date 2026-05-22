@@ -1747,6 +1747,96 @@ impl McpManager {
             .map(|d| d.name)
             .collect()
     }
+
+    /// Build runtime-visible MCP facts for CLI status, routing, and diagnostics.
+    pub async fn runtime_facts(&self) -> Vec<McpServerRuntimeFacts> {
+        let mut diagnostics = self.health_diagnostics();
+        diagnostics.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let mut facts = Vec::with_capacity(diagnostics.len());
+        for diagnostic in diagnostics {
+            let mut tools = Vec::new();
+            let mut resources = Vec::new();
+            let mut prompts = Vec::new();
+            let mut discovery_errors = Vec::new();
+
+            if diagnostic.approved && diagnostic.health == McpHealthStatus::Healthy {
+                if let Some(client) = self.clients.get(&diagnostic.name) {
+                    match client.discover_tools().await {
+                        Ok(items) => {
+                            tools = items.into_iter().map(|tool| tool.name).collect();
+                            tools.sort();
+                        }
+                        Err(error) => discovery_errors.push(format!("tools: {}", error)),
+                    }
+                    match client.discover_resources().await {
+                        Ok(items) => {
+                            resources = items.into_iter().map(|resource| resource.uri).collect();
+                            resources.sort();
+                        }
+                        Err(error) => discovery_errors.push(format!("resources: {}", error)),
+                    }
+                    match client.discover_prompts().await {
+                        Ok(items) => {
+                            prompts = items.into_iter().map(|prompt| prompt.name).collect();
+                            prompts.sort();
+                        }
+                        Err(error) => discovery_errors.push(format!("prompts: {}", error)),
+                    }
+                }
+            }
+
+            let commands = prompts
+                .iter()
+                .map(|prompt| format!("/mcp__{}__{}", diagnostic.name, prompt))
+                .collect::<Vec<_>>();
+            let diagnostic_text = if !diagnostic.approved {
+                format!(
+                    "server pending approval; next action: {}",
+                    diagnostic.repair_hint
+                )
+            } else if diagnostic.oauth_configured && !diagnostic.oauth_token_present {
+                format!(
+                    "oauth token missing; next action: {}",
+                    diagnostic.repair_hint
+                )
+            } else if !discovery_errors.is_empty() {
+                format!(
+                    "discovery degraded; {}; next action: {}",
+                    discovery_errors.join("; "),
+                    diagnostic.repair_hint
+                )
+            } else if matches!(
+                diagnostic.health,
+                McpHealthStatus::Degraded | McpHealthStatus::Unhealthy
+            ) {
+                format!("server degraded; next action: {}", diagnostic.repair_hint)
+            } else {
+                "server ready".to_string()
+            };
+
+            facts.push(McpServerRuntimeFacts {
+                name: diagnostic.name,
+                transport: diagnostic.transport,
+                health: diagnostic.health,
+                approved: diagnostic.approved,
+                oauth_configured: diagnostic.oauth_configured,
+                oauth_token_present: diagnostic.oauth_token_present,
+                circuit_breaker: diagnostic.circuit_breaker,
+                repair_hint: diagnostic.repair_hint,
+                tool_count: tools.len(),
+                resource_count: resources.len(),
+                prompt_count: prompts.len(),
+                commands,
+                tools,
+                resources,
+                prompts,
+                diagnostic: diagnostic_text,
+            });
+        }
+
+        facts
+    }
 }
 
 /// MCP 服务器健康状态
@@ -1764,7 +1854,7 @@ pub enum McpHealthStatus {
 }
 
 /// MCP 服务器健康信息
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerHealth {
     /// 服务器名称
     pub name: String,
@@ -1782,6 +1872,27 @@ pub struct McpServerHealth {
     pub oauth_token_present: bool,
     /// Human-readable repair command or next action.
     pub repair_hint: String,
+}
+
+/// Runtime-visible MCP integration facts for diagnostics and prompt/routing state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerRuntimeFacts {
+    pub name: String,
+    pub transport: String,
+    pub health: McpHealthStatus,
+    pub approved: bool,
+    pub oauth_configured: bool,
+    pub oauth_token_present: bool,
+    pub circuit_breaker: String,
+    pub repair_hint: String,
+    pub tool_count: usize,
+    pub resource_count: usize,
+    pub prompt_count: usize,
+    pub commands: Vec<String>,
+    pub tools: Vec<String>,
+    pub resources: Vec<String>,
+    pub prompts: Vec<String>,
+    pub diagnostic: String,
 }
 
 impl Default for McpManager {
@@ -1890,6 +2001,7 @@ impl crate::tools::Tool for McpManageTool {
                     "type": "string",
                     "enum": [
                         "list_servers",
+                        "status",
                         "list_tools",
                         "list_prompts",
                         "list_resources",
@@ -1899,6 +2011,7 @@ impl crate::tools::Tool for McpManageTool {
                         "repair_server"
                     ],
                     "description": "list_servers: show connected servers. \
+                                   status: show health, approval, auth, and discovered MCP runtime facts. \
                                    list_tools: show all available MCP tools. \
                                    list_prompts: show MCP prompts that can become commands. \
                                    list_resources: show available MCP resources. \
@@ -1955,6 +2068,42 @@ impl crate::tools::Tool for McpManageTool {
                         "Connected MCP servers:\n{}",
                         servers.join("\n")
                     ))
+                }
+            }
+            "status" => {
+                let facts = mcp_manager.runtime_facts().await;
+                if facts.is_empty() {
+                    crate::tools::ToolResult::success("No MCP servers configured.".to_string())
+                } else {
+                    let rows = facts
+                        .iter()
+                        .map(|fact| {
+                            format!(
+                                "- {} [{}] health={:?} approved={} oauth={} tools={} resources={} prompts={} next={}",
+                                fact.name,
+                                fact.transport,
+                                fact.health,
+                                fact.approved,
+                                if fact.oauth_configured {
+                                    if fact.oauth_token_present {
+                                        "configured/token"
+                                    } else {
+                                        "configured/missing_token"
+                                    }
+                                } else {
+                                    "none"
+                                },
+                                fact.tool_count,
+                                fact.resource_count,
+                                fact.prompt_count,
+                                fact.repair_hint
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    crate::tools::ToolResult::success_with_data(
+                        format!("MCP runtime status:\n{}", rows.join("\n")),
+                        json!({ "servers": facts }),
+                    )
                 }
             }
             "list_tools" => {
@@ -2236,7 +2385,69 @@ mod tests {
         assert!(action_names.contains(&"list_resources"));
         assert!(action_names.contains(&"read_resource"));
         assert!(action_names.contains(&"repair_server"));
+        assert!(action_names.contains(&"status"));
         assert!(schema["properties"].get("uri").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_runtime_facts_report_pending_approval_without_discovery() {
+        let mut manager = McpManager::new();
+        manager.add_server(McpServerConfig {
+            name: "filesystem".to_string(),
+            transport: McpTransport::Stdio,
+            command: "mcp-filesystem".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            websocket_url: None,
+            http_url: None,
+            headers: HashMap::new(),
+            oauth: None,
+            oauth_token_url: None,
+        });
+
+        let facts = manager.runtime_facts().await;
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].name, "filesystem");
+        assert_eq!(facts[0].health, McpHealthStatus::Pending);
+        assert!(!facts[0].approved);
+        assert_eq!(facts[0].tool_count, 0);
+        assert_eq!(facts[0].resource_count, 0);
+        assert_eq!(facts[0].prompt_count, 0);
+        assert_eq!(facts[0].repair_hint, "/mcp approve filesystem");
+        assert!(facts[0].diagnostic.contains("pending approval"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_status_action_returns_runtime_facts_data() {
+        use crate::tools::Tool;
+
+        let mut manager = McpManager::new();
+        manager.add_server(McpServerConfig {
+            name: "filesystem".to_string(),
+            transport: McpTransport::Stdio,
+            command: "mcp-filesystem".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            websocket_url: None,
+            http_url: None,
+            headers: HashMap::new(),
+            oauth: None,
+            oauth_token_url: None,
+        });
+        let context =
+            crate::tools::ToolContext::new(".", "test").with_mcp_manager(Arc::new(manager));
+
+        let result = McpManageTool
+            .execute(json!({ "action": "status" }), context)
+            .await;
+
+        assert!(result.success);
+        assert!(result.content.contains("MCP runtime status"));
+        assert_eq!(
+            result.data.unwrap()["servers"][0]["repair_hint"],
+            "/mcp approve filesystem"
+        );
     }
 
     #[test]

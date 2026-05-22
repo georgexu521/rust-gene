@@ -1163,6 +1163,24 @@ Acceptance:
 
 - Integration failures are visible, diagnosable, and recoverable from the CLI.
 
+Progress on 2026-05-22:
+
+- MCP now exposes runtime-visible server facts for health, approval, OAuth token
+  state, circuit breaker state, repair hints, discovered tools/resources/prompts,
+  and prompt-derived `/mcp__server__prompt` command names.
+- The `mcp` management tool now supports `action=status`, returning both a
+  concise CLI status panel and structured runtime-facts data for diagnostics and
+  future routing/runtime-state consumers.
+
+Validation so far:
+
+- `cargo test -q mcp_runtime_facts` - passed, 1 test for pending-approval
+  diagnostics without unsafe discovery.
+- `cargo test -q mcp_status_action` - passed, 1 test for structured CLI status
+  data.
+- `cargo test -q mcp` - passed, 29 tests after MCP runtime-facts support.
+- `cargo check -q` - passed.
+
 ## Phase 10: Release Hardening
 
 Purpose: make the project shippable, not only impressive locally.
