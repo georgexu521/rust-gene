@@ -859,6 +859,23 @@ Acceptance:
 - During a real coding task, the user can see progress, risk, diffs, validation,
   and background work without opening raw trace logs.
 
+Progress on 2026-05-22:
+
+- The runtime approval panel now renders permission audit risk facts, matched
+  rules, and recovery hints from the structured approval request instead of
+  requiring trace-log inspection.
+- Permission preview snapshot coverage was updated for command-scoped bash
+  approval details.
+
+Validation so far:
+
+- `cargo test -q runtime_panels` - passed, 5 tests.
+- `cargo test -q main_screen` - passed, 15 tests.
+- `cargo check -q` - passed.
+- `cargo fmt --check` - passed.
+- `cargo clippy -q -- -D warnings` - passed.
+- `git diff --check` - passed.
+
 ## Phase 7: Subagents, Tasks, And Worktrees
 
 Purpose: make parallel coding work dependable.
