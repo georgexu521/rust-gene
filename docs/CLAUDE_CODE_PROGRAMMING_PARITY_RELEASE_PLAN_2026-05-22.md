@@ -980,6 +980,12 @@ Progress on 2026-05-22:
   durable task state and persisted result artifacts from the current session
   store. This lets a parent inspect worker output after the in-memory manager
   result is gone.
+- The `agent` tool now supports `action=list`, which shows active in-memory
+  agents plus recent durable task states for the current session without
+  requiring a specific `agent_id`.
+- Durable `agent_id` plus `action=read` no longer requires an `AgentManager`;
+  the parent can inspect persisted worker state even after the in-memory manager
+  is unavailable.
 - Agent worktree branch merge and tracked-diff apply failures now wrap
   conflict-like git errors with recovery context that points to `agent_review`,
   manual resolution in the isolated worktree, or `agent_cleanup`.
@@ -997,6 +1003,8 @@ Validation so far:
 - `cargo test -q agent_tool` - passed, 15 tests after failure-state handling.
 - `cargo test -q agent_tool` - passed, 17 tests after cancel action support.
 - `cargo test -q agent_tool` - passed, 18 tests after durable read support.
+- `cargo test -q agent_tool` - passed, 20 tests after durable progress list and
+  manager-free durable read support.
 - `cargo test -q forked_context` - passed, 4 tests.
 - `cargo test -q worktree_tool` - passed, 3 tests.
 - `cargo test -q worktree_tool` - passed, 6 tests after safety guard coverage.

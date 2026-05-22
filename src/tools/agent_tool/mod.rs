@@ -936,6 +936,88 @@ fn read_durable_agent_state(context: &ToolContext, agent_id: &str) -> ToolResult
     )
 }
 
+async fn list_agent_progress(
+    context: &ToolContext,
+    agent_manager: Option<&std::sync::Arc<crate::agent::AgentManager>>,
+    limit: i64,
+) -> ToolResult {
+    let durable_states = match context.session_store.as_ref() {
+        Some(store) => match store.recent_agent_task_states(&context.session_id, limit) {
+            Ok(states) => states,
+            Err(error) => {
+                return ToolResult::error(format!("Failed to list agent task states: {}", error));
+            }
+        },
+        None => Vec::new(),
+    };
+    let active_agents = match agent_manager {
+        Some(manager) => manager.list_agents().await,
+        None => Vec::new(),
+    };
+
+    let mut lines = vec![format!(
+        "Sub-agent progress: {} durable task(s), {} active in-memory agent(s)",
+        durable_states.len(),
+        active_agents.len()
+    )];
+    if !active_agents.is_empty() {
+        lines.push(String::new());
+        lines.push("Active agents:".to_string());
+        for handle in &active_agents {
+            let status = format!("{:?}", *handle.status.borrow()).to_lowercase();
+            lines.push(format!(
+                "- {} [{}] {} - {}",
+                handle.id, status, handle.config.name, handle.config.description
+            ));
+        }
+    }
+    if !durable_states.is_empty() {
+        lines.push(String::new());
+        lines.push("Durable task states:".to_string());
+        for state in &durable_states {
+            let mut suffix = Vec::new();
+            if state.result_artifact_id.is_some() {
+                suffix.push("artifact");
+            }
+            if !state.cleanup_hooks.is_empty() {
+                suffix.push("cleanup");
+            }
+            let suffix = if suffix.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", suffix.join(","))
+            };
+            lines.push(format!(
+                "- {} / {} [{}] {}{}",
+                state.agent_id, state.task_id, state.status, state.description, suffix
+            ));
+        }
+    }
+    if active_agents.is_empty() && durable_states.is_empty() {
+        lines.push("No sub-agent activity recorded for this session.".to_string());
+    }
+
+    ToolResult::success_with_data(
+        lines.join("\n"),
+        json!({
+            "active_agents": active_agents
+                .iter()
+                .map(|handle| {
+                    json!({
+                        "agent_id": handle.id.to_string(),
+                        "status": format!("{:?}", *handle.status.borrow()).to_lowercase(),
+                        "name": handle.config.name.clone(),
+                        "description": handle.config.description.clone(),
+                        "role": format!("{:?}", handle.config.role).to_lowercase(),
+                        "working_dir": handle.config.working_dir.as_ref().map(|path| path.to_string_lossy().to_string()),
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "durable_tasks": durable_states,
+        }),
+    )
+}
+
 fn cancelled_agent_task_state_upsert(
     state: &crate::session_store::AgentTaskStateRecord,
 ) -> crate::session_store::AgentTaskStateUpsert {
@@ -1446,9 +1528,15 @@ impl Tool for AgentTool {
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["resume", "read", "cancel"],
-                    "description": "Action for agent_id. resume reads the in-memory result if available; read loads durable task/artifact state; cancel stops a running sub-agent and marks durable state cancelled.",
+                    "enum": ["list", "resume", "read", "cancel"],
+                    "description": "Action for agent lifecycle/progress. list shows active and durable sub-agent progress; resume reads the in-memory result if available; read loads durable task/artifact state; cancel stops a running sub-agent and marks durable state cancelled.",
                     "default": "resume"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum durable task states to return for action=list",
+                    "default": 20,
+                    "minimum": 1
                 },
                 "subtasks": {
                     "type": "array",
@@ -1536,6 +1624,31 @@ impl Tool for AgentTool {
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
+        if params["agent_id"].is_null() && params["action"].as_str() == Some("list") {
+            let limit = params["limit"].as_i64().unwrap_or(20).clamp(1, 100);
+            return list_agent_progress(&context, context.agent_manager.as_ref(), limit).await;
+        }
+        if let Some(agent_id_str) = params["agent_id"].as_str() {
+            if params["fork_branches"].is_null()
+                && params["subtasks"].is_null()
+                && params["description"].is_null()
+            {
+                match params["action"].as_str() {
+                    Some("read") => return read_durable_agent_state(&context, agent_id_str),
+                    Some("list") => {
+                        let limit = params["limit"].as_i64().unwrap_or(20).clamp(1, 100);
+                        return list_agent_progress(
+                            &context,
+                            context.agent_manager.as_ref(),
+                            limit,
+                        )
+                        .await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let agent_manager = match &context.agent_manager {
             Some(manager) => manager.clone(),
             None => {
@@ -1553,17 +1666,18 @@ impl Tool for AgentTool {
                 && params["description"].is_null()
             {
                 return match params["action"].as_str().unwrap_or("resume") {
+                    "list" => list_agent_progress(&context, Some(&agent_manager), 20).await,
                     "resume" => handle_resume(&agent_manager, agent_id_str).await,
                     "read" => read_durable_agent_state(&context, agent_id_str),
                     "cancel" => handle_cancel(&agent_manager, &context, agent_id_str).await,
                     other => ToolResult::error(format!(
-                        "Invalid agent action '{}'. Expected resume, read, or cancel.",
+                        "Invalid agent action '{}'. Expected list, resume, read, or cancel.",
                         other
                     )),
                 };
             }
         } else if let Some(action) = params["action"].as_str() {
-            if action != "resume" {
+            if action != "resume" && action != "list" {
                 return ToolResult::error("agent_id is required for agent action");
             }
         }
@@ -1656,11 +1770,17 @@ impl Tool for AgentTool {
         handle_single_agent(ctx).await
     }
 
-    fn requires_confirmation(&self, _params: &serde_json::Value) -> bool {
+    fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
+        if params["agent_id"].is_null() && params["action"].as_str() == Some("list") {
+            return false;
+        }
         true
     }
 
     fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {
+        if params["agent_id"].is_null() && params["action"].as_str() == Some("list") {
+            return None;
+        }
         if let Some(agent_id) = params["agent_id"].as_str() {
             return Some(match params["action"].as_str().unwrap_or("resume") {
                 "cancel" => format!("Cancel running sub-agent {}?", agent_id),
@@ -1706,6 +1826,7 @@ impl Tool for AgentTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn agent_tool_contract_discourages_blocking_delegation() {
@@ -1831,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_tool_schema_exposes_cancel_action() {
+    fn agent_tool_schema_exposes_lifecycle_actions() {
         let tool = AgentTool;
         let params = tool.parameters();
 
@@ -1844,8 +1965,9 @@ mod tests {
                         .filter_map(|value| value.as_str())
                         .collect::<Vec<_>>()
                 }),
-            Some(vec!["resume", "read", "cancel"])
+            Some(vec!["list", "resume", "read", "cancel"])
         );
+        assert!(!tool.requires_confirmation(&json!({"action": "list"})));
         assert!(tool
             .confirmation_prompt(&json!({"agent_id": "agent_1", "action": "cancel"}))
             .unwrap()
@@ -1854,6 +1976,84 @@ mod tests {
             .confirmation_prompt(&json!({"agent_id": "agent_1", "action": "read"}))
             .unwrap()
             .contains("Read durable state for sub-agent agent_1"));
+    }
+
+    #[tokio::test]
+    async fn agent_list_reads_durable_progress_without_manager() {
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store
+            .create_session("s1", "agent list test", "test-model")
+            .unwrap();
+        store
+            .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
+                session_id: "s1".to_string(),
+                task_id: "task_1".to_string(),
+                agent_id: "agent_1".to_string(),
+                profile: Some("implementer".to_string()),
+                role: "specialist".to_string(),
+                status: "running".to_string(),
+                description: "edit code".to_string(),
+                transcript_path: None,
+                tool_ids_in_progress: vec!["tool_1".to_string()],
+                permission_requests: Vec::new(),
+                result_artifact_id: None,
+                cleanup_hooks: vec!["worktree_cleanup".to_string()],
+                payload: json!({}),
+            })
+            .unwrap();
+
+        let result = AgentTool
+            .execute(
+                json!({"action": "list"}),
+                ToolContext::new(".", "s1").with_session_store(store),
+            )
+            .await;
+
+        assert!(result.success, "list failed: {:?}", result.error);
+        assert!(result.content.contains("Sub-agent progress"));
+        assert!(result
+            .content
+            .contains("agent_1 / task_1 [running] edit code"));
+        assert_eq!(
+            result.data.unwrap()["durable_tasks"][0]["agent_id"],
+            "agent_1"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_read_does_not_require_manager() {
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store
+            .create_session("s1", "agent read test", "test-model")
+            .unwrap();
+        store
+            .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
+                session_id: "s1".to_string(),
+                task_id: "task_1".to_string(),
+                agent_id: "agent_1".to_string(),
+                profile: Some("implementer".to_string()),
+                role: "specialist".to_string(),
+                status: "completed".to_string(),
+                description: "edit code".to_string(),
+                transcript_path: None,
+                tool_ids_in_progress: Vec::new(),
+                permission_requests: Vec::new(),
+                result_artifact_id: None,
+                cleanup_hooks: vec!["worktree_cleanup".to_string()],
+                payload: json!({}),
+            })
+            .unwrap();
+
+        let result = AgentTool
+            .execute(
+                json!({"agent_id": "agent_1", "action": "read"}),
+                ToolContext::new(".", "s1").with_session_store(store),
+            )
+            .await;
+
+        assert!(result.success, "read failed: {:?}", result.error);
+        assert!(result.content.contains("Sub-agent agent_1"));
+        assert_eq!(result.data.unwrap()["status"], "completed");
     }
 
     #[test]

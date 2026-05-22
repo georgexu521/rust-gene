@@ -79,10 +79,13 @@ Current stage:
   remaining `running`, while preserving cleanup metadata; `agent_id` plus
   `action=cancel` now stops a running subagent and marks durable state
   `cancelled`, and `action=read` loads durable task state plus persisted result
-  artifacts after in-memory manager results are gone. Agent worktree safety guards
-  now have direct coverage for dirty status, untracked paths, safe agent branch
-  deletion, rejection of non-isolated task records, and merge-conflict recovery
-  messaging for branch/diff merges. Worktree manager git calls now run from the
+  artifacts after in-memory manager results are gone. `action=list` now reports
+  active in-memory agents plus recent durable task states without requiring a
+  specific `agent_id`, and durable `action=read` no longer needs an
+  `AgentManager`. Agent worktree safety guards now have direct coverage for
+  dirty status, untracked paths, safe agent branch deletion, rejection of
+  non-isolated task records, and merge-conflict recovery messaging for
+  branch/diff merges. Worktree manager git calls now run from the
   captured repo root, porcelain worktree paths are parsed correctly, internal
   `.claude/worktrees/` storage no longer blocks parent merge cleanliness checks,
   and a real temporary-git-repo flow covers agent review, tracked-diff merge,
