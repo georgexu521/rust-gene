@@ -1358,6 +1358,11 @@ The next concrete batches should be:
    and record parity reports.
 3. **Bash safety and task-output hardening.**
    Deepen command facts, durable output, auto-background, and permission review.
+   - Progress on 2026-05-22: bash foreground and background terminal-task
+     metadata now records output availability, persisted-output status, and
+     stdout/stderr/combined byte counts. Short-output artifact persistence is
+     configurable with `PRIORITY_AGENT_BASH_OUTPUT_ARTIFACT_MIN_BYTES`, while
+     the default keeps existing behavior.
 4. **File history and rewind hardening.**
    Add turn-level snapshots, restore coverage, and closeout evidence plumbing.
 5. **TUI product pass for coding loop.**

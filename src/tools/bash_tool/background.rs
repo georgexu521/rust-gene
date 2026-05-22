@@ -1,6 +1,6 @@
 use super::{
     classification_data, kill_process_tree, preview_text, sanitize_agent_runtime_env,
-    shell_output_artifact_path, BashExecutionBackend,
+    shell_output_artifact_path, should_write_shell_output_artifact, BashExecutionBackend,
 };
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
@@ -148,6 +148,9 @@ impl BackgroundShellSnapshot {
         let (stdout_preview, stdout_truncated) = preview_text(&self.stdout, max_chars);
         let (stderr_preview, stderr_truncated) = preview_text(&self.stderr, max_chars);
         let output_path_for_task = output_path.clone();
+        let output = self.combined_output();
+        let output_persisted = output_path_for_task.is_some();
+        let output_available = output_persisted || !output.trim().is_empty();
         json!({
             "shell_background": {
                 "handle": self.handle,
@@ -163,6 +166,10 @@ impl BackgroundShellSnapshot {
                 "cancelled": self.cancelled(),
                 "truncated": self.truncated() || stdout_truncated || stderr_truncated,
                 "output_path": output_path,
+                "output_persisted": output_persisted,
+                "output_bytes": output.len(),
+                "stdout_bytes": self.stdout.len(),
+                "stderr_bytes": self.stderr.len(),
                 "stdout_preview": stdout_preview,
                 "stderr_preview": stderr_preview,
                 "classification": classification_data(&self.command),
@@ -178,6 +185,11 @@ impl BackgroundShellSnapshot {
                 "duration_ms": self.duration_ms,
                 "exit_code": self.exit_code,
                 "output_path": output_path_for_task,
+                "output_available": output_available,
+                "output_persisted": output_persisted,
+                "output_bytes": output.len(),
+                "stdout_bytes": self.stdout.len(),
+                "stderr_bytes": self.stderr.len(),
                 "read_tool": "bash_output",
                 "cancel_tool": "bash_cancel",
                 "cancel_handle": if self.status == BackgroundShellStatus::Running {
@@ -504,7 +516,7 @@ fn background_output_artifact_path(
 ) -> Option<String> {
     let output = snapshot.combined_output();
     let (_, preview_truncated) = preview_text(&output, max_chars);
-    if snapshot.truncated() || preview_truncated {
+    if snapshot.truncated() || should_write_shell_output_artifact(&output, preview_truncated) {
         shell_output_artifact_path(context, &snapshot.working_dir, &snapshot.command, &output)
     } else {
         None
@@ -910,6 +922,14 @@ mod tests {
         assert_eq!(
             result.data.as_ref().unwrap()["terminal_task"]["output_path"],
             output_path
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["terminal_task"]["output_available"],
+            true
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["terminal_task"]["output_persisted"],
+            true
         );
     }
 

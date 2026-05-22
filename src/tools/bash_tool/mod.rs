@@ -25,6 +25,8 @@ use tracing::{debug, error, info, warn};
 /// Bash 工具
 pub struct BashTool;
 
+const DEFAULT_OUTPUT_ARTIFACT_MIN_BYTES: usize = 10_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BashExecutionBackend {
     Local,
@@ -405,6 +407,33 @@ fn shell_output_artifact_path(
     Some(relative.to_string_lossy().to_string())
 }
 
+fn shell_output_artifact_min_bytes() -> usize {
+    std::env::var("PRIORITY_AGENT_BASH_OUTPUT_ARTIFACT_MIN_BYTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_OUTPUT_ARTIFACT_MIN_BYTES)
+        .min(10_000_000)
+}
+
+fn should_write_shell_output_artifact(output: &str, preview_truncated: bool) -> bool {
+    should_write_shell_output_artifact_with_min(
+        output,
+        preview_truncated,
+        shell_output_artifact_min_bytes(),
+    )
+}
+
+fn should_write_shell_output_artifact_with_min(
+    output: &str,
+    preview_truncated: bool,
+    min_bytes: usize,
+) -> bool {
+    if output.trim().is_empty() {
+        return false;
+    }
+    preview_truncated || output.len() >= min_bytes
+}
+
 struct ShellResultData<'a> {
     audit: &'a serde_json::Value,
     command: &'a str,
@@ -463,7 +492,7 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
     }
     content_preview = append_shell_compatibility_hint(content_preview);
 
-    let output_path = content_truncated
+    let output_path = should_write_shell_output_artifact(input.combined_output, content_truncated)
         .then(|| {
             shell_output_artifact_path(
                 input.context,
@@ -490,6 +519,8 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
     } else {
         serde_json::Value::Null
     };
+    let output_persisted = output_path.is_some();
+    let output_available = output_persisted || !input.combined_output.trim().is_empty();
     let data = json!({
         "audit": input.audit,
         "command_classification": classification.clone(),
@@ -500,6 +531,10 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
             "stdout_preview": stdout_preview,
             "stderr_preview": stderr_preview,
             "output_path": output_path,
+            "output_persisted": output_persisted,
+            "output_bytes": input.combined_output.len(),
+            "stdout_bytes": input.stdout.len(),
+            "stderr_bytes": input.stderr.len(),
             "duration_ms": serde_json::Value::Null,
             "timed_out": input.timed_out,
             "truncated": content_truncated || stdout_truncated || stderr_truncated,
@@ -517,6 +552,11 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
             "duration_ms": input.duration_ms,
             "exit_code": input.exit_code,
             "output_path": output_path_for_task,
+            "output_available": output_available,
+            "output_persisted": output_persisted,
+            "output_bytes": input.combined_output.len(),
+            "stdout_bytes": input.stdout.len(),
+            "stderr_bytes": input.stderr.len(),
             "read_tool": read_tool,
             "cancel_tool": serde_json::Value::Null,
             "cancel_handle": serde_json::Value::Null,
@@ -1611,6 +1651,26 @@ mod tests {
             .expect("terminal_task metadata should be present");
         assert_eq!(terminal_task["output_path"], output_path);
         assert_eq!(terminal_task["read_tool"], "file_read");
+    }
+
+    #[test]
+    fn test_shell_output_artifact_policy_is_configurable() {
+        assert!(!should_write_shell_output_artifact_with_min(
+            "short output",
+            false,
+            100
+        ));
+        assert!(should_write_shell_output_artifact_with_min(
+            "short output",
+            false,
+            0
+        ));
+        assert!(!should_write_shell_output_artifact_with_min("", true, 0));
+        assert!(should_write_shell_output_artifact_with_min(
+            "truncated output",
+            true,
+            10_000
+        ));
     }
 
     #[tokio::test]
