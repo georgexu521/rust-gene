@@ -970,12 +970,16 @@ Progress on 2026-05-22:
   `failed` or `timed_out` instead of leaving spawned workers stuck in `running`.
   The failure state preserves the original payload, including isolated worktree
   cleanup metadata.
+- The `agent` tool now supports `agent_id` with `action=cancel`, which sends the
+  manager stop signal and marks durable task state `cancelled` while preserving
+  permission requests and worktree cleanup metadata.
 
 Validation so far:
 
 - `cargo test -q profiles` - passed, 6 tests.
 - `cargo test -q agent_tool` - passed, 14 tests.
 - `cargo test -q agent_tool` - passed, 15 tests after failure-state handling.
+- `cargo test -q agent_tool` - passed, 17 tests after cancel action support.
 - `cargo test -q forked_context` - passed, 4 tests.
 - `cargo test -q worktree_tool` - passed, 3 tests.
 - `cargo test -q session_store` - passed, 14 tests.

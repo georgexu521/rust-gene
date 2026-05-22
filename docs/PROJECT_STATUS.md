@@ -76,7 +76,9 @@ Current stage:
   infers isolated worktree context whenever the resolved tool surface includes
   mutating file tools. Spawned subagents that fail or time out while waiting for
   results now update durable task state to `failed`/`timed_out` instead of
-  remaining `running`, while preserving cleanup metadata. Hook and permission failures now share the recovery spine:
+  remaining `running`, while preserving cleanup metadata; `agent_id` plus
+  `action=cancel` now stops a running subagent and marks durable state
+  `cancelled`. Hook and permission failures now share the recovery spine:
   failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
   classified as hook runtime failures, and permission denials emit
   `/permissions explain` recovery plans in trace.

@@ -847,6 +847,70 @@ async fn handle_resume(
     }
 }
 
+fn cancelled_agent_task_state_upsert(
+    state: &crate::session_store::AgentTaskStateRecord,
+) -> crate::session_store::AgentTaskStateUpsert {
+    let mut payload = state.payload.clone();
+    payload["cancelled_at"] = json!(chrono::Utc::now().to_rfc3339());
+    crate::session_store::AgentTaskStateUpsert {
+        session_id: state.session_id.clone(),
+        task_id: state.task_id.clone(),
+        agent_id: state.agent_id.clone(),
+        profile: state.profile.clone(),
+        role: state.role.clone(),
+        status: "cancelled".to_string(),
+        description: state.description.clone(),
+        transcript_path: state.transcript_path.clone(),
+        tool_ids_in_progress: Vec::new(),
+        permission_requests: state.permission_requests.clone(),
+        result_artifact_id: state.result_artifact_id,
+        cleanup_hooks: state.cleanup_hooks.clone(),
+        payload,
+    }
+}
+
+fn persist_cancelled_agent_task_state(context: &ToolContext, agent_id: &str) -> Option<String> {
+    let store = context.session_store.as_ref()?;
+    match store.agent_task_state(&context.session_id, agent_id) {
+        Ok(Some(state)) => {
+            let upsert = cancelled_agent_task_state_upsert(&state);
+            if let Err(err) = store.upsert_agent_task_state(&upsert) {
+                Some(format!("durable state update failed: {}", err))
+            } else {
+                Some("durable state updated to cancelled".to_string())
+            }
+        }
+        Ok(None) => Some("durable state not found for this session".to_string()),
+        Err(err) => Some(format!("durable state lookup failed: {}", err)),
+    }
+}
+
+async fn handle_cancel(
+    agent_manager: &crate::agent::AgentManager,
+    context: &ToolContext,
+    agent_id_str: &str,
+) -> ToolResult {
+    let agent_id = AgentId(agent_id_str.to_string());
+    match agent_manager.kill(&agent_id).await {
+        Ok(()) => {
+            let durable_state = persist_cancelled_agent_task_state(context, agent_id_str)
+                .unwrap_or_else(|| "durable state unavailable".to_string());
+            ToolResult::success_with_data(
+                format!("Cancelled sub-agent {}\n{}", agent_id, durable_state),
+                json!({
+                    "agent_id": agent_id.to_string(),
+                    "status": "cancelled",
+                    "durable_state": durable_state,
+                }),
+            )
+        }
+        Err(error) => ToolResult::error(format!(
+            "Failed to cancel sub-agent {}: {}",
+            agent_id, error
+        )),
+    }
+}
+
 /// 处理分叉分支探索
 async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
     let branches_array = match ctx.params["fork_branches"].as_array() {
@@ -1289,7 +1353,13 @@ impl Tool for AgentTool {
                 },
                 "agent_id": {
                     "type": "string",
-                    "description": "Resume an existing agent by ID instead of creating a new one"
+                    "description": "Operate on an existing agent by ID instead of creating a new one"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["resume", "cancel"],
+                    "description": "Action for agent_id. resume reads the result if available; cancel stops a running sub-agent and marks durable state cancelled.",
+                    "default": "resume"
                 },
                 "subtasks": {
                     "type": "array",
@@ -1393,7 +1463,18 @@ impl Tool for AgentTool {
                 && params["subtasks"].is_null()
                 && params["description"].is_null()
             {
-                return handle_resume(&agent_manager, agent_id_str).await;
+                return match params["action"].as_str().unwrap_or("resume") {
+                    "resume" => handle_resume(&agent_manager, agent_id_str).await,
+                    "cancel" => handle_cancel(&agent_manager, &context, agent_id_str).await,
+                    other => ToolResult::error(format!(
+                        "Invalid agent action '{}'. Expected resume or cancel.",
+                        other
+                    )),
+                };
+            }
+        } else if let Some(action) = params["action"].as_str() {
+            if action != "resume" {
+                return ToolResult::error("agent_id is required for agent action");
             }
         }
 
@@ -1490,8 +1571,11 @@ impl Tool for AgentTool {
     }
 
     fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {
-        if params["agent_id"].as_str().is_some() {
-            return Some("Resume an existing sub-agent?".to_string());
+        if let Some(agent_id) = params["agent_id"].as_str() {
+            return Some(match params["action"].as_str().unwrap_or("resume") {
+                "cancel" => format!("Cancel running sub-agent {}?", agent_id),
+                _ => "Resume an existing sub-agent?".to_string(),
+            });
         }
         if let Some(subtasks) = params["subtasks"].as_array() {
             return Some(format!(
@@ -1615,6 +1699,66 @@ mod tests {
 
         assert_eq!(agent_wait_failure_status(&timeout), "timed_out");
         assert_eq!(agent_wait_failure_status(&closed), "failed");
+    }
+
+    #[test]
+    fn cancelled_agent_task_state_preserves_cleanup_metadata() {
+        let state = crate::session_store::AgentTaskStateRecord {
+            id: 1,
+            session_id: "s1".to_string(),
+            task_id: "task_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "running".to_string(),
+            description: "edit code".to_string(),
+            transcript_path: Some("/tmp/a2a.jsonl".to_string()),
+            tool_ids_in_progress: vec!["tool_1".to_string()],
+            permission_requests: vec!["file_write".to_string()],
+            result_artifact_id: Some(9),
+            cleanup_hooks: vec!["worktree_cleanup".to_string()],
+            payload: json!({
+                "isolated_worktree": {
+                    "path": "/tmp/agent-worktree",
+                    "branch": "codex/agent-1234"
+                }
+            }),
+            created_at: "now".to_string(),
+            updated_at: "now".to_string(),
+        };
+
+        let upsert = cancelled_agent_task_state_upsert(&state);
+
+        assert_eq!(upsert.status, "cancelled");
+        assert!(upsert.tool_ids_in_progress.is_empty());
+        assert_eq!(upsert.cleanup_hooks, vec!["worktree_cleanup"]);
+        assert_eq!(
+            upsert.payload["isolated_worktree"]["branch"].as_str(),
+            Some("codex/agent-1234")
+        );
+        assert!(upsert.payload["cancelled_at"].as_str().is_some());
+    }
+
+    #[test]
+    fn agent_tool_schema_exposes_cancel_action() {
+        let tool = AgentTool;
+        let params = tool.parameters();
+
+        assert_eq!(
+            params["properties"]["action"]["enum"]
+                .as_array()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str())
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec!["resume", "cancel"])
+        );
+        assert!(tool
+            .confirmation_prompt(&json!({"agent_id": "agent_1", "action": "cancel"}))
+            .unwrap()
+            .contains("Cancel running sub-agent agent_1"));
     }
 
     #[test]
