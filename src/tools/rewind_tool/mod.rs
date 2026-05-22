@@ -2,7 +2,9 @@
 //!
 //! Restore checkpoint-backed file changes from the shared file history.
 
-use crate::engine::checkpoint::{FileChangeRecord, RestoreResult, ToolRoundRestoreResult};
+use crate::engine::checkpoint::{
+    FileChangeRecord, FileChangeRoundSummary, RestoreResult, ToolRoundRestoreResult,
+};
 use crate::tools::Tool;
 use crate::tools::ToolContext;
 use crate::tools::ToolResult;
@@ -59,8 +61,9 @@ impl Tool for RewindTool {
             .unwrap_or("latest_file_change");
 
         if target == "latest_tool_round" {
+            let summary = checkpoint_guard.latest_file_change_round();
             return match checkpoint_guard.restore_latest_tool_round().await {
-                Ok(result) => rewind_round_success_result(result),
+                Ok(result) => rewind_round_success_result(result, summary),
                 Err(err) => ToolResult::error(format!("Failed to rewind tool round: {}", err)),
             };
         }
@@ -68,8 +71,9 @@ impl Tool for RewindTool {
             let Some(id) = params.get("id").and_then(|v| v.as_str()) else {
                 return ToolResult::error("id is required for target=tool_round_id");
             };
+            let summary = checkpoint_guard.file_change_round(id);
             return match checkpoint_guard.restore_tool_round(id).await {
-                Ok(result) => rewind_round_success_result(result),
+                Ok(result) => rewind_round_success_result(result, summary),
                 Err(err) => ToolResult::error(format!("Failed to rewind tool round: {}", err)),
             };
         }
@@ -172,7 +176,10 @@ fn rewind_success_result(result: RestoreResult) -> ToolResult {
     )
 }
 
-fn rewind_round_success_result(result: ToolRoundRestoreResult) -> ToolResult {
+fn rewind_round_success_result(
+    result: ToolRoundRestoreResult,
+    summary: Option<FileChangeRoundSummary>,
+) -> ToolResult {
     let restored_files = result
         .results
         .iter()
@@ -200,6 +207,13 @@ fn rewind_round_success_result(result: ToolRoundRestoreResult) -> ToolResult {
     if let Some(round_id) = result.tool_round_id.as_deref() {
         lines.push(format!("Tool round: {}", round_id));
     }
+    if let Some(summary) = summary.as_ref() {
+        lines.push(format!(
+            "Round summary: {} file(s), {} bytes.",
+            summary.paths.len(),
+            summary.total_bytes_written
+        ));
+    }
     if restored_files > 0 {
         lines.push(format!("Restored {} file(s).", restored_files));
     }
@@ -218,6 +232,7 @@ fn rewind_round_success_result(result: ToolRoundRestoreResult) -> ToolResult {
         json!({
             "tool_round_id": result.tool_round_id,
             "restored_changes": result.restored_changes,
+            "file_change_round": summary,
             "results": result.results,
             "failed_files": failed_files,
             "success": failed_files.is_empty(),

@@ -95,6 +95,31 @@ pub struct FileChangeRecord {
     pub bytes_written: u64,
 }
 
+/// Summary of file mutations produced by one assistant tool-call round.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChangeRoundSummary {
+    /// Stable ID for the assistant tool-call round, when available.
+    pub tool_round_id: Option<String>,
+    /// File change IDs included in this round summary.
+    pub file_change_ids: Vec<String>,
+    /// Checkpoint IDs that can restore the pre-change states.
+    pub checkpoint_ids: Vec<String>,
+    /// Tool names that produced the changes.
+    pub tool_names: Vec<String>,
+    /// Changed paths in mutation order, de-duplicated.
+    pub paths: Vec<String>,
+    /// Number of file changes included in the round.
+    pub change_count: usize,
+    /// Total bytes written across all changes.
+    pub total_bytes_written: u64,
+    /// First mutation timestamp in the round.
+    pub first_timestamp: Option<DateTime<Local>>,
+    /// Last mutation timestamp in the round.
+    pub last_timestamp: Option<DateTime<Local>>,
+    /// Stored diffs joined in mutation order when available.
+    pub combined_diff: Option<String>,
+}
+
 /// Input for recording a successful file mutation after the write has landed.
 #[derive(Debug, Clone)]
 pub struct FileChangeInput {
@@ -737,6 +762,90 @@ impl CheckpointManager {
         &self.file_changes
     }
 
+    /// List durable file-change summaries grouped by assistant tool-call round.
+    pub fn list_file_change_rounds(&self) -> Vec<FileChangeRoundSummary> {
+        let mut summaries = Vec::<FileChangeRoundSummary>::new();
+        let mut by_key = HashMap::<String, usize>::new();
+
+        for record in &self.file_changes {
+            let key = record
+                .tool_round_id
+                .clone()
+                .unwrap_or_else(|| format!("file_change:{}", record.id));
+            let index = match by_key.get(&key).copied() {
+                Some(index) => index,
+                None => {
+                    let index = summaries.len();
+                    summaries.push(FileChangeRoundSummary {
+                        tool_round_id: record.tool_round_id.clone(),
+                        file_change_ids: Vec::new(),
+                        checkpoint_ids: Vec::new(),
+                        tool_names: Vec::new(),
+                        paths: Vec::new(),
+                        change_count: 0,
+                        total_bytes_written: 0,
+                        first_timestamp: None,
+                        last_timestamp: None,
+                        combined_diff: None,
+                    });
+                    by_key.insert(key, index);
+                    index
+                }
+            };
+
+            let summary = &mut summaries[index];
+            push_unique(&mut summary.file_change_ids, record.id.clone());
+            push_unique(&mut summary.checkpoint_ids, record.checkpoint_id.clone());
+            push_unique(&mut summary.tool_names, record.tool_name.clone());
+            push_unique(&mut summary.paths, record.path.clone());
+            summary.change_count += 1;
+            summary.total_bytes_written += record.bytes_written;
+            summary.first_timestamp = Some(
+                summary
+                    .first_timestamp
+                    .map(|timestamp| timestamp.min(record.timestamp))
+                    .unwrap_or(record.timestamp),
+            );
+            summary.last_timestamp = Some(
+                summary
+                    .last_timestamp
+                    .map(|timestamp| timestamp.max(record.timestamp))
+                    .unwrap_or(record.timestamp),
+            );
+            if let Some(diff) = record
+                .diff
+                .as_deref()
+                .filter(|diff| !diff.trim().is_empty())
+            {
+                match &mut summary.combined_diff {
+                    Some(existing) => {
+                        existing.push_str("\n\n");
+                        existing.push_str(diff);
+                    }
+                    None => summary.combined_diff = Some(diff.to_string()),
+                }
+            }
+        }
+
+        summaries
+    }
+
+    /// Return the newest file-change round summary.
+    pub fn latest_file_change_round(&self) -> Option<FileChangeRoundSummary> {
+        self.list_file_change_rounds().pop()
+    }
+
+    /// Return a file-change round summary by ID.
+    pub fn file_change_round(
+        &self,
+        tool_round_id: impl AsRef<str>,
+    ) -> Option<FileChangeRoundSummary> {
+        let tool_round_id = tool_round_id.as_ref();
+        self.list_file_change_rounds()
+            .into_iter()
+            .find(|summary| summary.tool_round_id.as_deref() == Some(tool_round_id))
+    }
+
     /// 获取最新的文件修改事件
     pub fn latest_file_change(&self) -> Option<&FileChangeRecord> {
         self.file_changes.last()
@@ -771,6 +880,12 @@ impl CheckpointManager {
         self.sequence_counter = 0;
         info!("Cleared all checkpoints for session {}", self.session_id);
         Ok(())
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
     }
 }
 

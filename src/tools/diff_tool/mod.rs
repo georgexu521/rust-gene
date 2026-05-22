@@ -1,6 +1,6 @@
 //! Diff 工具 - 生成和查看代码差异
 
-use crate::engine::checkpoint::FileChangeRecord;
+use crate::engine::checkpoint::{FileChangeRecord, FileChangeRoundSummary};
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -16,7 +16,7 @@ impl Tool for DiffTool {
     }
 
     fn description(&self) -> &str {
-        "Generate or view diffs. Actions: 'generate' (diff two strings), 'file' (git diff for a file), 'compare' (diff two files), 'history' (recent checkpoint-backed file changes), 'file_change' (stored diff for a file change)."
+        "Generate or view diffs. Actions: 'generate' (diff two strings), 'file' (git diff for a file), 'compare' (diff two files), 'history' (recent checkpoint-backed file changes and rounds), 'file_change' (stored diff for a file change), 'tool_round' (combined stored diff for a tool round)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -25,12 +25,12 @@ impl Tool for DiffTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["generate", "file", "compare", "history", "file_change"],
+                    "enum": ["generate", "file", "compare", "history", "file_change", "tool_round"],
                     "description": "The diff action to perform"
                 },
                 "id": {
                     "type": "string",
-                    "description": "File change ID for 'file_change' action"
+                    "description": "File change ID for 'file_change' action or tool round ID for 'tool_round' action"
                 },
                 "path": {
                     "type": "string",
@@ -157,6 +157,7 @@ impl Tool for DiffTool {
             }
             "history" => checkpoint_history_result(&context).await,
             "file_change" => checkpoint_file_change_diff_result(&context, &params).await,
+            "tool_round" => checkpoint_tool_round_diff_result(&context, &params).await,
             _ => ToolResult::error(format!("Unknown action: {}", action)),
         }
     }
@@ -169,14 +170,33 @@ async fn checkpoint_history_result(context: &ToolContext) -> ToolResult {
     };
     let checkpoint_guard = manager.lock().await;
     let file_changes = checkpoint_guard.list_file_changes();
+    let file_change_rounds = checkpoint_guard.list_file_change_rounds();
     if file_changes.is_empty() {
         return ToolResult::success_with_data(
             "No checkpoint-backed file changes recorded for this session.",
-            json!({ "file_changes": [] }),
+            json!({ "file_changes": [], "file_change_rounds": [] }),
         );
     }
 
     let mut lines = vec!["Recent checkpoint-backed file changes:".to_string()];
+    if !file_change_rounds.is_empty() {
+        lines.push("Recent tool-round summaries:".to_string());
+        for (idx, summary) in file_change_rounds.iter().rev().take(10).enumerate() {
+            let round = summary
+                .tool_round_id
+                .as_deref()
+                .unwrap_or("<single change>");
+            lines.push(format!(
+                "{}. {} | {} change(s), {} file(s), {} bytes",
+                idx + 1,
+                round,
+                summary.change_count,
+                summary.paths.len(),
+                summary.total_bytes_written
+            ));
+        }
+        lines.push("Recent file changes:".to_string());
+    }
     for (idx, change) in file_changes.iter().rev().take(20).enumerate() {
         let round = change
             .tool_round_id
@@ -197,6 +217,7 @@ async fn checkpoint_history_result(context: &ToolContext) -> ToolResult {
         lines.join("\n"),
         json!({
             "file_changes": file_changes.iter().rev().take(20).collect::<Vec<_>>(),
+            "file_change_rounds": file_change_rounds.iter().rev().take(10).collect::<Vec<_>>(),
         }),
     )
 }
@@ -238,6 +259,50 @@ async fn checkpoint_file_change_diff_result(
             "file_change": change,
             "checkpoint_id": change.checkpoint_id,
         }),
+    )
+}
+
+async fn checkpoint_tool_round_diff_result(
+    context: &ToolContext,
+    params: &serde_json::Value,
+) -> ToolResult {
+    let manager = match &context.checkpoint_manager {
+        Some(manager) => manager.clone(),
+        None => crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await,
+    };
+    let checkpoint_guard = manager.lock().await;
+    let summary = if let Some(id) = params.get("id").and_then(|v| v.as_str()) {
+        checkpoint_guard.file_change_round(id)
+    } else {
+        checkpoint_guard.latest_file_change_round()
+    };
+
+    let Some(summary) = summary else {
+        return ToolResult::error("No matching checkpoint-backed tool round found");
+    };
+    let diff = summary
+        .combined_diff
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| tool_round_no_diff_message(&summary));
+
+    ToolResult::success_with_data(
+        diff,
+        json!({
+            "file_change_round": summary,
+        }),
+    )
+}
+
+fn tool_round_no_diff_message(summary: &FileChangeRoundSummary) -> String {
+    format!(
+        "No stored diff for tool round {}.\nChanges: {}\nFiles: {}",
+        summary
+            .tool_round_id
+            .as_deref()
+            .unwrap_or("<single change>"),
+        summary.change_count,
+        summary.paths.join(", ")
     )
 }
 

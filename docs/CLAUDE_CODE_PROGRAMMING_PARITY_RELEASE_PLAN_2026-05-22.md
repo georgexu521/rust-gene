@@ -1369,6 +1369,12 @@ The next concrete batches should be:
      action, and reusable permission-rule suggestions.
 4. **File history and rewind hardening.**
    Add turn-level snapshots, restore coverage, and closeout evidence plumbing.
+   - Progress on 2026-05-22: checkpoint history now exposes assistant
+     tool-round summaries grouped from durable `file_history.json` records,
+     including file-change IDs, checkpoint IDs, tools, paths, byte totals, and
+     combined stored diffs. `diff action=history` now returns recent round
+     summaries, `diff action=tool_round` returns a combined round diff, and
+     whole-round `rewind` results include the same round summary metadata.
 5. **TUI product pass for coding loop.**
    Polish status, tool output, diff, approval, tasks, agents, and context panels.
 6. **Subagent lifecycle hardening.**
