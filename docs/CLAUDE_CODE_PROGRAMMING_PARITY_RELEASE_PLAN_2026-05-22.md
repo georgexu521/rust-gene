@@ -966,11 +966,16 @@ Progress on 2026-05-22:
   provided but the resolved tool surface includes mutating file tools such as
   `file_edit`, `file_write`, or `apply_patch`. Explicit `context_mode` still
   overrides the inference.
+- Durable subagent task state now records post-launch wait failures as
+  `failed` or `timed_out` instead of leaving spawned workers stuck in `running`.
+  The failure state preserves the original payload, including isolated worktree
+  cleanup metadata.
 
 Validation so far:
 
 - `cargo test -q profiles` - passed, 6 tests.
 - `cargo test -q agent_tool` - passed, 14 tests.
+- `cargo test -q agent_tool` - passed, 15 tests after failure-state handling.
 - `cargo test -q forked_context` - passed, 4 tests.
 - `cargo test -q worktree_tool` - passed, 3 tests.
 - `cargo test -q session_store` - passed, 14 tests.

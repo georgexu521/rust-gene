@@ -268,6 +268,15 @@ fn effective_agent_context_mode(
         })
 }
 
+fn agent_wait_failure_status(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string().to_ascii_lowercase();
+    if message.contains("timeout") || message.contains("timed out") {
+        "timed_out"
+    } else {
+        "failed"
+    }
+}
+
 /// 创建并等待单个子 Agent 完成
 #[allow(clippy::too_many_arguments)]
 async fn spawn_single_agent(
@@ -393,6 +402,21 @@ async fn spawn_single_agent(
 
     let agent_id = agent_manager.spawn(agent_config, None).await?;
     info!("Sub-agent spawned: {}", agent_id);
+    let task_payload = json!({
+        "timeout_secs": timeout_secs,
+        "max_turns": max_turns,
+        "allowed_tools": allowed_tools,
+        "context_mode": effective_context_mode.map(|mode| mode.to_string()),
+        "isolated_worktree": isolated_worktree.as_ref().map(|worktree| json!({
+            "path": worktree.path.to_string_lossy().to_string(),
+            "branch": worktree.branch.clone(),
+        })),
+        "fork_context": forked_context.as_ref().map(|fork| json!({
+            "message_count": fork.messages.len(),
+            "placeholder_complete": fork.is_placeholder_complete(),
+            "tool_call_ids": fork.tool_call_ids.clone(),
+        })),
+    });
     persist_agent_task_state(
         context,
         &agent_id,
@@ -401,21 +425,7 @@ async fn spawn_single_agent(
         definition,
         "running",
         None,
-        json!({
-            "timeout_secs": timeout_secs,
-            "max_turns": max_turns,
-            "allowed_tools": allowed_tools,
-            "context_mode": effective_context_mode.map(|mode| mode.to_string()),
-            "isolated_worktree": isolated_worktree.as_ref().map(|worktree| json!({
-                "path": worktree.path.to_string_lossy().to_string(),
-                "branch": worktree.branch.clone(),
-            })),
-            "fork_context": forked_context.as_ref().map(|fork| json!({
-                "message_count": fork.messages.len(),
-                "placeholder_complete": fork.is_placeholder_complete(),
-                "tool_call_ids": fork.tool_call_ids.clone(),
-            })),
-        }),
+        task_payload.clone(),
     );
     if let Some(trace) = context.trace_collector.as_ref() {
         trace.record(crate::engine::trace::TraceEvent::SubagentStarted {
@@ -494,6 +504,20 @@ async fn spawn_single_agent(
                 tools_used: 0,
             }),
         }
+    }
+    if let Err(error) = &result {
+        let mut failure_payload = task_payload;
+        failure_payload["error"] = json!(error.to_string());
+        persist_agent_task_state(
+            context,
+            &agent_id,
+            description,
+            role,
+            definition,
+            agent_wait_failure_status(error),
+            None,
+            failure_payload,
+        );
     }
     result
 }
@@ -1582,6 +1606,15 @@ mod tests {
         let mode = effective_agent_context_mode(Some(AgentContextMode::FullFork), None, &tools);
 
         assert_eq!(mode, Some(AgentContextMode::FullFork));
+    }
+
+    #[test]
+    fn agent_wait_failure_status_distinguishes_timeout() {
+        let timeout = anyhow::anyhow!("Timeout waiting for agent abc result after 1s");
+        let closed = anyhow::anyhow!("Agent abc result channel closed without result");
+
+        assert_eq!(agent_wait_failure_status(&timeout), "timed_out");
+        assert_eq!(agent_wait_failure_status(&closed), "failed");
     }
 
     #[test]
