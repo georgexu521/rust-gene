@@ -516,6 +516,57 @@ h1 {
   overflow-wrap: anywhere;
 }
 
+.timeline-summary {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 7px;
+  padding: 8px;
+  border: 1px solid #e0e6ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.timeline-summary svg {
+  margin-top: 1px;
+  color: #66707c;
+}
+
+.timeline-summary code {
+  display: block;
+  min-width: 0;
+  color: #252a31;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-summary strong {
+  display: block;
+  color: #252a31;
+  font-size: 12px;
+}
+
+.timeline-summary-meta {
+  margin-top: 3px;
+  color: #69727d;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.timeline-summary.failure {
+  border-color: #efb0b0;
+  background: #fffafa;
+}
+
+.timeline-summary.failure svg {
+  color: #a22b2b;
+}
+
 .timeline-facts {
   display: flex;
   flex-wrap: wrap;

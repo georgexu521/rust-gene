@@ -12,10 +12,31 @@ test.describe("desktop UI smoke", () => {
 
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.getByText("Pnpm Test")).toBeVisible();
-    await expect(page.getByText("corepack pnpm --dir apps/desktop test:ui-smoke")).toBeVisible();
+    await expect(page.locator(".timeline-title", { hasText: "Pnpm Test" })).toBeVisible();
+    await expect(
+      page.locator(".timeline-summary code", {
+        hasText: "corepack pnpm --dir apps/desktop test:ui-smoke",
+      }),
+    ).toBeVisible();
     await expect(page.getByText("validation pnpm_test")).toBeVisible();
-    await expect(page.getByText("exit 0")).toBeVisible();
+    await expect(page.locator(".timeline-facts span", { hasText: "exit 0" })).toBeVisible();
+    await expect(page.locator(".timeline-title", { hasText: "Edited file" })).toBeVisible();
+    await expect(
+      page.locator(".timeline-summary.file .timeline-summary-meta", {
+        hasText: "apps/desktop/src/app/runEventState.ts",
+      }),
+    ).toBeVisible();
+    await expect(page.locator(".timeline-facts span", { hasText: "2 replacements" })).toBeVisible();
+    await expect(
+      page.locator(".timeline-summary.failure strong", {
+        hasText: "cargo test failed with exit code 101",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".timeline-summary.failure .timeline-summary-meta", {
+        hasText: "Inspect the failing test output",
+      }),
+    ).toBeVisible();
 
     await assertNoHorizontalOverflow(page);
     await assertStableVerticalStack(page, [

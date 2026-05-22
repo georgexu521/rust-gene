@@ -11,10 +11,32 @@ export type TranscriptItem =
       title: string;
       detail?: string;
       facts?: string[];
+      summary?: TimelineSummary;
       status?: TimelineStatus;
     };
 
 export type TimelineKind = "run" | "tool" | "permission" | "usage" | "error";
+
+export type TimelineSummary =
+  | {
+      kind: "shell";
+      command: string;
+      validation?: string;
+      exitCode?: number;
+      duration?: string;
+    }
+  | {
+      kind: "file";
+      action: "read" | "write" | "edit" | "patch";
+      path?: string;
+      operations?: number;
+      replacements?: number;
+    }
+  | {
+      kind: "failure";
+      reason: string;
+      recovery?: string;
+    };
 
 export type TimelineStatus =
   | "running"

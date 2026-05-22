@@ -393,10 +393,12 @@ export function sendMessage(message: string): Promise<void> {
   if (!isTauriRuntime()) {
     const runId = crypto.randomUUID();
     const toolId = crypto.randomUUID();
+    const fileToolId = crypto.randomUUID();
+    const failedToolId = crypto.randomUUID();
     emitWebPreview({ type: "run_started", run_id: runId });
     emitWebPreview({ type: "thinking_started" });
     emitWebPreview({ type: "thinking_completed" });
-    emitWebPreview({ type: "tool_started", id: toolId, name: "project_inspect" });
+    emitWebPreview({ type: "tool_started", id: toolId, name: "bash" });
     emitWebPreview({
       type: "tool_execution_progress",
       id: toolId,
@@ -420,6 +422,45 @@ export function sendMessage(message: string): Promise<void> {
           status: "completed",
           exit_code: 0,
           duration_ms: 1240,
+        },
+      },
+    });
+    emitWebPreview({ type: "tool_started", id: fileToolId, name: "file_edit" });
+    emitWebPreview({
+      type: "tool_completed",
+      id: fileToolId,
+      result_preview: "Edited apps/desktop/src/app/runEventState.ts",
+      metadata: {
+        tool: "file_edit",
+        call_id: fileToolId,
+        success: true,
+        path: "apps/desktop/src/app/runEventState.ts",
+        replacements: 2,
+        duration_ms: 48,
+        output_chars: 44,
+      },
+    });
+    emitWebPreview({ type: "tool_started", id: failedToolId, name: "bash" });
+    emitWebPreview({
+      type: "tool_completed",
+      id: failedToolId,
+      result_preview: "cargo test failed with exit code 101",
+      metadata: {
+        tool: "bash",
+        call_id: failedToolId,
+        success: false,
+        command: "cargo test -q desktop_smoke",
+        command_category: "validation",
+        validation_family: "cargo_test",
+        command_kind: "cargo",
+        duration_ms: 820,
+        output_chars: 91,
+        error_preview: "cargo test failed with exit code 101",
+        user_note: "Inspect the failing test output, fix the regression, then rerun the same command.",
+        terminal_task: {
+          status: "failed",
+          exit_code: 101,
+          duration_ms: 820,
         },
       },
     });

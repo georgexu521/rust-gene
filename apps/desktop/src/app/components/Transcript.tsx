@@ -3,10 +3,11 @@ import {
   CircleAlert,
   CircleDotDashed,
   Clock3,
+  FilePenLine,
   KeyRound,
   TerminalSquare,
 } from "lucide-react";
-import { TimelineKind, TimelineStatus, TranscriptItem } from "../types";
+import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
 
 type TranscriptProps = {
   items: TranscriptItem[];
@@ -57,7 +58,10 @@ function TimelineEvent({ item }: { item: TimelineEventItem }) {
           <div className="timeline-title">{item.title}</div>
           <div className="timeline-status">{labelForStatus(item.status)}</div>
         </div>
-        {item.detail ? <div className="timeline-detail">{item.detail}</div> : null}
+        {item.summary ? <TimelineSummaryView summary={item.summary} /> : null}
+        {!item.summary && item.detail ? (
+          <div className="timeline-detail">{item.detail}</div>
+        ) : null}
         {item.facts && item.facts.length > 0 ? (
           <div className="timeline-facts">
             {item.facts.map((fact) => (
@@ -67,6 +71,56 @@ function TimelineEvent({ item }: { item: TimelineEventItem }) {
         ) : null}
       </div>
     </article>
+  );
+}
+
+function TimelineSummaryView({ summary }: { summary: TimelineSummary }) {
+  if (summary.kind === "shell") {
+    return (
+      <div className="timeline-summary shell">
+        <TerminalSquare aria-hidden="true" size={15} />
+        <div>
+          <code>{summary.command}</code>
+          <div className="timeline-summary-meta">
+            {compactSummaryMeta([
+              summary.validation,
+              summary.exitCode !== undefined ? `exit ${summary.exitCode}` : null,
+              summary.duration,
+            ]).join(" · ")}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (summary.kind === "file") {
+    return (
+      <div className="timeline-summary file">
+        <FilePenLine aria-hidden="true" size={15} />
+        <div>
+          <strong>{fileActionLabel(summary.action)}</strong>
+          <div className="timeline-summary-meta">
+            {compactSummaryMeta([
+              summary.path,
+              summary.replacements !== undefined ? `${summary.replacements} replacements` : null,
+              summary.operations !== undefined ? `${summary.operations} operations` : null,
+            ]).join(" · ")}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="timeline-summary failure">
+      <CircleAlert aria-hidden="true" size={15} />
+      <div>
+        <strong>{summary.reason}</strong>
+        {summary.recovery ? (
+          <div className="timeline-summary-meta">{summary.recovery}</div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -102,4 +156,21 @@ function labelForStatus(status?: TimelineStatus) {
     default:
       return "Info";
   }
+}
+
+function fileActionLabel(action: Extract<TimelineSummary, { kind: "file" }>["action"]) {
+  switch (action) {
+    case "read":
+      return "Read file";
+    case "write":
+      return "Wrote file";
+    case "edit":
+      return "Edited file";
+    case "patch":
+      return "Patched files";
+  }
+}
+
+function compactSummaryMeta(values: Array<string | null | undefined>) {
+  return values.filter((value): value is string => Boolean(value && value.trim()));
 }

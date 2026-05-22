@@ -24,15 +24,19 @@ Status: implemented. Tool events are grouped by tool id in the main transcript.
 - Surface command/path/file metadata when available.
 - Add status states: running, waiting, completed, failed, blocked.
 
-Status: first pass implemented. The desktop app now reads real runtime
-`tool_summary` metadata and shows command, path, validation family, operation
-counts, duration, output size, and terminal exit facts as compact chips.
+Status: implemented. The desktop app now reads real runtime `tool_summary`
+metadata, groups events by tool id, shows command/path/validation/file facts as
+chips, and renders shell validation, file edits/patches, and failed tools with
+specialized summaries.
 
 ## Phase 3 - File And Validation Cards
 
 - Promote file edits, patches, tests, and shell commands into specialized cards.
 - Add expandable result previews for long outputs.
 - Show validation commands and pass/fail outcomes in a scannable format.
+
+Status: partially implemented through the shared timeline summary renderer.
+Remaining work is richer diff previews and expandable long outputs.
 
 ## Phase 4 - Interaction
 
@@ -43,6 +47,6 @@ counts, duration, output size, and terminal exit facts as compact chips.
 
 ## Current Next Step
 
-Continue Phase 2 into specialized cards for file edits, patches, shell
-validation, and failed tools. The shared metadata path is now in place; the next
-work is better per-tool presentation.
+Continue Phase 3 with richer file/diff previews and expandable long outputs.
+The shared event grouping, metadata extraction, and specialized summary renderer
+are now in place.

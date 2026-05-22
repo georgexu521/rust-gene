@@ -1,5 +1,5 @@
 import { DesktopMessage, DesktopRunEvent } from "../runtime/desktopApi";
-import { PermissionRequest, TraceItem, TranscriptItem } from "./types";
+import { PermissionRequest, TimelineSummary, TraceItem, TranscriptItem } from "./types";
 
 export type RunViewState = {
   items: TranscriptItem[];
@@ -125,6 +125,7 @@ export function applyRunEvent(
           title: toolPresentation.title,
           detail: toolPresentation.detail,
           facts: toolPresentation.facts,
+          summary: toolPresentation.summary,
           status: toolPresentation.status,
         },
         traceTool(`${event.id}-done`, "Tool completed", event.result_preview),
@@ -485,6 +486,7 @@ type ToolPresentation = {
   title: string;
   detail?: string;
   facts?: string[];
+  summary?: TimelineSummary;
   status: "completed" | "failed";
 };
 
@@ -505,6 +507,8 @@ type ToolSummary = {
   terminal_task?: Record<string, unknown>;
   terminal_tasks_count?: number;
   error_preview?: string;
+  recovery_action?: string;
+  user_note?: string;
 };
 
 function presentToolCompletion(resultPreview: string, metadata: unknown): ToolPresentation {
@@ -521,11 +525,13 @@ function presentToolCompletion(resultPreview: string, metadata: unknown): ToolPr
   const title = toolTitle(summary);
   const detail = toolDetail(summary, resultPreview);
   const facts = toolFacts(summary);
+  const specialSummary = timelineSummary(summary, resultPreview);
 
   return {
     title,
     detail,
     facts,
+    summary: specialSummary,
     status,
   };
 }
@@ -595,6 +601,57 @@ function toolFacts(summary: ToolSummary): string[] {
   return facts.slice(0, 6);
 }
 
+function timelineSummary(summary: ToolSummary, resultPreview: string): TimelineSummary | undefined {
+  if (summary.success === false) {
+    return {
+      kind: "failure",
+      reason: summary.error_preview || resultPreview || "Tool failed",
+      recovery: summary.user_note || summary.recovery_action,
+    };
+  }
+
+  if (summary.tool === "bash" && summary.command) {
+    return {
+      kind: "shell",
+      command: summary.command,
+      validation: summary.validation_family
+        ? validationLabel(summary.validation_family)
+        : summary.command_category,
+      exitCode: terminalExitCode(summary.terminal_task),
+      duration: durationFact(summary.duration_ms) || undefined,
+    };
+  }
+
+  if (isFileTool(summary.tool)) {
+    return {
+      kind: "file",
+      action: fileAction(summary.tool),
+      path: summary.path,
+      operations: summary.operations,
+      replacements: summary.replacements,
+    };
+  }
+
+  return undefined;
+}
+
+function isFileTool(tool: string | undefined): tool is "file_read" | "file_write" | "file_edit" | "file_patch" {
+  return tool === "file_read" || tool === "file_write" || tool === "file_edit" || tool === "file_patch";
+}
+
+function fileAction(tool: "file_read" | "file_write" | "file_edit" | "file_patch") {
+  switch (tool) {
+    case "file_read":
+      return "read";
+    case "file_write":
+      return "write";
+    case "file_edit":
+      return "edit";
+    case "file_patch":
+      return "patch";
+  }
+}
+
 function terminalFact(task: Record<string, unknown> | undefined) {
   if (!task) {
     return null;
@@ -605,6 +662,13 @@ function terminalFact(task: Record<string, unknown> | undefined) {
     return `exit ${exitCode}`;
   }
   return status ? `terminal ${status}` : null;
+}
+
+function terminalExitCode(task: Record<string, unknown> | undefined) {
+  if (!task) {
+    return undefined;
+  }
+  return typeof task.exit_code === "number" ? task.exit_code : undefined;
 }
 
 function durationFact(durationMs: number | undefined) {
