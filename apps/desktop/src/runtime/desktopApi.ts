@@ -42,6 +42,8 @@ export type DesktopSettings = {
   selected_project: string;
   active_session_id?: string | null;
   permission_mode: PermissionModeId;
+  provider_name?: string | null;
+  model?: string | null;
   settings_path: string;
 };
 
@@ -70,6 +72,33 @@ export type ProviderSetupInfo = {
   shell_profile_path: string;
   provider_env_vars: string[];
   example: string;
+};
+
+export type ProviderModelStatus = {
+  active_provider?: string | null;
+  active_model: string;
+  configured_count: number;
+  providers: DesktopProviderOption[];
+  models: DesktopModelOption[];
+};
+
+export type DesktopProviderOption = {
+  id: string;
+  label: string;
+  provider_type: string;
+  model: string;
+  base_url: string;
+  configured: boolean;
+  active: boolean;
+  note: string;
+};
+
+export type DesktopModelOption = {
+  id: string;
+  label: string;
+  provider_id: string;
+  active: boolean;
+  note: string;
 };
 
 export type DesktopRunEvent =
@@ -129,6 +158,8 @@ export function desktopSettings(): Promise<DesktopSettings> {
       selected_project: "/Users/georgexu/Desktop/rust-agent",
       active_session_id: "web-preview",
       permission_mode: "auto",
+      provider_name: "kimi",
+      model: "kimi-k2.5",
       settings_path: "web-preview",
     });
   }
@@ -206,6 +237,78 @@ export function providerSetupInfo(): Promise<ProviderSetupInfo> {
   }
 
   return invoke("provider_setup_info");
+}
+
+export function providerModelStatus(): Promise<ProviderModelStatus> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      active_provider: "kimi",
+      active_model: "kimi-k2.5",
+      configured_count: 1,
+      providers: [
+        {
+          id: "kimi",
+          label: "Kimi",
+          provider_type: "Kimi",
+          model: "kimi-k2.5",
+          base_url: "https://api.moonshot.cn/v1",
+          configured: true,
+          active: true,
+          note: "current",
+        },
+        {
+          id: "openai",
+          label: "OpenAI",
+          provider_type: "OpenAI",
+          model: "gpt-4o",
+          base_url: "",
+          configured: false,
+          active: false,
+          note: "missing OPENAI_API_KEY",
+        },
+      ],
+      models: [
+        {
+          id: "kimi-k2.5",
+          label: "kimi-k2.5",
+          provider_id: "kimi",
+          active: true,
+          note: "current",
+        },
+        {
+          id: "kimi-k2.5-thinking",
+          label: "kimi-k2.5-thinking",
+          provider_id: "kimi",
+          active: false,
+          note: "takes effect next request",
+        },
+      ],
+    });
+  }
+
+  return invoke("provider_model_status");
+}
+
+export function setProviderModel(providerId: string, model: string): Promise<ProviderModelStatus> {
+  if (!isTauriRuntime()) {
+    return providerModelStatus().then((status) => ({
+      ...status,
+      active_provider: providerId,
+      active_model: model,
+      providers: status.providers.map((provider) => ({
+        ...provider,
+        active: provider.id === providerId,
+        note: provider.id === providerId ? "current" : provider.note,
+      })),
+      models: status.models.map((option) => ({
+        ...option,
+        active: option.id === model,
+        note: option.id === model ? "current" : option.note,
+      })),
+    }));
+  }
+
+  return invoke("set_provider_model", { providerId, model });
 }
 
 export function openSettingsFolder(): Promise<void> {

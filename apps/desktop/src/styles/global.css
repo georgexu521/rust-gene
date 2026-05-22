@@ -681,6 +681,42 @@ h1 {
   background: #eef0f2;
 }
 
+.runtime-selectors {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.45fr) minmax(170px, 0.55fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 0 10px 10px;
+}
+
+.runtime-selectors label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.runtime-selectors span,
+.runtime-status {
+  color: #68717d;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.runtime-selectors select {
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid #d8dde3;
+  border-radius: 6px;
+  color: #252a31;
+  background: #ffffff;
+}
+
+.runtime-status {
+  padding-bottom: 9px;
+  white-space: nowrap;
+}
+
 .error-banner {
   margin: -18px 48px 24px;
   padding: 10px 12px;
@@ -715,5 +751,15 @@ h1 {
 
   .diagnostics-list {
     grid-template-columns: 1fr;
+  }
+
+  .runtime-selectors,
+  .composer-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-status {
+    padding-bottom: 0;
+    white-space: normal;
   }
 }

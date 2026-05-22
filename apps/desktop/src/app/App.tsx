@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import {
   DesktopDiagnostic,
   DesktopHealth,
+  ProviderModelStatus,
   DesktopRunEvent,
   DesktopSettings,
   PermissionModeId,
@@ -18,10 +19,12 @@ import {
   openShellProfile,
   permissionModeOptions,
   pickProjectDirectory,
+  providerModelStatus,
   providerSetupInfo,
   resumeSession,
   selectProject,
   sendMessage,
+  setProviderModel,
   setPermissionMode,
 } from "../runtime/desktopApi";
 import { Composer } from "./components/Composer";
@@ -45,6 +48,7 @@ export function App() {
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [permissionOptions, setPermissionOptions] = useState<PermissionModeOption[]>([]);
   const [providerSetup, setProviderSetup] = useState<ProviderSetupInfo | null>(null);
+  const [providerStatus, setProviderStatus] = useState<ProviderModelStatus | null>(null);
   const [projectPath, setProjectPath] = useState("");
   const [sessions, setSessions] = useState<RecentSession[]>([]);
   const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
@@ -73,6 +77,7 @@ export function App() {
         nextDiagnostics,
         nextProviderSetup,
         nextPermissionOptions,
+        nextProviderStatus,
       ] =
         await Promise.all([
           desktopHealth(),
@@ -81,11 +86,13 @@ export function App() {
           desktopDiagnostics(),
           providerSetupInfo(),
           permissionModeOptions(),
+          providerModelStatus(),
         ]);
       setHealth(nextHealth);
       setSettings(nextSettings);
       setPermissionOptions(nextPermissionOptions);
       setProviderSetup(nextProviderSetup);
+      setProviderStatus(nextProviderStatus);
       setProjectPath(nextSettings.selected_project || nextHealth.cwd);
       setSessions(nextSessions);
       setDiagnostics(nextDiagnostics.items);
@@ -110,14 +117,26 @@ export function App() {
 
   async function refreshDiagnostics() {
     try {
-      const [nextSettings, nextDiagnostics, nextProviderSetup] = await Promise.all([
+      const [nextSettings, nextDiagnostics, nextProviderSetup, nextProviderStatus] = await Promise.all([
         desktopSettings(),
         desktopDiagnostics(),
         providerSetupInfo(),
+        providerModelStatus(),
       ]);
       setSettings(nextSettings);
       setDiagnostics(nextDiagnostics.items);
       setProviderSetup(nextProviderSetup);
+      setProviderStatus(nextProviderStatus);
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleProviderModelChange(providerId: string, model: string) {
+    try {
+      const nextProviderStatus = await setProviderModel(providerId, model);
+      setProviderStatus(nextProviderStatus);
+      setSettings(await desktopSettings());
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -281,11 +300,15 @@ export function App() {
         <Composer
           composer={composer}
           projectPath={projectPath}
+          providerStatus={providerStatus}
           isRunning={runState.isRunning}
           onComposerChange={setComposer}
           onProjectPathChange={setProjectPath}
           onBrowseProject={() => void handleBrowseProject()}
           onSelectProject={() => void handleSelectProject()}
+          onProviderModelChange={(providerId, model) =>
+            void handleProviderModelChange(providerId, model)
+          }
           onSubmit={handleSubmit}
         />
 

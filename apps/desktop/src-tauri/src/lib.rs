@@ -13,6 +13,8 @@ struct DesktopAppState {
     selected_project: Mutex<PathBuf>,
     active_session_id: Mutex<Option<String>>,
     permission_mode: Mutex<Option<String>>,
+    provider_name: Mutex<Option<String>>,
+    model: Mutex<Option<String>>,
     settings_path: PathBuf,
 }
 
@@ -56,6 +58,8 @@ struct DesktopSettings {
     selected_project: Option<String>,
     active_session_id: Option<String>,
     permission_mode: Option<String>,
+    provider_name: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +67,8 @@ struct DesktopSettingsResponse {
     selected_project: String,
     active_session_id: Option<String>,
     permission_mode: String,
+    provider_name: Option<String>,
+    model: Option<String>,
     settings_path: String,
 }
 
@@ -101,6 +107,36 @@ struct ProviderSetupInfo {
     example: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+struct ProviderModelStatus {
+    active_provider: Option<String>,
+    active_model: String,
+    configured_count: usize,
+    providers: Vec<DesktopProviderOption>,
+    models: Vec<DesktopModelOption>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DesktopProviderOption {
+    id: String,
+    label: String,
+    provider_type: String,
+    model: String,
+    base_url: String,
+    configured: bool,
+    active: bool,
+    note: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DesktopModelOption {
+    id: String,
+    label: String,
+    provider_id: String,
+    active: bool,
+    note: String,
+}
+
 #[tauri::command]
 fn desktop_health() -> Result<DesktopHealth, String> {
     let cwd = std::env::current_dir()
@@ -125,6 +161,8 @@ async fn desktop_settings(
             state.permission_mode.lock().await.as_deref(),
         )
         .to_string(),
+        provider_name: state.provider_name.lock().await.clone(),
+        model: state.model.lock().await.clone(),
         settings_path: state.settings_path.display().to_string(),
     })
 }
@@ -154,6 +192,54 @@ async fn set_permission_mode(
 #[tauri::command]
 fn permission_mode_options() -> Vec<PermissionModeOption> {
     desktop_permission_mode_options()
+}
+
+#[tauri::command]
+async fn provider_model_status(
+    state: State<'_, DesktopAppState>,
+) -> Result<ProviderModelStatus, String> {
+    provider_model_status_for_state(&state).await
+}
+
+#[tauri::command]
+async fn set_provider_model(
+    provider_id: String,
+    model: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<ProviderModelStatus, String> {
+    let normalized_provider = provider_id.trim().to_ascii_lowercase();
+    let normalized_model = model.trim().to_string();
+    if normalized_provider.is_empty() {
+        return Err("provider id cannot be empty".to_string());
+    }
+    if normalized_model.is_empty() {
+        return Err("model cannot be empty".to_string());
+    }
+
+    let registry = priority_agent::services::api::provider::ProviderRegistry::from_env();
+    let provider = registry
+        .get(&normalized_provider)
+        .ok_or_else(|| format!("provider is not configured: {normalized_provider}"))?;
+
+    {
+        let mut provider_name = state.provider_name.lock().await;
+        *provider_name = Some(normalized_provider.clone());
+    }
+    {
+        let mut stored_model = state.model.lock().await;
+        *stored_model = Some(normalized_model.clone());
+    }
+    {
+        let runtime = state.runtime.lock().await;
+        if let Some(runtime) = runtime.as_ref() {
+            runtime
+                .streaming_engine()
+                .set_provider(provider, normalized_model.clone());
+        }
+    }
+
+    persist_current_settings(&state).await?;
+    provider_model_status_for_state(&state).await
 }
 
 #[tauri::command]
@@ -244,6 +330,14 @@ async fn resume_session(
     let runtime = DesktopRuntime::initialize_for_session(&selected_project, &session_id)
         .await
         .map_err(|err| err.to_string())?;
+    let permission_mode_label =
+        normalized_permission_mode_label(state.permission_mode.lock().await.as_deref());
+    runtime
+        .streaming_engine()
+        .set_permission_mode(parse_desktop_permission_mode(permission_mode_label));
+    let provider_name = state.provider_name.lock().await.clone();
+    let model = state.model.lock().await.clone();
+    apply_desktop_provider_model(&runtime, provider_name.as_deref(), model.as_deref())?;
 
     {
         let mut stored_runtime = state.runtime.lock().await;
@@ -394,6 +488,8 @@ async fn runtime_for_state(state: &State<'_, DesktopAppState>) -> Result<Desktop
     let permission_mode_label =
         normalized_permission_mode_label(state.permission_mode.lock().await.as_deref());
     let permission_mode = parse_desktop_permission_mode(permission_mode_label);
+    let provider_name = state.provider_name.lock().await.clone();
+    let model = state.model.lock().await.clone();
     let runtime = if let Some(session_id) = active_session_id {
         DesktopRuntime::initialize_for_session(&selected_project, &session_id)
             .await
@@ -406,6 +502,7 @@ async fn runtime_for_state(state: &State<'_, DesktopAppState>) -> Result<Desktop
     runtime
         .streaming_engine()
         .set_permission_mode(permission_mode);
+    apply_desktop_provider_model(&runtime, provider_name.as_deref(), model.as_deref())?;
 
     let mut stored_runtime = state.runtime.lock().await;
     *stored_runtime = Some(runtime.clone());
@@ -421,12 +518,16 @@ async fn persist_current_settings(state: &State<'_, DesktopAppState>) -> Result<
     let active_session_id = state.active_session_id.lock().await.clone();
     let permission_mode =
         normalized_permission_mode_label(state.permission_mode.lock().await.as_deref()).to_string();
+    let provider_name = state.provider_name.lock().await.clone();
+    let model = state.model.lock().await.clone();
     write_desktop_settings(
         &state.settings_path,
         &DesktopSettings {
             selected_project: Some(selected_project.display().to_string()),
             active_session_id,
             permission_mode: Some(permission_mode),
+            provider_name,
+            model,
         },
     )
 }
@@ -501,6 +602,227 @@ fn parse_desktop_permission_mode(mode: &str) -> PermissionMode {
     }
 }
 
+async fn provider_model_status_for_state(
+    state: &State<'_, DesktopAppState>,
+) -> Result<ProviderModelStatus, String> {
+    let runtime = state.runtime.lock().await.clone();
+    let configured_provider = state.provider_name.lock().await.clone();
+    let configured_model = state.model.lock().await.clone();
+    let runtime_base_url = runtime
+        .as_ref()
+        .map(|runtime| runtime.streaming_engine().provider_base_url())
+        .unwrap_or_default();
+    let runtime_model = runtime
+        .as_ref()
+        .map(|runtime| runtime.streaming_engine().model_name());
+
+    let registry = priority_agent::services::api::provider::ProviderRegistry::from_env();
+    let active_provider = configured_provider
+        .or_else(|| provider_id_for_base_url(&registry, &runtime_base_url))
+        .or_else(|| default_provider_id_from_env(&registry));
+    let active_model = runtime_model
+        .or(configured_model)
+        .or_else(|| {
+            active_provider
+                .as_deref()
+                .and_then(|provider| registry.get_config(provider))
+                .map(|config| config.default_model.clone())
+        })
+        .unwrap_or_else(|| "unconfigured".to_string());
+    let providers = desktop_provider_options(&registry, active_provider.as_deref());
+    let configured_count = providers
+        .iter()
+        .filter(|provider| provider.configured)
+        .count();
+    let models = active_provider
+        .as_deref()
+        .map(|provider| desktop_model_options(&registry, provider, &active_model))
+        .unwrap_or_default();
+
+    Ok(ProviderModelStatus {
+        active_provider,
+        active_model,
+        configured_count,
+        providers,
+        models,
+    })
+}
+
+fn apply_desktop_provider_model(
+    runtime: &DesktopRuntime,
+    provider_name: Option<&str>,
+    model: Option<&str>,
+) -> Result<(), String> {
+    let Some(provider_name) = provider_name else {
+        return Ok(());
+    };
+    let provider_name = provider_name.trim().to_ascii_lowercase();
+    if provider_name.is_empty() {
+        return Ok(());
+    }
+
+    let registry = priority_agent::services::api::provider::ProviderRegistry::from_env();
+    let provider = registry
+        .get(&provider_name)
+        .ok_or_else(|| format!("configured desktop provider is unavailable: {provider_name}"))?;
+    let selected_model = model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            registry
+                .get_config(&provider_name)
+                .map(|config| config.default_model.clone())
+        })
+        .ok_or_else(|| format!("configured desktop provider has no model: {provider_name}"))?;
+
+    runtime
+        .streaming_engine()
+        .set_provider(provider, selected_model);
+    Ok(())
+}
+
+fn desktop_provider_options(
+    registry: &priority_agent::services::api::provider::ProviderRegistry,
+    active_provider: Option<&str>,
+) -> Vec<DesktopProviderOption> {
+    let mut providers = registry
+        .list_configs()
+        .into_iter()
+        .map(|config| {
+            let active = active_provider == Some(config.name.as_str());
+            DesktopProviderOption {
+                id: config.name.clone(),
+                label: provider_label(&config.name),
+                provider_type: format!("{:?}", config.provider_type),
+                model: config.default_model,
+                base_url: config.base_url.unwrap_or_default(),
+                configured: true,
+                active,
+                note: if active { "current" } else { "configured" }.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    for (id, label, provider_type, model, env_key) in default_desktop_providers() {
+        if providers.iter().any(|provider| provider.id == id) {
+            continue;
+        }
+        providers.push(DesktopProviderOption {
+            id: id.to_string(),
+            label: label.to_string(),
+            provider_type: provider_type.to_string(),
+            model: model.to_string(),
+            base_url: String::new(),
+            configured: false,
+            active: false,
+            note: format!("missing {env_key}"),
+        });
+    }
+
+    providers.sort_by_key(|provider| {
+        (
+            !provider.active,
+            !provider.configured,
+            provider.label.to_ascii_lowercase(),
+        )
+    });
+    providers
+}
+
+fn desktop_model_options(
+    registry: &priority_agent::services::api::provider::ProviderRegistry,
+    provider_id: &str,
+    active_model: &str,
+) -> Vec<DesktopModelOption> {
+    let mut models = default_models_for_provider(provider_id)
+        .into_iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if let Some(config) = registry.get_config(provider_id) {
+        if !models.iter().any(|model| model == &config.default_model) {
+            models.insert(0, config.default_model.clone());
+        }
+    }
+    if !active_model.is_empty() && !models.iter().any(|model| model == active_model) {
+        models.insert(0, active_model.to_string());
+    }
+
+    models
+        .into_iter()
+        .map(|model| DesktopModelOption {
+            id: model.clone(),
+            label: model.clone(),
+            provider_id: provider_id.to_string(),
+            active: model == active_model,
+            note: if model == active_model {
+                "current".to_string()
+            } else {
+                "takes effect next request".to_string()
+            },
+        })
+        .collect()
+}
+
+fn provider_id_for_base_url(
+    registry: &priority_agent::services::api::provider::ProviderRegistry,
+    base_url: &str,
+) -> Option<String> {
+    if base_url.trim().is_empty() {
+        return None;
+    }
+    registry
+        .list_configs()
+        .into_iter()
+        .find_map(|config| (config.base_url.as_deref() == Some(base_url)).then_some(config.name))
+}
+
+fn default_provider_id_from_env(
+    registry: &priority_agent::services::api::provider::ProviderRegistry,
+) -> Option<String> {
+    ["minimax", "openai", "kimi"]
+        .into_iter()
+        .find(|provider| registry.get(provider).is_some())
+        .map(ToString::to_string)
+}
+
+fn default_desktop_providers() -> [(
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+); 3] {
+    [
+        (
+            "minimax",
+            "MiniMax",
+            "Minimax",
+            "MiniMax-M2.7",
+            "MINIMAX_API_KEY",
+        ),
+        ("openai", "OpenAI", "OpenAI", "gpt-4o", "OPENAI_API_KEY"),
+        ("kimi", "Kimi", "Kimi", "kimi-k2.5", "MOONSHOT_API_KEY"),
+    ]
+}
+
+fn default_models_for_provider(provider_id: &str) -> Vec<&'static str> {
+    match provider_id {
+        "minimax" => vec!["MiniMax-M2.7", "MiniMax-M1"],
+        "openai" => vec!["gpt-4o", "gpt-4o-mini"],
+        "kimi" => vec!["kimi-k2.5", "kimi-k2.5-thinking"],
+        _ => Vec::new(),
+    }
+}
+
+fn provider_label(provider_id: &str) -> String {
+    default_desktop_providers()
+        .into_iter()
+        .find_map(|(id, label, _, _, _)| (id == provider_id).then_some(label.to_string()))
+        .unwrap_or_else(|| provider_id.to_string())
+}
+
 fn desktop_settings_path(app: &AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
@@ -548,6 +870,8 @@ pub fn run() {
                     normalized_permission_mode_label(settings.permission_mode.as_deref())
                         .to_string(),
                 )),
+                provider_name: Mutex::new(settings.provider_name),
+                model: Mutex::new(settings.model),
                 settings_path,
             });
             Ok(())
@@ -557,6 +881,8 @@ pub fn run() {
             desktop_settings,
             set_permission_mode,
             permission_mode_options,
+            provider_model_status,
+            set_provider_model,
             desktop_diagnostics,
             provider_setup_info,
             open_settings_folder,
@@ -666,6 +992,8 @@ mod tests {
             selected_project: Some("/tmp/project".to_string()),
             active_session_id: Some("session-1".to_string()),
             permission_mode: Some("auto_low_risk".to_string()),
+            provider_name: Some("kimi".to_string()),
+            model: Some("kimi-k2.5".to_string()),
         };
 
         write_desktop_settings(&path, &settings).unwrap();
@@ -675,6 +1003,8 @@ mod tests {
         assert_eq!(loaded.selected_project.as_deref(), Some("/tmp/project"));
         assert_eq!(loaded.active_session_id.as_deref(), Some("session-1"));
         assert_eq!(loaded.permission_mode.as_deref(), Some("auto_low_risk"));
+        assert_eq!(loaded.provider_name.as_deref(), Some("kimi"));
+        assert_eq!(loaded.model.as_deref(), Some("kimi-k2.5"));
     }
 
     #[test]
@@ -689,6 +1019,8 @@ mod tests {
             ),
             active_session_id: None,
             permission_mode: None,
+            provider_name: None,
+            model: None,
         };
 
         assert_eq!(initial_desktop_project(cwd.clone(), &settings), cwd);
@@ -757,6 +1089,34 @@ mod tests {
             parse_desktop_permission_mode("read_only"),
             PermissionMode::ReadOnly
         );
+    }
+
+    #[test]
+    fn desktop_smoke_provider_options_include_missing_defaults() {
+        let registry = priority_agent::services::api::provider::ProviderRegistry::new();
+        let providers = desktop_provider_options(&registry, Some("kimi"));
+
+        assert!(providers
+            .iter()
+            .any(|provider| provider.id == "minimax" && !provider.configured));
+        assert!(providers
+            .iter()
+            .any(|provider| provider.id == "openai" && provider.note.contains("OPENAI_API_KEY")));
+        assert!(providers
+            .iter()
+            .any(|provider| provider.id == "kimi" && provider.model == "kimi-k2.5"));
+    }
+
+    #[test]
+    fn desktop_smoke_model_options_include_current_model() {
+        let registry = priority_agent::services::api::provider::ProviderRegistry::new();
+        let models = desktop_model_options(&registry, "openai", "custom-model");
+
+        assert!(models
+            .iter()
+            .any(|model| model.id == "custom-model" && model.active));
+        assert!(models.iter().any(|model| model.id == "gpt-4o"));
+        assert!(models.iter().any(|model| model.id == "gpt-4o-mini"));
     }
 }
 

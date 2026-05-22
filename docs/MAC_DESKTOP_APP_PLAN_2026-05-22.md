@@ -476,6 +476,26 @@ cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
 corepack pnpm --dir apps/desktop build
 ```
 
+Provider/model selector is implemented:
+
+- `desktop-settings.json` now stores optional `provider_name` and `model`
+  fields.
+- The backend exposes `provider_model_status` and `set_provider_model`.
+- Provider status is built from the same environment-backed provider registry
+  as the TUI, with missing default providers shown as disabled options.
+- Runtime initialization and resumed sessions apply the persisted desktop
+  provider/model selection when the provider is configured.
+- The composer now shows provider and model selectors next to the project
+  controls, and switching either one updates the active runtime immediately.
+- Validation passed:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+corepack pnpm --dir apps/desktop build
+```
+
 ### Phase 0 - Runtime Extraction
 
 - Add `src/lib.rs` and turn `src/main.rs` into a thin binary entrypoint.
@@ -542,9 +562,8 @@ The next concrete code slice should deepen Phase 1:
    the current smoke covers the Rust command bridge and bundle path.
 2. Add focused tests around `runEventState.ts` once a frontend test runner is
    introduced.
-3. Add a model/provider selector that reflects the detected provider state.
-4. Add GUI-level Tauri automation once the native app test harness is stable;
-   the current smoke covers the Rust command bridge and bundle path.
+3. Add a lightweight visual/screenshot check for the settings drawer and
+   composer controls.
 
 The first shell, macOS `.app` bundle, session resume, and command smoke now
 exist. The frontend is split, icons are reproducible, and local packaging has a
@@ -552,6 +571,7 @@ single script entrypoint. Desktop project/session state now persists across app
 launches, and startup diagnostics now identify missing provider/tooling setup.
 The settings drawer now exposes that state and provider setup entrypoints. The
 first-run provider setup flow now guides shell profile setup without exposing
-secrets. Permission defaults now persist and are applied to active and future
-runtime sessions. The next useful work is a provider/model selector and a true
-GUI automation path when we are ready to spend the disk/build time.
+secrets. Permission defaults and provider/model choices now persist and are
+applied to active and future runtime sessions. The next useful work is a true
+GUI automation path plus focused frontend state tests when we are ready to
+spend the disk/build time.
