@@ -199,6 +199,25 @@ async fn run_git_with_stdin(cwd: &Path, args: Vec<String>, input: &str) -> Resul
     }
 }
 
+fn format_agent_merge_git_error(agent: &AgentWorktreeRef, merge_kind: &str, err: &str) -> String {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("conflict")
+        || lower.contains("merge failed")
+        || lower.contains("patch does not apply")
+        || lower.contains("could not apply")
+    {
+        format!(
+            "Agent worktree merge conflict while applying {} from {}.\nReview with agent_review, resolve manually from {}, or clean up with agent_cleanup after preserving needed changes.\n{}",
+            merge_kind,
+            agent.agent_id,
+            agent.path.display(),
+            err.trim_end()
+        )
+    } else {
+        err.to_string()
+    }
+}
+
 async fn commits_ahead(target_dir: &Path, branch: Option<&str>) -> Result<usize, String> {
     let Some(branch) = branch else {
         return Ok(0);
@@ -478,7 +497,9 @@ async fn handle_agent_merge(
         .await
         {
             Ok(output) => output,
-            Err(err) => return ToolResult::error(err),
+            Err(err) => {
+                return ToolResult::error(format_agent_merge_git_error(&agent, "branch", &err));
+            }
         };
         merge_kind = "branch";
         lines.push(if output.trim().is_empty() {
@@ -511,7 +532,13 @@ async fn handle_agent_merge(
             .await
             {
                 Ok(output) => output,
-                Err(err) => return ToolResult::error(err),
+                Err(err) => {
+                    return ToolResult::error(format_agent_merge_git_error(
+                        &agent,
+                        "tracked diff",
+                        &err,
+                    ));
+                }
             };
             merge_kind = "tracked_diff";
             lines.push(if output.trim().is_empty() {
@@ -895,5 +922,45 @@ mod tests {
         let err = extract_agent_worktree(&state).expect_err("non-isolated task should fail");
 
         assert!(err.contains("not an isolated worktree task"));
+    }
+
+    #[test]
+    fn merge_git_error_adds_conflict_recovery_context() {
+        let agent = AgentWorktreeRef {
+            agent_id: "agent_1".to_string(),
+            task_id: "task_1".to_string(),
+            status: "completed".to_string(),
+            description: "edit code".to_string(),
+            path: PathBuf::from("/tmp/agent-worktree"),
+            branch: Some("codex/agent-1234".to_string()),
+        };
+
+        let err = format_agent_merge_git_error(
+            &agent,
+            "tracked diff",
+            "git apply --3way failed: patch does not apply",
+        );
+
+        assert!(err.contains("Agent worktree merge conflict"));
+        assert!(err.contains("agent_review"));
+        assert!(err.contains("agent_cleanup"));
+        assert!(err.contains("/tmp/agent-worktree"));
+    }
+
+    #[test]
+    fn merge_git_error_leaves_non_conflict_errors_unchanged() {
+        let agent = AgentWorktreeRef {
+            agent_id: "agent_1".to_string(),
+            task_id: "task_1".to_string(),
+            status: "completed".to_string(),
+            description: "edit code".to_string(),
+            path: PathBuf::from("/tmp/agent-worktree"),
+            branch: Some("codex/agent-1234".to_string()),
+        };
+
+        let err =
+            format_agent_merge_git_error(&agent, "branch", "git rev-list failed: auth denied");
+
+        assert_eq!(err, "git rev-list failed: auth denied");
     }
 }

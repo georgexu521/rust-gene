@@ -81,7 +81,8 @@ Current stage:
   `cancelled`, and `action=read` loads durable task state plus persisted result
   artifacts after in-memory manager results are gone. Agent worktree safety guards
   now have direct coverage for dirty status, untracked paths, safe agent branch
-  deletion, and rejection of non-isolated task records. Hook and permission failures now share the recovery spine:
+  deletion, rejection of non-isolated task records, and merge-conflict recovery
+  messaging for branch/diff merges. Hook and permission failures now share the recovery spine:
   failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
   classified as hook runtime failures, and permission denials emit
   `/permissions explain` recovery plans in trace.

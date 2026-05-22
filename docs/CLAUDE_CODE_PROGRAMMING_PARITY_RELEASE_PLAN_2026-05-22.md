@@ -980,6 +980,9 @@ Progress on 2026-05-22:
   durable task state and persisted result artifacts from the current session
   store. This lets a parent inspect worker output after the in-memory manager
   result is gone.
+- Agent worktree branch merge and tracked-diff apply failures now wrap
+  conflict-like git errors with recovery context that points to `agent_review`,
+  manual resolution in the isolated worktree, or `agent_cleanup`.
 
 Validation so far:
 
@@ -991,6 +994,7 @@ Validation so far:
 - `cargo test -q forked_context` - passed, 4 tests.
 - `cargo test -q worktree_tool` - passed, 3 tests.
 - `cargo test -q worktree_tool` - passed, 6 tests after safety guard coverage.
+- `cargo test -q worktree_tool` - passed, 8 tests after merge-conflict recovery messaging.
 - `cargo test -q session_store` - passed, 14 tests.
 - `cargo check -q` - passed.
 - `cargo fmt --check` - passed.
