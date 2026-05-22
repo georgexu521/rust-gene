@@ -35,8 +35,10 @@ specialized summaries.
 - Add expandable result previews for long outputs.
 - Show validation commands and pass/fail outcomes in a scannable format.
 
-Status: partially implemented through the shared timeline summary renderer.
-Remaining work is richer diff previews and expandable long outputs.
+Status: implemented for the first desktop pass. File edit/patch tool summaries
+now carry a bounded diff preview from the Rust runtime, the desktop timeline
+renders it inline, and long failure/output previews collapse behind a native
+expand control.
 
 ## Phase 4 - Interaction
 
@@ -45,8 +47,12 @@ Remaining work is richer diff previews and expandable long outputs.
   footer permission card.
 - Add jump-to-trace/debug links for each event.
 
+Status: partially implemented. Permission timeline cards now expose approve and
+reject actions in the main transcript and update the original waiting card after
+the runtime answers. Stop/retry and jump-to-trace remain future work.
+
 ## Current Next Step
 
-Continue Phase 3 with richer file/diff previews and expandable long outputs.
-The shared event grouping, metadata extraction, and specialized summary renderer
-are now in place.
+Continue Phase 4 with jump-to-trace/debug affordances for each timeline event.
+Stop/retry should wait until the runtime exposes explicit cancellation/retry
+controls.

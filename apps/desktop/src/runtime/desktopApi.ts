@@ -395,6 +395,7 @@ export function sendMessage(message: string): Promise<void> {
     const toolId = crypto.randomUUID();
     const fileToolId = crypto.randomUUID();
     const failedToolId = crypto.randomUUID();
+    const permissionId = crypto.randomUUID();
     emitWebPreview({ type: "run_started", run_id: runId });
     emitWebPreview({ type: "thinking_started" });
     emitWebPreview({ type: "thinking_completed" });
@@ -436,6 +437,11 @@ export function sendMessage(message: string): Promise<void> {
         success: true,
         path: "apps/desktop/src/app/runEventState.ts",
         replacements: 2,
+        additions: 8,
+        deletions: 3,
+        diff_preview:
+          "@@ -18,6 +18,9 @@\n type ToolSummary = {\n   replacements?: number;\n+  additions?: number;\n+  deletions?: number;\n+  diff_preview?: string;\n };\n",
+        diff_preview_truncated: false,
         duration_ms: 48,
         output_chars: 44,
       },
@@ -444,7 +450,8 @@ export function sendMessage(message: string): Promise<void> {
     emitWebPreview({
       type: "tool_completed",
       id: failedToolId,
-      result_preview: "cargo test failed with exit code 101",
+      result_preview:
+        "cargo test failed with exit code 101\n\nfailures:\n  desktop_smoke::timeline_cards_show_diff_preview\n\nthread 'desktop_smoke::timeline_cards_show_diff_preview' panicked at assertion failed\n\nexpected diff preview to be visible\nreceived empty preview block\n\nstack backtrace:\n  0: rust_begin_unwind\n  1: core::panicking::panic_fmt\n  2: desktop_smoke::timeline_cards_show_diff_preview\n\nrerun with RUST_BACKTRACE=1 for a backtrace",
       metadata: {
         tool: "bash",
         call_id: failedToolId,
@@ -473,6 +480,15 @@ export function sendMessage(message: string): Promise<void> {
       prompt_tokens: 128,
       completion_tokens: 42,
       cached_tokens: 16,
+    });
+    emitWebPreview({
+      type: "permission_request",
+      id: permissionId,
+      tool_name: "bash",
+      arguments: {
+        command: "git push origin claude",
+      },
+      prompt: "Allow git push to update the remote branch?",
     });
     emitWebPreview({ type: "run_completed" });
     return Promise.resolve();

@@ -130,6 +130,7 @@ pub(super) fn build_tool_execution_summary(
                     serde_json::Value::String(path.to_string()),
                 );
             }
+            attach_diff_summary(object, result);
             if let Some(replacements) = result
                 .data
                 .as_ref()
@@ -157,6 +158,7 @@ pub(super) fn build_tool_execution_summary(
                     serde_json::Value::Number((operations.len() as u64).into()),
                 );
             }
+            attach_diff_summary(object, result);
         }
         "grep" => {
             if let Some(pattern) = tool_call.arguments["pattern"].as_str() {
@@ -198,6 +200,46 @@ pub(super) fn build_tool_execution_summary(
     }
 
     summary
+}
+
+fn attach_diff_summary(
+    summary: &mut serde_json::Map<String, serde_json::Value>,
+    result: &ToolResult,
+) {
+    let Some(diff) = result.data.as_ref().and_then(|data| data.get("diff")) else {
+        return;
+    };
+    if let Some(additions) = diff.get("additions").and_then(serde_json::Value::as_u64) {
+        summary.insert(
+            "additions".to_string(),
+            serde_json::Value::Number(additions.into()),
+        );
+    }
+    if let Some(deletions) = diff.get("deletions").and_then(serde_json::Value::as_u64) {
+        summary.insert(
+            "deletions".to_string(),
+            serde_json::Value::Number(deletions.into()),
+        );
+    }
+    if let Some(truncated) = diff
+        .get("preview_truncated")
+        .and_then(serde_json::Value::as_bool)
+    {
+        summary.insert(
+            "diff_preview_truncated".to_string(),
+            serde_json::Value::Bool(truncated),
+        );
+    }
+    if let Some(unified_diff) = diff
+        .get("unified_diff")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        summary.insert(
+            "diff_preview".to_string(),
+            serde_json::Value::String(safe_prefix_by_bytes(unified_diff, 1200).to_string()),
+        );
+    }
 }
 
 fn attach_terminal_task_summary(
@@ -730,6 +772,39 @@ mod tests {
         assert_eq!(summary["terminal_tasks"][0]["status"], "running");
         assert_eq!(summary["terminal_tasks"][0]["read_tool"], "bash_output");
         assert_eq!(summary["terminal_tasks"][0]["cancel_handle"], "shell_bg_1");
+    }
+
+    #[test]
+    fn tool_execution_summary_includes_file_diff_preview() {
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: "file_edit".to_string(),
+            arguments: serde_json::json!({"path": "src/lib.rs"}),
+        };
+        let result = ToolResult::success_with_data(
+            "edited",
+            serde_json::json!({
+                "replacements": 1,
+                "diff": {
+                    "additions": 2,
+                    "deletions": 1,
+                    "preview_truncated": false,
+                    "unified_diff": "@@ -1 +1 @@\n-old\n+new\n+again\n"
+                }
+            }),
+        );
+
+        let summary = build_tool_execution_summary(&call, &result);
+
+        assert_eq!(summary["path"], "src/lib.rs");
+        assert_eq!(summary["replacements"], 1);
+        assert_eq!(summary["additions"], 2);
+        assert_eq!(summary["deletions"], 1);
+        assert_eq!(summary["diff_preview_truncated"], false);
+        assert!(summary["diff_preview"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("+new"));
     }
 
     #[test]

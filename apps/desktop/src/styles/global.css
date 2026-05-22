@@ -558,6 +558,33 @@ h1 {
   overflow-wrap: anywhere;
 }
 
+.timeline-diff-preview,
+.timeline-output-preview {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 8px;
+  border: 1px solid #dde4eb;
+  border-radius: 7px;
+  color: #29303a;
+  background: #fbfcfd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.timeline-expandable-preview {
+  margin-top: 8px;
+}
+
+.timeline-expandable-preview summary {
+  width: max-content;
+  color: #4f5965;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .timeline-summary.failure {
   border-color: #efb0b0;
   background: #fffafa;
@@ -586,6 +613,28 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.timeline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.timeline-actions button {
+  min-height: 30px;
+  padding: 6px 11px;
+  border: 1px solid #cbd2da;
+  border-radius: 7px;
+  color: #30343a;
+  background: #ffffff;
+}
+
+.timeline-actions button:last-child {
+  border-color: #20242a;
+  color: #ffffff;
+  background: #20242a;
 }
 
 .trace-drawer {

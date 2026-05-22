@@ -283,7 +283,10 @@ export function App() {
           onRefresh={() => void refreshDiagnostics()}
         />
 
-        <Transcript items={runState.items} />
+        <Transcript
+          items={runState.items}
+          onPermissionAnswer={(approved) => void handlePermission(approved)}
+        />
 
         <TraceDrawer
           isOpen={isTraceOpen}

@@ -26,6 +26,7 @@ test.describe("desktop UI smoke", () => {
         hasText: "apps/desktop/src/app/runEventState.ts",
       }),
     ).toBeVisible();
+    await expect(page.locator(".timeline-diff-preview", { hasText: "+  diff_preview?: string;" })).toBeVisible();
     await expect(page.locator(".timeline-facts span", { hasText: "2 replacements" })).toBeVisible();
     await expect(
       page.locator(".timeline-summary.failure strong", {
@@ -37,6 +38,12 @@ test.describe("desktop UI smoke", () => {
         hasText: "Inspect the failing test output",
       }),
     ).toBeVisible();
+    await expect(page.locator(".timeline-expandable-preview summary", { hasText: "Output preview" })).toBeVisible();
+    await page.locator(".timeline-expandable-preview summary", { hasText: "Output preview" }).click();
+    await expect(page.locator(".timeline-output-preview", { hasText: "timeline_cards_show_diff_preview" })).toBeVisible();
+    await expect(page.locator(".timeline-event.permission", { hasText: "Allow git push" })).toBeVisible();
+    await page.locator(".timeline-event.permission .timeline-actions button", { hasText: "Approve" }).click();
+    await expect(page.locator(".timeline-event.permission", { hasText: "Permission approved" })).toBeVisible();
 
     await assertNoHorizontalOverflow(page);
     await assertStableVerticalStack(page, [

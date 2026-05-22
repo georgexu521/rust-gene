@@ -31,11 +31,17 @@ export type TimelineSummary =
       path?: string;
       operations?: number;
       replacements?: number;
+      additions?: number;
+      deletions?: number;
+      diffPreview?: string;
+      diffTruncated?: boolean;
     }
   | {
       kind: "failure";
       reason: string;
       recovery?: string;
+      outputPreview?: string;
+      outputTruncated?: boolean;
     };
 
 export type TimelineStatus =

@@ -1,5 +1,11 @@
 import { DesktopMessage, DesktopRunEvent } from "../runtime/desktopApi";
-import { PermissionRequest, TimelineSummary, TraceItem, TranscriptItem } from "./types";
+import {
+  PermissionRequest,
+  TimelineStatus,
+  TimelineSummary,
+  TraceItem,
+  TranscriptItem,
+} from "./types";
 
 export type RunViewState = {
   items: TranscriptItem[];
@@ -295,6 +301,27 @@ export function appendPermissionAnswer(
   answered: boolean,
   createId: () => string = () => `permission-${Date.now()}`,
 ): RunViewState {
+  const permissionId = state.pendingPermission?.id;
+  const answerTitle = answered
+    ? approved
+      ? "Permission approved"
+      : "Permission rejected"
+    : "No pending permission request was available";
+  const answerStatus: TimelineStatus = approved ? "completed" : "failed";
+  const updatedItems =
+    answered && permissionId
+      ? state.items.map((item) => {
+          if (item.role !== "timeline" || item.id !== permissionId) {
+            return item;
+          }
+          return {
+            ...item,
+            title: answerTitle,
+            status: answerStatus,
+          };
+        })
+      : updateLatestWaitingPermission(state.items, answerTitle, answerStatus, createId);
+
   return {
     ...state,
     pendingPermission: null,
@@ -307,19 +334,7 @@ export function appendPermissionAnswer(
         detail: answered ? undefined : "No pending permission request was available",
       },
     ],
-    items: [
-      ...state.items,
-      timelineEvent({
-        id: createId(),
-        kind: "permission",
-        title: answered
-          ? approved
-            ? "Permission approved"
-            : "Permission rejected"
-          : "No pending permission request was available",
-        status: approved ? "completed" : "failed",
-      }),
-    ],
+    items: updatedItems,
   };
 }
 
@@ -473,6 +488,44 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
   return nextItems;
 }
 
+function updateLatestWaitingPermission(
+  items: TranscriptItem[],
+  title: string,
+  status: "completed" | "failed",
+  createId: () => string,
+): TranscriptItem[] {
+  let index = -1;
+  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = items[itemIndex];
+    if (item.role === "timeline" && item.kind === "permission" && item.status === "waiting") {
+      index = itemIndex;
+      break;
+    }
+  }
+  if (index < 0) {
+    return [
+      ...items,
+      timelineEvent({
+        id: createId(),
+        kind: "permission",
+        title,
+        status,
+      }),
+    ];
+  }
+
+  const nextItems = [...items];
+  const item = nextItems[index];
+  if (item.role === "timeline") {
+    nextItems[index] = {
+      ...item,
+      title,
+      status,
+    };
+  }
+  return nextItems;
+}
+
 function traceTool(id: string, title: string, detail?: string): TraceItem {
   return {
     id,
@@ -503,6 +556,10 @@ type ToolSummary = {
   action?: string;
   replacements?: number;
   operations?: number;
+  additions?: number;
+  deletions?: number;
+  diff_preview?: string;
+  diff_preview_truncated?: boolean;
   output_chars?: number;
   terminal_task?: Record<string, unknown>;
   terminal_tasks_count?: number;
@@ -607,6 +664,8 @@ function timelineSummary(summary: ToolSummary, resultPreview: string): TimelineS
       kind: "failure",
       reason: summary.error_preview || resultPreview || "Tool failed",
       recovery: summary.user_note || summary.recovery_action,
+      outputPreview: resultPreview,
+      outputTruncated: resultPreview.length >= 2000,
     };
   }
 
@@ -629,6 +688,10 @@ function timelineSummary(summary: ToolSummary, resultPreview: string): TimelineS
       path: summary.path,
       operations: summary.operations,
       replacements: summary.replacements,
+      additions: summary.additions,
+      deletions: summary.deletions,
+      diffPreview: summary.diff_preview,
+      diffTruncated: summary.diff_preview_truncated,
     };
   }
 
