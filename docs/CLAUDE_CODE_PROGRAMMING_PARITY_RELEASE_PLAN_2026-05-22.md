@@ -956,6 +956,27 @@ Acceptance:
 - Mutating parallel workers use isolated worktrees by default.
 - Parent sessions can inspect, merge, or clean up worker output safely.
 
+Progress on 2026-05-22:
+
+- Code-change agent definitions now default to `isolated_worktree_fork` instead
+  of `full_fork`, which makes the derived permission mode `isolated_write`.
+- Built-in mutating profiles (`default` and `implementer`) now use isolated
+  worktree context by default.
+- The `agent` tool also infers `isolated_worktree_fork` when no profile is
+  provided but the resolved tool surface includes mutating file tools such as
+  `file_edit`, `file_write`, or `apply_patch`. Explicit `context_mode` still
+  overrides the inference.
+
+Validation so far:
+
+- `cargo test -q profiles` - passed, 6 tests.
+- `cargo test -q agent_tool` - passed, 14 tests.
+- `cargo test -q forked_context` - passed, 4 tests.
+- `cargo test -q worktree_tool` - passed, 3 tests.
+- `cargo test -q session_store` - passed, 14 tests.
+- `cargo check -q` - passed.
+- `cargo fmt --check` - passed.
+
 ## Phase 8: Context, Compaction, Memory, And Skills
 
 Purpose: keep long coding sessions coherent.

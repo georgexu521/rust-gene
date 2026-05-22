@@ -70,7 +70,11 @@ Current stage:
   command-palette results, while explicit search still exposes them and inserts
   rather than executes. `/panel all` now also includes stable agent and trace
   panels for profile definitions, running agents, durable task states, artifacts,
-  recent traces, and replay entrypoints. Hook and permission failures now share the recovery spine:
+  recent traces, and replay entrypoints. Phase 7 has started on subagent
+  reliability: code-change agent definitions and built-in mutating profiles now
+  default to `isolated_worktree_fork`/`isolated_write`, and the `agent` tool also
+  infers isolated worktree context whenever the resolved tool surface includes
+  mutating file tools. Hook and permission failures now share the recovery spine:
   failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
   classified as hook runtime failures, and permission denials emit
   `/permissions explain` recovery plans in trace.

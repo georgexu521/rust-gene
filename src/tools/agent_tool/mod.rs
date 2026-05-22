@@ -246,6 +246,28 @@ fn isolated_worktree_slug(description: &str) -> String {
     }
 }
 
+fn tools_allow_file_mutation(tools: &[String]) -> bool {
+    tools
+        .iter()
+        .any(|tool| matches!(tool.as_str(), "file_edit" | "file_write" | "apply_patch"))
+}
+
+fn effective_agent_context_mode(
+    override_mode: Option<AgentContextMode>,
+    definition: Option<&AgentDefinition>,
+    allowed_tools: &[String],
+) -> Option<AgentContextMode> {
+    override_mode
+        .or_else(|| definition.map(|definition| definition.context_mode))
+        .or_else(|| {
+            if tools_allow_file_mutation(allowed_tools) {
+                Some(AgentContextMode::IsolatedWorktreeFork)
+            } else {
+                None
+            }
+        })
+}
+
 /// 创建并等待单个子 Agent 完成
 #[allow(clippy::too_many_arguments)]
 async fn spawn_single_agent(
@@ -266,7 +288,7 @@ async fn spawn_single_agent(
 ) -> anyhow::Result<ManagerAgentResult> {
     let started_at = std::time::Instant::now();
     let effective_context_mode =
-        context_mode_override.or_else(|| definition.map(|definition| definition.context_mode));
+        effective_agent_context_mode(context_mode_override, definition, allowed_tools);
     let isolated_worktree = if effective_context_mode
         .map(|mode| mode.requires_isolated_worktree())
         .unwrap_or(false)
@@ -1106,11 +1128,11 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
             } else {
                 format!("\nRelevant files: {}", files.join(", "))
             };
-            let effective_context_mode = ctx.context_mode_override.or_else(|| {
-                ctx.definition
-                    .as_ref()
-                    .map(|definition| definition.context_mode)
-            });
+            let effective_context_mode = effective_agent_context_mode(
+                ctx.context_mode_override,
+                ctx.definition.as_ref(),
+                &ctx.allowed_tools,
+            );
 
             // Handle memory operations
             let memory_manager = crate::agent::memory::global_memory_manager();
@@ -1533,6 +1555,33 @@ mod tests {
         assert!(planner.contains(&"plan".to_string()));
         assert!(planner.contains(&"todo_write".to_string()));
         assert!(!planner.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn mutating_tool_surface_defaults_to_isolated_worktree_context() {
+        let tools = vec!["file_read".to_string(), "file_edit".to_string()];
+
+        let mode = effective_agent_context_mode(None, None, &tools);
+
+        assert_eq!(mode, Some(AgentContextMode::IsolatedWorktreeFork));
+    }
+
+    #[test]
+    fn read_only_tool_surface_does_not_force_worktree_context() {
+        let tools = vec!["grep".to_string(), "file_read".to_string()];
+
+        let mode = effective_agent_context_mode(None, None, &tools);
+
+        assert_eq!(mode, None);
+    }
+
+    #[test]
+    fn explicit_context_mode_overrides_mutating_tool_inference() {
+        let tools = vec!["file_write".to_string()];
+
+        let mode = effective_agent_context_mode(Some(AgentContextMode::FullFork), None, &tools);
+
+        assert_eq!(mode, Some(AgentContextMode::FullFork));
     }
 
     #[test]

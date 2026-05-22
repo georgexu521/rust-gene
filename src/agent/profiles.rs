@@ -296,7 +296,7 @@ impl AgentProfile {
             }
         });
         let context_mode = self.context.unwrap_or(match risk_policy {
-            AgentRiskPolicy::CodeChange => AgentContextMode::FullFork,
+            AgentRiskPolicy::CodeChange => AgentContextMode::IsolatedWorktreeFork,
             AgentRiskPolicy::ReadOnly | AgentRiskPolicy::VerifyOnly => {
                 AgentContextMode::InheritedSummary
             }
@@ -432,7 +432,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "format".into(),
             ],
             disallowed_tools: Vec::new(),
-            context: Some(AgentContextMode::InheritedSummary),
+            context: Some(AgentContextMode::IsolatedWorktreeFork),
             permission_mode: None,
             risk_policy: Some(AgentRiskPolicy::CodeChange),
             output_contract: Some(AgentOutputContract::PatchSummary),
@@ -528,8 +528,8 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "format".into(),
             ],
             disallowed_tools: vec!["agent".into(), "swarm".into()],
-            context: Some(AgentContextMode::FullFork),
-            permission_mode: Some(AgentPermissionMode::Bubble),
+            context: Some(AgentContextMode::IsolatedWorktreeFork),
+            permission_mode: Some(AgentPermissionMode::IsolatedWrite),
             risk_policy: Some(AgentRiskPolicy::CodeChange),
             output_contract: Some(AgentOutputContract::PatchSummary),
             model: None,
@@ -554,8 +554,20 @@ mod tests {
         assert!(profiles.iter().any(|profile| profile.name == "explorer"));
         assert!(profiles.iter().any(|profile| profile.name == "planner"));
         assert!(find_profile(".", "verifier").is_some());
+        let default = find_profile(".", "default").unwrap();
+        assert_eq!(
+            default.context,
+            Some(AgentContextMode::IsolatedWorktreeFork)
+        );
         let implementer = find_profile(".", "implementer").unwrap();
-        assert_eq!(implementer.context, Some(AgentContextMode::FullFork));
+        assert_eq!(
+            implementer.context,
+            Some(AgentContextMode::IsolatedWorktreeFork)
+        );
+        assert_eq!(
+            implementer.permission_mode,
+            Some(AgentPermissionMode::IsolatedWrite)
+        );
         assert_eq!(implementer.risk_policy, Some(AgentRiskPolicy::CodeChange));
         assert_eq!(
             implementer.output_contract,
@@ -649,15 +661,58 @@ context = "fork"
             .iter()
             .find(|definition| definition.name == "implementer")
             .unwrap();
-        assert_eq!(implementer.context_mode, AgentContextMode::FullFork);
-        assert_eq!(implementer.permission_mode, AgentPermissionMode::Bubble);
+        assert_eq!(
+            implementer.context_mode,
+            AgentContextMode::IsolatedWorktreeFork
+        );
+        assert_eq!(
+            implementer.permission_mode,
+            AgentPermissionMode::IsolatedWrite
+        );
         assert_eq!(
             implementer.output_contract,
             AgentOutputContract::PatchSummary
         );
         assert!(implementer.context_mode.copies_full_history());
+        assert!(implementer.context_mode.requires_isolated_worktree());
         assert!(implementer
             .envelope_constraints()
             .contains(&"agent_definition=implementer".to_string()));
+    }
+
+    #[test]
+    fn code_change_profiles_default_to_isolated_worktree_definition() {
+        let profile = AgentProfile {
+            name: "writer".to_string(),
+            description: "writes code".to_string(),
+            role: AgentRole::Specialist,
+            system_prompt: String::new(),
+            allowed_tools: vec!["file_edit".to_string(), "bash".to_string()],
+            disallowed_tools: Vec::new(),
+            context: None,
+            permission_mode: None,
+            risk_policy: None,
+            output_contract: None,
+            model: None,
+            effort: None,
+            mcp_servers: Vec::new(),
+            memory: None,
+            timeout_secs: None,
+            max_turns: None,
+            max_cost_usd: None,
+        };
+
+        let definition = profile.to_definition();
+
+        assert_eq!(definition.risk_policy, AgentRiskPolicy::CodeChange);
+        assert_eq!(
+            definition.context_mode,
+            AgentContextMode::IsolatedWorktreeFork
+        );
+        assert_eq!(
+            definition.permission_mode,
+            AgentPermissionMode::IsolatedWrite
+        );
+        assert!(definition.context_mode.requires_isolated_worktree());
     }
 }
