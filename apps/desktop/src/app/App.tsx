@@ -15,6 +15,7 @@ import {
   desktopHealth,
   desktopSettings,
   listRecentSessions,
+  newConversation,
   onDesktopRunEvent,
   openSettingsFolder,
   openShellProfile,
@@ -22,6 +23,7 @@ import {
   pickProjectDirectory,
   providerModelStatus,
   providerSetupInfo,
+  renameSession,
   resumeSession,
   selectProject,
   sendMessage,
@@ -52,6 +54,7 @@ export function App() {
   const [providerStatus, setProviderStatus] = useState<ProviderModelStatus | null>(null);
   const [projectPath, setProjectPath] = useState("");
   const [sessions, setSessions] = useState<RecentSession[]>([]);
+  const [sessionSearch, setSessionSearch] = useState("");
   const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
   const [composer, setComposer] = useState("");
   const [isTraceOpen, setIsTraceOpen] = useState(false);
@@ -159,6 +162,7 @@ export function App() {
       setSettings((current) =>
         current ? { ...current, selected_project: selected.path, active_session_id: null } : current,
       );
+      resetConversationView();
       void refreshDiagnostics();
     } catch (err) {
       setRunState((current) => withError(current, err));
@@ -176,6 +180,7 @@ export function App() {
       setSettings((current) =>
         current ? { ...current, selected_project: selected.path, active_session_id: null } : current,
       );
+      resetConversationView();
       void refreshDiagnostics();
     } catch (err) {
       setRunState((current) => withError(current, err));
@@ -190,6 +195,28 @@ export function App() {
       );
       setRunState((current) =>
         loadSessionTranscript(current, resumed.session_id, resumed.messages),
+      );
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleNewChat() {
+    try {
+      setSettings(await newConversation());
+      resetConversationView();
+      void refreshSessions();
+      void refreshDiagnostics();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleRenameSession(session: RecentSession, title: string) {
+    try {
+      const renamed = await renameSession(session.id, title);
+      setSessions((current) =>
+        current.map((item) => (item.id === renamed.id ? { ...item, ...renamed } : item)),
       );
     } catch (err) {
       setRunState((current) => withError(current, err));
@@ -239,11 +266,26 @@ export function App() {
     }
   }
 
+  function resetConversationView() {
+    setRunState({ ...initialRunViewState, items: [], traceItems: [] });
+    setComposer("");
+    setActiveTraceId(null);
+    setIsTraceOpen(false);
+  }
+
+  const filteredSessions = filterSessions(sessions, sessionSearch);
+
   return (
     <main className="app-shell">
       <Sidebar
-        sessions={sessions}
+        projectPath={projectPath}
+        sessions={filteredSessions}
+        sessionSearch={sessionSearch}
         selectedSessionId={runState.selectedSessionId}
+        onBrowseProject={() => void handleBrowseProject()}
+        onNewChat={() => void handleNewChat()}
+        onRenameSession={(session, title) => void handleRenameSession(session, title)}
+        onSearchChange={setSessionSearch}
         onLoadSession={(session) => void handleLoadSession(session)}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
@@ -339,4 +381,16 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function filterSessions(sessions: RecentSession[], query: string) {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) {
+    return sessions;
+  }
+
+  return sessions.filter((session) => {
+    const haystack = [session.title, session.id, session.model].join(" ").toLocaleLowerCase();
+    return haystack.includes(needle);
+  });
 }

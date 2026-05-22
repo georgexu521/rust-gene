@@ -1,27 +1,61 @@
 import {
+  Check,
   Clock3,
   ChevronLeft,
   ChevronRight,
+  Edit3,
   Folder,
   Search,
   Settings,
   SquarePen,
+  X,
 } from "lucide-react";
+import { FormEvent, useState } from "react";
 import { RecentSession } from "../../runtime/desktopApi";
 
 type SidebarProps = {
+  projectPath: string;
   sessions: RecentSession[];
+  sessionSearch: string;
   selectedSessionId: string | null;
+  onBrowseProject: () => void;
+  onNewChat: () => void;
+  onRenameSession: (session: RecentSession, title: string) => void;
+  onSearchChange: (query: string) => void;
   onLoadSession: (session: RecentSession) => void;
   onOpenSettings: () => void;
 };
 
 export function Sidebar({
+  projectPath,
   sessions,
+  sessionSearch,
   selectedSessionId,
+  onBrowseProject,
+  onNewChat,
+  onRenameSession,
+  onSearchChange,
   onLoadSession,
   onOpenSettings,
 }: SidebarProps) {
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
+  const projectLabel = basename(projectPath) || "Select project";
+
+  function beginRename(session: RecentSession) {
+    setEditingSessionId(session.id);
+    setDraftTitle(session.title);
+  }
+
+  function submitRename(event: FormEvent<HTMLFormElement>, session: RecentSession) {
+    event.preventDefault();
+    const title = draftTitle.trim();
+    if (title && title !== session.title) {
+      onRenameSession(session, title);
+    }
+    setEditingSessionId(null);
+  }
+
   return (
     <aside className="sidebar">
       <div className="window-spacer">
@@ -35,37 +69,89 @@ export function Sidebar({
           <ChevronRight size={16} />
         </div>
       </div>
-      <button className="nav-action">
+      <button className="nav-action" type="button" onClick={onNewChat}>
         <SquarePen aria-hidden="true" size={17} />
         <span>New Chat</span>
       </button>
-      <button className="nav-action">
+      <label className="sidebar-search">
         <Search aria-hidden="true" size={17} />
-        <span>Search</span>
-      </button>
+        <input
+          aria-label="Search sessions"
+          value={sessionSearch}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder="Search"
+        />
+      </label>
       <div className="sidebar-section">Projects</div>
-      <div className="project-pill">
+      <button
+        className="project-pill"
+        type="button"
+        title={projectPath}
+        onClick={onBrowseProject}
+      >
         <Folder aria-hidden="true" size={16} />
-        <span>rust-agent</span>
-      </div>
+        <span>{projectLabel}</span>
+      </button>
       <div className="sidebar-section">Recent</div>
       <div className="recent-list">
         {sessions.length === 0 ? (
-          <div className="recent-empty">No saved sessions</div>
+          <div className="recent-empty">
+            {sessionSearch.trim() ? "No matching sessions" : "No saved sessions"}
+          </div>
         ) : (
           sessions.map((session) => (
-            <button
+            <div
               className={`recent-item ${session.id === selectedSessionId ? "active" : ""}`}
               key={session.id}
-              onClick={() => onLoadSession(session)}
-              type="button"
             >
-              <span>{session.title}</span>
-              <small>
-                <Clock3 aria-hidden="true" size={12} />
-                {session.message_count} msgs · {session.model}
-              </small>
-            </button>
+              {editingSessionId === session.id ? (
+                <form className="recent-rename-form" onSubmit={(event) => submitRename(event, session)}>
+                  <input
+                    aria-label="Session name"
+                    autoFocus
+                    value={draftTitle}
+                    onChange={(event) => setDraftTitle(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        setEditingSessionId(null);
+                      }
+                    }}
+                  />
+                  <button aria-label="Save session title" type="submit">
+                    <Check aria-hidden="true" size={13} />
+                  </button>
+                  <button
+                    aria-label="Cancel rename"
+                    type="button"
+                    onClick={() => setEditingSessionId(null)}
+                  >
+                    <X aria-hidden="true" size={13} />
+                  </button>
+                </form>
+              ) : (
+                <>
+                  <button
+                    className="recent-item-main"
+                    onClick={() => onLoadSession(session)}
+                    type="button"
+                  >
+                    <span>{session.title}</span>
+                    <small>
+                      <Clock3 aria-hidden="true" size={12} />
+                      {session.message_count} msgs · {session.model}
+                    </small>
+                  </button>
+                  <button
+                    aria-label={`Rename ${session.title}`}
+                    className="recent-rename-button"
+                    type="button"
+                    onClick={() => beginRename(session)}
+                  >
+                    <Edit3 aria-hidden="true" size={13} />
+                  </button>
+                </>
+              )}
+            </div>
           ))
         )}
       </div>
@@ -75,4 +161,8 @@ export function Sidebar({
       </button>
     </aside>
   );
+}
+
+function basename(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 }

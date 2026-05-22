@@ -304,9 +304,43 @@ async fn select_project(
 }
 
 #[tauri::command]
+async fn new_conversation(
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopSettingsResponse, String> {
+    {
+        let mut runtime = state.runtime.lock().await;
+        *runtime = None;
+    }
+    {
+        let mut active_session_id = state.active_session_id.lock().await;
+        *active_session_id = None;
+    }
+    persist_current_settings(&state).await?;
+    desktop_settings(state).await
+}
+
+#[tauri::command]
 fn list_recent_sessions(limit: Option<i64>) -> Result<Vec<RecentSession>, String> {
     let store = open_session_store()?;
     list_recent_sessions_from_store(&store, limit.unwrap_or(20))
+}
+
+#[tauri::command]
+fn rename_session(session_id: String, title: String) -> Result<RecentSession, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("session title cannot be empty".to_string());
+    }
+
+    let store = open_session_store()?;
+    store
+        .get_session(&session_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| format!("session not found: {session_id}"))?;
+    store
+        .update_session_title(&session_id, title)
+        .map_err(|err| err.to_string())?;
+    recent_session_from_store(&store, &session_id)
 }
 
 #[tauri::command]
@@ -410,6 +444,24 @@ fn list_recent_sessions_from_store(
             })
         })
         .collect()
+}
+
+fn recent_session_from_store(store: &SessionStore, session_id: &str) -> Result<RecentSession, String> {
+    let session = store
+        .get_session(session_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| format!("session not found: {session_id}"))?;
+    let message_count = store
+        .message_count(&session.id)
+        .map_err(|err| err.to_string())?;
+
+    Ok(RecentSession {
+        id: session.id,
+        title: session.title,
+        updated_at: session.updated_at,
+        model: session.model,
+        message_count,
+    })
 }
 
 #[tauri::command]
@@ -920,7 +972,9 @@ pub fn run() {
             open_settings_folder,
             open_shell_profile,
             select_project,
+            new_conversation,
             list_recent_sessions,
+            rename_session,
             load_session_messages,
             resume_session,
             send_message,

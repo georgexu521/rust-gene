@@ -167,6 +167,14 @@ export function desktopSettings(): Promise<DesktopSettings> {
   return invoke("desktop_settings");
 }
 
+export function newConversation(): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    return desktopSettings().then((settings) => ({ ...settings, active_session_id: null }));
+  }
+
+  return invoke("new_conversation");
+}
+
 export function setPermissionMode(mode: PermissionModeId): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
     return desktopSettings().then((settings) => ({ ...settings, permission_mode: mode }));
@@ -337,10 +345,31 @@ export function listRecentSessions(limit = 20): Promise<RecentSession[]> {
         model: "web-preview",
         message_count: 2,
       },
+      {
+        id: "web-preview-release",
+        title: "Release readiness notes",
+        updated_at: "preview",
+        model: "web-preview",
+        message_count: 5,
+      },
     ]);
   }
 
   return invoke("list_recent_sessions", { limit });
+}
+
+export function renameSession(sessionId: string, title: string): Promise<RecentSession> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      id: sessionId,
+      title,
+      updated_at: "preview",
+      model: "web-preview",
+      message_count: 2,
+    });
+  }
+
+  return invoke("rename_session", { sessionId, title });
 }
 
 export function loadSessionMessages(sessionId: string): Promise<DesktopMessage[]> {

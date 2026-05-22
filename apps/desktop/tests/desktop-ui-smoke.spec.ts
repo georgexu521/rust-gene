@@ -9,6 +9,24 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Environment diagnostics")).toBeVisible();
     await expect(page.getByLabel("Provider")).toBeVisible();
     await expect(page.getByLabel("Model")).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Chat" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "rust-agent" })).toBeVisible();
+
+    await page.getByLabel("Search sessions").fill("Release");
+    await expect(page.getByText("Release readiness notes")).toBeVisible();
+    await expect(page.getByText("Desktop app Phase 1")).not.toBeVisible();
+    await page.getByLabel("Search sessions").fill("");
+
+    await page.getByRole("button", { name: /Rename Desktop app Phase 1/ }).click();
+    await page.getByLabel("Session name").fill("Daily desktop flow");
+    await page.getByRole("button", { name: "Save session title" }).click();
+    await expect(page.getByText("Daily desktop flow")).toBeVisible();
+
+    await page.locator(".recent-item-main", { hasText: "Daily desktop flow" }).click();
+    await expect(page.getByText("Loaded preview session: web-preview")).toBeVisible();
+
+    await page.getByRole("button", { name: "New Chat" }).click();
+    await expect(page.getByText("Loaded preview session: web-preview")).not.toBeVisible();
 
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
