@@ -727,6 +727,8 @@ impl ToolExecutionController {
                         execution.approval_channel.as_ref(),
                         exec_context.tx,
                         exec_context.trace,
+                        execution.hook_manager.as_ref(),
+                        &context,
                     )
                     .await;
                     if approved {

@@ -779,12 +779,16 @@ Progress on 2026-05-22:
   audit snapshot while keeping the existing prompt/decision fields compatible.
 - `StreamEvent::PermissionRequest` can carry the same audit snapshot for UI and
   future panel rendering.
+- Env hook provider now supports `PRIORITY_AGENT_PERMISSION_REQUEST_HOOK` and
+  `PRIORITY_AGENT_PERMISSION_RESOLVED_HOOK`, records them in lifecycle
+  snapshots, and lets permission-request hooks deny before the approval is
+  shown to the user.
 
 Validation so far:
 
 - `cargo test -q human_review` - passed, 8 tests.
 - `cargo test -q permission_controller` - passed, 8 tests.
-- `cargo test -q hooks` - passed, 8 tests.
+- `cargo test -q hooks` - passed, 9 tests.
 - `cargo test -q trace` - passed, 37 tests.
 - `cargo test -q recovery_plan` - passed, 13 tests.
 - `cargo check -q` - passed.

@@ -4,6 +4,8 @@
 //! Hooks are optional and configured by environment variables:
 //! - `PRIORITY_AGENT_PRE_TOOL_HOOK` (全局 pre-tool hook)
 //! - `PRIORITY_AGENT_POST_TOOL_HOOK` (全局 post-tool hook)
+//! - `PRIORITY_AGENT_PERMISSION_REQUEST_HOOK` (permission request hook)
+//! - `PRIORITY_AGENT_PERMISSION_RESOLVED_HOOK` (permission resolution hook)
 //! - `PRIORITY_AGENT_HOOK_TIMEOUT_MS` (optional, default 5000)
 //! - `PRIORITY_AGENT_HOOK_FAIL_CLOSED` (optional, default false)
 //!
@@ -35,6 +37,7 @@ pub enum HookEventKind {
     PreToolUse,
     PostToolUse,
     PermissionRequest,
+    PermissionResolved,
     ValidationStart,
     ValidationEnd,
     SubagentStart,
@@ -191,6 +194,10 @@ pub struct ToolHookManager {
     tool_specific_pre_hooks: HashMap<String, Vec<CommandHook>>,
     /// 特定工具的 post hooks (tool_name -> hooks)
     tool_specific_post_hooks: HashMap<String, Vec<CommandHook>>,
+    /// Permission request lifecycle hooks.
+    permission_request_hooks: Vec<CommandHook>,
+    /// Permission resolution lifecycle hooks.
+    permission_resolved_hooks: Vec<CommandHook>,
     /// 最近 hook 执行记录
     recent_records: Arc<Mutex<VecDeque<HookRunRecord>>>,
     /// 单调递增的 hook 执行序号，用于 trace 增量消费
@@ -303,6 +310,20 @@ impl ToolHookManager {
                 ));
             }
         }
+        for hook in &self.permission_request_hooks {
+            registrations.push(hook_registration(
+                HookEventKind::PermissionRequest,
+                "global".to_string(),
+                hook,
+            ));
+        }
+        for hook in &self.permission_resolved_hooks {
+            registrations.push(hook_registration(
+                HookEventKind::PermissionResolved,
+                "global".to_string(),
+                hook,
+            ));
+        }
         registrations
     }
 
@@ -360,10 +381,18 @@ impl ToolHookManager {
     pub fn from_env() -> Option<Self> {
         let pre = std::env::var("PRIORITY_AGENT_PRE_TOOL_HOOK").ok();
         let post = std::env::var("PRIORITY_AGENT_POST_TOOL_HOOK").ok();
+        let permission_request = std::env::var("PRIORITY_AGENT_PERMISSION_REQUEST_HOOK").ok();
+        let permission_resolved = std::env::var("PRIORITY_AGENT_PERMISSION_RESOLVED_HOOK").ok();
 
         // 检查是否有任何钩子配置
         let has_any_hook = pre.as_ref().is_some_and(|v| !v.trim().is_empty())
-            || post.as_ref().is_some_and(|v| !v.trim().is_empty());
+            || post.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || permission_request
+                .as_ref()
+                .is_some_and(|v| !v.trim().is_empty())
+            || permission_resolved
+                .as_ref()
+                .is_some_and(|v| !v.trim().is_empty());
 
         // 检查细粒度钩子
         let mut tool_specific_hooks = false;
@@ -403,6 +432,32 @@ impl ToolHookManager {
             if !cmd.is_empty() {
                 mgr.post_tool_hooks.push(CommandHook {
                     name: "env_post_tool_hook".to_string(),
+                    provider: HookProviderKind::Env,
+                    command: cmd.to_string(),
+                    timeout_ms,
+                    block_on_error: fail_closed,
+                });
+            }
+        }
+
+        if let Some(cmd) = permission_request {
+            let cmd = cmd.trim();
+            if !cmd.is_empty() {
+                mgr.permission_request_hooks.push(CommandHook {
+                    name: "env_permission_request_hook".to_string(),
+                    provider: HookProviderKind::Env,
+                    command: cmd.to_string(),
+                    timeout_ms,
+                    block_on_error: fail_closed,
+                });
+            }
+        }
+
+        if let Some(cmd) = permission_resolved {
+            let cmd = cmd.trim();
+            if !cmd.is_empty() {
+                mgr.permission_resolved_hooks.push(CommandHook {
+                    name: "env_permission_resolved_hook".to_string(),
                     provider: HookProviderKind::Env,
                     command: cmd.to_string(),
                     timeout_ms,
@@ -579,6 +634,82 @@ impl ToolHookManager {
                 }
             }
         }
+    }
+
+    pub async fn run_permission_request(
+        &self,
+        tool_call: &ToolCall,
+        context: &ToolContext,
+    ) -> HookDecision {
+        self.run_lifecycle_hooks(
+            HookEventKind::PermissionRequest,
+            &self.permission_request_hooks,
+            tool_call,
+            context,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn run_permission_resolved(
+        &self,
+        tool_call: &ToolCall,
+        context: &ToolContext,
+        approved: bool,
+    ) -> HookDecision {
+        self.run_lifecycle_hooks(
+            HookEventKind::PermissionResolved,
+            &self.permission_resolved_hooks,
+            tool_call,
+            context,
+            Some(approved),
+            None,
+        )
+        .await
+    }
+
+    async fn run_lifecycle_hooks(
+        &self,
+        event: HookEventKind,
+        hooks: &[CommandHook],
+        tool_call: &ToolCall,
+        context: &ToolContext,
+        success: Option<bool>,
+        result_content: Option<&str>,
+    ) -> HookDecision {
+        if hooks.is_empty() {
+            return HookDecision::allow();
+        }
+
+        let payload = HookPayload {
+            event,
+            session_id: &context.session_id,
+            working_dir: context.working_dir.to_string_lossy().to_string(),
+            tool_call_id: &tool_call.id,
+            tool_name: &tool_call.name,
+            arguments: &tool_call.arguments,
+            success,
+            result_content,
+        };
+
+        for hook in hooks {
+            match self.execute_hook(hook, &payload).await {
+                Ok(Some(decision)) if !decision.allow => return decision,
+                Ok(_) => {}
+                Err(err) => {
+                    warn!("Lifecycle hook '{}' failed: {}", hook.name, err);
+                    if hook.block_on_error {
+                        return HookDecision::deny(format!(
+                            "blocked by failing lifecycle hook '{}': {}",
+                            hook.name, err
+                        ));
+                    }
+                }
+            }
+        }
+
+        HookDecision::allow()
     }
 
     async fn execute_hook(
@@ -795,6 +926,8 @@ mod tests {
             post_tool_hooks: Vec::new(),
             tool_specific_pre_hooks: HashMap::new(),
             tool_specific_post_hooks: HashMap::new(),
+            permission_request_hooks: Vec::new(),
+            permission_resolved_hooks: Vec::new(),
             recent_records: Arc::new(Mutex::new(VecDeque::new())),
             next_record_sequence: Arc::new(AtomicU64::new(0)),
         }
@@ -805,6 +938,8 @@ mod tests {
         let mut env = EnvVarGuard::acquire_blocking();
         env.remove("PRIORITY_AGENT_PRE_TOOL_HOOK");
         env.remove("PRIORITY_AGENT_POST_TOOL_HOOK");
+        env.remove("PRIORITY_AGENT_PERMISSION_REQUEST_HOOK");
+        env.remove("PRIORITY_AGENT_PERMISSION_RESOLVED_HOOK");
         // 清理可能的细粒度钩子环境变量
         for (key, _) in std::env::vars() {
             if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_")
@@ -821,6 +956,8 @@ mod tests {
         let mut env = EnvVarGuard::acquire_blocking();
         env.remove("PRIORITY_AGENT_PRE_TOOL_HOOK");
         env.remove("PRIORITY_AGENT_POST_TOOL_HOOK");
+        env.remove("PRIORITY_AGENT_PERMISSION_REQUEST_HOOK");
+        env.remove("PRIORITY_AGENT_PERMISSION_RESOLVED_HOOK");
         for (key, _) in std::env::vars() {
             if key.starts_with("PRIORITY_AGENT_TOOL_HOOK_BEFORE_")
                 || key.starts_with("PRIORITY_AGENT_TOOL_HOOK_AFTER_")
@@ -829,6 +966,10 @@ mod tests {
             }
         }
         env.set("PRIORITY_AGENT_PRE_TOOL_HOOK", "echo '{\"allow\": true}'");
+        env.set(
+            "PRIORITY_AGENT_PERMISSION_REQUEST_HOOK",
+            "echo '{\"allow\": true}'",
+        );
         env.set("PRIORITY_AGENT_HOOK_TIMEOUT_MS", "2500");
         env.set("PRIORITY_AGENT_HOOK_FAIL_CLOSED", "true");
         env.set("PRIORITY_AGENT_TOOL_HOOK_AFTER_BASH", "printf done");
@@ -838,7 +979,7 @@ mod tests {
         assert!(snapshot.configured);
         assert_eq!(snapshot.default_timeout_ms, 2500);
         assert!(snapshot.fail_closed);
-        assert_eq!(snapshot.registrations.len(), 2);
+        assert_eq!(snapshot.registrations.len(), 3);
         assert!(snapshot.registrations.iter().any(|registration| {
             registration.event == HookEventKind::PreToolUse
                 && registration.scope == "global"
@@ -848,6 +989,11 @@ mod tests {
             registration.event == HookEventKind::PostToolUse
                 && registration.scope == "tool:bash"
                 && registration.hook_name == "env_post_tool_hook_bash"
+        }));
+        assert!(snapshot.registrations.iter().any(|registration| {
+            registration.event == HookEventKind::PermissionRequest
+                && registration.scope == "global"
+                && registration.hook_name == "env_permission_request_hook"
         }));
     }
 
@@ -921,6 +1067,41 @@ mod tests {
         let records = manager.recent_records();
         assert_eq!(records.len(), 1);
         assert!(!records[0].success);
+        assert!(records[0].blocked);
+    }
+
+    #[tokio::test]
+    async fn permission_request_hook_can_deny() {
+        let manager = ToolHookManager {
+            pre_tool_hooks: Vec::new(),
+            post_tool_hooks: Vec::new(),
+            tool_specific_pre_hooks: HashMap::new(),
+            tool_specific_post_hooks: HashMap::new(),
+            permission_request_hooks: vec![CommandHook {
+                name: "test_permission_request".to_string(),
+                provider: HookProviderKind::Env,
+                command: "echo '{\"allow\": false, \"reason\": \"policy denied\"}'".to_string(),
+                timeout_ms: 2_000,
+                block_on_error: false,
+            }],
+            permission_resolved_hooks: Vec::new(),
+            recent_records: Arc::new(Mutex::new(VecDeque::new())),
+            next_record_sequence: Arc::new(AtomicU64::new(0)),
+        };
+        let tool_call = ToolCall {
+            id: "perm-1".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({"command": "npm run dev"}),
+        };
+        let context = ToolContext::new(".", "session-test");
+
+        let decision = manager.run_permission_request(&tool_call, &context).await;
+
+        assert!(!decision.allow);
+        assert_eq!(decision.reason.as_deref(), Some("policy denied"));
+        let records = manager.recent_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].event, HookEventKind::PermissionRequest);
         assert!(records[0].blocked);
     }
 

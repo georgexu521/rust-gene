@@ -1,5 +1,6 @@
 use super::approval::{ToolApprovalChannel, ToolApprovalRequest};
 use crate::engine::goal_drift::DriftCheck;
+use crate::engine::hooks::ToolHookManager;
 use crate::engine::human_review::{HumanReviewAuditRecord, PermissionReview};
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
@@ -223,10 +224,52 @@ impl PermissionController {
         approval_channel: Option<&Arc<ToolApprovalChannel>>,
         tx: Option<&mpsc::Sender<StreamEvent>>,
         trace: &Option<TraceCollector>,
+        hook_manager: Option<&Arc<ToolHookManager>>,
+        context: &ToolContext,
     ) -> bool {
         let Some(prompt) = evaluation.prompt.as_ref() else {
             return true;
         };
+        if let Some(ref trace) = trace {
+            trace.record(TraceEvent::PermissionRequested {
+                tool: tool_call.name.clone(),
+                call_id: tool_call.id.clone(),
+                prompt: prompt.clone(),
+                review: evaluation
+                    .record
+                    .as_ref()
+                    .map(|record| record.review.clone()),
+            });
+        }
+        if let Some(hooks) = hook_manager {
+            let hook_start = hooks.current_record_sequence();
+            let decision = hooks.run_permission_request(tool_call, context).await;
+            let hook_records = hooks.recent_records_after_for(hook_start, &tool_call.id);
+            super::turn_recording::record_hook_traces(trace, &hook_records);
+            if !decision.allow {
+                if let Some(ref trace) = trace {
+                    trace.record(TraceEvent::PermissionResolved {
+                        tool: tool_call.name.clone(),
+                        call_id: tool_call.id.clone(),
+                        approved: false,
+                        decision: Some("hook_denied".to_string()),
+                        persistence_scope: None,
+                        rule_pattern: None,
+                        persisted_path: None,
+                        review: evaluation.record.as_ref().map(|record| {
+                            let mut review = record.review.clone().with_resolution(
+                                Some("hook_denied".to_string()),
+                                None,
+                                None,
+                            );
+                            review.hook_decision = decision.reason.clone();
+                            review
+                        }),
+                    });
+                }
+                return false;
+            }
+        }
         let mut approved = false;
         if let (Some(channel), Some(tx)) = (approval_channel, tx) {
             let _ = tx
@@ -241,17 +284,6 @@ impl PermissionController {
                         .map(|record| Box::new(record.review.clone())),
                 })
                 .await;
-            if let Some(ref trace) = trace {
-                trace.record(TraceEvent::PermissionRequested {
-                    tool: tool_call.name.clone(),
-                    call_id: tool_call.id.clone(),
-                    prompt: prompt.clone(),
-                    review: evaluation
-                        .record
-                        .as_ref()
-                        .map(|record| record.review.clone()),
-                });
-            }
             let request = ToolApprovalRequest {
                 tool_call: tool_call.clone(),
                 prompt: prompt.clone(),
@@ -264,6 +296,21 @@ impl PermissionController {
                     approval_response = Some(response);
                 }
                 Err(e) => warn!("Tool approval error: {}", e),
+            }
+            if let Some(hooks) = hook_manager {
+                let hook_start = hooks.current_record_sequence();
+                let decision = hooks
+                    .run_permission_resolved(tool_call, context, approved)
+                    .await;
+                let hook_records = hooks.recent_records_after_for(hook_start, &tool_call.id);
+                super::turn_recording::record_hook_traces(trace, &hook_records);
+                if approved && !decision.allow {
+                    approved = false;
+                    if approval_response.is_none() {
+                        approval_response =
+                            Some(super::approval::ToolApprovalResponse::rejected_once());
+                    }
+                }
             }
             if let Some(ref trace) = trace {
                 trace.record(TraceEvent::PermissionResolved {
