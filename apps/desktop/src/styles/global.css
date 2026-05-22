@@ -155,6 +155,35 @@ button:disabled {
   overflow: auto;
 }
 
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-shortcut {
+  width: 100%;
+  min-height: 28px;
+  padding: 5px 10px 5px 36px;
+  border: 0;
+  border-radius: 7px;
+  color: #68717d;
+  background: transparent;
+  text-align: left;
+}
+
+.project-shortcut:hover {
+  color: #363b43;
+  background: rgb(255 255 255 / 62%);
+}
+
+.project-shortcut span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .recent-item {
   position: relative;
   display: flex;
@@ -186,8 +215,8 @@ button:disabled {
   background: rgb(255 255 255 / 74%);
 }
 
-.recent-rename-button {
-  width: 30px;
+.recent-icon-button {
+  width: 26px;
   margin: 7px 7px 7px 0;
   border: 0;
   border-radius: 7px;
@@ -196,14 +225,18 @@ button:disabled {
   opacity: 0;
 }
 
-.recent-item:hover .recent-rename-button,
-.recent-rename-button:focus-visible {
+.recent-item:hover .recent-icon-button,
+.recent-icon-button:focus-visible {
   opacity: 1;
 }
 
-.recent-rename-button:hover {
+.recent-icon-button:hover {
   color: #363b43;
   background: rgb(255 255 255 / 82%);
+}
+
+.recent-icon-button.danger:hover {
+  color: #ba3329;
 }
 
 .recent-rename-form {

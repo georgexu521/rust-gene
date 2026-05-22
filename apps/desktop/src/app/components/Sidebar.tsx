@@ -3,6 +3,8 @@ import {
   Clock3,
   ChevronLeft,
   ChevronRight,
+  Archive,
+  Trash2,
   Edit3,
   Folder,
   Search,
@@ -15,26 +17,34 @@ import { RecentSession } from "../../runtime/desktopApi";
 
 type SidebarProps = {
   projectPath: string;
+  recentProjects: string[];
   sessions: RecentSession[];
   sessionSearch: string;
   selectedSessionId: string | null;
+  onArchiveSession: (session: RecentSession) => void;
   onBrowseProject: () => void;
+  onDeleteSession: (session: RecentSession) => void;
   onNewChat: () => void;
   onRenameSession: (session: RecentSession, title: string) => void;
   onSearchChange: (query: string) => void;
+  onSelectRecentProject: (path: string) => void;
   onLoadSession: (session: RecentSession) => void;
   onOpenSettings: () => void;
 };
 
 export function Sidebar({
   projectPath,
+  recentProjects,
   sessions,
   sessionSearch,
   selectedSessionId,
+  onArchiveSession,
   onBrowseProject,
+  onDeleteSession,
   onNewChat,
   onRenameSession,
   onSearchChange,
+  onSelectRecentProject,
   onLoadSession,
   onOpenSettings,
 }: SidebarProps) {
@@ -92,6 +102,22 @@ export function Sidebar({
         <Folder aria-hidden="true" size={16} />
         <span>{projectLabel}</span>
       </button>
+      <div className="project-list">
+        {recentProjects
+          .filter((path) => path !== projectPath)
+          .slice(0, 3)
+          .map((path) => (
+            <button
+              className="project-shortcut"
+              key={path}
+              title={path}
+              type="button"
+              onClick={() => onSelectRecentProject(path)}
+            >
+              <span>{basename(path)}</span>
+            </button>
+          ))}
+      </div>
       <div className="sidebar-section">Recent</div>
       <div className="recent-list">
         {sessions.length === 0 ? (
@@ -143,11 +169,27 @@ export function Sidebar({
                   </button>
                   <button
                     aria-label={`Rename ${session.title}`}
-                    className="recent-rename-button"
+                    className="recent-icon-button"
                     type="button"
                     onClick={() => beginRename(session)}
                   >
                     <Edit3 aria-hidden="true" size={13} />
+                  </button>
+                  <button
+                    aria-label={`Archive ${session.title}`}
+                    className="recent-icon-button"
+                    type="button"
+                    onClick={() => onArchiveSession(session)}
+                  >
+                    <Archive aria-hidden="true" size={13} />
+                  </button>
+                  <button
+                    aria-label={`Delete ${session.title}`}
+                    className="recent-icon-button danger"
+                    type="button"
+                    onClick={() => onDeleteSession(session)}
+                  >
+                    <Trash2 aria-hidden="true" size={13} />
                   </button>
                 </>
               )}

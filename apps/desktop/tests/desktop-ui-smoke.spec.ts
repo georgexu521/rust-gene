@@ -15,6 +15,9 @@ test.describe("desktop UI smoke", () => {
     await page.getByLabel("Search sessions").fill("Release");
     await expect(page.getByText("Release readiness notes")).toBeVisible();
     await expect(page.getByText("Desktop app Phase 1")).not.toBeVisible();
+    await page.locator(".recent-item", { hasText: "Release readiness notes" }).hover();
+    await page.getByRole("button", { name: /Archive Release readiness notes/ }).click();
+    await expect(page.getByText("No matching sessions")).toBeVisible();
     await page.getByLabel("Search sessions").fill("");
 
     await page.getByRole("button", { name: /Rename Desktop app Phase 1/ }).click();
@@ -27,6 +30,10 @@ test.describe("desktop UI smoke", () => {
 
     await page.getByRole("button", { name: "New Chat" }).click();
     await expect(page.getByText("Loaded preview session: web-preview")).not.toBeVisible();
+    await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: /Delete Daily desktop flow/ }).click();
+    await expect(page.getByText("Daily desktop flow")).not.toBeVisible();
 
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();

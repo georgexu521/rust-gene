@@ -11,6 +11,8 @@ import {
   ProviderSetupInfo,
   RecentSession,
   answerPermission,
+  archiveSession,
+  deleteSession,
   desktopDiagnostics,
   desktopHealth,
   desktopSettings,
@@ -25,6 +27,7 @@ import {
   providerSetupInfo,
   renameSession,
   resumeSession,
+  searchSessions,
   selectProject,
   sendMessage,
   setProviderModel,
@@ -114,7 +117,17 @@ export function App() {
 
   async function refreshSessions() {
     try {
-      setSessions(await listRecentSessions());
+      const query = sessionSearch.trim();
+      setSessions(query ? await searchSessions(query) : await listRecentSessions());
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleSearchChange(query: string) {
+    setSessionSearch(query);
+    try {
+      setSessions(query.trim() ? await searchSessions(query) : await listRecentSessions());
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -187,6 +200,21 @@ export function App() {
     }
   }
 
+  async function handleSelectRecentProject(path: string) {
+    try {
+      const selected = await selectProject(path);
+      setProjectPath(selected.path);
+      setSettings((current) =>
+        current ? { ...current, selected_project: selected.path, active_session_id: null } : current,
+      );
+      resetConversationView();
+      await refreshDiagnostics();
+      await refreshSessions();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
   async function handleLoadSession(session: RecentSession) {
     try {
       const resumed = await resumeSession(session.id);
@@ -218,6 +246,34 @@ export function App() {
       setSessions((current) =>
         current.map((item) => (item.id === renamed.id ? { ...item, ...renamed } : item)),
       );
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleArchiveSession(session: RecentSession) {
+    try {
+      setSettings(await archiveSession(session.id));
+      if (runState.selectedSessionId === session.id) {
+        resetConversationView();
+      }
+      await refreshSessions();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleDeleteSession(session: RecentSession) {
+    if (!window.confirm(`Delete session "${session.title}"? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      setSettings(await deleteSession(session.id));
+      if (runState.selectedSessionId === session.id) {
+        resetConversationView();
+      }
+      await refreshSessions();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -273,19 +329,21 @@ export function App() {
     setIsTraceOpen(false);
   }
 
-  const filteredSessions = filterSessions(sessions, sessionSearch);
-
   return (
     <main className="app-shell">
       <Sidebar
         projectPath={projectPath}
-        sessions={filteredSessions}
+        recentProjects={settings?.recent_projects || []}
+        sessions={sessions}
         sessionSearch={sessionSearch}
         selectedSessionId={runState.selectedSessionId}
+        onArchiveSession={(session) => void handleArchiveSession(session)}
         onBrowseProject={() => void handleBrowseProject()}
+        onDeleteSession={(session) => void handleDeleteSession(session)}
         onNewChat={() => void handleNewChat()}
         onRenameSession={(session, title) => void handleRenameSession(session, title)}
-        onSearchChange={setSessionSearch}
+        onSearchChange={(query) => void handleSearchChange(query)}
+        onSelectRecentProject={(path) => void handleSelectRecentProject(path)}
         onLoadSession={(session) => void handleLoadSession(session)}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
@@ -381,16 +439,4 @@ export function App() {
       </section>
     </main>
   );
-}
-
-function filterSessions(sessions: RecentSession[], query: string) {
-  const needle = query.trim().toLocaleLowerCase();
-  if (!needle) {
-    return sessions;
-  }
-
-  return sessions.filter((session) => {
-    const haystack = [session.title, session.id, session.model].join(" ").toLocaleLowerCase();
-    return haystack.includes(needle);
-  });
 }

@@ -6,7 +6,7 @@
 //! - 会话链（parent_session_id 用于上下文压缩）
 //! - Token 统计
 
-use rusqlite::{params, Connection, Result as SqlResult};
+use rusqlite::{params, Connection, Result as SqlResult, Row};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -445,6 +445,60 @@ impl SessionStore {
         })?;
 
         messages.collect()
+    }
+
+    /// Search sessions by title and by message content through the FTS index.
+    pub fn search_sessions(&self, query: &str, limit: i64) -> SqlResult<Vec<SessionRecord>> {
+        let query = query.trim();
+        if query.is_empty() {
+            return self.list_sessions(limit);
+        }
+
+        let conn = self.conn();
+        let clamped_limit = limit.clamp(1, 100);
+        let title_query = format!("%{query}%");
+        let fts_query = fts_phrase_terms(query);
+
+        let mut sessions = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, title, parent_session_id, created_at, updated_at, model, total_input_tokens, total_output_tokens
+                 FROM sessions
+                 WHERE title LIKE ?1
+                 ORDER BY updated_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![title_query, clamped_limit], session_from_row)?;
+            for row in rows {
+                let session = row?;
+                seen.insert(session.id.clone());
+                sessions.push(session);
+            }
+        }
+
+        if sessions.len() < clamped_limit as usize {
+            let remaining = clamped_limit - sessions.len() as i64;
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT s.id, s.title, s.parent_session_id, s.created_at, s.updated_at, s.model, s.total_input_tokens, s.total_output_tokens
+                 FROM messages_fts fts
+                 JOIN messages m ON m.id = fts.rowid
+                 JOIN sessions s ON s.id = m.session_id
+                 WHERE messages_fts MATCH ?1
+                 ORDER BY s.updated_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![fts_query, remaining], session_from_row)?;
+            for row in rows {
+                let session = row?;
+                if seen.insert(session.id.clone()) {
+                    sessions.push(session);
+                }
+            }
+        }
+
+        Ok(sessions)
     }
 
     // ==================== 统计 ====================
@@ -973,6 +1027,31 @@ pub struct DbStats {
     pub total_output_tokens: i64,
 }
 
+fn session_from_row(row: &Row<'_>) -> SqlResult<SessionRecord> {
+    Ok(SessionRecord {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        parent_session_id: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+        model: row.get(5)?,
+        total_input_tokens: row.get(6)?,
+        total_output_tokens: row.get(7)?,
+    })
+}
+
+fn fts_phrase_terms(query: &str) -> String {
+    let terms = query
+        .split_whitespace()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        "\"\"".to_string()
+    } else {
+        terms.join(" ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1295,6 +1374,24 @@ mod tests {
         // FTS5 搜索需要一点时间来索引
         let results = store.search_messages("authentication", 10).unwrap();
         assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_search_sessions_matches_title_and_message_fts() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Auth Plan", "model").unwrap();
+        store
+            .create_session("s2", "Migration Notes", "model")
+            .unwrap();
+        store
+            .add_message("s2", "user", "How should I implement oauth?", None, None)
+            .unwrap();
+
+        let title_results = store.search_sessions("Auth", 10).unwrap();
+        assert_eq!(title_results[0].id, "s1");
+
+        let message_results = store.search_sessions("oauth", 10).unwrap();
+        assert_eq!(message_results[0].id, "s2");
     }
 
     #[test]

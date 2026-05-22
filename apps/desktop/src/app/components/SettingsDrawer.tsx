@@ -68,6 +68,18 @@ export function SettingsDrawer({
               <dd>{activeSessionId || settings?.active_session_id || "None"}</dd>
             </div>
             <div>
+              <dt>Startup</dt>
+              <dd>{settings?.startup_state.detail || "Not loaded"}</dd>
+            </div>
+            <div>
+              <dt>Recent projects</dt>
+              <dd>{settings?.recent_projects.length || 0}</dd>
+            </div>
+            <div>
+              <dt>Archived sessions</dt>
+              <dd>{settings?.archived_session_ids.length || 0}</dd>
+            </div>
+            <div>
               <dt>Settings file</dt>
               <dd>{settings?.settings_path || "Not loaded"}</dd>
             </div>

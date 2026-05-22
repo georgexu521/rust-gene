@@ -3,6 +3,7 @@ use priority_agent::desktop_runtime::{DesktopRunEvent, DesktopRuntime};
 use priority_agent::permissions::PermissionMode;
 use priority_agent::session_store::SessionStore;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -15,6 +16,8 @@ struct DesktopAppState {
     permission_mode: Mutex<Option<String>>,
     provider_name: Mutex<Option<String>>,
     model: Mutex<Option<String>>,
+    recent_projects: Mutex<Vec<PathBuf>>,
+    archived_session_ids: Mutex<Vec<String>>,
     settings_path: PathBuf,
 }
 
@@ -60,6 +63,8 @@ struct DesktopSettings {
     permission_mode: Option<String>,
     provider_name: Option<String>,
     model: Option<String>,
+    recent_projects: Option<Vec<String>>,
+    archived_session_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,6 +75,15 @@ struct DesktopSettingsResponse {
     provider_name: Option<String>,
     model: Option<String>,
     settings_path: String,
+    recent_projects: Vec<String>,
+    archived_session_ids: Vec<String>,
+    startup_state: DesktopStartupState,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopStartupState {
+    status: &'static str,
+    detail: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,9 +167,18 @@ async fn desktop_settings(
 ) -> Result<DesktopSettingsResponse, String> {
     let selected_project = state.selected_project.lock().await.clone();
     let active_session_id = state.active_session_id.lock().await.clone();
+    let recent_projects = state
+        .recent_projects
+        .lock()
+        .await
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    let archived_session_ids = state.archived_session_ids.lock().await.clone();
 
     Ok(DesktopSettingsResponse {
         selected_project: selected_project.display().to_string(),
+        startup_state: desktop_startup_state(&selected_project, active_session_id.as_deref()),
         active_session_id,
         permission_mode: normalized_permission_mode_label(
             state.permission_mode.lock().await.as_deref(),
@@ -164,6 +187,8 @@ async fn desktop_settings(
         provider_name: state.provider_name.lock().await.clone(),
         model: state.model.lock().await.clone(),
         settings_path: state.settings_path.display().to_string(),
+        recent_projects,
+        archived_session_ids,
     })
 }
 
@@ -291,6 +316,10 @@ async fn select_project(
         *selected_project = project.clone();
     }
     {
+        let mut recent_projects = state.recent_projects.lock().await;
+        remember_recent_project(&mut recent_projects, project.clone());
+    }
+    {
         let mut runtime = state.runtime.lock().await;
         *runtime = None;
     }
@@ -320,9 +349,24 @@ async fn new_conversation(
 }
 
 #[tauri::command]
-fn list_recent_sessions(limit: Option<i64>) -> Result<Vec<RecentSession>, String> {
+async fn list_recent_sessions(
+    limit: Option<i64>,
+    state: State<'_, DesktopAppState>,
+) -> Result<Vec<RecentSession>, String> {
     let store = open_session_store()?;
-    list_recent_sessions_from_store(&store, limit.unwrap_or(20))
+    let archived_session_ids = state.archived_session_ids.lock().await.clone();
+    list_recent_sessions_from_store(&store, limit.unwrap_or(20), &archived_session_ids)
+}
+
+#[tauri::command]
+async fn search_sessions(
+    query: String,
+    limit: Option<i64>,
+    state: State<'_, DesktopAppState>,
+) -> Result<Vec<RecentSession>, String> {
+    let store = open_session_store()?;
+    let archived_session_ids = state.archived_session_ids.lock().await.clone();
+    search_sessions_from_store(&store, &query, limit.unwrap_or(20), &archived_session_ids)
 }
 
 #[tauri::command]
@@ -341,6 +385,40 @@ fn rename_session(session_id: String, title: String) -> Result<RecentSession, St
         .update_session_title(&session_id, title)
         .map_err(|err| err.to_string())?;
     recent_session_from_store(&store, &session_id)
+}
+
+#[tauri::command]
+async fn archive_session(
+    session_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopSettingsResponse, String> {
+    {
+        let mut archived_session_ids = state.archived_session_ids.lock().await;
+        if !archived_session_ids.iter().any(|id| id == &session_id) {
+            archived_session_ids.push(session_id.clone());
+        }
+    }
+    clear_active_session_if_matches(&state, &session_id).await;
+    persist_current_settings(&state).await?;
+    desktop_settings(state).await
+}
+
+#[tauri::command]
+async fn delete_session(
+    session_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopSettingsResponse, String> {
+    let store = open_session_store()?;
+    store
+        .delete_session(&session_id)
+        .map_err(|err| err.to_string())?;
+    {
+        let mut archived_session_ids = state.archived_session_ids.lock().await;
+        archived_session_ids.retain(|id| id != &session_id);
+    }
+    clear_active_session_if_matches(&state, &session_id).await;
+    persist_current_settings(&state).await?;
+    desktop_settings(state).await
 }
 
 #[tauri::command]
@@ -424,13 +502,51 @@ fn selected_project_response(project: PathBuf) -> SelectedProject {
 fn list_recent_sessions_from_store(
     store: &SessionStore,
     limit: i64,
+    archived_session_ids: &[String],
 ) -> Result<Vec<RecentSession>, String> {
+    let archived = archived_session_ids.iter().collect::<HashSet<_>>();
+    let limit = limit.clamp(1, 100);
+    let fetch_limit = (limit + archived_session_ids.len() as i64).clamp(1, 100);
     let sessions = store
-        .list_sessions(limit.clamp(1, 100))
+        .list_sessions(fetch_limit)
         .map_err(|err| err.to_string())?;
 
     sessions
         .into_iter()
+        .filter(|session| !archived.contains(&session.id))
+        .take(limit as usize)
+        .map(|session| {
+            let message_count = store
+                .message_count(&session.id)
+                .map_err(|err| err.to_string())?;
+            Ok(RecentSession {
+                id: session.id,
+                title: session.title,
+                updated_at: session.updated_at,
+                model: session.model,
+                message_count,
+            })
+        })
+        .collect()
+}
+
+fn search_sessions_from_store(
+    store: &SessionStore,
+    query: &str,
+    limit: i64,
+    archived_session_ids: &[String],
+) -> Result<Vec<RecentSession>, String> {
+    let archived = archived_session_ids.iter().collect::<HashSet<_>>();
+    let limit = limit.clamp(1, 100);
+    let fetch_limit = (limit + archived_session_ids.len() as i64).clamp(1, 100);
+    let sessions = store
+        .search_sessions(query, fetch_limit)
+        .map_err(|err| err.to_string())?;
+
+    sessions
+        .into_iter()
+        .filter(|session| !archived.contains(&session.id))
+        .take(limit as usize)
         .map(|session| {
             let message_count = store
                 .message_count(&session.id)
@@ -565,6 +681,27 @@ fn open_session_store() -> Result<SessionStore, String> {
     SessionStore::open(SessionStore::default_path()).map_err(|err| err.to_string())
 }
 
+async fn clear_active_session_if_matches(state: &State<'_, DesktopAppState>, session_id: &str) {
+    let should_clear = state
+        .active_session_id
+        .lock()
+        .await
+        .as_deref()
+        .is_some_and(|active| active == session_id);
+    if !should_clear {
+        return;
+    }
+
+    {
+        let mut runtime = state.runtime.lock().await;
+        *runtime = None;
+    }
+    {
+        let mut active_session_id = state.active_session_id.lock().await;
+        *active_session_id = None;
+    }
+}
+
 async fn persist_current_settings(state: &State<'_, DesktopAppState>) -> Result<(), String> {
     let selected_project = state.selected_project.lock().await.clone();
     let active_session_id = state.active_session_id.lock().await.clone();
@@ -572,6 +709,14 @@ async fn persist_current_settings(state: &State<'_, DesktopAppState>) -> Result<
         normalized_permission_mode_label(state.permission_mode.lock().await.as_deref()).to_string();
     let provider_name = state.provider_name.lock().await.clone();
     let model = state.model.lock().await.clone();
+    let recent_projects = state
+        .recent_projects
+        .lock()
+        .await
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    let archived_session_ids = state.archived_session_ids.lock().await.clone();
     write_desktop_settings(
         &state.settings_path,
         &DesktopSettings {
@@ -580,6 +725,8 @@ async fn persist_current_settings(state: &State<'_, DesktopAppState>) -> Result<
             permission_mode: Some(permission_mode),
             provider_name,
             model,
+            recent_projects: Some(recent_projects),
+            archived_session_ids: Some(archived_session_ids),
         },
     )
 }
@@ -639,6 +786,56 @@ fn migrate_accidental_desktop_subdir(project: PathBuf, default_project: &Path) -
         default_project.to_path_buf()
     } else {
         project
+    }
+}
+
+fn initial_recent_projects(selected_project: &Path, settings: &DesktopSettings) -> Vec<PathBuf> {
+    let mut projects = Vec::new();
+    remember_recent_project(&mut projects, selected_project.to_path_buf());
+
+    for project in settings
+        .recent_projects
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|path| validate_project_path(path).ok())
+    {
+        remember_recent_project(&mut projects, project);
+    }
+
+    projects
+}
+
+fn remember_recent_project(projects: &mut Vec<PathBuf>, project: PathBuf) {
+    projects.retain(|existing| existing != &project);
+    projects.insert(0, project);
+    projects.truncate(8);
+}
+
+fn desktop_startup_state(project: &Path, active_session_id: Option<&str>) -> DesktopStartupState {
+    if let Some(session_id) = active_session_id {
+        DesktopStartupState {
+            status: "restored_session",
+            detail: format!(
+                "Restored {} in {}",
+                session_id,
+                project
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("selected project")
+            ),
+        }
+    } else {
+        DesktopStartupState {
+            status: "new_conversation",
+            detail: format!(
+                "Ready for a new conversation in {}",
+                project
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("selected project")
+            ),
+        }
     }
 }
 
@@ -946,9 +1143,11 @@ pub fn run() {
         .setup(move |app| {
             let settings_path = desktop_settings_path(app.handle());
             let settings = load_desktop_settings(&settings_path).unwrap_or_default();
+            let selected_project = initial_desktop_project(cwd.clone(), &settings);
+            let recent_projects = initial_recent_projects(&selected_project, &settings);
             app.manage(DesktopAppState {
                 runtime: Mutex::new(None),
-                selected_project: Mutex::new(initial_desktop_project(cwd.clone(), &settings)),
+                selected_project: Mutex::new(selected_project),
                 active_session_id: Mutex::new(settings.active_session_id),
                 permission_mode: Mutex::new(Some(
                     normalized_permission_mode_label(settings.permission_mode.as_deref())
@@ -956,6 +1155,8 @@ pub fn run() {
                 )),
                 provider_name: Mutex::new(settings.provider_name),
                 model: Mutex::new(settings.model),
+                recent_projects: Mutex::new(recent_projects),
+                archived_session_ids: Mutex::new(settings.archived_session_ids.unwrap_or_default()),
                 settings_path,
             });
             Ok(())
@@ -974,7 +1175,10 @@ pub fn run() {
             select_project,
             new_conversation,
             list_recent_sessions,
+            search_sessions,
             rename_session,
+            archive_session,
+            delete_session,
             load_session_messages,
             resume_session,
             send_message,
@@ -1033,7 +1237,7 @@ mod tests {
             .add_message("desktop-session", "assistant", "hi", None, None)
             .unwrap();
 
-        let sessions = list_recent_sessions_from_store(&store, 20).unwrap();
+        let sessions = list_recent_sessions_from_store(&store, 20, &[]).unwrap();
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "desktop-session");
@@ -1041,6 +1245,46 @@ mod tests {
         assert_eq!(sessions[0].model, "mock-model");
         assert_eq!(sessions[0].message_count, 2);
         assert!(!sessions[0].updated_at.is_empty());
+    }
+
+    #[test]
+    fn desktop_smoke_recent_sessions_skip_archived_ids() {
+        let store = SessionStore::in_memory().unwrap();
+        store
+            .create_session("visible-session", "Visible Session", "mock-model")
+            .unwrap();
+        store
+            .create_session("archived-session", "Archived Session", "mock-model")
+            .unwrap();
+
+        let sessions =
+            list_recent_sessions_from_store(&store, 20, &["archived-session".to_string()])
+                .unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "visible-session");
+    }
+
+    #[test]
+    fn desktop_smoke_search_sessions_uses_message_fts() {
+        let store = SessionStore::in_memory().unwrap();
+        store
+            .create_session("desktop-session", "Desktop Session", "mock-model")
+            .unwrap();
+        store
+            .add_message(
+                "desktop-session",
+                "user",
+                "Find onboarding diagnostics",
+                None,
+                None,
+            )
+            .unwrap();
+
+        let sessions = search_sessions_from_store(&store, "onboarding", 20, &[]).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "desktop-session");
     }
 
     #[test]
@@ -1080,6 +1324,8 @@ mod tests {
             permission_mode: Some("auto_low_risk".to_string()),
             provider_name: Some("kimi".to_string()),
             model: Some("kimi-k2.5".to_string()),
+            recent_projects: Some(vec!["/tmp/project".to_string()]),
+            archived_session_ids: Some(vec!["old-session".to_string()]),
         };
 
         write_desktop_settings(&path, &settings).unwrap();
@@ -1091,6 +1337,14 @@ mod tests {
         assert_eq!(loaded.permission_mode.as_deref(), Some("auto_low_risk"));
         assert_eq!(loaded.provider_name.as_deref(), Some("kimi"));
         assert_eq!(loaded.model.as_deref(), Some("kimi-k2.5"));
+        assert_eq!(
+            loaded.recent_projects.as_deref(),
+            Some(["/tmp/project".to_string()].as_slice())
+        );
+        assert_eq!(
+            loaded.archived_session_ids.as_deref(),
+            Some(["old-session".to_string()].as_slice())
+        );
     }
 
     #[test]
@@ -1108,6 +1362,8 @@ mod tests {
             permission_mode: None,
             provider_name: None,
             model: None,
+            recent_projects: None,
+            archived_session_ids: None,
         };
 
         assert_eq!(initial_desktop_project(cwd, &settings), expected);
@@ -1143,6 +1399,8 @@ mod tests {
             permission_mode: None,
             provider_name: None,
             model: None,
+            recent_projects: None,
+            archived_session_ids: None,
         };
         let expected = root.canonicalize().unwrap();
         let selected = initial_desktop_project(tauri_dir.canonicalize().unwrap(), &settings);

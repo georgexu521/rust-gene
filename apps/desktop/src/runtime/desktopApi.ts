@@ -45,6 +45,14 @@ export type DesktopSettings = {
   provider_name?: string | null;
   model?: string | null;
   settings_path: string;
+  recent_projects: string[];
+  archived_session_ids: string[];
+  startup_state: DesktopStartupState;
+};
+
+export type DesktopStartupState = {
+  status: string;
+  detail: string;
 };
 
 export type PermissionModeId = "default" | "auto_low_risk" | "auto" | "read_only";
@@ -131,6 +139,36 @@ export type DesktopRunEvent =
   | { type: "run_error"; message: string };
 
 const webPreviewListeners = new Set<(event: DesktopRunEvent) => void>();
+let webPreviewSettings: DesktopSettings = {
+  selected_project: "/Users/georgexu/Desktop/rust-agent",
+  active_session_id: "web-preview",
+  permission_mode: "auto",
+  provider_name: "kimi",
+  model: "kimi-k2.5",
+  settings_path: "web-preview",
+  recent_projects: ["/Users/georgexu/Desktop/rust-agent", "/Users/georgexu/Desktop/bioclaw"],
+  archived_session_ids: [],
+  startup_state: {
+    status: "restored_session",
+    detail: "Restored web-preview in rust-agent",
+  },
+};
+let webPreviewSessions: RecentSession[] = [
+  {
+    id: "web-preview",
+    title: "Desktop app Phase 1",
+    updated_at: "preview",
+    model: "web-preview",
+    message_count: 2,
+  },
+  {
+    id: "web-preview-release",
+    title: "Release readiness notes",
+    updated_at: "preview",
+    model: "web-preview",
+    message_count: 5,
+  },
+];
 
 export function desktopHealth(): Promise<DesktopHealth> {
   if (!isTauriRuntime()) {
@@ -146,6 +184,16 @@ export function desktopHealth(): Promise<DesktopHealth> {
 
 export function selectProject(path: string): Promise<SelectedProject> {
   if (!isTauriRuntime()) {
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      selected_project: path,
+      active_session_id: null,
+      recent_projects: [path, ...webPreviewSettings.recent_projects.filter((project) => project !== path)].slice(0, 8),
+      startup_state: {
+        status: "new_conversation",
+        detail: `Ready for a new conversation in ${basename(path)}`,
+      },
+    };
     return Promise.resolve({ path });
   }
 
@@ -154,14 +202,7 @@ export function selectProject(path: string): Promise<SelectedProject> {
 
 export function desktopSettings(): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
-    return Promise.resolve({
-      selected_project: "/Users/georgexu/Desktop/rust-agent",
-      active_session_id: "web-preview",
-      permission_mode: "auto",
-      provider_name: "kimi",
-      model: "kimi-k2.5",
-      settings_path: "web-preview",
-    });
+    return Promise.resolve(webPreviewSettings);
   }
 
   return invoke("desktop_settings");
@@ -169,7 +210,15 @@ export function desktopSettings(): Promise<DesktopSettings> {
 
 export function newConversation(): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
-    return desktopSettings().then((settings) => ({ ...settings, active_session_id: null }));
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      active_session_id: null,
+      startup_state: {
+        status: "new_conversation",
+        detail: `Ready for a new conversation in ${basename(webPreviewSettings.selected_project)}`,
+      },
+    };
+    return Promise.resolve(webPreviewSettings);
   }
 
   return invoke("new_conversation");
@@ -177,7 +226,8 @@ export function newConversation(): Promise<DesktopSettings> {
 
 export function setPermissionMode(mode: PermissionModeId): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
-    return desktopSettings().then((settings) => ({ ...settings, permission_mode: mode }));
+    webPreviewSettings = { ...webPreviewSettings, permission_mode: mode };
+    return Promise.resolve(webPreviewSettings);
   }
 
   return invoke("set_permission_mode", { mode });
@@ -337,39 +387,77 @@ export function openShellProfile(): Promise<void> {
 
 export function listRecentSessions(limit = 20): Promise<RecentSession[]> {
   if (!isTauriRuntime()) {
-    return Promise.resolve([
-      {
-        id: "web-preview",
-        title: "Desktop app Phase 1",
-        updated_at: "preview",
-        model: "web-preview",
-        message_count: 2,
-      },
-      {
-        id: "web-preview-release",
-        title: "Release readiness notes",
-        updated_at: "preview",
-        model: "web-preview",
-        message_count: 5,
-      },
-    ]);
+    return Promise.resolve(webPreviewSessions.slice(0, limit));
   }
 
   return invoke("list_recent_sessions", { limit });
 }
 
+export function searchSessions(query: string, limit = 20): Promise<RecentSession[]> {
+  if (!isTauriRuntime()) {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) {
+      return listRecentSessions(limit);
+    }
+    return Promise.resolve(
+      webPreviewSessions
+        .filter((session) =>
+          [session.title, session.id, session.model].join(" ").toLocaleLowerCase().includes(needle),
+        )
+        .slice(0, limit),
+    );
+  }
+
+  return invoke("search_sessions", { query, limit });
+}
+
 export function renameSession(sessionId: string, title: string): Promise<RecentSession> {
   if (!isTauriRuntime()) {
-    return Promise.resolve({
-      id: sessionId,
-      title,
-      updated_at: "preview",
-      model: "web-preview",
-      message_count: 2,
-    });
+    webPreviewSessions = webPreviewSessions.map((session) =>
+      session.id === sessionId ? { ...session, title } : session,
+    );
+    const renamed = webPreviewSessions.find((session) => session.id === sessionId);
+    if (!renamed) {
+      return Promise.reject(new Error(`session not found: ${sessionId}`));
+    }
+    return Promise.resolve(renamed);
   }
 
   return invoke("rename_session", { sessionId, title });
+}
+
+export function archiveSession(sessionId: string): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    webPreviewSessions = webPreviewSessions.filter((session) => session.id !== sessionId);
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      active_session_id:
+        webPreviewSettings.active_session_id === sessionId
+          ? null
+          : webPreviewSettings.active_session_id,
+      archived_session_ids: [...webPreviewSettings.archived_session_ids, sessionId],
+    };
+    return Promise.resolve(webPreviewSettings);
+  }
+
+  return invoke("archive_session", { sessionId });
+}
+
+export function deleteSession(sessionId: string): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    webPreviewSessions = webPreviewSessions.filter((session) => session.id !== sessionId);
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      active_session_id:
+        webPreviewSettings.active_session_id === sessionId
+          ? null
+          : webPreviewSettings.active_session_id,
+      archived_session_ids: webPreviewSettings.archived_session_ids.filter((id) => id !== sessionId),
+    };
+    return Promise.resolve(webPreviewSettings);
+  }
+
+  return invoke("delete_session", { sessionId });
 }
 
 export function loadSessionMessages(sessionId: string): Promise<DesktopMessage[]> {
@@ -566,4 +654,8 @@ function isTauriRuntime() {
     transformCallback?: unknown;
   };
   return typeof internals.invoke === "function" && typeof internals.transformCallback === "function";
+}
+
+function basename(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 }
