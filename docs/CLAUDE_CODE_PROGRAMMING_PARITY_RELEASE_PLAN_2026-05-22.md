@@ -1171,6 +1171,13 @@ Progress on 2026-05-22:
 - The `mcp` management tool now supports `action=status`, returning both a
   concise CLI status panel and structured runtime-facts data for diagnostics and
   future routing/runtime-state consumers.
+- Plugins now expose runtime-visible facts for enabled state, readiness
+  (`ready`, `disabled`, `usable_with_warnings`, or `blocked`), trust/signature
+  status, manifest issues, process/tool contributions, and user-facing
+  diagnostics.
+- The `plugin_manage` tool now supports `action=status`, returning a concise
+  plugin status panel plus structured runtime-facts data that doctor/runtime
+  state can reuse.
 
 Validation so far:
 
@@ -1179,6 +1186,12 @@ Validation so far:
 - `cargo test -q mcp_status_action` - passed, 1 test for structured CLI status
   data.
 - `cargo test -q mcp` - passed, 29 tests after MCP runtime-facts support.
+- `cargo test -q runtime_facts` - passed, 4 tests including plugin runtime
+  readiness classification.
+- `cargo test -q plugin_manage_status` - passed, 1 test for structured plugin
+  status data.
+- `cargo test -q plugin_manage` - passed, 5 tests after plugin status support.
+- `cargo test -q plugins` - passed, 11 tests after runtime-facts support.
 - `cargo check -q` - passed.
 
 ## Phase 10: Release Hardening

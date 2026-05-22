@@ -46,6 +46,36 @@ pub struct PluginValidationIssue {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRuntimeStatus {
+    Ready,
+    Disabled,
+    UsableWithWarnings,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginRuntimeFacts {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub enabled: bool,
+    pub status: PluginRuntimeStatus,
+    pub source_dir: PathBuf,
+    pub manifest_path: PathBuf,
+    pub entry_command: Option<String>,
+    pub entry_args: Vec<String>,
+    pub tool_name: Option<String>,
+    pub tool_description: Option<String>,
+    pub tool_timeout_secs: Option<u64>,
+    pub signature_valid: bool,
+    pub trust_mode: String,
+    pub issues: Vec<PluginValidationIssue>,
+    pub contributions: Vec<String>,
+    pub diagnostic: String,
+}
+
 pub fn default_plugin_roots(working_dir: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
@@ -180,6 +210,109 @@ pub fn validate_installed_plugin(plugin: &InstalledPlugin) -> Vec<PluginValidati
     issues
 }
 
+pub fn runtime_facts(
+    plugins: &[InstalledPlugin],
+    trust_mode: trust::TrustMode,
+) -> Vec<PluginRuntimeFacts> {
+    let mut facts = plugins
+        .iter()
+        .map(|plugin| runtime_facts_for_plugin(plugin, trust_mode))
+        .collect::<Vec<_>>();
+    facts.sort_by(|a, b| a.id.cmp(&b.id));
+    facts
+}
+
+pub fn runtime_facts_for_plugin(
+    plugin: &InstalledPlugin,
+    trust_mode: trust::TrustMode,
+) -> PluginRuntimeFacts {
+    let mut issues = validate_installed_plugin(plugin);
+    issues.extend(trust::validate_signature(&plugin.manifest, trust_mode));
+
+    let signature_valid =
+        trust::SignatureVerifier::verify_manifest(&plugin.manifest).unwrap_or(false);
+    let has_errors = issues.iter().any(|issue| issue.severity == "error");
+    let has_warnings = issues.iter().any(|issue| issue.severity == "warning");
+    let missing_entry = plugin
+        .manifest
+        .entry_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .is_none();
+    let strict_unsigned = trust_mode == trust::TrustMode::Strict && !signature_valid;
+
+    let status = if !plugin.manifest.enabled {
+        PluginRuntimeStatus::Disabled
+    } else if has_errors || missing_entry || strict_unsigned {
+        PluginRuntimeStatus::Blocked
+    } else if has_warnings {
+        PluginRuntimeStatus::UsableWithWarnings
+    } else {
+        PluginRuntimeStatus::Ready
+    };
+
+    let mut contributions = Vec::new();
+    if let Some(tool_name) = plugin
+        .manifest
+        .tool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        contributions.push(format!("tool:{}", tool_name));
+    }
+    if plugin.manifest.enabled
+        && plugin
+            .manifest
+            .entry_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+            .is_some()
+    {
+        contributions.push("runtime:process".to_string());
+    }
+
+    let diagnostic = match status {
+        PluginRuntimeStatus::Ready => "plugin ready".to_string(),
+        PluginRuntimeStatus::Disabled => "plugin disabled; enable before use".to_string(),
+        PluginRuntimeStatus::UsableWithWarnings => {
+            "plugin usable with warnings; run plugin_manage validate for details".to_string()
+        }
+        PluginRuntimeStatus::Blocked => {
+            if strict_unsigned {
+                "plugin blocked by strict trust policy; sign manifest or change trust mode"
+                    .to_string()
+            } else if missing_entry {
+                "plugin blocked because enabled manifest has no entry_command".to_string()
+            } else {
+                "plugin blocked by manifest or signature errors".to_string()
+            }
+        }
+    };
+
+    PluginRuntimeFacts {
+        id: plugin.id.clone(),
+        name: plugin.manifest.name.clone(),
+        version: plugin.manifest.version.clone(),
+        enabled: plugin.manifest.enabled,
+        status,
+        source_dir: plugin.source_dir.clone(),
+        manifest_path: plugin.manifest_path.clone(),
+        entry_command: plugin.manifest.entry_command.clone(),
+        entry_args: plugin.manifest.entry_args.clone(),
+        tool_name: plugin.manifest.tool_name.clone(),
+        tool_description: plugin.manifest.tool_description.clone(),
+        tool_timeout_secs: plugin.manifest.tool_timeout_secs,
+        signature_valid,
+        trust_mode: trust_mode.as_str().to_string(),
+        issues,
+        contributions,
+        diagnostic,
+    }
+}
+
 pub fn set_plugin_enabled(
     plugin_roots: &[PathBuf],
     plugin_id: &str,
@@ -277,6 +410,68 @@ enabled = true
         let refreshed = discover_plugins(std::slice::from_ref(&temp_dir));
         assert_eq!(refreshed.len(), 1);
         assert!(!refreshed[0].manifest.enabled);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_runtime_facts_classify_ready_disabled_and_blocked_plugins() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "priority-agent-plugin-facts-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let ready_dir = temp_dir.join("ready");
+        let disabled_dir = temp_dir.join("disabled");
+        let blocked_dir = temp_dir.join("blocked");
+        std::fs::create_dir_all(&ready_dir).expect("create ready plugin");
+        std::fs::create_dir_all(&disabled_dir).expect("create disabled plugin");
+        std::fs::create_dir_all(&blocked_dir).expect("create blocked plugin");
+
+        std::fs::write(
+            ready_dir.join("plugin.toml"),
+            r#"
+name = "ready"
+version = "0.1.0"
+enabled = true
+entry_command = "sh"
+tool_name = "plugin_ready"
+"#,
+        )
+        .expect("write ready manifest");
+        std::fs::write(
+            disabled_dir.join("plugin.toml"),
+            r#"
+name = "disabled"
+version = "0.1.0"
+enabled = false
+entry_command = "sh"
+"#,
+        )
+        .expect("write disabled manifest");
+        std::fs::write(
+            blocked_dir.join("plugin.toml"),
+            r#"
+name = "blocked"
+version = "0.1.0"
+enabled = true
+"#,
+        )
+        .expect("write blocked manifest");
+
+        let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
+        let facts = runtime_facts(&discovered, trust::TrustMode::Off);
+
+        let ready = facts.iter().find(|fact| fact.id == "ready").unwrap();
+        let disabled = facts.iter().find(|fact| fact.id == "disabled").unwrap();
+        let blocked = facts.iter().find(|fact| fact.id == "blocked").unwrap();
+        assert_eq!(ready.status, PluginRuntimeStatus::Ready);
+        assert!(ready
+            .contributions
+            .contains(&"tool:plugin_ready".to_string()));
+        assert!(ready.contributions.contains(&"runtime:process".to_string()));
+        assert_eq!(disabled.status, PluginRuntimeStatus::Disabled);
+        assert_eq!(blocked.status, PluginRuntimeStatus::Blocked);
+        assert!(blocked.diagnostic.contains("entry_command"));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

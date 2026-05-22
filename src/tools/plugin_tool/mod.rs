@@ -429,7 +429,7 @@ impl Tool for PluginManageTool {
     }
 
     fn description(&self) -> &str {
-        "Manage plugins (list, validate, reload, enable, disable, run)."
+        "Manage plugins (list, status, validate, reload, enable, disable, run)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -438,7 +438,7 @@ impl Tool for PluginManageTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "validate", "reload", "enable", "disable", "run", "sign", "generate_key"],
+                    "enum": ["list", "status", "validate", "reload", "enable", "disable", "run", "sign", "generate_key"],
                     "description": "Management action"
                 },
                 "plugin_id": {
@@ -489,6 +489,42 @@ impl Tool for PluginManageTool {
                     }),
                 )
             }
+            "status" => {
+                let trust_mode = current_trust_mode();
+                let facts = plugins::runtime_facts(&discovered, trust_mode);
+                let rows = facts
+                    .iter()
+                    .map(|fact| {
+                        format!(
+                            "- {}@{} status={:?} enabled={} signature_valid={} contributions={} diagnostic={}",
+                            fact.id,
+                            fact.version,
+                            fact.status,
+                            fact.enabled,
+                            fact.signature_valid,
+                            if fact.contributions.is_empty() {
+                                "none".to_string()
+                            } else {
+                                fact.contributions.join(",")
+                            },
+                            fact.diagnostic
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                ToolResult::success_with_data(
+                    if rows.is_empty() {
+                        "No plugins discovered".to_string()
+                    } else {
+                        format!("Plugin runtime status:\n{}", rows.join("\n"))
+                    },
+                    json!({
+                        "count": facts.len(),
+                        "roots": roots,
+                        "trust_mode": trust_mode.as_str(),
+                        "plugins": facts
+                    }),
+                )
+            }
             "validate" => {
                 let selected = if let Some(pid) = plugin_id {
                     let Some(plugin) = discovered.iter().find(|p| p.id == pid) else {
@@ -511,11 +547,15 @@ impl Tool for PluginManageTool {
                         let sig_valid =
                             plugins::trust::SignatureVerifier::verify_manifest(&plugin.manifest)
                                 .unwrap_or(false);
+                        let runtime_facts = plugins::runtime_facts_for_plugin(plugin, trust_mode);
                         json!({
                             "id": plugin.id,
                             "valid": !issues.iter().any(|i| i.severity == "error"),
                             "signature_valid": sig_valid,
                             "trust_mode": trust_mode.as_str(),
+                            "runtime_status": runtime_facts.status,
+                            "diagnostic": runtime_facts.diagnostic,
+                            "contributions": runtime_facts.contributions,
                             "issues": issues
                         })
                     })
@@ -869,6 +909,41 @@ enabled = false
 
         let validate_result = tool.execute(json!({"action":"validate"}), ctx).await;
         assert!(validate_result.success);
+
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[tokio::test]
+    async fn test_plugin_manage_status_returns_runtime_facts() {
+        let tmp = std::env::temp_dir().join(format!(
+            "priority-agent-plugin-status-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let plugins_root = tmp.join(".priority-agent").join("plugins").join("demo");
+        std::fs::create_dir_all(&plugins_root).expect("create dirs");
+        std::fs::write(
+            plugins_root.join("plugin.toml"),
+            r#"
+name = "demo"
+version = "0.1.0"
+enabled = true
+entry_command = "sh"
+tool_name = "plugin_demo"
+"#,
+        )
+        .expect("write manifest");
+
+        let tool = PluginManageTool;
+        let ctx = crate::tools::ToolContext::new(&tmp, "s1");
+        let result = tool.execute(json!({"action":"status"}), ctx).await;
+
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.content.contains("Plugin runtime status"));
+        let data = result.data.as_ref().unwrap();
+        assert_eq!(data["count"], 1);
+        assert_eq!(data["plugins"][0]["id"], "demo");
+        assert_eq!(data["plugins"][0]["status"], "usable_with_warnings");
+        assert_eq!(data["plugins"][0]["contributions"][0], "tool:plugin_demo");
 
         let _ = std::fs::remove_dir_all(tmp);
     }
