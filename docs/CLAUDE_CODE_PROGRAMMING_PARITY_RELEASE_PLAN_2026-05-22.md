@@ -685,11 +685,18 @@ Progress on 2026-05-22:
   assistant tool-call round. `rewind` and TUI slash rollback can restore the
   latest tool round or a specified round ID, giving Phase 4 a practical
   whole-turn rollback path for multi-tool file changes.
+- File-tool tests that intentionally exercise plain exact edit behavior now
+  clear `PRIORITY_AGENT_SMART_EDIT` under the shared env guard, so the Phase 4
+  `file_tool` gate is stable even when smart-edit tests run in parallel.
 
 Validation so far:
 
+- `cargo test -q file_tool` - passed, 50 tests.
+- `cargo test -q file_state` - passed, 0 tests matched.
 - `cargo test -q rewind_tool` - passed, 1 test.
+- `cargo test -q rewind` - passed, 5 tests.
 - `cargo test -q diff_tool` - passed, 3 tests.
+- `cargo test -q diff` - passed, 29 tests.
 - `cargo test -q checkpoint` - passed, 34 tests.
 - `cargo test -q slash_handler` - passed, 49 tests.
 - `cargo check -q` - passed.

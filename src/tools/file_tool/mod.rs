@@ -2934,6 +2934,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_edit_success() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+        env.remove("PRIORITY_AGENT_SMART_EDIT");
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_success.txt";
         tokio::fs::write(path, "hello world\nfoo bar\n")
@@ -3363,6 +3365,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_edit_rejects_whitespace_only_old_string() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+        env.remove("PRIORITY_AGENT_SMART_EDIT");
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_blank_anchor.txt";
         tokio::fs::write(path, "line1\nline2\nline3\n")
