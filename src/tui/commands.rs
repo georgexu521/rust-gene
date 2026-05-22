@@ -195,6 +195,9 @@ impl CommandRegistry {
             if let Some(cmd_names) = self.categories.get(cat) {
                 for cmd_name in cmd_names {
                     if let Some(cmd) = self.commands.get(cmd_name) {
+                        if cmd.placeholder {
+                            continue;
+                        }
                         let alias_str = if cmd.aliases.is_empty() {
                             String::new()
                         } else {
@@ -393,6 +396,9 @@ impl CommandRegistry {
             if !seen.insert(cmd.name) {
                 continue;
             }
+            if query.is_empty() && cmd.placeholder {
+                continue;
+            }
             let haystack = format!(
                 "{} {} {} {}",
                 cmd.name,
@@ -461,6 +467,9 @@ impl CommandRegistry {
 }
 
 pub fn command_accept_behavior(cmd: &CommandDef) -> CommandAcceptBehavior {
+    if cmd.placeholder {
+        return CommandAcceptBehavior::Insert;
+    }
     if command_requires_arguments(cmd) {
         CommandAcceptBehavior::Insert
     } else {
@@ -1866,8 +1875,12 @@ mod tests {
         assert!(help.contains("Memory:"));
         assert!(help.contains("[production]"));
         assert!(help.contains("[usable]"));
-        assert!(help.contains("[placeholder]"));
-        assert!(help.contains("/desktop"));
+        assert!(!help.contains("[placeholder]"));
+        assert!(!help.contains("/desktop"));
+
+        let all_help = registry.help_text_all();
+        assert!(all_help.contains("[placeholder]"));
+        assert!(all_help.contains("/desktop"));
     }
 
     #[test]
@@ -2007,6 +2020,16 @@ mod tests {
     }
 
     #[test]
+    fn test_palette_items_hide_placeholder_until_explicit_query() {
+        let registry = default_command_registry();
+        let default_items = registry.palette_items("", 200, &[]);
+        assert!(!default_items.iter().any(|cmd| cmd.name == "/desktop"));
+
+        let explicit_items = registry.palette_items("desktop", 20, &[]);
+        assert!(explicit_items.iter().any(|cmd| cmd.name == "/desktop"));
+    }
+
+    #[test]
     fn test_command_accept_behavior_inserts_required_args() {
         assert_eq!(
             command_accept_behavior(&CMD_SAVE),
@@ -2015,6 +2038,11 @@ mod tests {
         assert_eq!(
             command_accept_behavior(&CMD_STATUS),
             CommandAcceptBehavior::Execute
+        );
+        let registry = default_command_registry();
+        assert_eq!(
+            registry.get("/desktop").map(command_accept_behavior),
+            Some(CommandAcceptBehavior::Insert)
         );
     }
 }

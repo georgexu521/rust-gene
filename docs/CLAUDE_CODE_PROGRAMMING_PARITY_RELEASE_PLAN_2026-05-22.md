@@ -871,10 +871,16 @@ Progress on 2026-05-22:
   runtime selectors for failed tools, backgrounded tools, pending approvals, and
   MCP repair hints. JSON output also includes product readiness metadata and a
   `product_ready` check.
+- Placeholder slash commands are now gated from default help and empty command
+  palette results. They still appear when explicitly searched, and accepting one
+  from the palette inserts the command instead of executing it immediately.
 
 Validation so far:
 
 - `cargo test -q commands` - passed, 25 tests.
+- `cargo test -q commands` - passed, 26 tests after placeholder gating.
+- `cargo test -q command_palette` - passed, 5 tests.
+- `cargo test -q help_maturity` - passed, 1 test.
 - `cargo test -q runtime_panels` - passed, 5 tests.
 - `cargo test -q status_bar` - passed, 3 tests.
 - `cargo test -q tool_view` - passed, 12 tests.
