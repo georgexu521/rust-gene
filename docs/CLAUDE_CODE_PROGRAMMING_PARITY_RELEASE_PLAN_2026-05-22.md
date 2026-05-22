@@ -1363,6 +1363,10 @@ The next concrete batches should be:
      stdout/stderr/combined byte counts. Short-output artifact persistence is
      configurable with `PRIORITY_AGENT_BASH_OUTPUT_ARTIFACT_MIN_BYTES`, while
      the default keeps existing behavior.
+   - Progress on 2026-05-22: bash foreground, PTY diagnostic, and background
+     results now expose structured `permission_review` metadata with risk level,
+     review-required flag, risk facts, backend/mode/sandbox context, suggested
+     action, and reusable permission-rule suggestions.
 4. **File history and rewind hardening.**
    Add turn-level snapshots, restore coverage, and closeout evidence plumbing.
 5. **TUI product pass for coding loop.**

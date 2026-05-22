@@ -1,6 +1,7 @@
 use super::{
-    classification_data, kill_process_tree, preview_text, sanitize_agent_runtime_env,
-    shell_output_artifact_path, should_write_shell_output_artifact, BashExecutionBackend,
+    bash_permission_review_data, classification_data, command_classifier::classify_command,
+    kill_process_tree, preview_text, sanitize_agent_runtime_env, shell_output_artifact_path,
+    should_write_shell_output_artifact, BashExecutionBackend,
 };
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
@@ -535,8 +536,17 @@ pub(super) fn background_shell_result_data(
     snapshot: &BackgroundShellSnapshot,
 ) -> serde_json::Value {
     let classification = classification_data(&snapshot.command);
+    let command_classification = classify_command(&snapshot.command);
+    let permission_review = bash_permission_review_data(
+        &snapshot.command,
+        &command_classification,
+        snapshot.backend,
+        "background",
+        false,
+    );
     json!({
         "command_classification": classification.clone(),
+        "permission_review": permission_review,
         "shell_result": {
             "handle": snapshot.handle,
             "command": snapshot.command,
