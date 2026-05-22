@@ -2,6 +2,12 @@
 .DS_Store
 **/.DS_Store
 
+# Desktop app local build artifacts
+apps/desktop/dist/
+apps/desktop/node_modules/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/target/
+
 # Live eval transient artifacts. Keep curated summaries/reports in docs, but
 # avoid committing raw API payloads, server logs, and generated patch dumps.
 docs/benchmarks/live-*/**/api-response.json

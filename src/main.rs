@@ -3,57 +3,12 @@
 //! 解决 AI Agent 抓不住重点的问题，通过显式的权重系统让 AI 始终专注于最重要的事项。
 //! 高密度思考 = 高密度 Q&A — Agent 应不断提问/解答来深化推理。
 
-// ─── Core Modules ────────────────────────────────────────────────────
-pub mod agent;
-#[cfg(feature = "experimental-task-analyzer")]
-pub mod ai_analyzer;
-#[cfg(feature = "experimental-api-server")]
-pub mod api;
-pub mod bootstrap;
-pub mod bridge;
-pub mod changelog;
-pub mod context_manager;
-pub mod cost_tracker;
-pub mod diagnostics;
-pub mod engine;
-pub mod errors;
-pub mod github;
-pub mod ide;
-pub mod instructions;
-pub mod memory;
-pub mod migrations;
-pub mod onboarding;
-pub mod permissions;
-#[cfg(feature = "experimental-platform")]
-pub mod platform;
-pub mod plugins;
-#[cfg(feature = "experimental-priority")]
-pub mod priority;
-#[cfg(feature = "experimental-priority")]
-pub mod quality_gates;
-pub mod remote;
-pub mod security;
-pub mod services;
-pub mod session_store;
-pub mod shell;
-pub mod skills;
-pub mod slo;
-pub mod state;
-#[cfg(feature = "experimental-task-analyzer")]
-pub mod task_analyzer;
-pub mod task_manager;
-pub mod team;
-pub mod telemetry;
-#[cfg(test)]
-pub mod test_utils;
-pub mod tools;
-pub mod tui;
-pub mod version;
-#[cfg(feature = "voice")]
-pub mod voice;
-
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
+
+#[cfg(feature = "experimental-api-server")]
+use priority_agent::api;
+use priority_agent::{bootstrap, diagnostics, shell, tui};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartupMode {
@@ -138,7 +93,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 async fn answer_pending_approval(
-    engine: &std::sync::Arc<crate::engine::streaming::StreamingQueryEngine>,
+    engine: &std::sync::Arc<priority_agent::engine::streaming::StreamingQueryEngine>,
     approved: bool,
 ) -> bool {
     let Some(channel) = engine.approval_channel() else {
@@ -148,9 +103,9 @@ async fn answer_pending_approval(
     for _ in 0..20 {
         if let Some((_request, tx)) = channel.take_pending().await {
             let response = if approved {
-                crate::engine::conversation_loop::ToolApprovalResponse::approved_once()
+                priority_agent::engine::conversation_loop::ToolApprovalResponse::approved_once()
             } else {
-                crate::engine::conversation_loop::ToolApprovalResponse::rejected_once()
+                priority_agent::engine::conversation_loop::ToolApprovalResponse::rejected_once()
             };
             let _ = tx.send(response);
             return true;
@@ -162,8 +117,8 @@ async fn answer_pending_approval(
 }
 
 async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
-    use crate::engine::streaming::StreamEvent;
     use futures::StreamExt;
+    use priority_agent::engine::streaming::StreamEvent;
     use serde_json::json;
 
     let prompt_file = arg_value(args, "--prompt-file")
@@ -451,11 +406,12 @@ async fn main() {
                     }
                 };
                 let tool_registry = bootstrap::init_tool_registry(&working_dir);
-                let mut lsp_manager = crate::engine::lsp::LspManager::new();
+                let mut lsp_manager = priority_agent::engine::lsp::LspManager::new();
                 lsp_manager.detect_servers(&working_dir);
                 let lsp_manager = std::sync::Arc::new(lsp_manager);
-                let worktree_manager =
-                    std::sync::Arc::new(crate::engine::worktree::WorktreeManager::new().await);
+                let worktree_manager = std::sync::Arc::new(
+                    priority_agent::engine::worktree::WorktreeManager::new().await,
+                );
 
                 if let Err(e) = api::start_server(
                     provider,

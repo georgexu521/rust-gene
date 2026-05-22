@@ -1,0 +1,32 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Priority Agent",
+  "version": "0.1.0",
+  "identifier": "com.priorityagent.desktop",
+  "build": {
+    "beforeDevCommand": "corepack pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "corepack pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Priority Agent",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 920,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "category": "DeveloperTool",
+    "icon": ["icons/icon.png", "icons/icon.icns"]
+  }
+}

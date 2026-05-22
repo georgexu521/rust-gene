@@ -1,0 +1,25 @@
+[package]
+name = "priority-agent-desktop"
+version = "0.1.0"
+description = "Priority Agent desktop app"
+edition = "2021"
+
+[workspace]
+
+[lib]
+name = "priority_agent_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.2", features = [] }
+
+[dependencies]
+anyhow = "1.0"
+futures = "0.3"
+priority-agent = { path = "../../.." }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2.11.2", features = [] }
+tauri-plugin-dialog = "2.7.1"
+tauri-plugin-opener = "2.5.4"
+tokio = { version = "1.40", features = ["sync"] }
