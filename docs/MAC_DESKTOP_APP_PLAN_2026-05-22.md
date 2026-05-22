@@ -686,7 +686,9 @@ cargo check -q
 Status: started. `apps/desktop/tests/run-event-state.spec.ts` now covers the
 core pure state transitions for user submit, run completion, assistant delta
 coalescing, shell/file timeline summaries, permission answers, and session
-message loading.
+message loading. `apps/desktop/tests/desktop-api-state.spec.ts` now covers the
+web-preview API state flow for session search, rename, archive, delete, project
+selection, and new-conversation startup recovery.
 
 #### Track E - Release-Quality Desktop Hardening
 
