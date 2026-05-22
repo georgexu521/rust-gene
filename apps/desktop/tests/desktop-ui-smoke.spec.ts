@@ -44,6 +44,10 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-event.permission", { hasText: "Allow git push" })).toBeVisible();
     await page.locator(".timeline-event.permission .timeline-actions button", { hasText: "Approve" }).click();
     await expect(page.locator(".timeline-event.permission", { hasText: "Permission approved" })).toBeVisible();
+    await page.locator(".timeline-event", { hasText: "Pnpm Test" }).getByRole("button", { name: "Debug" }).click();
+    await expect(page.getByRole("complementary", { name: "Run trace" })).toBeVisible();
+    await expect(page.locator(".trace-item.active", { hasText: "Tool completed" })).toBeVisible();
+    await page.getByRole("complementary", { name: "Run trace" }).getByRole("button", { name: "Close" }).click();
 
     await assertNoHorizontalOverflow(page);
     await assertStableVerticalStack(page, [

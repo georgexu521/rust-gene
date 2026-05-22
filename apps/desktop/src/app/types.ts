@@ -13,6 +13,7 @@ export type TranscriptItem =
       facts?: string[];
       summary?: TimelineSummary;
       status?: TimelineStatus;
+      traceId?: string;
     };
 
 export type TimelineKind = "run" | "tool" | "permission" | "usage" | "error";

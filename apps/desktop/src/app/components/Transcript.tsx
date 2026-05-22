@@ -3,6 +3,7 @@ import {
   CircleAlert,
   CircleDotDashed,
   Clock3,
+  Bug,
   FilePenLine,
   KeyRound,
   TerminalSquare,
@@ -12,9 +13,10 @@ import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from ".
 type TranscriptProps = {
   items: TranscriptItem[];
   onPermissionAnswer?: (approved: boolean) => void;
+  onOpenTrace?: (traceId: string) => void;
 };
 
-export function Transcript({ items, onPermissionAnswer }: TranscriptProps) {
+export function Transcript({ items, onPermissionAnswer, onOpenTrace }: TranscriptProps) {
   return (
     <section className="transcript" aria-live="polite">
       {items.length === 0 ? (
@@ -30,6 +32,7 @@ export function Transcript({ items, onPermissionAnswer }: TranscriptProps) {
               item={item}
               key={item.id}
               onPermissionAnswer={onPermissionAnswer}
+              onOpenTrace={onOpenTrace}
             />
           ) : (
             <article className={`message ${item.role}`} key={item.id}>
@@ -55,9 +58,11 @@ type TimelineEventItem = Extract<TranscriptItem, { role: "timeline" }>;
 function TimelineEvent({
   item,
   onPermissionAnswer,
+  onOpenTrace,
 }: {
   item: TimelineEventItem;
   onPermissionAnswer?: (approved: boolean) => void;
+  onOpenTrace?: (traceId: string) => void;
 }) {
   return (
     <article className={`timeline-event ${item.kind} ${item.status || "info"}`}>
@@ -89,6 +94,16 @@ function TimelineEvent({
               Approve
             </button>
           </div>
+        ) : null}
+        {item.traceId && onOpenTrace ? (
+          <button
+            className="timeline-debug-link"
+            type="button"
+            onClick={() => onOpenTrace(item.traceId!)}
+          >
+            <Bug aria-hidden="true" size={13} />
+            <span>Debug</span>
+          </button>
         ) : null}
       </div>
     </article>

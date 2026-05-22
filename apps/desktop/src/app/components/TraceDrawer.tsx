@@ -1,12 +1,26 @@
+import { useEffect } from "react";
 import { TraceItem } from "../types";
 
 type TraceDrawerProps = {
+  activeItemId: string | null;
   isOpen: boolean;
   items: TraceItem[];
   onClose: () => void;
 };
 
-export function TraceDrawer({ isOpen, items, onClose }: TraceDrawerProps) {
+export function TraceDrawer({ activeItemId, isOpen, items, onClose }: TraceDrawerProps) {
+  useEffect(() => {
+    if (!isOpen || !activeItemId) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-trace-id="${CSS.escape(activeItemId)}"]`)
+        ?.scrollIntoView({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeItemId, isOpen, items.length]);
+
   if (!isOpen) {
     return null;
   }
@@ -28,7 +42,11 @@ export function TraceDrawer({ isOpen, items, onClose }: TraceDrawerProps) {
       ) : (
         <div className="trace-list">
           {items.map((item) => (
-            <article className={`trace-item ${item.kind}`} key={item.id}>
+            <article
+              className={`trace-item ${item.kind} ${item.id === activeItemId ? "active" : ""}`}
+              data-trace-id={item.id}
+              key={item.id}
+            >
               <div className="trace-kind">{item.kind}</div>
               <div className="trace-title">{item.title}</div>
               {item.detail ? <div className="trace-detail">{item.detail}</div> : null}
@@ -39,4 +57,3 @@ export function TraceDrawer({ isOpen, items, onClose }: TraceDrawerProps) {
     </aside>
   );
 }
-

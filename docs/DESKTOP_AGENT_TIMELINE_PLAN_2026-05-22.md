@@ -47,12 +47,14 @@ expand control.
   footer permission card.
 - Add jump-to-trace/debug links for each event.
 
-Status: partially implemented. Permission timeline cards now expose approve and
+Status: mostly implemented. Permission timeline cards now expose approve and
 reject actions in the main transcript and update the original waiting card after
-the runtime answers. Stop/retry and jump-to-trace remain future work.
+the runtime answers. Timeline cards also expose debug links that open the trace
+drawer and highlight the corresponding trace event. Stop/retry remain future
+work.
 
 ## Current Next Step
 
-Continue Phase 4 with jump-to-trace/debug affordances for each timeline event.
-Stop/retry should wait until the runtime exposes explicit cancellation/retry
-controls.
+Continue Phase 4 only when the runtime exposes explicit cancellation/retry
+controls. The next desktop UX work can move to run/session ergonomics: new chat,
+session naming, search, and project switching.

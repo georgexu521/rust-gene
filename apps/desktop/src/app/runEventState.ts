@@ -49,6 +49,7 @@ export function applyRunEvent(
               title: "Agent run",
               detail: event.session_id ? `Session ${event.session_id}` : undefined,
               status: "running",
+              traceId: event.run_id,
             }),
           ],
           traceItems: [
@@ -99,6 +100,7 @@ export function applyRunEvent(
           title: event.name,
           detail: "Tool started",
           status: "running",
+          traceId: event.id,
         },
         () => event.id,
         traceTool(event.id, `Tool started: ${event.name}`),
@@ -133,6 +135,7 @@ export function applyRunEvent(
           facts: toolPresentation.facts,
           summary: toolPresentation.summary,
           status: toolPresentation.status,
+          traceId: `${event.id}-done`,
         },
         traceTool(`${event.id}-done`, "Tool completed", event.result_preview),
       );
@@ -158,6 +161,7 @@ export function applyRunEvent(
               title: `Permission needed: ${event.tool_name}`,
               detail: event.prompt,
               status: "waiting",
+              traceId: `${event.id}-permission`,
             }),
           ],
         },
@@ -172,23 +176,25 @@ export function applyRunEvent(
       ]
         .filter(Boolean)
         .join(" · ");
+      const usageId = createId();
       return {
         state: {
           ...state,
           items: [
             ...state.items,
             timelineEvent({
-              id: createId(),
+              id: usageId,
               kind: "usage",
               title: "Token usage",
               detail: usageDetail,
               status: "info",
+              traceId: usageId,
             }),
           ],
           traceItems: [
             ...state.traceItems,
             {
-              id: createId(),
+              id: usageId,
               kind: "usage",
               title: "Usage",
               detail: usageDetail,
@@ -197,19 +203,23 @@ export function applyRunEvent(
         },
         shouldRefreshSessions: false,
       };
-    case "output_truncated":
+    case "output_truncated": {
+      const traceId = createId();
       return appendTimelineAndTrace(state, timelineEvent({
-        id: createId(),
+        id: traceId,
         kind: "run",
         title: "Output truncated",
         detail: "Open trace for the complete runtime details.",
         status: "info",
+        traceId,
       }), {
-        id: createId(),
+        id: traceId,
         kind: "run",
         title: "Output truncated",
       });
-    case "run_error":
+    }
+    case "run_error": {
+      const traceId = createId();
       return {
         state: {
           ...state,
@@ -219,17 +229,18 @@ export function applyRunEvent(
           items: [
             ...state.items,
             timelineEvent({
-              id: createId(),
+              id: traceId,
               kind: "error",
               title: "Run error",
               detail: event.message,
               status: "failed",
+              traceId,
             }),
           ],
           traceItems: [
             ...state.traceItems,
             {
-              id: createId(),
+              id: traceId,
               kind: "error",
               title: "Run error",
               detail: event.message,
@@ -238,6 +249,7 @@ export function applyRunEvent(
         },
         shouldRefreshSessions: true,
       };
+    }
     case "run_completed":
       return {
         state: {
@@ -308,6 +320,7 @@ export function appendPermissionAnswer(
       : "Permission rejected"
     : "No pending permission request was available";
   const answerStatus: TimelineStatus = approved ? "completed" : "failed";
+  const answerTraceId = `${createId()}-trace`;
   const updatedItems =
     answered && permissionId
       ? state.items.map((item) => {
@@ -318,9 +331,16 @@ export function appendPermissionAnswer(
             ...item,
             title: answerTitle,
             status: answerStatus,
+            traceId: answerTraceId,
           };
         })
-      : updateLatestWaitingPermission(state.items, answerTitle, answerStatus, createId);
+      : updateLatestWaitingPermission(
+          state.items,
+          answerTitle,
+          answerStatus,
+          answerTraceId,
+          createId,
+        );
 
   return {
     ...state,
@@ -328,7 +348,7 @@ export function appendPermissionAnswer(
     traceItems: [
       ...state.traceItems,
       {
-        id: `${createId()}-trace`,
+        id: answerTraceId,
         kind: "permission",
         title: approved ? "Permission approved" : "Permission rejected",
         detail: answered ? undefined : "No pending permission request was available",
@@ -492,6 +512,7 @@ function updateLatestWaitingPermission(
   items: TranscriptItem[],
   title: string,
   status: "completed" | "failed",
+  traceId: string,
   createId: () => string,
 ): TranscriptItem[] {
   let index = -1;
@@ -510,6 +531,7 @@ function updateLatestWaitingPermission(
         kind: "permission",
         title,
         status,
+        traceId,
       }),
     ];
   }
@@ -521,6 +543,7 @@ function updateLatestWaitingPermission(
       ...item,
       title,
       status,
+      traceId,
     };
   }
   return nextItems;

@@ -55,6 +55,7 @@ export function App() {
   const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
   const [composer, setComposer] = useState("");
   const [isTraceOpen, setIsTraceOpen] = useState(false);
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [runState, setRunState] = useState(initialRunViewState);
 
@@ -285,10 +286,15 @@ export function App() {
 
         <Transcript
           items={runState.items}
+          onOpenTrace={(traceId) => {
+            setActiveTraceId(traceId);
+            setIsTraceOpen(true);
+          }}
           onPermissionAnswer={(approved) => void handlePermission(approved)}
         />
 
         <TraceDrawer
+          activeItemId={activeTraceId}
           isOpen={isTraceOpen}
           items={runState.traceItems}
           onClose={() => setIsTraceOpen(false)}

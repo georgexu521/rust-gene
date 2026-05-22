@@ -637,6 +637,20 @@ h1 {
   background: #20242a;
 }
 
+.timeline-debug-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  margin-top: 9px;
+  padding: 0;
+  border: 0;
+  color: #68717d;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .trace-drawer {
   position: fixed;
   top: 0;
@@ -933,6 +947,12 @@ h1 {
 .trace-item.permission {
   border-color: #f2c15b;
   background: #fff9ea;
+}
+
+.trace-item.active {
+  border-color: #8bb8f0;
+  background: #f2f7ff;
+  box-shadow: inset 3px 0 0 #2f80ed;
 }
 
 .trace-title {
