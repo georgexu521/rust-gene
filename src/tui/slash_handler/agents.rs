@@ -290,6 +290,117 @@ fn format_terminal_bash_exposure(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProductReadiness {
+    ready: bool,
+    label: &'static str,
+    status: crate::diagnostics::CheckStatus,
+    blockers: Vec<String>,
+    warnings: Vec<String>,
+}
+
+impl ProductReadiness {
+    fn to_check_result(&self) -> crate::diagnostics::CheckResult {
+        match self.status {
+            crate::diagnostics::CheckStatus::Ok => crate::diagnostics::CheckResult::ok(
+                "product_ready",
+                "READY: install and runtime can run coding sessions",
+            ),
+            crate::diagnostics::CheckStatus::Warning => crate::diagnostics::CheckResult::warn(
+                "product_ready",
+                format!("USABLE_WITH_WARNINGS: {} warning(s)", self.warnings.len()),
+                self.warnings.join("; "),
+            ),
+            crate::diagnostics::CheckStatus::Error => crate::diagnostics::CheckResult::error(
+                "product_ready",
+                format!("BLOCKED: {} blocker(s)", self.blockers.len()),
+                self.blockers.join("; "),
+            ),
+            crate::diagnostics::CheckStatus::Info => {
+                crate::diagnostics::CheckResult::info("product_ready", self.label)
+            }
+        }
+    }
+
+    fn format_text(&self) -> String {
+        let mut lines = vec![
+            "Product Readiness".to_string(),
+            format!("Status: {}", self.label),
+        ];
+        if self.blockers.is_empty() {
+            lines.push("Blockers: none".to_string());
+        } else {
+            lines.push(format!("Blockers: {}", self.blockers.join("; ")));
+        }
+        if self.warnings.is_empty() {
+            lines.push("Warnings: none".to_string());
+        } else {
+            lines.push(format!("Warnings: {}", self.warnings.join("; ")));
+        }
+        lines.join("\n")
+    }
+}
+
+fn evaluate_product_readiness(
+    report: &crate::diagnostics::DiagnosticReport,
+    runtime: &crate::state::RuntimeStatusSnapshot,
+) -> ProductReadiness {
+    let blockers = report
+        .checks
+        .iter()
+        .filter(|check| check.status == crate::diagnostics::CheckStatus::Error)
+        .map(|check| format!("{}: {}", check.name, check.message))
+        .collect::<Vec<_>>();
+    let mut warnings = report
+        .checks
+        .iter()
+        .filter(|check| check.status == crate::diagnostics::CheckStatus::Warning)
+        .map(|check| format!("{}: {}", check.name, check.message))
+        .collect::<Vec<_>>();
+
+    if runtime.failed_tool_count > 0 {
+        warnings.push(format!(
+            "runtime tools failed={}",
+            runtime.failed_tool_count
+        ));
+    }
+    if runtime.backgrounded_tool_count > 0 {
+        warnings.push(format!(
+            "backgrounded tools={}",
+            runtime.backgrounded_tool_count
+        ));
+    }
+    if let Some(pending) = runtime.pending_permission.as_ref() {
+        warnings.push(format!("approval pending: {}", pending));
+    }
+    if !runtime.mcp_repair_hints.is_empty() {
+        warnings.push(format!(
+            "mcp repair: {}",
+            runtime.mcp_repair_hints.join(", ")
+        ));
+    }
+
+    let (ready, label, status) = if !blockers.is_empty() {
+        (false, "BLOCKED", crate::diagnostics::CheckStatus::Error)
+    } else if !warnings.is_empty() {
+        (
+            false,
+            "USABLE_WITH_WARNINGS",
+            crate::diagnostics::CheckStatus::Warning,
+        )
+    } else {
+        (true, "READY", crate::diagnostics::CheckStatus::Ok)
+    };
+
+    ProductReadiness {
+        ready,
+        label,
+        status,
+        blockers,
+        warnings,
+    }
+}
+
 async fn terminal_task_status_line(app: &TuiApp) -> String {
     let context = app.build_tool_context().await;
     let result = crate::tools::bash_tool::BashTasksTool
@@ -799,6 +910,24 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
         ));
     }
 
+    let runtime = app.runtime_status_snapshot().await;
+    let readiness = evaluate_product_readiness(&report, &runtime);
+    report
+        .metadata
+        .insert("product_ready".to_string(), readiness.ready.to_string());
+    report
+        .metadata
+        .insert("product_readiness".to_string(), readiness.label.to_string());
+    report.metadata.insert(
+        "product_blockers".to_string(),
+        readiness.blockers.len().to_string(),
+    );
+    report.metadata.insert(
+        "product_warnings".to_string(),
+        readiness.warnings.len().to_string(),
+    );
+    report.checks.push(readiness.to_check_result());
+
     report.overall = if report
         .checks
         .iter()
@@ -822,7 +951,7 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
         // W4-3: Generate a live gap snapshot based on current implementation
         generate_gap_snapshot(app, &report).await
     } else {
-        report.format_text()
+        format!("{}\n\n{}", readiness.format_text(), report.format_text())
     }
 }
 /// Generate a live gap snapshot (W4-3)
@@ -2279,6 +2408,53 @@ mod tests {
 
         assert!(line.contains("hidden for terminal requests"));
         assert!(line.contains("permission mode is read_only"));
+    }
+
+    #[test]
+    fn product_readiness_reports_ready_when_diagnostics_are_clean() {
+        let report = crate::diagnostics::DiagnosticReport::new(vec![
+            crate::diagnostics::CheckResult::ok("git", "available"),
+            crate::diagnostics::CheckResult::ok("engine", "model=test"),
+        ]);
+        let runtime = crate::state::RuntimeStatusSnapshot::default();
+
+        let readiness = evaluate_product_readiness(&report, &runtime);
+
+        assert!(readiness.ready);
+        assert_eq!(readiness.label, "READY");
+        assert_eq!(
+            readiness.to_check_result().status,
+            crate::diagnostics::CheckStatus::Ok
+        );
+        assert!(readiness.format_text().contains("Status: READY"));
+    }
+
+    #[test]
+    fn product_readiness_surfaces_blockers_and_runtime_warnings() {
+        let report = crate::diagnostics::DiagnosticReport::new(vec![
+            crate::diagnostics::CheckResult::error("config", "No key", "Set a key"),
+            crate::diagnostics::CheckResult::warn("network", "slow", "Check proxy"),
+        ]);
+        let runtime = crate::state::RuntimeStatusSnapshot {
+            failed_tool_count: 2,
+            backgrounded_tool_count: 1,
+            pending_permission: Some("bash (call_1)".to_string()),
+            mcp_repair_hints: vec!["filesystem: approve".to_string()],
+            ..crate::state::RuntimeStatusSnapshot::default()
+        };
+
+        let readiness = evaluate_product_readiness(&report, &runtime);
+        let text = readiness.format_text();
+
+        assert!(!readiness.ready);
+        assert_eq!(readiness.label, "BLOCKED");
+        assert!(text.contains("config: No key"));
+        assert!(text.contains("runtime tools failed=2"));
+        assert!(text.contains("approval pending: bash (call_1)"));
+        assert_eq!(
+            readiness.to_check_result().status,
+            crate::diagnostics::CheckStatus::Error
+        );
     }
 
     #[test]

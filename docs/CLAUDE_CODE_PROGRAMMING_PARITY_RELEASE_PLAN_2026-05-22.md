@@ -866,10 +866,18 @@ Progress on 2026-05-22:
   requiring trace-log inspection.
 - Permission preview snapshot coverage was updated for command-scoped bash
   approval details.
+- `/doctor` now starts with a product readiness summary. It reports `READY`,
+  `USABLE_WITH_WARNINGS`, or `BLOCKED` from the current diagnostic report plus
+  runtime selectors for failed tools, backgrounded tools, pending approvals, and
+  MCP repair hints. JSON output also includes product readiness metadata and a
+  `product_ready` check.
 
 Validation so far:
 
+- `cargo test -q commands` - passed, 25 tests.
 - `cargo test -q runtime_panels` - passed, 5 tests.
+- `cargo test -q status_bar` - passed, 3 tests.
+- `cargo test -q tool_view` - passed, 12 tests.
 - `cargo test -q main_screen` - passed, 15 tests.
 - `cargo check -q` - passed.
 - `cargo fmt --check` - passed.
