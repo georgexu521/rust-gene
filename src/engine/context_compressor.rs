@@ -9,7 +9,8 @@
 //! - 工具调用对完整性校验（孤立项清理 + stub 插入）
 
 pub use crate::engine::context_collapse::{
-    extract_compact_boundaries, CompactMetadata, CompactionRuntimeRecord, ContextCompactionStrategy,
+    extract_compact_boundaries, CompactMetadata, CompactionRuntimeRecord,
+    ContextCompactionStrategy, ContextTokenPressure,
 };
 use crate::services::api::Message;
 #[cfg(test)]
@@ -402,6 +403,48 @@ impl TokenBudget {
     pub fn tail_soft_ceiling(&self) -> u64 {
         self.target_tokens() * 150 / 100
     }
+}
+
+fn compaction_retained_items(
+    head_count: usize,
+    tail_count: usize,
+    compact_meta: Option<&CompactMetadata>,
+    session_memory: &SessionMemoryCompact,
+) -> Vec<String> {
+    let mut items = vec![
+        format!("head_messages:{}", head_count),
+        format!("tail_messages:{}", tail_count),
+        "recent_tool_results:last_3".to_string(),
+        "tool_call_pairs:sanitized".to_string(),
+    ];
+    if let Some(meta) = compact_meta {
+        items.push(format!("compact_boundary:{}", meta.boundary_id));
+    }
+    if !session_memory.hot_files.is_empty() {
+        items.push(format!(
+            "session_memory_hot_files:{}",
+            session_memory.hot_files.len()
+        ));
+    }
+    if !session_memory.pending_tasks.is_empty() {
+        items.push(format!(
+            "session_memory_pending_tasks:{}",
+            session_memory.pending_tasks.len()
+        ));
+    }
+    if !session_memory.tool_patterns.is_empty() {
+        items.push(format!(
+            "session_memory_tool_patterns:{}",
+            session_memory.tool_patterns.len()
+        ));
+    }
+    if !session_memory.user_preferences.is_empty() {
+        items.push(format!(
+            "session_memory_user_preferences:{}",
+            session_memory.user_preferences.len()
+        ));
+    }
+    items
 }
 
 // ── Token 估算 ────────────────────────────────────────────
@@ -826,6 +869,18 @@ impl ContextCompressor {
         CompressionWarning::from_usage_ratio(ratio)
     }
 
+    fn token_pressure_for_tokens(&self, message_tokens: u64) -> ContextTokenPressure {
+        let total = message_tokens
+            .saturating_add(self.budget.system_prompt_tokens)
+            .saturating_add(self.budget.tool_schemas_tokens);
+        let ratio = if self.budget.max_context_tokens == 0 {
+            1.0
+        } else {
+            total as f64 / self.budget.max_context_tokens as f64
+        };
+        ContextTokenPressure::from_usage_ratio(ratio)
+    }
+
     /// 检查是否需要基于时间的压缩
     pub fn needs_time_based_compression(&self, messages: &[Message]) -> bool {
         if !self.time_config.enabled {
@@ -859,6 +914,8 @@ impl ContextCompressor {
         self.record_compaction(CompactionRuntimeRecord {
             strategy: ContextCompactionStrategy::Snip,
             level: None,
+            trigger: None,
+            token_pressure: Some(self.token_pressure_for_tokens(tokens_before)),
             messages_before: messages.len(),
             messages_after: result.len(),
             tokens_before,
@@ -866,6 +923,7 @@ impl ContextCompressor {
             boundary_id: None,
             sequence: None,
             preserved_tail_count: None,
+            retained_items: vec!["recent_tool_results:last_3".to_string()],
             provenance: vec!["tool_result_snip".to_string()],
         });
 
@@ -890,6 +948,8 @@ impl ContextCompressor {
         self.record_compaction(CompactionRuntimeRecord {
             strategy,
             level: level.map(|value| value.label().to_string()),
+            trigger: None,
+            token_pressure: Some(self.token_pressure_for_tokens(tokens_before)),
             messages_before: messages.len(),
             messages_after: result.len(),
             tokens_before,
@@ -897,6 +957,10 @@ impl ContextCompressor {
             boundary_id: None,
             sequence: None,
             preserved_tail_count: None,
+            retained_items: vec![
+                "recent_tool_results:last_3".to_string(),
+                "tool_call_pairs:sanitized".to_string(),
+            ],
             provenance: vec![
                 "tool_result_snip".to_string(),
                 "tool_pair_sanitize".to_string(),
@@ -995,6 +1059,8 @@ impl ContextCompressor {
                 self.record_compaction(CompactionRuntimeRecord {
                     strategy,
                     level: Some(level.label().to_string()),
+                    trigger: None,
+                    token_pressure: Some(self.token_pressure_for_tokens(tokens_before)),
                     messages_before: messages.len(),
                     messages_after: messages.len(),
                     tokens_before,
@@ -1002,6 +1068,7 @@ impl ContextCompressor {
                     boundary_id: None,
                     sequence: None,
                     preserved_tail_count: None,
+                    retained_items: vec!["messages:all".to_string()],
                     provenance: vec!["level:none".to_string()],
                 });
                 messages.to_vec()
@@ -1365,6 +1432,8 @@ impl ContextCompressor {
         self.record_compaction(CompactionRuntimeRecord {
             strategy,
             level: level.map(|value| value.label().to_string()),
+            trigger: None,
+            token_pressure: Some(self.token_pressure_for_tokens(original_tokens_before)),
             messages_before: original_message_count,
             messages_after: result.len(),
             tokens_before: original_tokens_before,
@@ -1372,6 +1441,12 @@ impl ContextCompressor {
             boundary_id: recorded_meta.as_ref().map(|meta| meta.boundary_id.clone()),
             sequence: recorded_meta.as_ref().map(|meta| meta.sequence),
             preserved_tail_count: recorded_meta.as_ref().map(|meta| meta.preserved_tail_count),
+            retained_items: compaction_retained_items(
+                head.len(),
+                tail.len(),
+                recorded_meta.as_ref(),
+                &session_memory,
+            ),
             provenance,
         });
         self.compression_count += 1;
@@ -1839,6 +1914,13 @@ impl ContextCompressor {
     /// 获取运行时压缩记录（策略、来源和 compact boundary）。
     pub fn compaction_records(&self) -> &[CompactionRuntimeRecord] {
         &self.compaction_records
+    }
+
+    pub fn annotate_compaction_record_trigger(&mut self, index: usize, trigger: impl Into<String>) {
+        if let Some(record) = self.compaction_records.get_mut(index) {
+            record.trigger = Some(trigger.into());
+            record.normalize_provenance();
+        }
     }
 
     /// 获取最近一次运行时压缩记录。
@@ -2764,6 +2846,10 @@ mod tests {
         assert_eq!(record.strategy, ContextCompactionStrategy::Snip);
         assert_eq!(record.messages_before, messages.len());
         assert_eq!(record.messages_after, compressed.len());
+        assert_eq!(record.token_pressure, Some(ContextTokenPressure::Low));
+        assert!(record
+            .retained_items
+            .contains(&"recent_tool_results:last_3".to_string()));
         assert!(record.provenance.iter().any(|p| p == "tool_result_snip"));
     }
 
@@ -2778,6 +2864,9 @@ mod tests {
         assert_eq!(record.strategy, ContextCompactionStrategy::MicroCompact);
         assert_eq!(record.level.as_deref(), Some("light"));
         assert_eq!(record.messages_after, compressed.len());
+        assert!(record
+            .retained_items
+            .contains(&"tool_call_pairs:sanitized".to_string()));
         assert!(record.provenance.iter().any(|p| p == "tool_pair_sanitize"));
     }
 
@@ -2899,6 +2988,10 @@ mod tests {
         assert_eq!(record.strategy, ContextCompactionStrategy::AutoCompact);
         assert!(record.boundary_id.is_some());
         assert_eq!(record.sequence, Some(1));
+        assert!(record
+            .retained_items
+            .iter()
+            .any(|item| item.starts_with("tail_messages:")));
         assert!(record
             .provenance
             .iter()

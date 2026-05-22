@@ -128,6 +128,7 @@ fn message_content(message: &Message) -> &str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextCompactionStrategy {
+    NoOp,
     Snip,
     MicroCompact,
     AutoCompact,
@@ -138,6 +139,7 @@ pub enum ContextCompactionStrategy {
 impl ContextCompactionStrategy {
     pub fn label(self) -> &'static str {
         match self {
+            ContextCompactionStrategy::NoOp => "no_op",
             ContextCompactionStrategy::Snip => "snip",
             ContextCompactionStrategy::MicroCompact => "microcompact",
             ContextCompactionStrategy::AutoCompact => "auto_compact",
@@ -147,10 +149,47 @@ impl ContextCompactionStrategy {
     }
 }
 
+/// Runtime-visible token pressure at the time compaction was considered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextTokenPressure {
+    Low,
+    Moderate,
+    High,
+    Critical,
+}
+
+impl ContextTokenPressure {
+    pub fn from_usage_ratio(ratio: f64) -> Self {
+        if ratio >= 0.90 {
+            Self::Critical
+        } else if ratio >= 0.80 {
+            Self::High
+        } else if ratio >= 0.60 {
+            Self::Moderate
+        } else {
+            Self::Low
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Moderate => "moderate",
+            Self::High => "high",
+            Self::Critical => "critical",
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct CompactionRuntimeRecord {
     pub strategy: ContextCompactionStrategy,
     pub level: Option<String>,
+    #[serde(default)]
+    pub trigger: Option<String>,
+    #[serde(default)]
+    pub token_pressure: Option<ContextTokenPressure>,
     pub messages_before: usize,
     pub messages_after: usize,
     pub tokens_before: u64,
@@ -158,6 +197,8 @@ pub struct CompactionRuntimeRecord {
     pub boundary_id: Option<String>,
     pub sequence: Option<u32>,
     pub preserved_tail_count: Option<usize>,
+    #[serde(default)]
+    pub retained_items: Vec<String>,
     pub provenance: Vec<String>,
 }
 
@@ -171,6 +212,24 @@ impl CompactionRuntimeRecord {
             let boundary_tag = format!("compact_boundary:{}", boundary_id);
             if !self.provenance.iter().any(|tag| tag == &boundary_tag) {
                 self.provenance.push(boundary_tag);
+            }
+        }
+        if let Some(trigger) = &self.trigger {
+            let trigger_tag = format!("trigger:{}", trigger);
+            if !self.provenance.iter().any(|tag| tag == &trigger_tag) {
+                self.provenance.push(trigger_tag);
+            }
+        }
+        if let Some(token_pressure) = self.token_pressure {
+            let pressure_tag = format!("token_pressure:{}", token_pressure.label());
+            if !self.provenance.iter().any(|tag| tag == &pressure_tag) {
+                self.provenance.push(pressure_tag);
+            }
+        }
+        for item in &self.retained_items {
+            let retained_tag = format!("retained:{}", item);
+            if !self.provenance.iter().any(|tag| tag == &retained_tag) {
+                self.provenance.push(retained_tag);
             }
         }
     }
@@ -628,6 +687,8 @@ mod tests {
         let mut record = CompactionRuntimeRecord {
             strategy: ContextCompactionStrategy::ReactiveCompact,
             level: Some("heavy".to_string()),
+            trigger: Some("api_context_error".to_string()),
+            token_pressure: Some(ContextTokenPressure::Critical),
             messages_before: 10,
             messages_after: 4,
             tokens_before: 1000,
@@ -635,6 +696,7 @@ mod tests {
             boundary_id: Some("cb-test".to_string()),
             sequence: Some(2),
             preserved_tail_count: Some(3),
+            retained_items: vec!["tail_messages:3".to_string()],
             provenance: vec!["trigger:api_context_error".to_string()],
         };
 
@@ -657,5 +719,11 @@ mod tests {
                 .count(),
             1
         );
+        assert!(record
+            .provenance
+            .contains(&"token_pressure:critical".to_string()));
+        assert!(record
+            .provenance
+            .contains(&"retained:tail_messages:3".to_string()));
     }
 }

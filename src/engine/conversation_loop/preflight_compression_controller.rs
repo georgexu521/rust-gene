@@ -55,6 +55,7 @@ impl PreflightCompressionController {
                     ContextCompactionStrategy::AutoCompact,
                 )
                 .await;
+            compressor.annotate_compaction_record_trigger(compaction_record_len, "preflight");
             let compaction_record = compressor
                 .compaction_records()
                 .get(compaction_record_len)
@@ -73,6 +74,12 @@ impl PreflightCompressionController {
                     .as_ref()
                     .map(|record| record.strategy.label().to_string())
                     .unwrap_or_else(|| "auto_compact".to_string()),
+                trigger: Some("preflight".to_string()),
+                token_pressure: compaction_record.as_ref().and_then(|record| {
+                    record
+                        .token_pressure
+                        .map(|pressure| pressure.label().to_string())
+                }),
                 boundary_id: compaction_record
                     .as_ref()
                     .and_then(|record| record.boundary_id.clone()),
@@ -88,6 +95,10 @@ impl PreflightCompressionController {
                 preserved_tail_count: compaction_record
                     .as_ref()
                     .and_then(|record| record.preserved_tail_count),
+                retained_items: compaction_record
+                    .as_ref()
+                    .map(|record| record.retained_items.clone())
+                    .unwrap_or_default(),
                 provenance,
             });
             if after_tokens >= before_tokens {

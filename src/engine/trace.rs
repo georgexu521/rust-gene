@@ -222,6 +222,10 @@ pub enum TraceEvent {
         after_tokens: usize,
         strategy: String,
         #[serde(default)]
+        trigger: Option<String>,
+        #[serde(default)]
+        token_pressure: Option<String>,
+        #[serde(default)]
         boundary_id: Option<String>,
         #[serde(default)]
         sequence: Option<u32>,
@@ -231,6 +235,8 @@ pub enum TraceEvent {
         messages_after: Option<usize>,
         #[serde(default)]
         preserved_tail_count: Option<usize>,
+        #[serde(default)]
+        retained_items: Vec<String>,
         #[serde(default)]
         provenance: Vec<String>,
     },
@@ -770,17 +776,22 @@ impl TraceEvent {
                 before_tokens,
                 after_tokens,
                 strategy,
+                trigger,
+                token_pressure,
                 boundary_id,
                 sequence,
                 messages_before,
                 messages_after,
                 preserved_tail_count,
+                retained_items,
                 provenance,
             } => format!(
-                "context compacted: {} -> {} tokens ({}) boundary={} seq={} msgs={}->{} preserved={} provenance={}",
+                "context compacted: {} -> {} tokens ({}) trigger={} pressure={} boundary={} seq={} msgs={}->{} preserved={} retained={} provenance={}",
                 before_tokens,
                 after_tokens,
                 strategy,
+                trigger.as_deref().unwrap_or("unknown"),
+                token_pressure.as_deref().unwrap_or("unknown"),
                 boundary_id.as_deref().unwrap_or("none"),
                 sequence
                     .map(|value| value.to_string())
@@ -794,6 +805,11 @@ impl TraceEvent {
                 preserved_tail_count
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string()),
+                if retained_items.is_empty() {
+                    "none".to_string()
+                } else {
+                    retained_items.join(",")
+                },
                 if provenance.is_empty() {
                     "none".to_string()
                 } else {

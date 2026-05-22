@@ -1062,6 +1062,33 @@ Acceptance:
 - A long task survives compaction without losing the active objective, changed
   files, validation state, or active subagent/task state.
 
+Progress on 2026-05-22:
+
+- Runtime compaction records now carry structured `trigger`, `token_pressure`,
+  `strategy`, compact boundary metadata, preserved tail count, and retained item
+  facts instead of relying only on free-form provenance strings.
+- The compaction strategy model now includes `no_op`, and trace
+  `ContextCompacted` events expose trigger, token pressure, and retained items
+  for preflight and reactive context-error compaction.
+- Compressor records now identify retained head/tail messages, recent tool
+  results, sanitized tool-call pairs, compact boundaries, and session-memory
+  facts such as hot files, pending tasks, tool patterns, and preferences.
+- The `context` tool now supports `action=explain`, which reports retained
+  memory/retrieval items and skill triggers with inclusion reasons, provenance,
+  trust, conflict status, and token estimates.
+
+Validation so far:
+
+- `cargo test -q context_tool` - passed, 1 test after retained-context explain support.
+- `cargo test -q context_compressor` - passed, 42 tests after structured
+  compaction state support.
+- `cargo test -q context_collapse` - passed, 5 tests after token-pressure and
+  retained-item provenance support.
+- `cargo test -q preflight_compression_controller` - passed, 2 tests.
+- `cargo test -q context_budget_controller` - passed, 5 tests.
+- `cargo test -q memory_sync_controller` - passed, 4 tests.
+- `cargo test -q retained_context` - passed, 1 test.
+
 ## Phase 9: MCP, Plugins, Bridge, Remote, And Providers
 
 Purpose: productize integrations after the local programming harness is stable.

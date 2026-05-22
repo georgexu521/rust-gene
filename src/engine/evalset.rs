@@ -2255,11 +2255,14 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
             before_tokens: compaction.before_tokens,
             after_tokens: compaction.after_tokens,
             strategy: compaction.strategy.clone(),
+            trigger: None,
+            token_pressure: None,
             boundary_id: compaction.boundary_id.clone(),
             sequence: compaction.sequence,
             messages_before: compaction.messages_before,
             messages_after: compaction.messages_after,
             preserved_tail_count: compaction.preserved_tail_count,
+            retained_items: Vec::new(),
             provenance: compaction.provenance.clone(),
         });
     }

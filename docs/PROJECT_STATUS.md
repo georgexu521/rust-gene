@@ -94,6 +94,15 @@ Current stage:
   recovery plans, pre-tool hook blocks are classified as hook runtime failures,
   and permission denials emit
   `/permissions explain` recovery plans in trace.
+- Phase 8 has started on long-session coherence. Runtime compaction records and
+  `ContextCompacted` trace events now expose structured trigger, token pressure,
+  strategy, compact boundary, preserved tail count, and retained-item facts for
+  preflight and reactive context-error compaction. Retained facts include
+  head/tail preservation, recent tool results, sanitized tool-call pairs,
+  compact boundaries, and session-memory signals. The `context` tool now has an
+  `action=explain` path that reports retained memory/retrieval and skill
+  inclusion reasons with provenance, trust, conflict status, and token
+  estimates.
 - Phase 12 verification work has completed its local deterministic replay and
   external-baseline ingestion surfaces: `src/engine/scenario_matrix.rs`
   declares the six required parity scenarios and maps each one to concrete
