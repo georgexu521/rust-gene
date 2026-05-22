@@ -42,6 +42,18 @@ fn untracked_paths(status: &str) -> Vec<String> {
         .collect()
 }
 
+fn status_without_internal_worktree_storage(status: &str) -> String {
+    status
+        .lines()
+        .filter(|line| {
+            !line
+                .strip_prefix("?? ")
+                .is_some_and(|path| path.starts_with(".claude/worktrees/"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn task_is_isolated_agent(state: &crate::session_store::AgentTaskStateRecord) -> bool {
     state
         .cleanup_hooks
@@ -441,10 +453,20 @@ async fn handle_agent_merge(
 
     let target_dir = manager.original_dir();
     let allow_dirty_parent = params["allow_dirty_parent"].as_bool().unwrap_or(false);
-    let target_status = match run_git(target_dir, vec!["status".into(), "--short".into()]).await {
+    let target_status = match run_git(
+        target_dir,
+        vec![
+            "status".into(),
+            "--short".into(),
+            "--untracked-files=all".into(),
+        ],
+    )
+    .await
+    {
         Ok(status) => status,
         Err(err) => return ToolResult::error(err),
     };
+    let target_status = status_without_internal_worktree_storage(&target_status);
     if status_is_dirty(&target_status) && !allow_dirty_parent {
         return ToolResult::error(format!(
             "Target worktree is not clean. Commit/stash current changes or retry with allow_dirty_parent=true.\n{}",
@@ -814,6 +836,63 @@ impl Tool for WorktreeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_store::AgentTaskStateUpsert;
+    use std::fs;
+    use std::process::Command as StdCommand;
+    use std::sync::Arc;
+
+    fn git(cwd: &Path, args: &[&str]) -> String {
+        let output = StdCommand::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .unwrap_or_else(|err| panic!("failed to run git {}: {}", args.join(" "), err));
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
+    fn init_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp repo");
+        git(dir.path(), &["init", "-q"]);
+        git(dir.path(), &["config", "user.email", "agent@example.test"]);
+        git(dir.path(), &["config", "user.name", "Agent Test"]);
+        fs::write(dir.path().join("hello.txt"), "base\n").expect("seed file");
+        git(dir.path(), &["add", "hello.txt"]);
+        git(dir.path(), &["commit", "-q", "-m", "initial"]);
+        dir
+    }
+
+    fn isolated_agent_state(
+        agent_id: &str,
+        worktree_path: &Path,
+        branch: &str,
+    ) -> AgentTaskStateUpsert {
+        AgentTaskStateUpsert {
+            session_id: "s1".to_string(),
+            task_id: agent_id.to_string(),
+            agent_id: agent_id.to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "completed".to_string(),
+            description: "edit code in isolated worktree".to_string(),
+            transcript_path: None,
+            tool_ids_in_progress: Vec::new(),
+            permission_requests: Vec::new(),
+            result_artifact_id: None,
+            cleanup_hooks: vec!["worktree_cleanup".to_string()],
+            payload: json!({
+                "isolated_worktree": {
+                    "path": worktree_path.to_string_lossy().to_string(),
+                    "branch": branch
+                }
+            }),
+        }
+    }
 
     #[tokio::test]
     async fn test_worktree_list() {
@@ -890,6 +969,17 @@ mod tests {
     }
 
     #[test]
+    fn parent_status_filter_ignores_internal_worktree_storage_only() {
+        let filtered = status_without_internal_worktree_storage(
+            "?? .claude/worktrees/agent-1/.git\n?? .claude/settings.json\n M src/main.rs\n",
+        );
+
+        assert!(!filtered.contains(".claude/worktrees"));
+        assert!(filtered.contains(".claude/settings.json"));
+        assert!(filtered.contains("src/main.rs"));
+    }
+
+    #[test]
     fn branch_delete_safety_only_allows_agent_branches() {
         assert!(is_safe_agent_branch("codex/agent-1234"));
         assert!(is_safe_agent_branch("refs/heads/codex/agent-1234"));
@@ -962,5 +1052,87 @@ mod tests {
             format_agent_merge_git_error(&agent, "branch", "git rev-list failed: auth denied");
 
         assert_eq!(err, "git rev-list failed: auth denied");
+    }
+
+    #[tokio::test]
+    async fn agent_worktree_review_merge_and_cleanup_cover_real_git_flow() {
+        let repo = init_git_repo();
+        let manager = Arc::new(crate::engine::worktree::WorktreeManager::for_root(
+            repo.path().to_path_buf(),
+        ));
+        let branch = "codex/agent-integration";
+        let worktree_path = manager
+            .create("agent-integration", Some(branch))
+            .await
+            .expect("create worktree");
+        fs::write(worktree_path.join("hello.txt"), "agent edit\n").expect("edit worktree file");
+
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().expect("store"));
+        store
+            .create_session("s1", "agent worktree test", "test-model")
+            .expect("create session");
+        store
+            .upsert_agent_task_state(&isolated_agent_state("agent_1", &worktree_path, branch))
+            .expect("persist agent state");
+        let context = ToolContext::new(repo.path(), "s1")
+            .with_session_store(store)
+            .with_worktree_manager(manager);
+        let tool = WorktreeTool;
+
+        let review = tool
+            .execute(
+                json!({"action": "agent_review", "agent_id": "agent_1"}),
+                context.clone(),
+            )
+            .await;
+        assert!(review.success, "review failed: {:?}", review.error);
+        assert!(review.content.contains("Agent worktree review: agent_1"));
+        assert!(review.content.contains("hello.txt"));
+        assert_eq!(review.data.unwrap()["dirty"], true);
+
+        let merge = tool
+            .execute(
+                json!({
+                    "action": "agent_merge",
+                    "agent_id": "agent_1",
+                    "cleanup": true
+                }),
+                context.clone(),
+            )
+            .await;
+        assert!(merge.success, "merge failed: {:?}", merge.error);
+        assert_eq!(merge.data.as_ref().unwrap()["merge_kind"], "tracked_diff");
+        assert!(merge.content.contains("Cleanup skipped"));
+        assert_eq!(
+            fs::read_to_string(repo.path().join("hello.txt")).unwrap(),
+            "agent edit\n"
+        );
+        assert!(
+            worktree_path.exists(),
+            "dirty source worktree should remain for review"
+        );
+
+        let cleanup = tool
+            .execute(
+                json!({
+                    "action": "agent_cleanup",
+                    "agent_id": "agent_1",
+                    "force": true,
+                    "delete_branch": true
+                }),
+                context,
+            )
+            .await;
+        assert!(cleanup.success, "cleanup failed: {:?}", cleanup.error);
+        assert!(
+            !worktree_path.exists(),
+            "forced cleanup should remove worktree"
+        );
+        assert!(
+            git(repo.path(), &["branch", "--list", branch])
+                .trim()
+                .is_empty(),
+            "safe agent branch should be deleted"
+        );
     }
 }

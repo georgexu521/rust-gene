@@ -82,9 +82,14 @@ Current stage:
   artifacts after in-memory manager results are gone. Agent worktree safety guards
   now have direct coverage for dirty status, untracked paths, safe agent branch
   deletion, rejection of non-isolated task records, and merge-conflict recovery
-  messaging for branch/diff merges. Hook and permission failures now share the recovery spine:
-  failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
-  classified as hook runtime failures, and permission denials emit
+  messaging for branch/diff merges. Worktree manager git calls now run from the
+  captured repo root, porcelain worktree paths are parsed correctly, internal
+  `.claude/worktrees/` storage no longer blocks parent merge cleanliness checks,
+  and a real temporary-git-repo flow covers agent review, tracked-diff merge,
+  cleanup skip, forced cleanup, and safe branch deletion. Hook and permission
+  failures now share the recovery spine: failed/blocked hooks emit `/hooks`
+  recovery plans, pre-tool hook blocks are classified as hook runtime failures,
+  and permission denials emit
   `/permissions explain` recovery plans in trace.
 - Phase 12 verification work has completed its local deterministic replay and
   external-baseline ingestion surfaces: `src/engine/scenario_matrix.rs`

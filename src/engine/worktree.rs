@@ -38,6 +38,13 @@ impl WorktreeManager {
         }
     }
 
+    pub fn for_root(original_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            original_dir: original_dir.into(),
+            current_worktree: RwLock::new(None),
+        }
+    }
+
     /// 检测当前是否在 worktree 中
     async fn detect_current_worktree() -> Option<PathBuf> {
         // 运行 git rev-parse --show-toplevel
@@ -108,6 +115,7 @@ impl WorktreeManager {
     /// 列出所有 worktree
     pub async fn list(&self) -> anyhow::Result<Vec<WorktreeInfo>> {
         let output = Command::new("git")
+            .current_dir(&self.original_dir)
             .args(["worktree", "list", "--porcelain"])
             .output()
             .await?;
@@ -133,7 +141,7 @@ impl WorktreeManager {
 
             if current.is_none() {
                 current = Some(WorktreeInfo {
-                    path: PathBuf::from(line),
+                    path: PathBuf::from(line.strip_prefix("worktree ").unwrap_or(line)),
                     commit: None,
                     branch: None,
                     is_bare: false,
@@ -171,7 +179,7 @@ impl WorktreeManager {
         }
 
         // 标记当前 worktree
-        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let current_dir = self.original_dir.clone();
         for wt in &mut worktrees {
             if let Ok(canonical) = current_dir.canonicalize() {
                 if let Ok(wt_canonical) = wt.path.canonicalize() {
@@ -201,6 +209,7 @@ impl WorktreeManager {
         }
 
         let mut cmd = Command::new("git");
+        cmd.current_dir(&self.original_dir);
         cmd.args(["worktree", "add"]);
         if let Some(b) = branch {
             cmd.arg("-b").arg(b);
@@ -222,6 +231,7 @@ impl WorktreeManager {
     /// 删除 worktree
     pub async fn remove(&self, path: &str) -> anyhow::Result<()> {
         let output = Command::new("git")
+            .current_dir(&self.original_dir)
             .args(["worktree", "remove", path])
             .output()
             .await?;
@@ -240,6 +250,7 @@ impl WorktreeManager {
     /// 强制删除 worktree（包括未提交的更改）
     pub async fn remove_force(&self, path: &str) -> anyhow::Result<()> {
         let output = Command::new("git")
+            .current_dir(&self.original_dir)
             .args(["worktree", "remove", "--force", path])
             .output()
             .await?;
@@ -258,6 +269,7 @@ impl WorktreeManager {
     /// 清理无效的 worktree 记录
     pub async fn prune(&self) -> anyhow::Result<String> {
         let output = Command::new("git")
+            .current_dir(&self.original_dir)
             .args(["worktree", "prune"])
             .output()
             .await?;

@@ -983,6 +983,12 @@ Progress on 2026-05-22:
 - Agent worktree branch merge and tracked-diff apply failures now wrap
   conflict-like git errors with recovery context that points to `agent_review`,
   manual resolution in the isolated worktree, or `agent_cleanup`.
+- Worktree operations now run git commands from the manager's captured repo root
+  instead of the process cwd, parse `git worktree list --porcelain` paths
+  correctly, and ignore the internal `.claude/worktrees/` storage entries during
+  parent cleanliness checks so isolated workers do not block their own merge.
+- Agent worktree review, tracked-diff merge, cleanup skip, forced cleanup, and
+  safe branch deletion now have a real temporary-git-repo flow test.
 
 Validation so far:
 
@@ -995,6 +1001,8 @@ Validation so far:
 - `cargo test -q worktree_tool` - passed, 3 tests.
 - `cargo test -q worktree_tool` - passed, 6 tests after safety guard coverage.
 - `cargo test -q worktree_tool` - passed, 8 tests after merge-conflict recovery messaging.
+- `cargo test -q worktree_tool` - passed, 10 tests after real git
+  review/merge/cleanup flow coverage.
 - `cargo test -q session_store` - passed, 14 tests.
 - `cargo check -q` - passed.
 - `cargo fmt --check` - passed.
