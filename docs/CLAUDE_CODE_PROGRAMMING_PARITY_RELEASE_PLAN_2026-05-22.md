@@ -783,6 +783,9 @@ Progress on 2026-05-22:
   `PRIORITY_AGENT_PERMISSION_RESOLVED_HOOK`, records them in lifecycle
   snapshots, and lets permission-request hooks deny before the approval is
   shown to the user.
+- Tool approval requests now carry the audit snapshot into the TUI. The
+  approval panel renders risk facts, matched rules, and recovery hints so the
+  review can be understood without opening logs.
 
 Validation so far:
 
@@ -791,6 +794,8 @@ Validation so far:
 - `cargo test -q hooks` - passed, 9 tests.
 - `cargo test -q trace` - passed, 37 tests.
 - `cargo test -q recovery_plan` - passed, 13 tests.
+- `cargo test -q runtime_panels` - passed, 5 tests.
+- `cargo test -q main_screen` - passed, 15 tests.
 - `cargo check -q` - passed.
 - `cargo fmt --check` - passed.
 - `cargo clippy -q -- -D warnings` - passed.

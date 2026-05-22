@@ -2468,7 +2468,10 @@ mod tests {
         let args = serde_json::json!({ "command": "ls -la" });
         assert_eq!(
             permission_preview("bash", &args),
-            Some(("Command", "$ ls -la".to_string()))
+            Some((
+                "Command",
+                "$ ls -la\ncategory=list kind=inspection\nrule=bash:ls -la".to_string()
+            ))
         );
     }
 
@@ -2495,6 +2498,7 @@ mod tests {
             prompt: "Permission explanation: decision=Ask, risk=high, reason=destructive command"
                 .to_string(),
             review: None,
+            audit: None,
         };
 
         let rendered = render_permission_approval_text(&req);
@@ -2527,6 +2531,7 @@ mod tests {
             prompt: "Permission explanation: decision=Ask, risk=medium, reason=file write"
                 .to_string(),
             review: None,
+            audit: None,
         };
 
         let rendered = render_permission_approval_text(&req);

@@ -113,6 +113,7 @@ impl ReflectionGateController {
                             format!("{:?}", route.workflow),
                         ),
                     ),
+                    audit: None,
                 })
                 .await
             {

@@ -288,6 +288,10 @@ impl PermissionController {
                 tool_call: tool_call.clone(),
                 prompt: prompt.clone(),
                 review: None,
+                audit: evaluation
+                    .record
+                    .as_ref()
+                    .map(|record| record.review.clone()),
             };
             let mut approval_response = None;
             match channel.submit(request).await {

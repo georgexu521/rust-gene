@@ -11,6 +11,7 @@ pub struct ToolApprovalRequest {
     pub tool_call: ToolCall,
     pub prompt: String,
     pub review: Option<crate::engine::human_review::HumanReviewRequest>,
+    pub audit: Option<crate::engine::human_review::HumanReviewAuditRecord>,
 }
 
 impl ToolApprovalRequest {

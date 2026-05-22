@@ -4079,6 +4079,7 @@ mod tests {
                 },
                 prompt: "Allow?".to_string(),
                 review: None,
+                audit: None,
             });
 
         let commands = app.contextual_palette_commands();
@@ -4185,6 +4186,7 @@ mod tests {
                 },
                 prompt: "Approve shell command?".to_string(),
                 review: None,
+                audit: None,
             });
 
         app.handle_slash_command("/permissions").await;
@@ -4227,6 +4229,7 @@ mod tests {
                 },
                 prompt: "Allow?".to_string(),
                 review: None,
+                audit: None,
             });
         app.open_command_palette();
 
@@ -4384,6 +4387,7 @@ mod tests {
                 },
                 prompt: "Approve MCP?".to_string(),
                 review: None,
+                audit: None,
             });
         app.permission_response_tx = Some(tx);
         app.mode = AppMode::PermissionApproval;
@@ -4427,6 +4431,7 @@ mod tests {
                 },
                 prompt: "Approve bash?".to_string(),
                 review: None,
+                audit: None,
             });
         app.permission_response_tx = Some(tx);
         app.mode = AppMode::PermissionApproval;
@@ -4568,6 +4573,7 @@ mod tests {
                 },
                 prompt: "Approve bash?".to_string(),
                 review: None,
+                audit: None,
             });
         app.permission_response_tx = Some(tx);
         app.mode = AppMode::PermissionApproval;
@@ -4601,6 +4607,7 @@ mod tests {
                 },
                 prompt: "Approve file write?".to_string(),
                 review: None,
+                audit: None,
             });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
@@ -4627,6 +4634,7 @@ mod tests {
                 },
                 prompt: "Approve file edit?".to_string(),
                 review: None,
+                audit: None,
             });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
@@ -4654,6 +4662,7 @@ mod tests {
                 },
                 prompt: "Approve file edit?".to_string(),
                 review: None,
+                audit: None,
             });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
@@ -4679,6 +4688,7 @@ mod tests {
                 },
                 prompt: "Approve bash?".to_string(),
                 review: None,
+                audit: None,
             });
 
         let (title, diff) = app.compute_permission_diff().unwrap();
@@ -4700,6 +4710,7 @@ mod tests {
                 },
                 prompt: "Approve grep?".to_string(),
                 review: None,
+                audit: None,
             });
 
         assert!(app.compute_permission_diff().is_none());

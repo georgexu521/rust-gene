@@ -110,6 +110,23 @@ pub fn render_approval_panel(app: &TuiApp) -> String {
         "Reason: {}",
         compact_panel_line(&review.reason, 220)
     ));
+    if let Some(audit) = request.audit.as_ref() {
+        if !audit.risk_facts.is_empty() {
+            lines.push(format!(
+                "Risk facts: {}",
+                compact_panel_line(&audit.risk_facts.join(", "), 220)
+            ));
+        }
+        if !audit.matched_rules.is_empty() {
+            lines.push(format!(
+                "Matched rules: {}",
+                compact_panel_line(&audit.matched_rules.join(", "), 180)
+            ));
+        }
+        if let Some(hint) = audit.recovery_hint.as_deref() {
+            lines.push(format!("Recovery: {}", compact_panel_line(hint, 220)));
+        }
+    }
 
     let choices = permission
         .options
@@ -698,6 +715,24 @@ mod tests {
                 },
                 prompt: "Approve shell command?".to_string(),
                 review: None,
+                audit: Some(crate::engine::human_review::HumanReviewAuditRecord {
+                    kind: crate::engine::human_review::HumanReviewKind::ToolPermission,
+                    title: "Tool approval".to_string(),
+                    risk: crate::engine::human_review::HumanReviewRisk::Medium,
+                    subject: "bash: cargo check -q".to_string(),
+                    reason: "Approve shell command?".to_string(),
+                    tool_call_id: Some("call_1".to_string()),
+                    tool_name: Some("bash".to_string()),
+                    input_summary: "bash: cargo check -q".to_string(),
+                    risk_facts: vec!["family:shell".to_string()],
+                    matched_rules: vec!["bash:cargo check*".to_string()],
+                    classifier_result: None,
+                    hook_decision: None,
+                    user_decision: None,
+                    persistence_scope: Some("this_call".to_string()),
+                    saved_config_path: None,
+                    recovery_hint: Some("Ask the user before retrying.".to_string()),
+                }),
             });
 
         let panel = render_runtime_panel(&app, RuntimePanelKind::Approval).await;
@@ -705,6 +740,9 @@ mod tests {
         assert!(panel.contains("# Approval Panel"));
         assert!(panel.contains("Pending approval: Tool approval"));
         assert!(panel.contains("Rule: bash"));
+        assert!(panel.contains("Risk facts: family:shell"));
+        assert!(panel.contains("Matched rules: bash:cargo check*"));
+        assert!(panel.contains("Recovery: Ask the user"));
         assert!(panel.contains("Choices: y=allow once"));
         assert!(panel.contains("Preview:"));
     }
