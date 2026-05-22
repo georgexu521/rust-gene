@@ -1178,6 +1178,13 @@ Progress on 2026-05-22:
 - The `plugin_manage` tool now supports `action=status`, returning a concise
   plugin status panel plus structured runtime-facts data that doctor/runtime
   state can reuse.
+- Bridge runtime snapshots now classify bridge readiness (`ready`,
+  `configured_without_auth`, or `not_configured`) and expose a diagnostic
+  message alongside bridge URL source, auth-token state, tenant state, and
+  replay cursor facts.
+- Remote runtime snapshots now summarize detected environment, saved session
+  count, connected/error session counts, sorted session ids, and retry-oriented
+  diagnostics without attempting network connections.
 
 Validation so far:
 
@@ -1192,6 +1199,14 @@ Validation so far:
   status data.
 - `cargo test -q plugin_manage` - passed, 5 tests after plugin status support.
 - `cargo test -q plugins` - passed, 11 tests after runtime-facts support.
+- `cargo test -q bridge` - passed, 7 tests after bridge runtime status support.
+- `cargo test -q remote_runtime_snapshot` - passed, 1 test for remote session
+  diagnostics.
+- `cargo test -q remote_env` - passed, 4 tests.
+- `cargo test -q remote_dev` - passed, 5 tests after remote snapshot support.
+- `cargo test -q remote_trigger` - passed, 4 tests after bridge snapshot support.
+- `cargo test -q runtime_bridge_state` - passed, 0 matching tests but compiled
+  the filter target.
 - `cargo check -q` - passed.
 
 ## Phase 10: Release Hardening

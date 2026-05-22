@@ -14,12 +14,22 @@ static BRIDGE_URL: OnceLock<String> = OnceLock::new();
 pub struct BridgeRuntimeSnapshot {
     pub bridge_url: Option<String>,
     pub bridge_url_source: Option<String>,
+    pub status: BridgeRuntimeStatus,
+    pub diagnostic: String,
     pub auth_token_configured: bool,
     pub auth_token_source: Option<String>,
     pub tenant_id: Option<String>,
     pub cursor_path: PathBuf,
     pub cursor_count: usize,
     pub cursor_session_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BridgeRuntimeStatus {
+    Ready,
+    ConfiguredWithoutAuth,
+    NotConfigured,
 }
 
 /// 设置全局桥接服务器 URL（线程安全，只能设置一次）
@@ -73,10 +83,27 @@ pub fn runtime_snapshot() -> BridgeRuntimeSnapshot {
     let cursor_map = load_replay_cursor_map(&cursor_path);
     let mut cursor_session_ids = cursor_map.keys().cloned().collect::<Vec<_>>();
     cursor_session_ids.sort();
+    let status = match (bridge_url.is_some(), auth_token_configured) {
+        (false, _) => BridgeRuntimeStatus::NotConfigured,
+        (true, false) => BridgeRuntimeStatus::ConfiguredWithoutAuth,
+        (true, true) => BridgeRuntimeStatus::Ready,
+    };
+    let diagnostic = match status {
+        BridgeRuntimeStatus::Ready => "bridge configured with auth token".to_string(),
+        BridgeRuntimeStatus::ConfiguredWithoutAuth => {
+            "bridge URL configured without auth token; remote bridge may reject requests"
+                .to_string()
+        }
+        BridgeRuntimeStatus::NotConfigured => {
+            "bridge URL not configured; set PRIORITY_AGENT_BRIDGE_URL or BRIDGE_URL".to_string()
+        }
+    };
 
     BridgeRuntimeSnapshot {
         bridge_url,
         bridge_url_source,
+        status,
+        diagnostic,
         auth_token_configured,
         auth_token_source,
         tenant_id,
@@ -342,6 +369,8 @@ mod tests {
         let snapshot = runtime_snapshot();
 
         assert_eq!(snapshot.bridge_url.as_deref(), Some("http://bridge.local"));
+        assert_eq!(snapshot.status, BridgeRuntimeStatus::Ready);
+        assert_eq!(snapshot.diagnostic, "bridge configured with auth token");
         assert_eq!(
             snapshot.bridge_url_source.as_deref(),
             Some("PRIORITY_AGENT_BRIDGE_URL")
@@ -354,6 +383,31 @@ mod tests {
         assert_eq!(snapshot.tenant_id.as_deref(), Some("team-a"));
         assert_eq!(snapshot.cursor_count, 1);
         assert_eq!(snapshot.cursor_session_ids, vec!["remote-1"]);
+
+        let _ = std::fs::remove_file(cursor_path);
+    }
+
+    #[test]
+    fn runtime_snapshot_reports_missing_bridge_url_diagnostic() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        let cursor_path = std::env::temp_dir().join(format!(
+            "priority-agent-bridge-missing-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        env.remove("PRIORITY_AGENT_BRIDGE_URL");
+        env.remove("BRIDGE_URL");
+        env.remove("PRIORITY_AGENT_BRIDGE_TOKEN");
+        env.remove("BRIDGE_TOKEN");
+        env.set(
+            "PRIORITY_AGENT_BRIDGE_CURSOR_FILE",
+            &cursor_path.to_string_lossy(),
+        );
+
+        let snapshot = runtime_snapshot();
+
+        assert_eq!(snapshot.status, BridgeRuntimeStatus::NotConfigured);
+        assert!(snapshot.diagnostic.contains("BRIDGE_URL"));
+        assert_eq!(snapshot.cursor_count, 0);
 
         let _ = std::fs::remove_file(cursor_path);
     }

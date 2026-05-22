@@ -67,6 +67,16 @@ pub struct RemoteEnvInfo {
     pub metadata: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteRuntimeSnapshot {
+    pub env: RemoteEnvInfo,
+    pub saved_session_count: usize,
+    pub connected_session_count: usize,
+    pub error_session_count: usize,
+    pub session_ids: Vec<String>,
+    pub diagnostics: Vec<String>,
+}
+
 impl Default for RemoteEnvInfo {
     fn default() -> Self {
         Self {
@@ -420,6 +430,48 @@ impl RemoteSessionManager {
         sessions.clone()
     }
 
+    pub fn runtime_snapshot(&self, env: RemoteEnvInfo) -> RemoteRuntimeSnapshot {
+        let sessions = self.list_sessions();
+        let connected_session_count = sessions
+            .iter()
+            .filter(|session| session.status == RemoteSessionStatus::Connected)
+            .count();
+        let error_session_count = sessions
+            .iter()
+            .filter(|session| session.status == RemoteSessionStatus::Error)
+            .count();
+        let mut session_ids = sessions
+            .iter()
+            .map(|session| session.id.clone())
+            .collect::<Vec<_>>();
+        session_ids.sort();
+
+        let mut diagnostics = Vec::new();
+        if env.is_remote {
+            diagnostics.push(format!("running in remote environment: {}", env.env_type));
+        } else {
+            diagnostics.push("running in local environment".to_string());
+        }
+        if sessions.is_empty() {
+            diagnostics.push("no saved remote SSH sessions".to_string());
+        }
+        if error_session_count > 0 {
+            diagnostics.push(format!(
+                "{} remote session(s) have errors; inspect /remote status before retry",
+                error_session_count
+            ));
+        }
+
+        RemoteRuntimeSnapshot {
+            env,
+            saved_session_count: sessions.len(),
+            connected_session_count,
+            error_session_count,
+            session_ids,
+            diagnostics,
+        }
+    }
+
     /// 获取单个会话
     pub fn get_session(&self, id: &str) -> Option<RemoteSession> {
         let sessions = self.sessions.lock().unwrap();
@@ -657,6 +709,39 @@ mod tests {
         let removed = manager.remove_session(&session.id);
         assert!(removed);
         assert!(manager.get_session(&session.id).is_none());
+    }
+
+    #[test]
+    fn test_remote_runtime_snapshot_reports_sessions_and_diagnostics() {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let manager = RemoteSessionManager::with_path(temp_file.path().to_path_buf());
+        let config = RemoteSessionConfig {
+            name: "prod".to_string(),
+            host: "prod.example.com".to_string(),
+            username: "deploy".to_string(),
+            ..Default::default()
+        };
+        let session = manager.create_session(config);
+        assert!(manager.set_session_error(&session.id, "connection refused"));
+
+        let mut env = HashMap::new();
+        env.insert("SSH_CLIENT".to_string(), "192.168.1.1 12345 22".to_string());
+        let remote_env = RemoteEnvDetector::detect_with_env(&env);
+        let snapshot = manager.runtime_snapshot(remote_env);
+
+        assert_eq!(snapshot.saved_session_count, 1);
+        assert_eq!(snapshot.connected_session_count, 0);
+        assert_eq!(snapshot.error_session_count, 1);
+        assert_eq!(snapshot.env.env_type, RemoteEnvType::Ssh);
+        assert_eq!(snapshot.session_ids, vec![session.id]);
+        assert!(snapshot
+            .diagnostics
+            .iter()
+            .any(|line| line.contains("remote environment")));
+        assert!(snapshot
+            .diagnostics
+            .iter()
+            .any(|line| line.contains("have errors")));
     }
 
     #[test]
