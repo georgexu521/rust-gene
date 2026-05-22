@@ -5,6 +5,8 @@
 # Desktop app local build artifacts
 apps/desktop/dist/
 apps/desktop/node_modules/
+apps/desktop/test-artifacts/
+apps/desktop/test-results/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/target/
 

@@ -144,7 +144,7 @@ fn desktop_health() -> Result<DesktopHealth, String> {
         .canonicalize()
         .map_err(|err| err.to_string())?;
 
-    Ok(desktop_health_value(cwd))
+    Ok(desktop_health_value(default_desktop_project(cwd)))
 }
 
 #[tauri::command]
@@ -551,11 +551,43 @@ fn write_desktop_settings(path: &PathBuf, settings: &DesktopSettings) -> Result<
 }
 
 fn initial_desktop_project(cwd: PathBuf, settings: &DesktopSettings) -> PathBuf {
+    let default_project = default_desktop_project(cwd);
     settings
         .selected_project
         .as_deref()
         .and_then(|path| validate_project_path(path).ok())
-        .unwrap_or(cwd)
+        .map(|project| migrate_accidental_desktop_subdir(project, &default_project))
+        .unwrap_or(default_project)
+}
+
+fn default_desktop_project(cwd: PathBuf) -> PathBuf {
+    if let Some(project) = std::env::var("PRIORITY_AGENT_DESKTOP_PROJECT_DIR")
+        .ok()
+        .and_then(|path| validate_project_path(path).ok())
+    {
+        return project;
+    }
+
+    discover_project_root(&cwd).unwrap_or(cwd)
+}
+
+fn discover_project_root(start: &Path) -> Option<PathBuf> {
+    let start = start.canonicalize().ok()?;
+    start
+        .ancestors()
+        .find(|path| path.join(".git").exists() && path.join("Cargo.toml").exists())
+        .map(PathBuf::from)
+}
+
+fn migrate_accidental_desktop_subdir(project: PathBuf, default_project: &Path) -> PathBuf {
+    let Ok(relative) = project.strip_prefix(default_project) else {
+        return project;
+    };
+    if relative == Path::new("apps/desktop") || relative == Path::new("apps/desktop/src-tauri") {
+        default_project.to_path_buf()
+    } else {
+        project
+    }
 }
 
 fn desktop_permission_mode_options() -> Vec<PermissionModeOption> {
@@ -1010,6 +1042,7 @@ mod tests {
     #[test]
     fn desktop_smoke_initial_project_falls_back_when_saved_path_is_missing() {
         let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let expected = default_desktop_project(cwd.clone());
         let settings = DesktopSettings {
             selected_project: Some(
                 std::env::temp_dir()
@@ -1023,7 +1056,45 @@ mod tests {
             model: None,
         };
 
-        assert_eq!(initial_desktop_project(cwd.clone(), &settings), cwd);
+        assert_eq!(initial_desktop_project(cwd, &settings), expected);
+    }
+
+    #[test]
+    fn desktop_smoke_default_project_discovers_repo_root_from_tauri_dir() {
+        let root = std::env::temp_dir().join(format!("priority-agent-root-{}", std::process::id()));
+        let tauri_dir = root.join("apps/desktop/src-tauri");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(&tauri_dir).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+
+        let expected = root.canonicalize().unwrap();
+        let discovered = default_desktop_project(tauri_dir.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(discovered, expected);
+    }
+
+    #[test]
+    fn desktop_smoke_initial_project_migrates_old_tauri_subdir_default() {
+        let root =
+            std::env::temp_dir().join(format!("priority-agent-migrate-{}", std::process::id()));
+        let tauri_dir = root.join("apps/desktop/src-tauri");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(&tauri_dir).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+
+        let settings = DesktopSettings {
+            selected_project: Some(tauri_dir.display().to_string()),
+            active_session_id: None,
+            permission_mode: None,
+            provider_name: None,
+            model: None,
+        };
+        let expected = root.canonicalize().unwrap();
+        let selected = initial_desktop_project(tauri_dir.canonicalize().unwrap(), &settings);
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(selected, expected);
     }
 
     #[test]

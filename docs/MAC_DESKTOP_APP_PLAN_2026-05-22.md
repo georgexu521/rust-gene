@@ -496,6 +496,53 @@ cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
 corepack pnpm --dir apps/desktop build
 ```
 
+GUI screenshot smoke is implemented for the desktop frontend:
+
+- `apps/desktop/playwright.config.ts` starts the built Vite preview server.
+- `apps/desktop/tests/desktop-ui-smoke.spec.ts` checks the desktop shell,
+  diagnostics panel, provider/model selectors, Settings drawer, and mobile
+  composer layout.
+- The smoke asserts that the app has no horizontal overflow and that the core
+  desktop sections keep a stable vertical stack.
+- The test writes desktop, settings-drawer, and mobile screenshots under
+  `apps/desktop/test-results/`, which is intentionally gitignored.
+- A native `tauri dev` launch caught and fixed a missing Tauri event-listen
+  capability. The main window now starts without the previous
+  `event.listen not allowed` runtime error.
+- Native whole-screen capture works through `screencapture`; exact window
+  cropping is blocked until macOS Accessibility permission is granted for the
+  automation process.
+- Validation passed:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+corepack pnpm --dir apps/desktop tauri dev
+```
+
+Native dev project-root detection is fixed:
+
+- The desktop backend now resolves the default project from
+  `PRIORITY_AGENT_DESKTOP_PROJECT_DIR` when set, then falls back to walking up
+  from the current process directory until it finds the repo root
+  (`.git` + `Cargo.toml`).
+- This prevents `tauri dev` from defaulting to
+  `apps/desktop/src-tauri` just because the native process starts there.
+- If an older desktop settings file already stored `apps/desktop` or
+  `apps/desktop/src-tauri`, startup migrates it back to the repo root.
+- Native `tauri dev` verification now shows project access for
+  `/Users/georgexu/Desktop/rust-agent`.
+- Validation passed:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+corepack pnpm --dir apps/desktop tauri dev
+```
+
 ### Phase 0 - Runtime Extraction
 
 - Add `src/lib.rs` and turn `src/main.rs` into a thin binary entrypoint.
@@ -558,12 +605,12 @@ cargo check --features experimental-api-server -q
 
 The next concrete code slice should deepen Phase 1:
 
-1. Add GUI-level Tauri automation once the native app test harness is stable;
-   the current smoke covers the Rust command bridge and bundle path.
+1. Add native WebView/Tauri window automation once a stable driver path is
+   chosen; the current smoke covers the frontend UI in Chromium and the Rust
+   command bridge separately.
 2. Add focused tests around `runEventState.ts` once a frontend test runner is
    introduced.
-3. Add a lightweight visual/screenshot check for the settings drawer and
-   composer controls.
+3. Add visual regression thresholds after the UI stops changing rapidly.
 
 The first shell, macOS `.app` bundle, session resume, and command smoke now
 exist. The frontend is split, icons are reproducible, and local packaging has a
@@ -572,6 +619,8 @@ launches, and startup diagnostics now identify missing provider/tooling setup.
 The settings drawer now exposes that state and provider setup entrypoints. The
 first-run provider setup flow now guides shell profile setup without exposing
 secrets. Permission defaults and provider/model choices now persist and are
-applied to active and future runtime sessions. The next useful work is a true
-GUI automation path plus focused frontend state tests when we are ready to
-spend the disk/build time.
+applied to active and future runtime sessions. A Chromium screenshot smoke now
+checks the desktop shell, Settings drawer, selectors, diagnostics, and mobile
+layout. Native dev now defaults to the real repo root instead of the Tauri
+crate directory. The next useful work is a native WebView/Tauri automation path
+plus focused frontend state tests.
