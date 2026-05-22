@@ -1384,6 +1384,12 @@ The next concrete batches should be:
      `/diff last-round` shows the combined stored diff for the latest round.
 6. **Subagent lifecycle hardening.**
    Make worker progress, output, cancellation, merge, and cleanup reliable.
+   - Progress on 2026-05-22: the in-memory agent reaper now cleans terminal
+     agent handles/channels without deleting retained results, so sub-agent
+     resume/read remains available until the capped result cache prunes old
+     outputs. Agent progress now reports lifecycle cache counters for active
+     handles, terminal handles, message channels, completion waiters, and cached
+     results.
 7. **Context/memory long-session pass.**
    Prove compaction and memory retention on long real coding tasks.
 8. **Release hardening.**

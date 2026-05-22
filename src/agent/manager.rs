@@ -25,6 +25,16 @@ pub struct AgentResult {
     pub has_conflict: bool,
 }
 
+/// In-memory lifecycle counters for active sub-agents and retained outputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentManagerStats {
+    pub active_agents: usize,
+    pub terminal_agents: usize,
+    pub message_channels: usize,
+    pub completion_receivers: usize,
+    pub cached_results: usize,
+}
+
 /// DAG 节点状态
 #[derive(Debug, Clone)]
 pub struct DagNode {
@@ -368,7 +378,9 @@ impl AgentManager {
             RwLock<HashMap<AgentId, tokio::sync::oneshot::Receiver<AgentResult>>>,
         > = Arc::new(RwLock::new(HashMap::new()));
 
-        // 启动周期性清理任务（每 30 秒回收已终止的 Agent 及其结果）
+        // 启动周期性清理任务（每 30 秒回收已终止的 Agent 句柄和通道）。
+        // Agent results remain available for resume/read until the capped result
+        // cache prunes older entries below.
         let agents_for_reaper = agents.clone();
         let channels_for_reaper = message_channels.clone();
         let receivers_for_reaper = completion_receivers.clone();
@@ -397,7 +409,6 @@ impl AgentManager {
                     agents.remove(&id);
                     channels.remove(&id);
                     receivers.remove(&id);
-                    results_map.remove(&id);
                     debug!("Reaper cleaned up agent: {}", id);
                 }
 
@@ -585,6 +596,25 @@ impl AgentManager {
     pub async fn list_agents(&self) -> Vec<AgentHandle> {
         let agents = self.agents.read().await;
         agents.values().cloned().collect()
+    }
+
+    /// Snapshot lifecycle counters for UI/debug surfaces.
+    pub async fn stats(&self) -> AgentManagerStats {
+        let agents = self.agents.read().await;
+        let terminal_agents = agents
+            .values()
+            .filter(|handle| handle.status.borrow().is_terminal())
+            .count();
+        let message_channels = self.message_channels.read().await.len();
+        let completion_receivers = self.completion_receivers.read().await.len();
+        let cached_results = self.results.read().await.len();
+        AgentManagerStats {
+            active_agents: agents.len(),
+            terminal_agents,
+            message_channels,
+            completion_receivers,
+            cached_results,
+        }
     }
 
     /// 终止 Agent

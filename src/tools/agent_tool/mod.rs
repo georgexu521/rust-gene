@@ -954,12 +954,25 @@ async fn list_agent_progress(
         Some(manager) => manager.list_agents().await,
         None => Vec::new(),
     };
+    let manager_stats = match agent_manager {
+        Some(manager) => Some(manager.stats().await),
+        None => None,
+    };
 
     let mut lines = vec![format!(
         "Sub-agent progress: {} durable task(s), {} active in-memory agent(s)",
         durable_states.len(),
         active_agents.len()
     )];
+    if let Some(stats) = manager_stats.as_ref() {
+        lines.push(format!(
+            "Lifecycle cache: {} result(s), {} channel(s), {} completion waiter(s), {} terminal handle(s)",
+            stats.cached_results,
+            stats.message_channels,
+            stats.completion_receivers,
+            stats.terminal_agents
+        ));
+    }
     if !active_agents.is_empty() {
         lines.push(String::new());
         lines.push("Active agents:".to_string());
@@ -1014,6 +1027,13 @@ async fn list_agent_progress(
                 })
                 .collect::<Vec<_>>(),
             "durable_tasks": durable_states,
+            "manager_stats": manager_stats.map(|stats| json!({
+                "active_agents": stats.active_agents,
+                "terminal_agents": stats.terminal_agents,
+                "message_channels": stats.message_channels,
+                "completion_receivers": stats.completion_receivers,
+                "cached_results": stats.cached_results,
+            })),
         }),
     )
 }
