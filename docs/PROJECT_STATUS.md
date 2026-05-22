@@ -68,7 +68,9 @@ Current stage:
   selectors for failed tools, backgrounded tools, pending approvals, and MCP
   repair hints. Placeholder commands are also gated from default help and empty
   command-palette results, while explicit search still exposes them and inserts
-  rather than executes. Hook and permission failures now share the recovery spine:
+  rather than executes. `/panel all` now also includes stable agent and trace
+  panels for profile definitions, running agents, durable task states, artifacts,
+  recent traces, and replay entrypoints. Hook and permission failures now share the recovery spine:
   failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
   classified as hook runtime failures, and permission denials emit
   `/permissions explain` recovery plans in trace.

@@ -874,6 +874,10 @@ Progress on 2026-05-22:
 - Placeholder slash commands are now gated from default help and empty command
   palette results. They still appear when explicitly searched, and accepting one
   from the palette inserts the command instead of executing it immediately.
+- `/panel` now includes stable `agents` and `trace` panels, and `/panel all`
+  includes both. The agent panel summarizes profile definitions, running agents,
+  durable task states, and recent artifacts; the trace panel summarizes latest
+  and recent traces plus the replay status entrypoints.
 
 Validation so far:
 
@@ -882,6 +886,7 @@ Validation so far:
 - `cargo test -q command_palette` - passed, 5 tests.
 - `cargo test -q help_maturity` - passed, 1 test.
 - `cargo test -q runtime_panels` - passed, 5 tests.
+- `cargo test -q runtime_panels` - passed, 7 tests after agent/trace panels.
 - `cargo test -q status_bar` - passed, 3 tests.
 - `cargo test -q tool_view` - passed, 12 tests.
 - `cargo test -q main_screen` - passed, 15 tests.

@@ -9,8 +9,10 @@ pub enum RuntimePanelKind {
     Hooks,
     Context,
     Tasks,
+    Agents,
     Mcp,
     Bridge,
+    Trace,
 }
 
 impl RuntimePanelKind {
@@ -22,15 +24,17 @@ impl RuntimePanelKind {
             "approval" | "approvals" | "permission" | "permissions" => Some(Self::Approval),
             "hook" | "hooks" => Some(Self::Hooks),
             "context" | "memory" | "tokens" => Some(Self::Context),
-            "task" | "tasks" | "agents" => Some(Self::Tasks),
+            "task" | "tasks" => Some(Self::Tasks),
+            "agent" | "agents" | "agent-panel" | "subagent" | "subagents" => Some(Self::Agents),
             "mcp" | "servers" => Some(Self::Mcp),
             "bridge" | "remote" | "remotes" => Some(Self::Bridge),
+            "trace" | "traces" | "replay" => Some(Self::Trace),
             _ => None,
         }
     }
 
     pub const fn usage() -> &'static str {
-        "Usage: /panel [all|diff|approval|hooks|context|tasks|mcp|bridge]"
+        "Usage: /panel [all|diff|approval|hooks|context|tasks|agents|mcp|bridge|trace]"
     }
 }
 
@@ -42,8 +46,10 @@ pub async fn render_runtime_panel(app: &TuiApp, kind: RuntimePanelKind) -> Strin
                 render_approval_panel(app),
                 render_hooks_panel(app),
                 render_tasks_panel(app).await,
+                render_agent_panel(app).await,
                 render_mcp_panel(app).await,
                 render_bridge_panel(app),
+                render_trace_panel(app),
                 render_diff_panel(app),
             ];
             sections.retain(|section| !section.trim().is_empty());
@@ -54,8 +60,10 @@ pub async fn render_runtime_panel(app: &TuiApp, kind: RuntimePanelKind) -> Strin
         RuntimePanelKind::Hooks => render_hooks_panel(app),
         RuntimePanelKind::Context => render_context_panel(app).await,
         RuntimePanelKind::Tasks => render_tasks_panel(app).await,
+        RuntimePanelKind::Agents => render_agent_panel(app).await,
         RuntimePanelKind::Mcp => render_mcp_panel(app).await,
         RuntimePanelKind::Bridge => render_bridge_panel(app),
+        RuntimePanelKind::Trace => render_trace_panel(app),
     }
 }
 
@@ -375,6 +383,97 @@ async fn render_tasks_panel(app: &TuiApp) -> String {
     lines.join("\n")
 }
 
+async fn render_agent_panel(app: &TuiApp) -> String {
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let definitions = crate::agent::profiles::load_definitions(&working_dir);
+    let mut lines = vec![
+        "# Agent Panel".to_string(),
+        format!("Definitions: {}", definitions.len()),
+    ];
+    if !definitions.is_empty() {
+        lines.push(format!(
+            "Profiles: {}",
+            definitions
+                .iter()
+                .take(8)
+                .map(|definition| compact_panel_line(&definition.summary_line(), 120))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    if let Some(manager) = app
+        .streaming_engine
+        .as_ref()
+        .and_then(|engine| engine.agent_manager())
+    {
+        let agents = manager.list_agents().await;
+        lines.push(format!("Running agents: {}", agents.len()));
+        for handle in agents.iter().take(8) {
+            let status = *handle.status.borrow();
+            lines.push(format!(
+                "- {} [{:?}] role={} {}",
+                handle.id,
+                status,
+                handle.config.role.display_name(),
+                compact_panel_line(&handle.config.name, 96)
+            ));
+        }
+    } else {
+        lines.push("Running agents: manager unavailable".to_string());
+    }
+
+    match app.session_manager.recent_agent_task_states(8) {
+        Ok(states) if states.is_empty() => {
+            lines.push("Durable task states: none for current session".to_string());
+        }
+        Ok(states) => {
+            lines.push(format!("Durable task states: {}", states.len()));
+            for state in states.iter().take(8) {
+                lines.push(format!(
+                    "- {} [{}] profile={} role={} tools={} permissions={} {}",
+                    state.agent_id,
+                    state.status,
+                    state.profile.as_deref().unwrap_or("none"),
+                    state.role,
+                    state.tool_ids_in_progress.len(),
+                    state.permission_requests.len(),
+                    compact_panel_line(&state.description, 100)
+                ));
+            }
+        }
+        Err(error) => lines.push(format!("Durable task states: unavailable ({})", error)),
+    }
+
+    match app.session_manager.recent_agent_artifacts(8) {
+        Ok(artifacts) if artifacts.is_empty() => {
+            lines.push("Recent artifacts: none for current session".to_string());
+        }
+        Ok(artifacts) => {
+            lines.push(format!("Recent artifacts: {}", artifacts.len()));
+            for artifact in artifacts.iter().take(8) {
+                let preview = artifact.output.lines().next().unwrap_or("");
+                let detail = if preview.trim().is_empty() {
+                    artifact.description.as_str()
+                } else {
+                    preview
+                };
+                lines.push(format!(
+                    "- {} [{}] profile={} role={} {}",
+                    artifact.agent_id,
+                    artifact.status,
+                    artifact.profile.as_deref().unwrap_or("none"),
+                    artifact.role,
+                    compact_panel_line(detail, 100)
+                ));
+            }
+        }
+        Err(error) => lines.push(format!("Recent artifacts: unavailable ({})", error)),
+    }
+
+    lines.join("\n")
+}
+
 async fn render_mcp_panel(app: &TuiApp) -> String {
     let runtime = app.runtime_status_snapshot().await;
     let mut lines = vec![
@@ -541,6 +640,66 @@ pub fn render_bridge_panel(app: &TuiApp) -> String {
     lines.join("\n")
 }
 
+fn render_trace_panel(app: &TuiApp) -> String {
+    let mut lines = vec!["# Trace Panel".to_string()];
+    let mut traces = Vec::new();
+    if let Some(engine) = app.streaming_engine.as_ref() {
+        lines.push(format!("In-memory traces: {}", engine.trace_store().len()));
+        if let Some(trace) = engine.trace_store().latest() {
+            lines.push(format!(
+                "Latest: {}",
+                crate::engine::trace::format_trace_recent_line(&trace)
+            ));
+        }
+        traces.extend(engine.trace_store().recent(5));
+    } else {
+        lines.push("In-memory traces: engine unavailable".to_string());
+    }
+
+    match app.session_manager.recent_traces(5) {
+        Ok(persisted) => traces.extend(persisted),
+        Err(error) => lines.push(format!("Persisted traces: unavailable ({})", error)),
+    }
+    traces = dedupe_trace_panel_traces(traces, 5);
+
+    if traces.is_empty() {
+        lines.push("Recent traces: none recorded".to_string());
+    } else {
+        lines.push("Recent traces:".to_string());
+        for trace in traces {
+            lines.push(format!(
+                "- {}",
+                crate::engine::trace::format_trace_recent_line(&trace)
+            ));
+        }
+    }
+    lines.push(
+        "Replay: use /eval matrix or /eval parity for deterministic replay status".to_string(),
+    );
+    lines.join("\n")
+}
+
+fn dedupe_trace_panel_traces(
+    traces: Vec<crate::engine::trace::TurnTrace>,
+    limit: usize,
+) -> Vec<crate::engine::trace::TurnTrace> {
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for trace in traces {
+        if seen.insert(trace.trace_id.clone()) {
+            deduped.push(trace);
+        }
+    }
+    deduped.sort_by(|left, right| {
+        right
+            .turn_index
+            .cmp(&left.turn_index)
+            .then_with(|| right.started_at.cmp(&left.started_at))
+    });
+    deduped.truncate(limit);
+    deduped
+}
+
 fn task_summary_line(label: &str, tasks: &[TaskItem]) -> String {
     let count_status =
         |status: TaskStatus| -> usize { tasks.iter().filter(|task| task.status == status).count() };
@@ -673,8 +832,16 @@ mod tests {
             Some(RuntimePanelKind::Mcp)
         );
         assert_eq!(
+            RuntimePanelKind::parse("agents"),
+            Some(RuntimePanelKind::Agents)
+        );
+        assert_eq!(
             RuntimePanelKind::parse("remote"),
             Some(RuntimePanelKind::Bridge)
+        );
+        assert_eq!(
+            RuntimePanelKind::parse("trace"),
+            Some(RuntimePanelKind::Trace)
         );
         assert_eq!(RuntimePanelKind::parse("unknown"), None);
     }
@@ -803,5 +970,29 @@ mod tests {
         assert!(panel.contains("Bridge URL:"));
         assert!(panel.contains("Remote env:"));
         assert!(panel.contains("Saved SSH sessions:"));
+    }
+
+    #[tokio::test]
+    async fn renders_agent_panel_without_engine() {
+        let app = TuiApp::new();
+
+        let panel = render_runtime_panel(&app, RuntimePanelKind::Agents).await;
+
+        assert!(panel.contains("# Agent Panel"));
+        assert!(panel.contains("Definitions:"));
+        assert!(panel.contains("Running agents: manager unavailable"));
+        assert!(panel.contains("Durable task states:"));
+    }
+
+    #[tokio::test]
+    async fn renders_trace_panel_without_engine() {
+        let app = TuiApp::new();
+
+        let panel = render_runtime_panel(&app, RuntimePanelKind::Trace).await;
+
+        assert!(panel.contains("# Trace Panel"));
+        assert!(panel.contains("In-memory traces: engine unavailable"));
+        assert!(panel.contains("Recent traces:"));
+        assert!(panel.contains("Replay:"));
     }
 }
