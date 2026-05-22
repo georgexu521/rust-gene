@@ -1280,6 +1280,8 @@ Primary files:
 - `src/services/config.rs`
 - `src/tools/config_tool/mod.rs`
 - `src/tui/slash_handler/config.rs`
+- `scripts/package-release.sh`
+- `scripts/release-gates.sh`
 
 Progress on 2026-05-22:
 
@@ -1301,6 +1303,11 @@ Progress on 2026-05-22:
   validation checks, redacted JSON export, and centralized get/set behavior.
 - `/config` and the `config` tool now share the same config implementation for
   list/get/set/schema/doctor/export behavior.
+- `scripts/package-release.sh` now builds a release archive and writes a
+  matching SHA-256 checksum for distribution.
+- `scripts/release-gates.sh` now provides a repeatable local quick/full release
+  gate that covers installer smoke checks, doctor/config/MCP tests, fmt/check,
+  clippy, feature check, package dry-run, and full tests in full mode.
 
 Validation so far:
 
@@ -1312,6 +1319,11 @@ Validation so far:
 - `cargo test -q doctor` - passed, 4 tests.
 - `cargo test -q config` - passed, 18 tests.
 - `cargo test -q config_tool` - passed, 0 matching tests.
+- `bash -n scripts/package-release.sh` - passed.
+- `bash -n scripts/release-gates.sh` - passed.
+- `scripts/package-release.sh --features experimental-api-server --dry-run` -
+  passed.
+- `scripts/release-gates.sh quick` - passed.
 - `cargo fmt --check` - passed.
 - `cargo check -q` - passed.
 - `cargo clippy --all-features -- -D warnings` - passed.
