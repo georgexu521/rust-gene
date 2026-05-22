@@ -847,6 +847,95 @@ async fn handle_resume(
     }
 }
 
+fn format_durable_agent_read(
+    state: &crate::session_store::AgentTaskStateRecord,
+    artifact: Option<&crate::session_store::AgentArtifactRecord>,
+) -> String {
+    let mut lines = vec![
+        format!("Sub-agent {}", state.agent_id),
+        format!("Status: {}", state.status),
+        format!("Task: {}", state.description),
+        format!("Role: {}", state.role),
+    ];
+    if let Some(profile) = state.profile.as_deref() {
+        lines.push(format!("Profile: {}", profile));
+    }
+    if let Some(path) = state.transcript_path.as_deref() {
+        lines.push(format!("Transcript: {}", path));
+    }
+    if !state.cleanup_hooks.is_empty() {
+        lines.push(format!("Cleanup: {}", state.cleanup_hooks.join(",")));
+    }
+    if !state.permission_requests.is_empty() {
+        lines.push(format!(
+            "Permission requests: {}",
+            state.permission_requests.join(",")
+        ));
+    }
+    if let Some(artifact) = artifact {
+        lines.push(String::new());
+        lines.push(format!(
+            "Result artifact {} [{}]:",
+            artifact.id, artifact.status
+        ));
+        lines.push(artifact.output.clone());
+    } else if state.result_artifact_id.is_some() {
+        lines.push("Result artifact: missing in current session store".to_string());
+    } else {
+        lines.push("Result artifact: none yet".to_string());
+    }
+    lines.join("\n")
+}
+
+fn read_durable_agent_state(context: &ToolContext, agent_id: &str) -> ToolResult {
+    let Some(store) = context.session_store.as_ref() else {
+        return ToolResult::error(
+            "Session store not available. Durable agent read requires session state.",
+        );
+    };
+    let state = match store.agent_task_state(&context.session_id, agent_id) {
+        Ok(Some(state)) => state,
+        Ok(None) => {
+            return ToolResult::error(format!(
+                "Agent task '{}' was not found in current session {}",
+                agent_id, context.session_id
+            ));
+        }
+        Err(error) => {
+            return ToolResult::error(format!("Failed to read agent task state: {}", error))
+        }
+    };
+    let artifact = match state.result_artifact_id {
+        Some(id) => match store.agent_artifact(&context.session_id, id) {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                return ToolResult::error(format!(
+                    "Failed to read agent artifact {}: {}",
+                    id, error
+                ));
+            }
+        },
+        None => None,
+    };
+    ToolResult::success_with_data(
+        format_durable_agent_read(&state, artifact.as_ref()),
+        json!({
+            "agent_id": state.agent_id,
+            "task_id": state.task_id,
+            "status": state.status,
+            "description": state.description,
+            "profile": state.profile,
+            "role": state.role,
+            "transcript_path": state.transcript_path,
+            "permission_requests": state.permission_requests,
+            "cleanup_hooks": state.cleanup_hooks,
+            "result_artifact_id": state.result_artifact_id,
+            "artifact": artifact,
+            "payload": state.payload,
+        }),
+    )
+}
+
 fn cancelled_agent_task_state_upsert(
     state: &crate::session_store::AgentTaskStateRecord,
 ) -> crate::session_store::AgentTaskStateUpsert {
@@ -1357,8 +1446,8 @@ impl Tool for AgentTool {
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["resume", "cancel"],
-                    "description": "Action for agent_id. resume reads the result if available; cancel stops a running sub-agent and marks durable state cancelled.",
+                    "enum": ["resume", "read", "cancel"],
+                    "description": "Action for agent_id. resume reads the in-memory result if available; read loads durable task/artifact state; cancel stops a running sub-agent and marks durable state cancelled.",
                     "default": "resume"
                 },
                 "subtasks": {
@@ -1465,9 +1554,10 @@ impl Tool for AgentTool {
             {
                 return match params["action"].as_str().unwrap_or("resume") {
                     "resume" => handle_resume(&agent_manager, agent_id_str).await,
+                    "read" => read_durable_agent_state(&context, agent_id_str),
                     "cancel" => handle_cancel(&agent_manager, &context, agent_id_str).await,
                     other => ToolResult::error(format!(
-                        "Invalid agent action '{}'. Expected resume or cancel.",
+                        "Invalid agent action '{}'. Expected resume, read, or cancel.",
                         other
                     )),
                 };
@@ -1574,6 +1664,7 @@ impl Tool for AgentTool {
         if let Some(agent_id) = params["agent_id"].as_str() {
             return Some(match params["action"].as_str().unwrap_or("resume") {
                 "cancel" => format!("Cancel running sub-agent {}?", agent_id),
+                "read" => format!("Read durable state for sub-agent {}?", agent_id),
                 _ => "Resume an existing sub-agent?".to_string(),
             });
         }
@@ -1753,12 +1844,58 @@ mod tests {
                         .filter_map(|value| value.as_str())
                         .collect::<Vec<_>>()
                 }),
-            Some(vec!["resume", "cancel"])
+            Some(vec!["resume", "read", "cancel"])
         );
         assert!(tool
             .confirmation_prompt(&json!({"agent_id": "agent_1", "action": "cancel"}))
             .unwrap()
             .contains("Cancel running sub-agent agent_1"));
+        assert!(tool
+            .confirmation_prompt(&json!({"agent_id": "agent_1", "action": "read"}))
+            .unwrap()
+            .contains("Read durable state for sub-agent agent_1"));
+    }
+
+    #[test]
+    fn durable_agent_read_formats_state_and_artifact() {
+        let state = crate::session_store::AgentTaskStateRecord {
+            id: 1,
+            session_id: "s1".to_string(),
+            task_id: "task_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "completed".to_string(),
+            description: "edit code".to_string(),
+            transcript_path: Some("/tmp/a2a.jsonl".to_string()),
+            tool_ids_in_progress: Vec::new(),
+            permission_requests: vec!["file_write".to_string()],
+            result_artifact_id: Some(9),
+            cleanup_hooks: vec!["worktree_cleanup".to_string()],
+            payload: json!({}),
+            created_at: "now".to_string(),
+            updated_at: "now".to_string(),
+        };
+        let artifact = crate::session_store::AgentArtifactRecord {
+            id: 9,
+            session_id: "s1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "completed".to_string(),
+            description: "edit code".to_string(),
+            output: "changed src/lib.rs".to_string(),
+            payload: json!({ "confidence": 0.8 }),
+            created_at: "now".to_string(),
+        };
+
+        let rendered = format_durable_agent_read(&state, Some(&artifact));
+
+        assert!(rendered.contains("Sub-agent agent_1"));
+        assert!(rendered.contains("Status: completed"));
+        assert!(rendered.contains("Cleanup: worktree_cleanup"));
+        assert!(rendered.contains("Result artifact 9 [completed]:"));
+        assert!(rendered.contains("changed src/lib.rs"));
     }
 
     #[test]

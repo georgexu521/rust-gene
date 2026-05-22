@@ -793,6 +793,42 @@ impl SessionStore {
         rows.collect()
     }
 
+    pub fn agent_artifact(
+        &self,
+        session_id: &str,
+        artifact_id: i64,
+    ) -> SqlResult<Option<AgentArtifactRecord>> {
+        let conn = self.conn();
+        let result = conn.query_row(
+            "SELECT id, session_id, agent_id, profile, role, status, description, output, payload, created_at
+             FROM agent_artifacts
+             WHERE session_id = ?1 AND id = ?2
+             LIMIT 1",
+            params![session_id, artifact_id],
+            |row| {
+                let payload_text: String = row.get(8)?;
+                Ok(AgentArtifactRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    agent_id: row.get(2)?,
+                    profile: row.get(3)?,
+                    role: row.get(4)?,
+                    status: row.get(5)?,
+                    description: row.get(6)?,
+                    output: row.get(7)?,
+                    payload: serde_json::from_str(&payload_text)
+                        .unwrap_or_else(|_| serde_json::json!({})),
+                    created_at: row.get(9)?,
+                })
+            },
+        );
+        match result {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     // ==================== Agent Task State 操作 ====================
 
     pub fn upsert_agent_task_state(&self, state: &AgentTaskStateUpsert) -> SqlResult<()> {
@@ -1128,6 +1164,11 @@ mod tests {
         assert_eq!(artifacts[0].agent_id, "agent_123");
         assert_eq!(artifacts[0].profile.as_deref(), Some("verifier"));
         assert_eq!(artifacts[0].payload["confidence"], 0.9);
+
+        let artifact = store.agent_artifact("s1", id).unwrap().unwrap();
+        assert_eq!(artifact.id, id);
+        assert_eq!(artifact.output, "looks good");
+        assert!(store.agent_artifact("s1", id + 1).unwrap().is_none());
     }
 
     #[test]

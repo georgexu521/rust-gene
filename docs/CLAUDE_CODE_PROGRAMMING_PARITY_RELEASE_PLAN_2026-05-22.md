@@ -976,6 +976,10 @@ Progress on 2026-05-22:
 - Agent worktree safety guards now have direct coverage for dirty status
   detection, untracked path detection, safe `codex/agent-*` branch deletion, and
   rejection of non-isolated task records.
+- The `agent` tool now supports `agent_id` with `action=read`, which reads
+  durable task state and persisted result artifacts from the current session
+  store. This lets a parent inspect worker output after the in-memory manager
+  result is gone.
 
 Validation so far:
 
@@ -983,6 +987,7 @@ Validation so far:
 - `cargo test -q agent_tool` - passed, 14 tests.
 - `cargo test -q agent_tool` - passed, 15 tests after failure-state handling.
 - `cargo test -q agent_tool` - passed, 17 tests after cancel action support.
+- `cargo test -q agent_tool` - passed, 18 tests after durable read support.
 - `cargo test -q forked_context` - passed, 4 tests.
 - `cargo test -q worktree_tool` - passed, 3 tests.
 - `cargo test -q worktree_tool` - passed, 6 tests after safety guard coverage.

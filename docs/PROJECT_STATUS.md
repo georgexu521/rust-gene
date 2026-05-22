@@ -78,9 +78,10 @@ Current stage:
   results now update durable task state to `failed`/`timed_out` instead of
   remaining `running`, while preserving cleanup metadata; `agent_id` plus
   `action=cancel` now stops a running subagent and marks durable state
-  `cancelled`. Agent worktree safety guards now have direct coverage for dirty
-  status, untracked paths, safe agent branch deletion, and rejection of
-  non-isolated task records. Hook and permission failures now share the recovery spine:
+  `cancelled`, and `action=read` loads durable task state plus persisted result
+  artifacts after in-memory manager results are gone. Agent worktree safety guards
+  now have direct coverage for dirty status, untracked paths, safe agent branch
+  deletion, and rejection of non-isolated task records. Hook and permission failures now share the recovery spine:
   failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
   classified as hook runtime failures, and permission denials emit
   `/permissions explain` recovery plans in trace.
