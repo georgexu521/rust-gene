@@ -1401,6 +1401,11 @@ The next concrete batches should be:
      command output context intact.
 8. **Release hardening.**
    Install/update/doctor/config/docs/CI.
+   - Progress on 2026-05-22: full diagnostics now include a static
+     `release_artifacts` check for `Cargo.toml`, installer, package script,
+     release gate, and release-readiness guide presence, giving `/doctor` a
+     cheap pre-publish asset sanity check without running builds or network
+     probes.
 
 Do not start broad UI or release packaging before ordered tool execution and
 real external baseline evidence exist. Those two items are the fastest way to

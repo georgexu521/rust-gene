@@ -142,6 +142,7 @@ pub async fn run_full_diagnostics(working_dir: &Path) -> DiagnosticReport {
     checks.push(check_session_store());
     checks.push(check_state_dirs_writable());
     checks.push(check_git_worktree(working_dir));
+    checks.push(check_release_artifacts(working_dir));
     checks.push(check_plugin_runtime(working_dir));
     checks.push(check_bridge_runtime());
     checks.push(check_remote_runtime());
@@ -492,6 +493,48 @@ pub fn check_git_worktree(working_dir: &Path) -> CheckResult {
     }
 }
 
+pub fn check_release_artifacts(working_dir: &Path) -> CheckResult {
+    let required = [
+        "Cargo.toml",
+        "scripts/install.sh",
+        "scripts/package-release.sh",
+        "scripts/release-gates.sh",
+        "docs/RELEASE_READINESS_GUIDE_2026-05-22.md",
+    ];
+    check_release_artifacts_for_paths(
+        &required
+            .iter()
+            .map(|relative| working_dir.join(relative))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn check_release_artifacts_for_paths(paths: &[PathBuf]) -> CheckResult {
+    let mut present = Vec::new();
+    let mut missing = Vec::new();
+
+    for path in paths {
+        if path.exists() {
+            present.push(path.display().to_string());
+        } else {
+            missing.push(path.display().to_string());
+        }
+    }
+
+    if missing.is_empty() {
+        CheckResult::ok(
+            "release_artifacts",
+            format!("Release assets present: {}", present.join("; ")),
+        )
+    } else {
+        CheckResult::warn(
+            "release_artifacts",
+            format!("Missing release assets: {}", missing.join("; ")),
+            "Restore the release script/docs files or update the release gate before publishing",
+        )
+    }
+}
+
 pub fn check_plugin_runtime(working_dir: &Path) -> CheckResult {
     let roots = plugins::default_plugin_roots(working_dir);
     let trust_mode = AppConfig::load()
@@ -720,6 +763,47 @@ mod tests {
             result.status,
             CheckStatus::Warning | CheckStatus::Error
         ));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_check_release_artifacts_reports_missing_assets() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-doctor-release-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("scripts")).expect("create scripts dir");
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+
+        let result = check_release_artifacts(&root);
+
+        assert_eq!(result.status, CheckStatus::Warning);
+        assert!(result.message.contains("package-release.sh"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_check_release_artifacts_for_paths_ok() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-doctor-release-ok-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create root");
+        let paths = ["a", "b", "c"]
+            .iter()
+            .map(|name| {
+                let path = root.join(name);
+                std::fs::write(&path, "ok").expect("write release asset");
+                path
+            })
+            .collect::<Vec<_>>();
+
+        let result = check_release_artifacts_for_paths(&paths);
+
+        assert_eq!(result.status, CheckStatus::Ok);
+        assert!(result.message.contains("Release assets present"));
 
         let _ = std::fs::remove_dir_all(root);
     }
