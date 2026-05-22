@@ -1,4 +1,5 @@
 import {
+  Activity,
   CheckCircle2,
   CircleAlert,
   CircleDotDashed,
@@ -164,6 +165,20 @@ function TimelineEvent({
 }
 
 function TimelineSummaryView({ summary }: { summary: TimelineSummary }) {
+  if (summary.kind === "run") {
+    return (
+      <div className={`timeline-summary run ${summary.stage}`}>
+        <Activity aria-hidden="true" size={15} />
+        <div>
+          <strong>{summary.headline}</strong>
+          <div className="timeline-summary-meta">
+            {compactSummaryMeta([summary.detail, summary.sessionId]).join(" · ")}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (summary.kind === "shell") {
     return (
       <div className="timeline-summary shell">

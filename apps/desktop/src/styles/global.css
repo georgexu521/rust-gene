@@ -803,6 +803,35 @@ h1 {
   font-size: 12px;
 }
 
+.timeline-summary.run {
+  border-color: #d6dee7;
+  background: #fbfcfd;
+}
+
+.timeline-summary.run svg {
+  color: #5b6673;
+}
+
+.timeline-summary.run.running {
+  border-color: #c7d8ea;
+  background: #f8fbff;
+}
+
+.timeline-summary.run.waiting {
+  border-color: #ead596;
+  background: #fffdf8;
+}
+
+.timeline-summary.run.completed {
+  border-color: #cfe2d6;
+  background: #fbfdfb;
+}
+
+.timeline-summary.run.failed {
+  border-color: #efb0b0;
+  background: #fffafa;
+}
+
 .timeline-summary-meta {
   margin-top: 3px;
   color: #69727d;

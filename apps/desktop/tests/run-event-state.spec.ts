@@ -36,6 +36,67 @@ test.describe("run event state", () => {
         role: "timeline",
         kind: "run",
         status: "completed",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "completed",
+          headline: "Run completed",
+          sessionId: "session-1",
+        }),
+      }),
+    );
+  });
+
+  test("keeps the run card aligned with tool and permission progress", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+      session_id: "session-1",
+    }).state;
+    const toolRunning = applyRunEvent(started, {
+      type: "tool_started",
+      id: "tool-1",
+      name: "bash",
+    }).state;
+    const permissionWaiting = applyRunEvent(toolRunning, {
+      type: "permission_request",
+      id: "permission-1",
+      tool_name: "bash",
+      arguments: { command: "git push" },
+      prompt: "Allow git push?",
+    }).state;
+    const approved = appendPermissionAnswer(permissionWaiting, true, true, ids("answer-1"));
+
+    expect(toolRunning.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "running",
+          headline: "Running tool",
+          detail: "bash",
+        }),
+      }),
+    );
+    expect(permissionWaiting.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "waiting",
+          headline: "Waiting for permission",
+          detail: "Allow git push?",
+        }),
+      }),
+    );
+    expect(approved.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "running",
+          headline: "Permission approved",
+          sessionId: "session-1",
+        }),
       }),
     );
   });

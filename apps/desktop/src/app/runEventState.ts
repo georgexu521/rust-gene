@@ -48,6 +48,13 @@ export function applyRunEvent(
               kind: "run",
               title: "Agent run",
               detail: event.session_id ? `Session ${event.session_id}` : undefined,
+              summary: {
+                kind: "run",
+                stage: "running",
+                headline: "Runtime connected",
+                detail: "Preparing model and tool events",
+                sessionId: event.session_id ?? undefined,
+              },
               status: "running",
               traceId: event.run_id,
             }),
@@ -93,7 +100,11 @@ export function applyRunEvent(
       });
     case "tool_started":
       return appendToolNote(
-        state,
+        updateLatestRunSummary(state, {
+          stage: "running",
+          headline: "Running tool",
+          detail: event.name,
+        }),
         {
           id: event.id,
           kind: "tool",
@@ -114,7 +125,11 @@ export function applyRunEvent(
       return appendTraceOnly(state, traceTool(`${event.id}-call`, "Tool call prepared"));
     case "tool_execution_progress":
       return updateToolNote(
-        state,
+        updateLatestRunSummary(state, {
+          stage: "running",
+          headline: "Tool in progress",
+          detail: event.progress,
+        }),
         {
           id: event.id,
           kind: "tool",
@@ -126,7 +141,11 @@ export function applyRunEvent(
     case "tool_completed":
       const toolPresentation = presentToolCompletion(event.result_preview, event.metadata);
       return updateToolNote(
-        state,
+        updateLatestRunSummary(state, {
+          stage: toolPresentation.status === "failed" ? "failed" : "running",
+          headline: toolPresentation.status === "failed" ? "Tool failed" : "Tool completed",
+          detail: toolPresentation.title,
+        }),
         {
           id: event.id,
           kind: "tool",
@@ -139,13 +158,18 @@ export function applyRunEvent(
         },
         traceTool(`${event.id}-done`, "Tool completed", event.result_preview),
       );
-    case "permission_request":
+    case "permission_request": {
+      const updatedRunState = updateLatestRunSummary(state, {
+        stage: "waiting",
+        headline: "Waiting for permission",
+        detail: event.prompt,
+      });
       return {
         state: {
-          ...state,
+          ...updatedRunState,
           pendingPermission: event,
           traceItems: [
-            ...state.traceItems,
+            ...updatedRunState.traceItems,
             {
               id: `${event.id}-permission`,
               kind: "permission",
@@ -154,7 +178,7 @@ export function applyRunEvent(
             },
           ],
           items: [
-            ...state.items,
+            ...updatedRunState.items,
             timelineEvent({
               id: event.id,
               kind: "permission",
@@ -167,6 +191,7 @@ export function applyRunEvent(
         },
         shouldRefreshSessions: false,
       };
+    }
     case "usage":
       const usageDetail = [
         `prompt ${event.prompt_tokens}`,
@@ -222,7 +247,11 @@ export function applyRunEvent(
       const traceId = createId();
       return {
         state: {
-          ...state,
+          ...updateLatestRunSummary(state, {
+            stage: "failed",
+            headline: "Run failed",
+            detail: event.message,
+          }),
           error: event.message,
           isRunning: false,
           pendingPermission: null,
@@ -341,9 +370,15 @@ export function appendPermissionAnswer(
           answerTraceId,
           createId,
         );
+  const runSummary = {
+    stage: approved ? "running" : "failed",
+    headline: approved ? "Permission approved" : "Permission rejected",
+    detail: answered ? undefined : "No pending permission request was available",
+  } satisfies Omit<Extract<TimelineSummary, { kind: "run" }>, "kind" | "sessionId">;
+  const updatedRunState = updateLatestRunSummary({ ...state, items: updatedItems }, runSummary);
 
   return {
-    ...state,
+    ...updatedRunState,
     pendingPermission: null,
     traceItems: [
       ...state.traceItems,
@@ -354,7 +389,6 @@ export function appendPermissionAnswer(
         detail: answered ? undefined : "No pending permission request was available",
       },
     ],
-    items: updatedItems,
   };
 }
 
@@ -411,6 +445,47 @@ function appendToolNote(
       items: [...state.items, timelineEvent({ ...event, id: event.id || createId() })],
     },
     shouldRefreshSessions: false,
+  };
+}
+
+function updateLatestRunSummary(
+  state: RunViewState,
+  patch: Omit<Extract<TimelineSummary, { kind: "run" }>, "kind" | "sessionId">,
+): RunViewState {
+  let index = -1;
+  for (let itemIndex = state.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = state.items[itemIndex];
+    if (item.role === "timeline" && item.kind === "run") {
+      index = itemIndex;
+      break;
+    }
+  }
+  if (index < 0) {
+    return state;
+  }
+
+  const nextItems = [...state.items];
+  const item = nextItems[index];
+  if (item.role === "timeline") {
+    const previousSummary =
+      item.summary?.kind === "run"
+        ? item.summary
+        : {
+            kind: "run" as const,
+            stage: patch.stage,
+            headline: patch.headline,
+          };
+    nextItems[index] = {
+      ...item,
+      summary: {
+        ...previousSummary,
+        ...patch,
+      },
+    };
+  }
+  return {
+    ...state,
+    items: nextItems,
   };
 }
 
@@ -491,6 +566,12 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
         id: `run-completed-${Date.now()}`,
         kind: "run",
         title: "Agent run",
+        summary: {
+          kind: "run",
+          stage: "completed",
+          headline: "Run completed",
+          detail: "No active run was found in the transcript",
+        },
         status: "completed",
       }),
     ];
@@ -502,6 +583,13 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
     nextItems[index] = {
       ...item,
       detail: item.detail || "Completed",
+      summary: {
+        kind: "run",
+        stage: "completed",
+        headline: "Run completed",
+        detail: "Conversation and session state refreshed",
+        sessionId: item.summary?.kind === "run" ? item.summary.sessionId : undefined,
+      },
       status: "completed",
     };
   }

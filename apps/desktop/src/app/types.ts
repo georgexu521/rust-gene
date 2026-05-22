@@ -20,6 +20,13 @@ export type TimelineKind = "run" | "tool" | "permission" | "usage" | "error";
 
 export type TimelineSummary =
   | {
+      kind: "run";
+      stage: "running" | "waiting" | "completed" | "failed";
+      headline: string;
+      detail?: string;
+      sessionId?: string;
+    }
+  | {
       kind: "shell";
       command: string;
       validation?: string;

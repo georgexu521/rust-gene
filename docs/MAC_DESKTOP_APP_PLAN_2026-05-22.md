@@ -640,6 +640,10 @@ corepack pnpm --dir apps/desktop test:ui-smoke
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
 ```
 
+Status: started. The main run timeline card now carries a dedicated run summary
+for runtime connection, tool progress, permission waits, completion, and failure
+states, so normal transcript reading no longer depends on opening trace first.
+
 #### Track C - Session And Project Ergonomics
 
 - Turn search into a more complete desktop interaction: keyboard focus,
