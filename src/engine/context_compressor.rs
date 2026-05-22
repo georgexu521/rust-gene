@@ -186,6 +186,168 @@ impl SessionMemoryCompact {
     }
 }
 
+/// Explicit runtime facts that make a compacted long task resumable.
+///
+/// This intentionally only keeps labeled state lines. Free-form conversation
+/// can still be summarized heuristically, but continuation-critical facts must
+/// be emitted with stable labels by runtime/tooling before they are promoted.
+#[derive(Debug, Clone, Default)]
+struct RuntimeContinuityFacts {
+    active_objectives: Vec<String>,
+    changed_files: Vec<String>,
+    validation_states: Vec<String>,
+    subagent_task_states: Vec<String>,
+}
+
+impl RuntimeContinuityFacts {
+    fn analyze(messages: &[Message]) -> Self {
+        let mut facts = Self::default();
+        for msg in messages {
+            for line in msg.content().lines() {
+                facts.capture_line(line.trim());
+            }
+        }
+        facts
+    }
+
+    fn capture_line(&mut self, line: &str) {
+        let line = Self::normalize_line(line);
+        if line.is_empty() {
+            return;
+        }
+
+        let lower = line.to_lowercase();
+        if Self::is_active_objective(&lower) {
+            Self::push_unique(&mut self.active_objectives, &line, 5);
+        }
+        if Self::is_changed_files(&lower) {
+            Self::push_unique(&mut self.changed_files, &line, 8);
+        }
+        if Self::is_validation_state(&lower) {
+            Self::push_unique(&mut self.validation_states, &line, 8);
+        }
+        if Self::is_subagent_task_state(&lower) {
+            Self::push_unique(&mut self.subagent_task_states, &line, 8);
+        }
+    }
+
+    fn normalize_line(line: &str) -> String {
+        line.trim()
+            .trim_start_matches("- ")
+            .trim_start_matches("* ")
+            .trim_start_matches("[ ] ")
+            .trim_start_matches("[x] ")
+            .chars()
+            .take(240)
+            .collect::<String>()
+    }
+
+    fn push_unique(target: &mut Vec<String>, line: &str, max: usize) {
+        if target.len() >= max || target.iter().any(|item| item == line) {
+            return;
+        }
+        target.push(line.to_string());
+    }
+
+    fn is_active_objective(lower: &str) -> bool {
+        lower.starts_with("active objective:")
+            || lower.starts_with("current objective:")
+            || lower.starts_with("objective:")
+    }
+
+    fn is_changed_files(lower: &str) -> bool {
+        lower.starts_with("changed files:")
+            || lower.starts_with("changed file:")
+            || lower.starts_with("modified files:")
+            || lower.starts_with("files changed:")
+    }
+
+    fn is_validation_state(lower: &str) -> bool {
+        lower.starts_with("validation passed:")
+            || lower.starts_with("validation failed:")
+            || lower.starts_with("validation partial:")
+            || lower.starts_with("required validation:")
+            || lower.starts_with("verified:")
+            || ((lower.contains("cargo test") || lower.contains("cargo check"))
+                && (lower.contains("passed") || lower.contains("failed")))
+    }
+
+    fn is_subagent_task_state(lower: &str) -> bool {
+        lower.starts_with("active subagent:")
+            || lower.starts_with("active sub-agent:")
+            || lower.starts_with("subagent state:")
+            || lower.starts_with("sub-agent state:")
+            || lower.starts_with("agent task:")
+            || (lower.contains("agent_id") && lower.contains("task_id"))
+            || (lower.contains("subagent") && lower.contains("worktree"))
+            || (lower.contains("sub-agent") && lower.contains("worktree"))
+    }
+
+    fn inject_into_summary(&self, summary: &mut String) {
+        if self.is_empty() {
+            return;
+        }
+        summary.push_str("\n\n## Runtime Continuity\n");
+        Self::append_group(summary, "Active objectives", &self.active_objectives);
+        Self::append_group(summary, "Changed files", &self.changed_files);
+        Self::append_group(summary, "Validation state", &self.validation_states);
+        Self::append_group(summary, "Subagent/task state", &self.subagent_task_states);
+    }
+
+    fn append_group(summary: &mut String, label: &str, lines: &[String]) {
+        if lines.is_empty() {
+            return;
+        }
+        summary.push_str(&format!("{}:\n", label));
+        for line in lines {
+            summary.push_str(&format!("- {}\n", line));
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.active_objectives.is_empty()
+            && self.changed_files.is_empty()
+            && self.validation_states.is_empty()
+            && self.subagent_task_states.is_empty()
+    }
+
+    fn retained_items(&self) -> Vec<String> {
+        let mut items = Vec::new();
+        if !self.active_objectives.is_empty() {
+            items.push(format!(
+                "runtime_state_active_objectives:{}",
+                self.active_objectives.len()
+            ));
+        }
+        if !self.changed_files.is_empty() {
+            items.push(format!(
+                "runtime_state_changed_files:{}",
+                self.changed_files.len()
+            ));
+        }
+        if !self.validation_states.is_empty() {
+            items.push(format!(
+                "runtime_state_validation:{}",
+                self.validation_states.len()
+            ));
+        }
+        if !self.subagent_task_states.is_empty() {
+            items.push(format!(
+                "runtime_state_subagent_tasks:{}",
+                self.subagent_task_states.len()
+            ));
+        }
+        items
+    }
+
+    fn provenance_tags(&self) -> Vec<String> {
+        self.retained_items()
+            .into_iter()
+            .map(|item| format!("runtime_continuity:{}", item))
+            .collect()
+    }
+}
+
 /// 给 LLM 的压缩 prompt 模板
 pub const COMPRESSION_PROMPT_TEMPLATE: &str = "\
 You are a conversation compressor. Summarize the following conversation into \
@@ -410,6 +572,7 @@ fn compaction_retained_items(
     tail_count: usize,
     compact_meta: Option<&CompactMetadata>,
     session_memory: &SessionMemoryCompact,
+    runtime_continuity: &RuntimeContinuityFacts,
 ) -> Vec<String> {
     let mut items = vec![
         format!("head_messages:{}", head_count),
@@ -444,6 +607,7 @@ fn compaction_retained_items(
             session_memory.user_preferences.len()
         ));
     }
+    items.extend(runtime_continuity.retained_items());
     items
 }
 
@@ -1240,6 +1404,7 @@ impl ContextCompressor {
         }
         self.total_tokens_before += original_tokens_before;
         let session_memory = SessionMemoryCompact::analyze(messages);
+        let runtime_continuity = RuntimeContinuityFacts::analyze(messages);
 
         info!(
             "Compressing {} messages (budget: {} available tokens, iteration: {})",
@@ -1279,6 +1444,7 @@ impl ContextCompressor {
             self.summarize_middle(middle)
         };
         session_memory.inject_into_summary(&mut summary_text);
+        runtime_continuity.inject_into_summary(&mut summary_text);
 
         // Phase 4: 组装结果
         let mut result = head.to_vec();
@@ -1423,12 +1589,16 @@ impl ContextCompressor {
         {
             provenance.push("summary_memory:session".to_string());
         }
+        if !runtime_continuity.is_empty() {
+            provenance.push("summary_memory:runtime_continuity".to_string());
+        }
         provenance.push(if summary_text.is_empty() {
             "summary_source:empty".to_string()
         } else {
             summary_source_tag.to_string()
         });
         provenance.extend(session_memory.provenance_tags());
+        provenance.extend(runtime_continuity.provenance_tags());
         self.record_compaction(CompactionRuntimeRecord {
             strategy,
             level: level.map(|value| value.label().to_string()),
@@ -1446,6 +1616,7 @@ impl ContextCompressor {
                 tail.len(),
                 recorded_meta.as_ref(),
                 &session_memory,
+                &runtime_continuity,
             ),
             provenance,
         });
@@ -3051,6 +3222,93 @@ mod tests {
         let tags = smc.provenance_tags();
         assert!(tags.contains(&"session_memory:user_preferences=1".to_string()));
         assert!(tags.contains(&"session_memory:hot_files=2".to_string()));
+    }
+
+    #[test]
+    fn test_runtime_continuity_facts_extract_labeled_state() {
+        let messages = vec![
+            Message::assistant(
+                "Active objective: finish Phase 8 compaction survivability\n\
+                 Changed files: src/engine/context_compressor.rs, docs/PROJECT_STATUS.md\n\
+                 Validation passed: cargo test -q context_compressor\n\
+                 agent_id=agent_1 task_id=task_1 status=running worktree=/tmp/agent-worktree",
+            ),
+            Message::user("This unrelated sentence mentions objective but is not runtime state."),
+        ];
+
+        let facts = RuntimeContinuityFacts::analyze(&messages);
+
+        assert_eq!(facts.active_objectives.len(), 1);
+        assert_eq!(facts.changed_files.len(), 1);
+        assert_eq!(facts.validation_states.len(), 1);
+        assert_eq!(facts.subagent_task_states.len(), 1);
+        assert!(facts
+            .retained_items()
+            .contains(&"runtime_state_active_objectives:1".to_string()));
+        assert!(facts
+            .retained_items()
+            .contains(&"runtime_state_subagent_tasks:1".to_string()));
+    }
+
+    #[test]
+    fn test_long_task_compaction_preserves_runtime_continuity_state() {
+        let mut messages = vec![
+            Message::system("You are a coding agent."),
+            Message::user("Please continue the release plan."),
+        ];
+        for i in 0..30 {
+            messages.push(Message::assistant(format!(
+                "Implementation note {}: repeated middle context {}",
+                i,
+                "x".repeat(120)
+            )));
+        }
+        messages.push(Message::assistant(
+            "Active objective: finish Phase 8 compaction survivability\n\
+             Changed files: src/engine/context_compressor.rs, docs/CLAUDE_CODE_PROGRAMMING_PARITY_RELEASE_PLAN_2026-05-22.md\n\
+             Validation passed: cargo test -q context_compressor\n\
+             agent_id=agent_1 task_id=task_1 status=running worktree=/tmp/agent-worktree branch=codex/agent-1234",
+        ));
+        for i in 30..60 {
+            messages.push(Message::assistant(format!(
+                "Later implementation note {}: repeated middle context {}",
+                i,
+                "y".repeat(120)
+            )));
+        }
+        messages.push(Message::user("Continue from the current state."));
+
+        let mut compressor = ContextCompressor::new(3_000);
+        let compressed =
+            compressor.compress_with_summary(&messages, Some("## Goal\nContinue Phase 8\n"));
+        let compacted_text = compressed
+            .iter()
+            .map(|msg| msg.content())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let record = compressor.latest_compaction_record().unwrap();
+
+        assert!(compacted_text.contains("## Runtime Continuity"));
+        assert!(compacted_text.contains("Active objective: finish Phase 8"));
+        assert!(compacted_text.contains("Changed files: src/engine/context_compressor.rs"));
+        assert!(compacted_text.contains("Validation passed: cargo test -q context_compressor"));
+        assert!(compacted_text.contains("agent_id=agent_1 task_id=task_1"));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_active_objectives:1".to_string()));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_changed_files:1".to_string()));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_validation:1".to_string()));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_subagent_tasks:1".to_string()));
+        assert!(record
+            .provenance
+            .iter()
+            .any(|p| p == "summary_memory:runtime_continuity"));
     }
 
     #[test]

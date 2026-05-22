@@ -1084,12 +1084,21 @@ Progress on 2026-05-22:
   keywords, matched fields (`name`, `description`, `trigger`, or `body`),
   trigger metadata, and provenance. `skills_list action=explain` exposes those
   reasons without loading full skill bodies into the prompt.
+- Long-task compaction now preserves explicit runtime-continuity facts with
+  labeled state lines for active objectives, changed files, validation state,
+  and subagent/task worktree state, and records those facts in retained-item
+  and provenance metadata.
 
 Validation so far:
 
 - `cargo test -q context_tool` - passed, 1 test after retained-context explain support.
-- `cargo test -q context_compressor` - passed, 42 tests after structured
-  compaction state support.
+- `cargo test -q runtime_continuity` - passed, 2 tests for labeled runtime-state
+  extraction and retained-item metadata.
+- `cargo test -q long_task_compaction` - passed, 1 test proving compressed
+  long-task summaries preserve objective, changed files, validation, and
+  subagent/task state.
+- `cargo test -q context_compressor` - passed, 44 tests after structured
+  compaction state and runtime-continuity support.
 - `cargo test -q context_collapse` - passed, 5 tests after token-pressure and
   retained-item provenance support.
 - `cargo test -q preflight_compression_controller` - passed, 2 tests.
