@@ -98,13 +98,9 @@ export function applyRunEvent(
         kind: "run",
         title: "Thinking completed",
       });
-    case "tool_started":
-      return appendToolNote(
-        updateLatestRunSummary(state, {
-          stage: "running",
-          headline: "Running tool",
-          detail: event.name,
-        }),
+    case "tool_started": {
+      const result = appendToolNote(
+        state,
         {
           id: event.id,
           kind: "tool",
@@ -116,6 +112,16 @@ export function applyRunEvent(
         () => event.id,
         traceTool(event.id, `Tool started: ${event.name}`),
       );
+      return {
+        ...result,
+        state: updateLatestOpenRunSummary(result.state, {
+          stage: "running",
+          headline: "Running tool",
+          detail: event.name,
+          stats: runStats(result.state.items),
+        }),
+      };
+    }
     case "tool_args_delta":
       return appendTraceOnly(
         state,
@@ -123,13 +129,9 @@ export function applyRunEvent(
       );
     case "tool_call_completed":
       return appendTraceOnly(state, traceTool(`${event.id}-call`, "Tool call prepared"));
-    case "tool_execution_progress":
-      return updateToolNote(
-        updateLatestRunSummary(state, {
-          stage: "running",
-          headline: "Tool in progress",
-          detail: event.progress,
-        }),
+    case "tool_execution_progress": {
+      const result = updateToolNote(
+        state,
         {
           id: event.id,
           kind: "tool",
@@ -138,14 +140,20 @@ export function applyRunEvent(
         },
         traceTool(`${event.id}-progress`, "Tool progress", event.progress),
       );
-    case "tool_completed":
-      const toolPresentation = presentToolCompletion(event.result_preview, event.metadata);
-      return updateToolNote(
-        updateLatestRunSummary(state, {
-          stage: toolPresentation.status === "failed" ? "failed" : "running",
-          headline: toolPresentation.status === "failed" ? "Tool failed" : "Tool completed",
-          detail: toolPresentation.title,
+      return {
+        ...result,
+        state: updateLatestOpenRunSummary(result.state, {
+          stage: "running",
+          headline: "Tool in progress",
+          detail: event.progress,
+          stats: runStats(result.state.items),
         }),
+      };
+    }
+    case "tool_completed": {
+      const toolPresentation = presentToolCompletion(event.result_preview, event.metadata);
+      const result = updateToolNote(
+        state,
         {
           id: event.id,
           kind: "tool",
@@ -158,11 +166,23 @@ export function applyRunEvent(
         },
         traceTool(`${event.id}-done`, "Tool completed", event.result_preview),
       );
+      return {
+        ...result,
+        state: updateLatestOpenRunSummary(result.state, {
+          stage: toolPresentation.status === "failed" ? "failed" : "running",
+          headline: toolPresentation.status === "failed" ? "Tool failed" : "Tool completed",
+          detail: toolPresentation.title,
+          recovery: runRecovery(toolPresentation.summary),
+          stats: runStats(result.state.items),
+        }),
+      };
+    }
     case "permission_request": {
       const updatedRunState = updateLatestRunSummary(state, {
         stage: "waiting",
         headline: "Waiting for permission",
         detail: event.prompt,
+        stats: runStats(state.items),
       });
       return {
         state: {
@@ -251,12 +271,20 @@ export function applyRunEvent(
             stage: "failed",
             headline: "Run failed",
             detail: event.message,
+            recovery: "Inspect the error details, fix the runtime issue, then rerun.",
+            stats: runStats(state.items),
           }),
           error: event.message,
           isRunning: false,
           pendingPermission: null,
           items: [
-            ...state.items,
+            ...updateLatestRunSummary(state, {
+              stage: "failed",
+              headline: "Run failed",
+              detail: event.message,
+              recovery: "Inspect the error details, fix the runtime issue, then rerun.",
+              stats: runStats(state.items),
+            }).items,
             timelineEvent({
               id: traceId,
               kind: "error",
@@ -374,8 +402,9 @@ export function appendPermissionAnswer(
     stage: approved ? "running" : "failed",
     headline: approved ? "Permission approved" : "Permission rejected",
     detail: answered ? undefined : "No pending permission request was available",
+    stats: runStats(updatedItems),
   } satisfies Omit<Extract<TimelineSummary, { kind: "run" }>, "kind" | "sessionId">;
-  const updatedRunState = updateLatestRunSummary({ ...state, items: updatedItems }, runSummary);
+  const updatedRunState = updateLatestOpenRunSummary({ ...state, items: updatedItems }, runSummary);
 
   return {
     ...updatedRunState,
@@ -452,10 +481,25 @@ function updateLatestRunSummary(
   state: RunViewState,
   patch: Omit<Extract<TimelineSummary, { kind: "run" }>, "kind" | "sessionId">,
 ): RunViewState {
+  return updateLatestRunSummaryMatching(state, patch, () => true);
+}
+
+function updateLatestOpenRunSummary(
+  state: RunViewState,
+  patch: Omit<Extract<TimelineSummary, { kind: "run" }>, "kind" | "sessionId">,
+): RunViewState {
+  return updateLatestRunSummaryMatching(state, patch, (item) => item.status !== "completed");
+}
+
+function updateLatestRunSummaryMatching(
+  state: RunViewState,
+  patch: Omit<Extract<TimelineSummary, { kind: "run" }>, "kind" | "sessionId">,
+  matches: (item: Extract<TranscriptItem, { role: "timeline" }>) => boolean,
+): RunViewState {
   let index = -1;
   for (let itemIndex = state.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
     const item = state.items[itemIndex];
-    if (item.role === "timeline" && item.kind === "run") {
+    if (item.role === "timeline" && item.kind === "run" && matches(item)) {
       index = itemIndex;
       break;
     }
@@ -566,12 +610,13 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
         id: `run-completed-${Date.now()}`,
         kind: "run",
         title: "Agent run",
-        summary: {
-          kind: "run",
-          stage: "completed",
-          headline: "Run completed",
-          detail: "No active run was found in the transcript",
-        },
+      summary: {
+        kind: "run",
+        stage: "completed",
+        headline: "Run completed",
+        detail: "No active run was found in the transcript",
+        stats: runStats(items),
+      },
         status: "completed",
       }),
     ];
@@ -587,13 +632,66 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
         kind: "run",
         stage: "completed",
         headline: "Run completed",
-        detail: "Conversation and session state refreshed",
+        detail: runCompletionDetail(nextItems),
         sessionId: item.summary?.kind === "run" ? item.summary.sessionId : undefined,
+        stats: runStats(nextItems),
       },
       status: "completed",
     };
   }
   return nextItems;
+}
+
+function runCompletionDetail(items: TranscriptItem[]): string {
+  const failedTools = timelineTools(items).filter((item) => item.status === "failed").length;
+  if (failedTools > 0) {
+    return `${failedTools} tool${failedTools === 1 ? " needs" : "s need"} attention`;
+  }
+  return "Conversation and session state refreshed";
+}
+
+function runRecovery(summary: TimelineSummary | undefined): string | undefined {
+  if (summary?.kind !== "failure") {
+    return undefined;
+  }
+  return summary.recovery || "Inspect the failing output, fix the issue, then rerun.";
+}
+
+function runStats(items: TranscriptItem[]): string[] {
+  const tools = timelineTools(items);
+  const completed = tools.filter((item) => item.status === "completed").length;
+  const failed = tools.filter((item) => item.status === "failed").length;
+  const running = tools.filter((item) => item.status === "running").length;
+  const fileChanges = uniqueToolValues(
+    tools
+      .map((item) => item.summary)
+      .filter((summary): summary is Extract<TimelineSummary, { kind: "file" }> =>
+        summary?.kind === "file" && summary.action !== "read",
+      )
+      .map((summary) => summary.path || summary.action),
+  ).length;
+  const validations = tools.filter((item) => item.summary?.kind === "shell" && item.summary.validation)
+    .length;
+
+  return compactFacts([
+    tools.length > 0 ? `${tools.length} tool${tools.length === 1 ? "" : "s"}` : null,
+    running > 0 ? `${running} running` : null,
+    completed > 0 ? `${completed} done` : null,
+    failed > 0 ? `${failed} failed` : null,
+    fileChanges > 0 ? `${fileChanges} file${fileChanges === 1 ? "" : "s"} changed` : null,
+    validations > 0 ? `${validations} validation${validations === 1 ? "" : "s"}` : null,
+  ]);
+}
+
+function timelineTools(items: TranscriptItem[]): Array<Extract<TranscriptItem, { role: "timeline" }>> {
+  return items.filter(
+    (item): item is Extract<TranscriptItem, { role: "timeline" }> =>
+      item.role === "timeline" && item.kind === "tool",
+  );
+}
+
+function uniqueToolValues(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim())));
 }
 
 function updateLatestWaitingPermission(

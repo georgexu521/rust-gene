@@ -643,6 +643,8 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
 Status: started. The main run timeline card now carries a dedicated run summary
 for runtime connection, tool progress, permission waits, completion, and failure
 states, so normal transcript reading no longer depends on opening trace first.
+It also aggregates multi-tool runs into compact stats for tool count, failures,
+file changes, validations, and recovery guidance.
 
 #### Track C - Session And Project Ergonomics
 

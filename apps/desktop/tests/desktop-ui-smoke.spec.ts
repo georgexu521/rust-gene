@@ -39,6 +39,9 @@ test.describe("desktop UI smoke", () => {
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.locator(".timeline-summary.run.completed", { hasText: "Run completed" })).toBeVisible();
+    await expect(page.locator(".timeline-run-stats span", { hasText: "3 tools" })).toBeVisible();
+    await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
+    await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();
     await expect(page.locator(".timeline-title", { hasText: "Pnpm Test" })).toBeVisible();
     await expect(
       page.locator(".timeline-summary code", {

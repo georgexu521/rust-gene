@@ -174,6 +174,16 @@ function TimelineSummaryView({ summary }: { summary: TimelineSummary }) {
           <div className="timeline-summary-meta">
             {compactSummaryMeta([summary.detail, summary.sessionId]).join(" · ")}
           </div>
+          {summary.stats && summary.stats.length > 0 ? (
+            <div className="timeline-run-stats">
+              {summary.stats.map((stat) => (
+                <span key={stat}>{stat}</span>
+              ))}
+            </div>
+          ) : null}
+          {summary.recovery ? (
+            <div className="timeline-recovery">{summary.recovery}</div>
+          ) : null}
         </div>
       </div>
     );

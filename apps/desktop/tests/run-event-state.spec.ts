@@ -41,6 +41,7 @@ test.describe("run event state", () => {
           stage: "completed",
           headline: "Run completed",
           sessionId: "session-1",
+          stats: [],
         }),
       }),
     );
@@ -74,6 +75,7 @@ test.describe("run event state", () => {
           stage: "running",
           headline: "Running tool",
           detail: "bash",
+          stats: ["1 tool", "1 running"],
         }),
       }),
     );
@@ -85,6 +87,7 @@ test.describe("run event state", () => {
           stage: "waiting",
           headline: "Waiting for permission",
           detail: "Allow git push?",
+          stats: ["1 tool", "1 running"],
         }),
       }),
     );
@@ -96,6 +99,90 @@ test.describe("run event state", () => {
           stage: "running",
           headline: "Permission approved",
           sessionId: "session-1",
+          stats: ["1 tool", "1 running"],
+        }),
+      }),
+    );
+  });
+
+  test("summarizes multi-tool runs with failures and recovery guidance", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+    }).state;
+    const shellStarted = applyRunEvent(started, {
+      type: "tool_started",
+      id: "shell-1",
+      name: "bash",
+    }).state;
+    const shellCompleted = applyRunEvent(shellStarted, {
+      type: "tool_completed",
+      id: "shell-1",
+      result_preview: "ok",
+      metadata: {
+        tool: "bash",
+        success: true,
+        command: "corepack pnpm --dir apps/desktop test:ui-smoke",
+        validation_family: "pnpm_test",
+        terminal_task: { status: "completed", exit_code: 0 },
+      },
+    }).state;
+    const fileStarted = applyRunEvent(shellCompleted, {
+      type: "tool_started",
+      id: "file-1",
+      name: "file_edit",
+    }).state;
+    const fileCompleted = applyRunEvent(fileStarted, {
+      type: "tool_completed",
+      id: "file-1",
+      result_preview: "Edited file",
+      metadata: {
+        tool: "file_edit",
+        success: true,
+        path: "apps/desktop/src/app/runEventState.ts",
+        replacements: 2,
+      },
+    }).state;
+    const failedStarted = applyRunEvent(fileCompleted, {
+      type: "tool_started",
+      id: "failed-1",
+      name: "bash",
+    }).state;
+    const failed = applyRunEvent(failedStarted, {
+      type: "tool_completed",
+      id: "failed-1",
+      result_preview: "cargo test failed",
+      metadata: {
+        tool: "bash",
+        success: false,
+        error_preview: "cargo test failed",
+        user_note: "Fix the failing test and rerun it.",
+      },
+    }).state;
+    const completed = applyRunEvent(failed, { type: "run_completed" }).state;
+
+    expect(failed.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "failed",
+          headline: "Tool failed",
+          detail: "Shell command",
+          recovery: "Fix the failing test and rerun it.",
+          stats: ["3 tools", "2 done", "1 failed", "1 file changed", "1 validation"],
+        }),
+      }),
+    );
+    expect(completed.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        status: "completed",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "completed",
+          detail: "1 tool needs attention",
+          stats: ["3 tools", "2 done", "1 failed", "1 file changed", "1 validation"],
         }),
       }),
     );
@@ -218,6 +305,74 @@ test.describe("run event state", () => {
         id: "answer-1-trace",
         kind: "permission",
         title: "Permission approved",
+      }),
+    );
+  });
+
+  test("does not rewrite a completed run card after a late permission answer", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+    }).state;
+    const requested = applyRunEvent(started, {
+      type: "permission_request",
+      id: "permission-1",
+      tool_name: "bash",
+      arguments: { command: "git push" },
+      prompt: "Allow git push?",
+    }).state;
+    const completed = applyRunEvent(requested, { type: "run_completed" }).state;
+    const approved = appendPermissionAnswer(completed, true, true, ids("answer-1"));
+
+    expect(completed.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        status: "completed",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "completed",
+          headline: "Run completed",
+        }),
+      }),
+    );
+    expect(approved.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        status: "completed",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "completed",
+          headline: "Run completed",
+        }),
+      }),
+    );
+  });
+
+  test("does not rewrite a completed run card after a late tool event", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+    }).state;
+    const completed = applyRunEvent(started, { type: "run_completed" }).state;
+    const lateTool = applyRunEvent(completed, {
+      type: "tool_completed",
+      id: "late-tool",
+      result_preview: "Permission approved",
+      metadata: {
+        tool: "bash",
+        success: true,
+      },
+    }).state;
+
+    expect(lateTool.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        status: "completed",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "completed",
+          headline: "Run completed",
+        }),
       }),
     );
   });

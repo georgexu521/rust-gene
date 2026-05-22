@@ -24,7 +24,9 @@ export type TimelineSummary =
       stage: "running" | "waiting" | "completed" | "failed";
       headline: string;
       detail?: string;
+      recovery?: string;
       sessionId?: string;
+      stats?: string[];
     }
   | {
       kind: "shell";

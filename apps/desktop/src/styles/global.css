@@ -832,6 +832,37 @@ h1 {
   background: #fffafa;
 }
 
+.timeline-run-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.timeline-run-stats span {
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid #dde3ea;
+  border-radius: 999px;
+  color: #58616c;
+  background: #ffffff;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.timeline-recovery {
+  margin-top: 6px;
+  padding: 6px 7px;
+  border: 1px solid #efcfca;
+  border-radius: 6px;
+  color: #6f302c;
+  background: #fff7f6;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .timeline-summary-meta {
   margin-top: 3px;
   color: #69727d;
