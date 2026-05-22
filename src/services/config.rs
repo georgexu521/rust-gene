@@ -5,7 +5,8 @@
 use anyhow::Result;
 use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
 type ConfigCallback = dyn Fn(&AppConfig) + Send + Sync;
 
@@ -161,6 +162,329 @@ impl AppConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigScopePaths {
+    pub user_config: PathBuf,
+    pub project_config: PathBuf,
+    pub legacy_config_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigKeySpec {
+    pub key: &'static str,
+    pub value_type: &'static str,
+    pub mutable: bool,
+    pub secret: bool,
+    pub description: &'static str,
+}
+
+pub const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
+    ConfigKeySpec {
+        key: "api.base_url",
+        value_type: "string",
+        mutable: true,
+        secret: false,
+        description: "LLM provider base URL",
+    },
+    ConfigKeySpec {
+        key: "api.model",
+        value_type: "string",
+        mutable: true,
+        secret: false,
+        description: "Default LLM model",
+    },
+    ConfigKeySpec {
+        key: "api.temperature",
+        value_type: "float",
+        mutable: true,
+        secret: false,
+        description: "Sampling temperature",
+    },
+    ConfigKeySpec {
+        key: "api.max_tokens",
+        value_type: "integer|none",
+        mutable: true,
+        secret: false,
+        description: "Optional max tokens",
+    },
+    ConfigKeySpec {
+        key: "ui.theme",
+        value_type: "string",
+        mutable: true,
+        secret: false,
+        description: "UI theme",
+    },
+    ConfigKeySpec {
+        key: "ui.show_token_usage",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Show token usage in UI",
+    },
+    ConfigKeySpec {
+        key: "ui.compact_mode",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Compact UI layout",
+    },
+    ConfigKeySpec {
+        key: "storage.persistence_enabled",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Persist sessions and state",
+    },
+    ConfigKeySpec {
+        key: "storage.auto_save_interval_secs",
+        value_type: "integer",
+        mutable: true,
+        secret: false,
+        description: "Auto-save interval",
+    },
+    ConfigKeySpec {
+        key: "features.mcp_enabled",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Enable MCP features",
+    },
+    ConfigKeySpec {
+        key: "features.skills_enabled",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Enable skills",
+    },
+    ConfigKeySpec {
+        key: "features.web_search",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Enable web search",
+    },
+    ConfigKeySpec {
+        key: "features.plugin_trust_mode",
+        value_type: "strict|warn|off",
+        mutable: true,
+        secret: false,
+        description: "Plugin signature trust policy",
+    },
+    ConfigKeySpec {
+        key: "engine.max_iterations",
+        value_type: "integer",
+        mutable: true,
+        secret: false,
+        description: "Maximum tool loop iterations",
+    },
+];
+
+pub fn config_scope_paths(working_dir: &Path) -> ConfigScopePaths {
+    let user_config = dirs::config_dir()
+        .map(|d| d.join("priority-agent").join("config.toml"))
+        .unwrap_or_else(|| PathBuf::from(".priority-agent").join("config.toml"));
+    let project_config = working_dir.join(".priority-agent").join("config.toml");
+    let legacy_config_dir = dirs::home_dir()
+        .map(|d| d.join(".priority-agent"))
+        .unwrap_or_else(|| PathBuf::from(".priority-agent"));
+
+    ConfigScopePaths {
+        user_config,
+        project_config,
+        legacy_config_dir,
+    }
+}
+
+pub fn config_schema_json() -> Value {
+    json!({
+        "version": 1,
+        "keys": CONFIG_KEY_SPECS,
+        "scopes": ["user", "project", "legacy"],
+        "env_prefix": "PRIORITY_AGENT"
+    })
+}
+
+pub fn format_config_summary(config: &AppConfig) -> String {
+    format!(
+        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  ui.compact_mode = {}\n  storage.persistence_enabled = {}\n  storage.auto_save_interval_secs = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}",
+        config.api.base_url,
+        config.api.model,
+        config.api.temperature,
+        config.api.max_tokens.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+        config.ui.theme,
+        config.ui.show_token_usage,
+        config.ui.compact_mode,
+        config.storage.persistence_enabled,
+        config.storage.auto_save_interval_secs,
+        config.features.mcp_enabled,
+        config.features.skills_enabled,
+        config.features.web_search,
+        config.features.plugin_trust_mode,
+        config.engine.max_iterations,
+    )
+}
+
+pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
+    match key {
+        "api.base_url" => Some(config.api.base_url.clone()),
+        "api.model" => Some(config.api.model.clone()),
+        "api.temperature" => Some(config.api.temperature.to_string()),
+        "api.max_tokens" => Some(
+            config
+                .api
+                .max_tokens
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        ),
+        "ui.theme" => Some(config.ui.theme.clone()),
+        "ui.show_token_usage" => Some(config.ui.show_token_usage.to_string()),
+        "ui.compact_mode" => Some(config.ui.compact_mode.to_string()),
+        "storage.persistence_enabled" => Some(config.storage.persistence_enabled.to_string()),
+        "storage.auto_save_interval_secs" => {
+            Some(config.storage.auto_save_interval_secs.to_string())
+        }
+        "features.mcp_enabled" => Some(config.features.mcp_enabled.to_string()),
+        "features.skills_enabled" => Some(config.features.skills_enabled.to_string()),
+        "features.web_search" => Some(config.features.web_search.to_string()),
+        "features.plugin_trust_mode" => Some(config.features.plugin_trust_mode.clone()),
+        "engine.max_iterations" => Some(config.engine.max_iterations.to_string()),
+        _ => None,
+    }
+}
+
+pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Result<(), String> {
+    match key {
+        "api.base_url" => config.api.base_url = value.to_string(),
+        "api.model" => config.api.model = value.to_string(),
+        "api.temperature" => {
+            config.api.temperature = value
+                .parse::<f32>()
+                .map_err(|_| format!("Invalid float for {}: {}", key, value))?;
+        }
+        "api.max_tokens" => {
+            if value.eq_ignore_ascii_case("none") {
+                config.api.max_tokens = None;
+            } else {
+                config.api.max_tokens = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| format!("Invalid integer for {}: {}", key, value))?,
+                );
+            }
+        }
+        "ui.theme" => config.ui.theme = value.to_string(),
+        "ui.show_token_usage" => config.ui.show_token_usage = parse_bool(value)?,
+        "ui.compact_mode" => config.ui.compact_mode = parse_bool(value)?,
+        "storage.persistence_enabled" => config.storage.persistence_enabled = parse_bool(value)?,
+        "storage.auto_save_interval_secs" => {
+            config.storage.auto_save_interval_secs = value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "features.mcp_enabled" => config.features.mcp_enabled = parse_bool(value)?,
+        "features.skills_enabled" => config.features.skills_enabled = parse_bool(value)?,
+        "features.web_search" => config.features.web_search = parse_bool(value)?,
+        "features.plugin_trust_mode" => {
+            let mode = crate::plugins::trust::TrustMode::parse_lossy(value);
+            config.features.plugin_trust_mode = mode.as_str().to_string();
+        }
+        "engine.max_iterations" => {
+            config.engine.max_iterations = value
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        _ => return Err(format!("Unknown config key: {}", key)),
+    }
+    Ok(())
+}
+
+pub fn validate_config(config: &AppConfig) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    if !(0.0..=2.0).contains(&config.api.temperature) {
+        issues.push("api.temperature should be between 0.0 and 2.0".to_string());
+    }
+    if config.storage.auto_save_interval_secs == 0 {
+        issues.push("storage.auto_save_interval_secs must be greater than 0".to_string());
+    }
+    if config.engine.max_iterations == 0 {
+        issues.push("engine.max_iterations must be greater than 0".to_string());
+    }
+    let trust_mode =
+        crate::plugins::trust::TrustMode::parse_lossy(&config.features.plugin_trust_mode);
+    if trust_mode.as_str() != config.features.plugin_trust_mode {
+        issues.push(format!(
+            "features.plugin_trust_mode '{}' will be normalized to '{}'",
+            config.features.plugin_trust_mode,
+            trust_mode.as_str()
+        ));
+    }
+
+    issues
+}
+
+pub fn redacted_config_json(config: &AppConfig) -> Value {
+    let mut value = serde_json::to_value(config).unwrap_or_else(|_| json!({}));
+    redact_secrets(&mut value);
+    value
+}
+
+pub fn redacted_config_export(config: &AppConfig, working_dir: &Path) -> Value {
+    let paths = config_scope_paths(working_dir);
+    json!({
+        "schema_version": 1,
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "config": redacted_config_json(config),
+        "schema": config_schema_json(),
+        "paths": paths,
+        "validation": validate_config(config),
+    })
+}
+
+pub fn format_config_schema_text() -> String {
+    let mut lines = vec!["Config schema v1:".to_string()];
+    for spec in CONFIG_KEY_SPECS {
+        lines.push(format!(
+            "- {} ({}) mutable={} secret={} - {}",
+            spec.key, spec.value_type, spec.mutable, spec.secret, spec.description
+        ));
+    }
+    lines.join("\n")
+}
+
+fn redact_secrets(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                let lower = key.to_ascii_lowercase();
+                if lower.contains("api_key")
+                    || lower == "key"
+                    || lower.contains("token")
+                    || lower.contains("secret")
+                {
+                    *child = Value::String("[redacted]".to_string());
+                } else {
+                    redact_secrets(child);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_secrets(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_bool(value: &str) -> Result<bool, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "on" | "yes" => Ok(true),
+        "false" | "0" | "off" | "no" => Ok(false),
+        _ => Err(format!("Invalid boolean value: {}", value)),
+    }
+}
+
 /// API 配置
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ApiConfig {
@@ -287,5 +611,69 @@ mod tests {
         assert_eq!(config.api.model, "");
         assert_eq!(config.api.base_url, "");
         assert!(config.storage.persistence_enabled);
+    }
+
+    #[test]
+    fn config_schema_exposes_release_keys() {
+        let schema = config_schema_json();
+        let keys = schema["keys"].as_array().expect("keys array");
+
+        assert!(keys.iter().any(|item| item["key"] == "api.model"));
+        assert!(keys
+            .iter()
+            .any(|item| item["key"] == "features.plugin_trust_mode"));
+        assert!(keys
+            .iter()
+            .any(|item| item["key"] == "engine.max_iterations"));
+    }
+
+    #[test]
+    fn config_get_set_covers_release_keys() {
+        let mut config = AppConfig::default();
+
+        set_config_value(&mut config, "features.plugin_trust_mode", "strict").unwrap();
+        set_config_value(&mut config, "engine.max_iterations", "7").unwrap();
+
+        assert_eq!(
+            get_config_value(&config, "features.plugin_trust_mode").as_deref(),
+            Some("strict")
+        );
+        assert_eq!(
+            get_config_value(&config, "engine.max_iterations").as_deref(),
+            Some("7")
+        );
+    }
+
+    #[test]
+    fn config_validation_reports_invalid_release_values() {
+        let mut config = AppConfig::default();
+        config.storage.auto_save_interval_secs = 0;
+        config.engine.max_iterations = 0;
+        config.features.plugin_trust_mode = "invalid".to_string();
+
+        let issues = validate_config(&config);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.contains("storage.auto_save_interval_secs")));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.contains("engine.max_iterations")));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.contains("features.plugin_trust_mode")));
+    }
+
+    #[test]
+    fn redacted_config_export_hides_api_key() {
+        let mut config = AppConfig::default();
+        config.api.api_key = Some("secret-key".to_string());
+
+        let export = redacted_config_export(&config, Path::new("/tmp/project"));
+        let text = serde_json::to_string(&export).unwrap();
+
+        assert!(text.contains("[redacted]"));
+        assert!(!text.contains("secret-key"));
+        assert!(text.contains("schema_version"));
     }
 }

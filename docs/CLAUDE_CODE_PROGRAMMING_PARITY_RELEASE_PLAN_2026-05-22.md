@@ -1277,6 +1277,9 @@ Primary files:
 - `Cargo.toml`
 - `scripts/`
 - `src/diagnostics/mod.rs`
+- `src/services/config.rs`
+- `src/tools/config_tool/mod.rs`
+- `src/tui/slash_handler/config.rs`
 
 Progress on 2026-05-22:
 
@@ -1294,6 +1297,10 @@ Progress on 2026-05-22:
 - Provider diagnostics report detected protocol family, tool/streaming/reasoning
   traits, and message-normalization requirements from the shared provider
   capability detector.
+- Configuration now has a shared release schema with key metadata, scope paths,
+  validation checks, redacted JSON export, and centralized get/set behavior.
+- `/config` and the `config` tool now share the same config implementation for
+  list/get/set/schema/doctor/export behavior.
 
 Validation so far:
 
@@ -1303,6 +1310,8 @@ Validation so far:
   - passed without writing files.
 - `cargo test -q diagnostics` - passed, 22 tests.
 - `cargo test -q doctor` - passed, 4 tests.
+- `cargo test -q config` - passed, 18 tests.
+- `cargo test -q config_tool` - passed, 0 matching tests.
 - `cargo fmt --check` - passed.
 - `cargo check -q` - passed.
 - `cargo clippy --all-features -- -D warnings` - passed.

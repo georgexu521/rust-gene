@@ -17,7 +17,7 @@ impl Tool for ConfigTool {
     }
 
     fn description(&self) -> &str {
-        "View and modify agent configuration. Use 'action' parameter: 'get' (view config), 'set' (set a value), 'list' (list all settings)"
+        "View and modify agent configuration. Actions: list, get, set, schema, export, doctor"
     }
 
     fn parameters(&self) -> Value {
@@ -26,8 +26,8 @@ impl Tool for ConfigTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get", "set", "list"],
-                    "description": "Action: get, set, or list"
+                    "enum": ["get", "set", "list", "schema", "export", "doctor"],
+                    "description": "Action to perform"
                 },
                 "key": {
                     "type": "string",
@@ -55,9 +55,14 @@ impl Tool for ConfigTool {
                 if key.is_empty() {
                     return ToolResult::success("Usage: config action=get key=<key>");
                 }
-                // Return current value for the key
-                let output = format!("Config [{}]: (use /config set to modify)", key);
-                ToolResult::success(output)
+                match crate::services::config::AppConfig::load() {
+                    Ok(config) => crate::services::config::get_config_value(&config, key)
+                        .map(|v| ToolResult::success(format!("{} = {}", key, v)))
+                        .unwrap_or_else(|| {
+                            ToolResult::error(format!("Unknown config key: {}", key))
+                        }),
+                    Err(e) => ToolResult::error(format!("Failed to load config: {}", e)),
+                }
             }
             "set" => {
                 if key.is_empty() {
@@ -66,27 +71,59 @@ impl Tool for ConfigTool {
                 if value.is_empty() {
                     return ToolResult::success("Usage: config action=set key=<key> value=<value>");
                 }
-                let output = format!("Config [{}] set to: {}", key, value);
-                ToolResult::success(output)
+                match crate::services::config::AppConfig::load() {
+                    Ok(mut config) => {
+                        match crate::services::config::set_config_value(&mut config, key, value) {
+                            Ok(()) => match config.save() {
+                                Ok(()) => ToolResult::success(format!(
+                                    "Updated {} = {} and saved to config.toml",
+                                    key, value
+                                )),
+                                Err(e) => {
+                                    ToolResult::error(format!("Failed to save config: {}", e))
+                                }
+                            },
+                            Err(e) => ToolResult::error(e),
+                        }
+                    }
+                    Err(e) => ToolResult::error(format!("Failed to load config: {}", e)),
+                }
             }
-            _ => {
-                // List common configuration options
-                let config_list = r#"Current Configuration Options:
-  model              - LLM model to use
-  temperature       - Model temperature (0.0-1.0)
-  max_tokens        - Maximum tokens in response
-  thinking          - Enable thinking mode (0/1)
-  thinking_budget   - Thinking token budget
-  permissions       - Permission mode (default/auto/auto_low_risk/auto_all/read_only)
-  hooks.pre_tool    - Pre-tool hook command
-  hooks.post_tool   - Post-tool hook command
-  context_window    - Context window size
-  compression_threshold - When to compress context
-
-Use 'config action=get key=<key>' to view a value
-Use 'config action=set key=<key> value=<value>' to modify"#;
-                ToolResult::success(config_list)
-            }
+            "schema" => ToolResult::success(crate::services::config::format_config_schema_text()),
+            "export" => match crate::services::config::AppConfig::load() {
+                Ok(config) => {
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let export = crate::services::config::redacted_config_export(&config, &cwd);
+                    match serde_json::to_string_pretty(&export) {
+                        Ok(text) => ToolResult::success(text),
+                        Err(e) => {
+                            ToolResult::error(format!("Failed to serialize config export: {}", e))
+                        }
+                    }
+                }
+                Err(e) => ToolResult::error(format!("Failed to load config: {}", e)),
+            },
+            "doctor" => match crate::services::config::AppConfig::load() {
+                Ok(config) => {
+                    let issues = crate::services::config::validate_config(&config);
+                    if issues.is_empty() {
+                        ToolResult::success("Config doctor: ok")
+                    } else {
+                        ToolResult::success(format!(
+                            "Config doctor: warning\n- {}",
+                            issues.join("\n- ")
+                        ))
+                    }
+                }
+                Err(e) => ToolResult::error(format!("Failed to load config: {}", e)),
+            },
+            _ => match crate::services::config::AppConfig::load() {
+                Ok(config) => {
+                    ToolResult::success(crate::services::config::format_config_summary(&config))
+                }
+                Err(e) => ToolResult::error(format!("Failed to load config: {}", e)),
+            },
         }
     }
 }

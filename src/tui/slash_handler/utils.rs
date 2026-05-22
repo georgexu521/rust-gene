@@ -193,50 +193,14 @@ pub(crate) fn parse_optional_count(args: &str, cmd: &str) -> Result<usize, Strin
 // ─── Config helpers ─────────────────────────────────────────────────────
 
 pub(crate) fn format_config_summary(config: &crate::services::config::AppConfig) -> String {
-    format!(
-        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  ui.compact_mode = {}\n  storage.persistence_enabled = {}\n  storage.auto_save_interval_secs = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}",
-        config.api.base_url,
-        config.api.model,
-        config.api.temperature,
-        config.api.max_tokens.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
-        config.ui.theme,
-        config.ui.show_token_usage,
-        config.ui.compact_mode,
-        config.storage.persistence_enabled,
-        config.storage.auto_save_interval_secs,
-        config.features.mcp_enabled,
-        config.features.skills_enabled,
-        config.features.web_search,
-    )
+    crate::services::config::format_config_summary(config)
 }
 
 pub(crate) fn get_config_value(
     config: &crate::services::config::AppConfig,
     key: &str,
 ) -> Option<String> {
-    match key {
-        "api.base_url" => Some(config.api.base_url.clone()),
-        "api.model" => Some(config.api.model.clone()),
-        "api.temperature" => Some(config.api.temperature.to_string()),
-        "api.max_tokens" => Some(
-            config
-                .api
-                .max_tokens
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "none".to_string()),
-        ),
-        "ui.theme" => Some(config.ui.theme.clone()),
-        "ui.show_token_usage" => Some(config.ui.show_token_usage.to_string()),
-        "ui.compact_mode" => Some(config.ui.compact_mode.to_string()),
-        "storage.persistence_enabled" => Some(config.storage.persistence_enabled.to_string()),
-        "storage.auto_save_interval_secs" => {
-            Some(config.storage.auto_save_interval_secs.to_string())
-        }
-        "features.mcp_enabled" => Some(config.features.mcp_enabled.to_string()),
-        "features.skills_enabled" => Some(config.features.skills_enabled.to_string()),
-        "features.web_search" => Some(config.features.web_search.to_string()),
-        _ => None,
-    }
+    crate::services::config::get_config_value(config, key)
 }
 
 pub(crate) fn parse_bool(value: &str) -> Result<bool, String> {
@@ -252,40 +216,7 @@ pub(crate) fn set_config_value(
     key: &str,
     value: &str,
 ) -> Result<(), String> {
-    match key {
-        "api.base_url" => config.api.base_url = value.to_string(),
-        "api.model" => config.api.model = value.to_string(),
-        "api.temperature" => {
-            config.api.temperature = value
-                .parse::<f32>()
-                .map_err(|_| format!("Invalid float for {}: {}", key, value))?;
-        }
-        "api.max_tokens" => {
-            if value.eq_ignore_ascii_case("none") {
-                config.api.max_tokens = None;
-            } else {
-                config.api.max_tokens = Some(
-                    value
-                        .parse::<u32>()
-                        .map_err(|_| format!("Invalid integer for {}: {}", key, value))?,
-                );
-            }
-        }
-        "ui.theme" => config.ui.theme = value.to_string(),
-        "ui.show_token_usage" => config.ui.show_token_usage = parse_bool(value)?,
-        "ui.compact_mode" => config.ui.compact_mode = parse_bool(value)?,
-        "storage.persistence_enabled" => config.storage.persistence_enabled = parse_bool(value)?,
-        "storage.auto_save_interval_secs" => {
-            config.storage.auto_save_interval_secs = value
-                .parse::<u64>()
-                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
-        }
-        "features.mcp_enabled" => config.features.mcp_enabled = parse_bool(value)?,
-        "features.skills_enabled" => config.features.skills_enabled = parse_bool(value)?,
-        "features.web_search" => config.features.web_search = parse_bool(value)?,
-        _ => return Err(format!("Unknown config key: {}", key)),
-    }
-    Ok(())
+    crate::services::config::set_config_value(config, key, value)
 }
 
 // ─── Test result counters ───────────────────────────────────────────────

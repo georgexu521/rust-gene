@@ -398,6 +398,47 @@ pub fn handle_config(_app: &TuiApp, args: &str) -> String {
         };
     }
 
+    if args == "schema" {
+        return crate::services::config::format_config_schema_text();
+    }
+
+    if args == "paths" {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let paths = crate::services::config::config_scope_paths(&cwd);
+        return format!(
+            "Config paths:\n  user = {}\n  project = {}\n  legacy = {}",
+            paths.user_config.display(),
+            paths.project_config.display(),
+            paths.legacy_config_dir.display()
+        );
+    }
+
+    if args == "doctor" {
+        return match crate::services::config::AppConfig::load() {
+            Ok(config) => {
+                let issues = crate::services::config::validate_config(&config);
+                if issues.is_empty() {
+                    "Config doctor: ok".to_string()
+                } else {
+                    format!("Config doctor: warning\n- {}", issues.join("\n- "))
+                }
+            }
+            Err(e) => format!("Config doctor: error\n- failed to load config: {}", e),
+        };
+    }
+
+    if args == "export" || args == "export json" {
+        return match crate::services::config::AppConfig::load() {
+            Ok(config) => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let export = crate::services::config::redacted_config_export(&config, &cwd);
+                serde_json::to_string_pretty(&export)
+                    .unwrap_or_else(|e| format!("Failed to serialize config export: {}", e))
+            }
+            Err(e) => format!("Failed to load config: {}", e),
+        };
+    }
+
     if let Some(key) = args.strip_prefix("get ").map(str::trim) {
         if key.is_empty() {
             return "Usage: /config get <key>".to_string();
@@ -434,7 +475,7 @@ pub fn handle_config(_app: &TuiApp, args: &str) -> String {
         };
     }
 
-    "Usage: /config [list|get <key>|set <key> <value>]".to_string()
+    "Usage: /config [list|schema|paths|doctor|export|get <key>|set <key> <value>]".to_string()
 }
 
 /// /copy - Copy text to clipboard

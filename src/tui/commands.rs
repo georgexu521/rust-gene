@@ -1162,8 +1162,8 @@ pub const CMD_CONFIG: CommandDef = CommandDef::new(
     "/config",
     &[],
     "Config",
-    "/config [edit|get <key>]",
-    "View/edit configuration",
+    "/config [list|schema|paths|doctor|export|get <key>|set <key> <value>]",
+    "View, edit, validate, or export redacted configuration",
 );
 
 pub const CMD_COPY: CommandDef = CommandDef::new(
