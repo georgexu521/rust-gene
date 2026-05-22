@@ -1282,6 +1282,7 @@ Primary files:
 - `src/tui/slash_handler/config.rs`
 - `scripts/package-release.sh`
 - `scripts/release-gates.sh`
+- `docs/RELEASE_READINESS_GUIDE_2026-05-22.md`
 
 Progress on 2026-05-22:
 
@@ -1308,6 +1309,9 @@ Progress on 2026-05-22:
 - `scripts/release-gates.sh` now provides a repeatable local quick/full release
   gate that covers installer smoke checks, doctor/config/MCP tests, fmt/check,
   clippy, feature check, package dry-run, and full tests in full mode.
+- `docs/RELEASE_READINESS_GUIDE_2026-05-22.md` now gives a release operator
+  guide for quick start, config export, doctor interpretation, safety model,
+  packaging, gates, and known release gaps.
 
 Validation so far:
 
@@ -1324,6 +1328,7 @@ Validation so far:
 - `scripts/package-release.sh --features experimental-api-server --dry-run` -
   passed.
 - `scripts/release-gates.sh quick` - passed.
+- Release readiness guide added and linked from this Phase 10 progress section.
 - `cargo fmt --check` - passed.
 - `cargo check -q` - passed.
 - `cargo clippy --all-features -- -D warnings` - passed.
