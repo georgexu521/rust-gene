@@ -1392,6 +1392,13 @@ The next concrete batches should be:
      results.
 7. **Context/memory long-session pass.**
    Prove compaction and memory retention on long real coding tasks.
+   - Progress on 2026-05-22: long-task context compression now preserves
+     checkpoint-backed file-change round lines and terminal-task/output lines as
+     runtime continuity facts, alongside objectives, changed files, validation,
+     and sub-agent state. Compaction provenance records retained
+     `runtime_state_file_change_rounds` and `runtime_state_terminal_tasks`
+     counts so long coding sessions can resume with file-history and background
+     command output context intact.
 8. **Release hardening.**
    Install/update/doctor/config/docs/CI.
 

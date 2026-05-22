@@ -195,7 +195,9 @@ impl SessionMemoryCompact {
 struct RuntimeContinuityFacts {
     active_objectives: Vec<String>,
     changed_files: Vec<String>,
+    file_change_rounds: Vec<String>,
     validation_states: Vec<String>,
+    terminal_task_states: Vec<String>,
     subagent_task_states: Vec<String>,
 }
 
@@ -223,8 +225,14 @@ impl RuntimeContinuityFacts {
         if Self::is_changed_files(&lower) {
             Self::push_unique(&mut self.changed_files, &line, 8);
         }
+        if Self::is_file_change_round(&lower) {
+            Self::push_unique(&mut self.file_change_rounds, &line, 8);
+        }
         if Self::is_validation_state(&lower) {
             Self::push_unique(&mut self.validation_states, &line, 8);
+        }
+        if Self::is_terminal_task_state(&lower) {
+            Self::push_unique(&mut self.terminal_task_states, &line, 8);
         }
         if Self::is_subagent_task_state(&lower) {
             Self::push_unique(&mut self.subagent_task_states, &line, 8);
@@ -262,6 +270,16 @@ impl RuntimeContinuityFacts {
             || lower.starts_with("files changed:")
     }
 
+    fn is_file_change_round(lower: &str) -> bool {
+        lower.starts_with("file change round:")
+            || lower.starts_with("file-change round:")
+            || lower.starts_with("tool round:")
+            || lower.starts_with("tool-round:")
+            || lower.contains("file_change_round")
+            || (lower.contains("round_") && lower.contains("checkpoint"))
+            || (lower.contains("tool round") && lower.contains("file"))
+    }
+
     fn is_validation_state(lower: &str) -> bool {
         lower.starts_with("validation passed:")
             || lower.starts_with("validation failed:")
@@ -270,6 +288,15 @@ impl RuntimeContinuityFacts {
             || lower.starts_with("verified:")
             || ((lower.contains("cargo test") || lower.contains("cargo check"))
                 && (lower.contains("passed") || lower.contains("failed")))
+    }
+
+    fn is_terminal_task_state(lower: &str) -> bool {
+        lower.starts_with("terminal task:")
+            || lower.starts_with("terminal-task:")
+            || lower.contains("terminal_task")
+            || lower.contains("terminal task")
+            || (lower.contains("task_id") && lower.contains("output_path"))
+            || (lower.contains("shell_") && lower.contains("output"))
     }
 
     fn is_subagent_task_state(lower: &str) -> bool {
@@ -290,7 +317,9 @@ impl RuntimeContinuityFacts {
         summary.push_str("\n\n## Runtime Continuity\n");
         Self::append_group(summary, "Active objectives", &self.active_objectives);
         Self::append_group(summary, "Changed files", &self.changed_files);
+        Self::append_group(summary, "File-change rounds", &self.file_change_rounds);
         Self::append_group(summary, "Validation state", &self.validation_states);
+        Self::append_group(summary, "Terminal task state", &self.terminal_task_states);
         Self::append_group(summary, "Subagent/task state", &self.subagent_task_states);
     }
 
@@ -307,7 +336,9 @@ impl RuntimeContinuityFacts {
     fn is_empty(&self) -> bool {
         self.active_objectives.is_empty()
             && self.changed_files.is_empty()
+            && self.file_change_rounds.is_empty()
             && self.validation_states.is_empty()
+            && self.terminal_task_states.is_empty()
             && self.subagent_task_states.is_empty()
     }
 
@@ -329,6 +360,18 @@ impl RuntimeContinuityFacts {
             items.push(format!(
                 "runtime_state_validation:{}",
                 self.validation_states.len()
+            ));
+        }
+        if !self.file_change_rounds.is_empty() {
+            items.push(format!(
+                "runtime_state_file_change_rounds:{}",
+                self.file_change_rounds.len()
+            ));
+        }
+        if !self.terminal_task_states.is_empty() {
+            items.push(format!(
+                "runtime_state_terminal_tasks:{}",
+                self.terminal_task_states.len()
             ));
         }
         if !self.subagent_task_states.is_empty() {
@@ -3230,7 +3273,9 @@ mod tests {
             Message::assistant(
                 "Active objective: finish Phase 8 compaction survivability\n\
                  Changed files: src/engine/context_compressor.rs, docs/PROJECT_STATUS.md\n\
+                 Tool round: round_abc checkpoint-backed 2 file changes\n\
                  Validation passed: cargo test -q context_compressor\n\
+                 Terminal task: shell_background_1 output_path=.priority-agent/tool-results/out.txt status=running\n\
                  agent_id=agent_1 task_id=task_1 status=running worktree=/tmp/agent-worktree",
             ),
             Message::user("This unrelated sentence mentions objective but is not runtime state."),
@@ -3240,7 +3285,9 @@ mod tests {
 
         assert_eq!(facts.active_objectives.len(), 1);
         assert_eq!(facts.changed_files.len(), 1);
+        assert_eq!(facts.file_change_rounds.len(), 1);
         assert_eq!(facts.validation_states.len(), 1);
+        assert_eq!(facts.terminal_task_states.len(), 1);
         assert_eq!(facts.subagent_task_states.len(), 1);
         assert!(facts
             .retained_items()
@@ -3248,6 +3295,12 @@ mod tests {
         assert!(facts
             .retained_items()
             .contains(&"runtime_state_subagent_tasks:1".to_string()));
+        assert!(facts
+            .retained_items()
+            .contains(&"runtime_state_file_change_rounds:1".to_string()));
+        assert!(facts
+            .retained_items()
+            .contains(&"runtime_state_terminal_tasks:1".to_string()));
     }
 
     #[test]
@@ -3266,7 +3319,9 @@ mod tests {
         messages.push(Message::assistant(
             "Active objective: finish Phase 8 compaction survivability\n\
              Changed files: src/engine/context_compressor.rs, docs/CLAUDE_CODE_PROGRAMMING_PARITY_RELEASE_PLAN_2026-05-22.md\n\
+             Tool round: round_phase8 checkpoint-backed 2 file changes\n\
              Validation passed: cargo test -q context_compressor\n\
+             Terminal task: shell_background_1 output_path=.priority-agent/tool-results/out.txt status=running\n\
              agent_id=agent_1 task_id=task_1 status=running worktree=/tmp/agent-worktree branch=codex/agent-1234",
         ));
         for i in 30..60 {
@@ -3291,7 +3346,9 @@ mod tests {
         assert!(compacted_text.contains("## Runtime Continuity"));
         assert!(compacted_text.contains("Active objective: finish Phase 8"));
         assert!(compacted_text.contains("Changed files: src/engine/context_compressor.rs"));
+        assert!(compacted_text.contains("Tool round: round_phase8"));
         assert!(compacted_text.contains("Validation passed: cargo test -q context_compressor"));
+        assert!(compacted_text.contains("Terminal task: shell_background_1"));
         assert!(compacted_text.contains("agent_id=agent_1 task_id=task_1"));
         assert!(record
             .retained_items
@@ -3302,6 +3359,12 @@ mod tests {
         assert!(record
             .retained_items
             .contains(&"runtime_state_validation:1".to_string()));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_file_change_rounds:1".to_string()));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_terminal_tasks:1".to_string()));
         assert!(record
             .retained_items
             .contains(&"runtime_state_subagent_tasks:1".to_string()));
