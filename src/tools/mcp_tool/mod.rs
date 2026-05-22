@@ -21,6 +21,7 @@ fn scoped_mcp_servers(context: &ToolContext) -> Option<Vec<String>> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn ensure_mcp_server_allowed(context: &ToolContext, server_name: &str) -> Result<(), ToolResult> {
     let Some(servers) = scoped_mcp_servers(context) else {
         return Ok(());

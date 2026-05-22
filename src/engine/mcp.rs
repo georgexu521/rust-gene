@@ -1851,6 +1851,7 @@ fn scoped_mcp_servers(context: &crate::tools::ToolContext) -> Option<Vec<String>
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn ensure_mcp_server_allowed(
     context: &crate::tools::ToolContext,
     server_name: &str,

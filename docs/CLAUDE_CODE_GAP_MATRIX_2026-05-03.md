@@ -191,7 +191,9 @@ Acceptance:
 
 ### P0: Evaluation Replay Matrix
 
-Status: initial matrix landed.
+Status: local deterministic matrix and external-baseline ingestion surfaces
+landed. Real Claude Code/Codex result artifacts still need to be imported
+before claiming empirical parity.
 
 - `evalsets/coding_replay_matrix.yaml` now covers 25 deterministic coding
   replay scenarios.
@@ -206,6 +208,21 @@ Status: initial matrix landed.
 - `/eval baseline-template <provider> [model]` and `/eval baseline-write
   <provider> [model]` generate complete `not_run` baseline templates for all
   Phase 12 scenario ids.
+- `scripts/external-baseline-artifact.py` creates Markdown run-record
+  skeletons under `target/external-runs/` so real external-agent transcripts can
+  be captured before import.
+- `/eval baseline-import <artifact_path> <provider> [model]` converts existing
+  external baseline YAML/JSON or Markdown run-result tables into the shared
+  baseline schema, so real Claude/Codex artifacts can be staged without manual
+  row copying.
+- `/eval baseline-validate [provider|all]` checks external baseline files for
+  missing required ids, duplicate/unknown rows, not-run placeholders, missing
+  evidence, and pass rows that are not explicitly validation/evidence backed.
+- `/eval parity [provider|all]` is now the Phase 12 parity report surface: it
+  combines local replay readiness with imported external provider outcomes and
+  labels each scenario/provider gap.
+- `/eval parity-record [provider|all]` records that same parity report under
+  `target/eval-reports/` with a timestamped filename for later audit.
 - Persisted eval report JSON is backward compatible and can carry optional
   external baseline metadata for Claude/Codex-style comparisons.
 - Git tool execution now honors `ToolContext.working_dir` and returns

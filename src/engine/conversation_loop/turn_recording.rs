@@ -182,7 +182,7 @@ pub(super) fn record_remote_bridge_trace(
             .error
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| result.content.as_str());
+            .unwrap_or(result.content.as_str());
         let plan = crate::engine::recovery_plan::RecoveryPlan::tool_failure(
             &tool_call.name,
             error,
@@ -244,7 +244,7 @@ pub(super) fn record_permission_denial_recovery_trace(
         .error
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| result.content.as_str());
+        .unwrap_or(result.content.as_str());
     let permission_denied = matches!(error_code.as_deref(), Some("permission_denied"))
         || result
             .data

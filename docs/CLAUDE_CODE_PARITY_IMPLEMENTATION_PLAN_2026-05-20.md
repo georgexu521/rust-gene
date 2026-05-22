@@ -2,7 +2,9 @@
 
 Date: 2026-05-20
 
-Status: new active implementation plan.
+Status: implementation complete through the Phase 12 local replay and external
+baseline-ingestion surfaces. Real Claude Code/Codex baseline artifacts still
+need to be produced and imported before making any parity claim.
 
 Scope: tactical shift from "mostly inspired by Claude Code" to "first reach
 Claude Code-like runtime parity, then personalize and diverge." This plan is
@@ -1649,6 +1651,69 @@ Progress, 2026-05-21 follow-up:
   `/eval baseline-write <provider> [model]`; both generate complete `not_run`
   templates covering all six Phase 12 scenario ids so real external runs do not
   drift from the matrix.
+- Added `/eval baseline-import <artifact_path> <provider> [model]` so external
+  run artifacts can be converted into the shared baseline YAML without
+  hand-copying scenario rows. The importer accepts existing baseline YAML/JSON
+  or Markdown tables with scenario/result/evidence columns, ignores unknown
+  scenario ids, and refuses to overwrite an existing imported baseline.
+- Added `/eval baseline-validate [provider|all]` to close the external baseline
+  ingestion loop before any full external run is required. It reports missing
+  required scenario ids, duplicate rows, unknown ids, not-run entries,
+  placeholder/missing evidence, and pass records that are not backed by
+  validation plus final evidence metadata.
+- Added `/eval parity [provider|all]` as the product-level Phase 12 parity
+  report. It combines local replay-ready status with imported external
+  provider outcomes and labels each scenario/provider gap as missing, not-run,
+  failed, blocked, or evidence-incomplete.
+- Added `/eval parity-record [provider|all]` so the same parity report can be
+  written to `target/eval-reports/` as a timestamped artifact. This keeps the
+  external comparison auditable once real Claude Code/Codex runs are imported.
+- Added `scripts/external-baseline-artifact.py` so a real Claude Code, Codex,
+  or other external-agent run can be captured as a Markdown table under
+  `target/external-runs/` and then imported through `/eval baseline-import`.
+  The artifact includes per-scenario run cards and minimum evidence notes so
+  the external comparison does not collapse into a hand-written score table.
+- Updated `/eval matrix` so the six Phase 12 scenarios report external
+  baseline readiness once the replay fixtures and import/validation surfaces
+  exist. Missing empirical provider data is now reported by `/eval parity`
+  instead of leaving the matrix in a deferred state.
+
+Validation, 2026-05-21:
+
+- `cargo test -q external_baseline` - passed, 10 tests.
+- `cargo test -q parity` - passed, 3 tests.
+- `cargo test -q evalset` - passed, 33 tests.
+- `cargo test -q scenario_matrix` - passed, 5 tests.
+- `cargo test -q bundled_coding_replay_matrix_passes` - passed, 1 test.
+- `cargo test -q commands` - passed, 25 tests.
+- `cargo test -q observability` - passed, 3 tests.
+- `cargo check -q` - passed.
+- `cargo fmt --check` - passed.
+
+Validation, 2026-05-22:
+
+- `python3 -m py_compile scripts/external-baseline-artifact.py` - passed.
+- `python3 scripts/external-baseline-artifact.py --provider claude-code --model
+  claude-opus --output /tmp/claude-code-baseline.md --force` - passed.
+- `cargo test -q scenario_matrix` - passed, 5 tests.
+- `cargo test -q external_baseline` - passed, 10 tests.
+- `cargo test -q evalset` - passed, 33 tests.
+- `cargo fmt --check` - passed.
+- `cargo check -q` - passed.
+- `cargo clippy -q -- -D warnings` - passed.
+- `cargo test -q` - passed, 1572 tests.
+- `cargo check --all-features -q` - passed.
+- `cargo clippy --all-features -q -- -D warnings` - passed.
+- `git diff --check` - passed.
+
+Phase 12 code status:
+
+- Complete for local deterministic replay readiness, baseline templates,
+  baseline artifact skeletons, baseline import, baseline validation, parity
+  reporting, and parity report recording.
+- Not complete for empirical Claude Code/Codex comparison data until real
+  external artifacts are generated and imported. That is evidence collection,
+  not another runtime implementation prerequisite.
 
 ## First Ten Code Batches
 

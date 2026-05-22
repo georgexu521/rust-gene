@@ -1,0 +1,948 @@
+# Claude Code Programming Parity Release Plan
+
+Date: 2026-05-22
+
+Status: follow-up execution plan. This document starts after
+`docs/CLAUDE_CODE_PARITY_IMPLEMENTATION_PLAN_2026-05-20.md` reached local
+deterministic replay readiness and external-baseline ingestion surfaces.
+
+Goal: move Priority Agent from "Claude Code-inspired and usable for controlled
+coding tasks" to "stable enough to ship as a daily coding-agent product with
+Claude Code-like programming ability."
+
+This plan focuses on programming ability: tool calling, file editing, bash and
+terminal tasks, permissions, subagents, context handling, TUI feedback, and
+release evidence. It is not a generic feature-count race.
+
+## Product Target
+
+The target experience is:
+
+1. A user can open the CLI in a real repo and ask for a code change.
+2. The agent reads the right files, edits safely, runs relevant validation, and
+   reports evidence without repeated steering.
+3. Tool execution order, permission review, terminal tasks, file history,
+   diffs, context pressure, and subagent work are visible as product state.
+4. Failures are recoverable: stale reads, denied permissions, long-running
+   commands, provider protocol issues, context-too-long errors, MCP auth
+   failures, and bad edits produce specific recovery paths.
+5. The product can be installed, updated, diagnosed, and regression-tested
+   without depending on ad hoc local knowledge.
+
+Approximate current position from the 2026-05-22 source comparison:
+
+| Area | Current maturity | Release target |
+|------|------------------|----------------|
+| Local coding loop | 70% | 90% |
+| File edit/history/rewind | 70-75% | 90% |
+| Bash/terminal task behavior | 60-65% | 90% |
+| Tool-call contract and orchestration | 55-60% | 90% |
+| Permissions/hooks/human review | 65-70% | 85% |
+| Subagents/worktrees | 55-60% | 80-85% |
+| Context/memory/skills | 55-60% | 80-85% |
+| TUI/product UX | 35-45% | 85% |
+| MCP/plugins/bridge/provider polish | 35-45% | 75-80% |
+| Release/install/diagnostics | 40-50% | 85% |
+
+The important point: the next gap is not missing nouns. It is runtime semantics,
+durable state, UI feedback, and empirical proof.
+
+## Reference Rule
+
+Before implementing a major subsystem, re-read the current local Claude source
+for that subsystem:
+
+- Tool contract: `/Users/georgexu/Desktop/claude/src/Tool.ts`
+- Tool execution: `/Users/georgexu/Desktop/claude/src/services/tools/`
+- Bash: `/Users/georgexu/Desktop/claude/src/tools/BashTool/`
+- File tools: `/Users/georgexu/Desktop/claude/src/tools/File*Tool/`
+- File history: `/Users/georgexu/Desktop/claude/src/utils/fileHistory.ts`
+- Agent tool: `/Users/georgexu/Desktop/claude/src/tools/AgentTool/`
+- Tasks: `/Users/georgexu/Desktop/claude/src/tasks/`
+- App state: `/Users/georgexu/Desktop/claude/src/state/`
+- UI: `/Users/georgexu/Desktop/claude/src/components/`
+- Context/compact/memory/skills: `/Users/georgexu/Desktop/claude/src/services/`
+  and `/Users/georgexu/Desktop/claude/src/skills/`
+- MCP/plugins/bridge/remote:
+  `/Users/georgexu/Desktop/claude/src/services/mcp/`,
+  `/Users/georgexu/Desktop/claude/src/plugins/`,
+  `/Users/georgexu/Desktop/claude/src/bridge/`,
+  `/Users/georgexu/Desktop/claude/src/remote/`
+
+Translate product semantics into original Rust code. Do not copy Claude source
+or long prompt/UI strings verbatim.
+
+## Semantic Replication Protocol
+
+The goal is not clean-room invention when Claude Code already contains a better
+programming-agent pattern. The goal is also not source-code copying. The working
+method for this plan is semantic replication:
+
+1. Read the relevant Claude module immediately before implementing a Priority
+   Agent subsystem.
+2. Extract the behavior as a small design note:
+   - inputs and outputs;
+   - state carried between calls;
+   - ordering guarantees;
+   - concurrency boundaries;
+   - permission and hook checkpoints;
+   - error branches and fallback behavior;
+   - result normalization and UI facts;
+   - tests or examples needed to prove parity.
+3. Implement the same semantics in Rust using Priority Agent's own types,
+   module boundaries, error handling, and storage model.
+4. Add tests that assert behavior, not textual similarity.
+5. Record any deliberate divergence in the plan or status doc.
+
+### What Can Be Replicated
+
+These are legitimate parity targets and should be copied at the semantic level:
+
+- Function responsibility boundaries.
+- State-machine shape.
+- Tool-call ordering algorithms.
+- Validation and permission checkpoint order.
+- Error classification and recovery decision trees.
+- File edit safety sequence: normalize path, validate input, verify read state,
+  detect stale content, prepare checkpoint, mutate, record diff, update state.
+- Bash safety sequence: parse command, classify subcommands, cap expensive
+  analysis, build permission facts, choose foreground/background/PTY behavior,
+  record task output.
+- Subagent fork semantics: preserve parent context, insert deterministic
+  placeholder tool results, add child directive, prevent uncontrolled recursive
+  forking, isolate mutating work in a worktree.
+- Context compaction semantics: record boundary, preserve active task facts,
+  retain critical tool/file/validation evidence, emit traceable provenance.
+- UI product structure: status, diff, approval, task, agent, context, MCP, and
+  trace panels backed by runtime state.
+- Test scenarios and acceptance criteria.
+
+### What Must Not Be Copied
+
+Do not copy:
+
+- Source code bodies.
+- Long prompt strings or UI copy.
+- Private identifiers that do not make sense in Priority Agent.
+- Analytics names, internal experiment names, or vendor-specific feature flags.
+- Exact file organization when the Rust codebase already has a better local
+  ownership boundary.
+- Dead code, compatibility branches, or product experiments that are not needed
+  for Priority Agent's release target.
+
+### Claude-First Implementation Checklist
+
+For each parity batch, create or keep a short local note in the PR/commit
+description or plan progress section:
+
+```text
+Claude reference:
+- files/functions inspected:
+- behavior extracted:
+- Priority Agent target files:
+- intentional divergences:
+- parity tests added:
+- validation commands:
+```
+
+This makes Claude Code a practical implementation reference while keeping the
+Priority Agent implementation original and maintainable.
+
+### Examples From The Current Gap
+
+Tool orchestration should follow Claude's algorithmic shape: group consecutive
+concurrency-safe tool calls, run each read-only group concurrently, run
+mutating or unsafe calls serially, and apply state/context changes in original
+tool-call order. Priority Agent should not merely "support parallel tools"; it
+should match this ordering guarantee.
+
+File edit should follow Claude's safety sequence: normalize and canonicalize the
+path, reject impossible edits before permission, check permission rules, verify
+the file has been read, reject stale content unless content is unchanged,
+handle exact-match ambiguity, prepare a checkpoint/history record, write while
+preserving text format, then update read/file state and emit diff evidence.
+
+Bash permission should follow Claude's risk-shaping approach: parse before
+trusting the command, cap expensive compound-command analysis, generate stable
+rule suggestions, avoid broad shell-wrapper approvals, and fall back to asking
+when safety cannot be proven.
+
+Subagent fork should follow Claude's context strategy: fork with deterministic
+placeholder results for parent tool calls, keep child output constrained,
+prevent recursive uncontrolled delegation, and use isolated worktrees for
+mutating parallel work.
+
+## Release Gates
+
+### Internal Alpha
+
+The product is ready for daily dogfooding by gex when:
+
+- Ordered tool execution matches Claude-like read/write semantics.
+- File edits create durable checkpoint-backed evidence.
+- Bash foreground/background/PTY tasks are visible and recoverable.
+- `/status`, `/tool-output`, `/diff`, `/rewind`, `/permissions`, `/tasks`,
+  `/agents`, `/context`, and `/trace` are usable without reading raw logs.
+- Real Claude Code and Codex artifacts have been imported for the parity matrix.
+- Full local tests and clippy are clean.
+
+### Beta
+
+The product is ready for a small external tester group when:
+
+- The real-project coding gauntlet is stable across repeated runs.
+- Install/update/doctor flows are reliable on a fresh machine.
+- Provider protocol failures are typed and recoverable.
+- TUI panels do not expose placeholder flows as production features.
+- Permission and destructive action review are understandable without source
+  knowledge.
+- Crash/failure reports can be exported with enough evidence to debug.
+
+### Release Candidate
+
+The product is ready for release candidate status when:
+
+- A pinned parity suite shows no P0 gaps against Claude Code for local repo
+  coding tasks.
+- The product can survive long sessions with compaction, background tasks, and
+  subagents without losing state.
+- Release packaging, migration, config, and rollback paths are documented and
+  tested.
+- Known non-parity decisions are documented as deliberate product choices, not
+  accidental gaps.
+
+## Phase 0: Evidence Lock And External Baseline
+
+Purpose: stop planning from drifting and get real comparison data early.
+
+Tasks:
+
+1. Generate real Claude Code baseline artifacts for the six Phase 12 scenarios.
+2. Generate real Codex baseline artifacts for the same scenarios.
+3. Import them with `/eval baseline-import`.
+4. Validate with `/eval baseline-validate`.
+5. Record reports with `/eval parity-record`.
+6. Add a second wider set of 10-15 real coding tasks:
+   - small bug fix
+   - cross-file refactor
+   - test failure repair
+   - frontend UI change
+   - CLI behavior change
+   - permission-denied recovery
+   - long-running dev server or watcher
+   - package install refusal/approval path
+   - stale-read edit conflict
+   - subagent worker review/merge
+   - context compaction during a long turn
+   - MCP auth/resource retry
+
+Deliverables:
+
+- Imported baseline files under `evalsets/external_baselines/`.
+- Recorded parity reports under `target/eval-reports/`.
+- A short current-gap summary appended to the parity plan or status doc.
+
+Acceptance:
+
+- No parity claim relies only on deterministic local replay.
+- Each passing external scenario has transcript/evidence notes, not just a
+  hand-written pass label.
+
+## Phase 1: Tool-Call Orchestration Semantics
+
+Purpose: match Claude-like tool execution ordering before deepening more tools.
+
+Current gap:
+
+- Claude partitions tool calls into consecutive concurrency-safe read batches
+  and serial mutating calls, preserving model order.
+- Priority Agent currently collects safe read-only calls and then executes
+  mutating calls. This can change the meaning of `read -> edit -> read`.
+
+Tasks:
+
+1. Replace global read-first scheduling with ordered partitioning:
+   - consecutive concurrency-safe calls form one concurrent batch;
+   - each mutating or non-safe call forms a serial batch;
+   - batch order follows the assistant message order.
+2. Treat Claude's partitioning flow as the behavioral reference, but implement
+   it as original Rust batch types owned by `ToolExecutionController`.
+3. Preserve pre-executed provider read-only results without changing relative
+   order.
+4. Return tool results in the model-visible order required by provider
+   protocols.
+5. Keep lifecycle records, trace events, permission events, and runtime tool
+   status aligned with the ordered batches.
+6. Add regression tests for:
+   - `read, write, read`
+   - `read, read, write, read, read`
+   - denied tool between read batches
+   - pre-executed read-only before and after a write
+   - max-tool-call policy with ordered batches
+
+Primary files:
+
+- `src/engine/conversation_loop/tool_execution_controller.rs`
+- `src/engine/conversation_loop/tool_execution.rs`
+- `src/engine/conversation_loop/tool_call_lifecycle.rs`
+- `src/engine/conversation_loop/tool_result_controller.rs`
+
+Validation:
+
+- `cargo test -q tool_execution`
+- `cargo test -q tool_call_lifecycle`
+- `cargo test -q provider_protocol`
+- `cargo check -q`
+
+Acceptance:
+
+- Tool call ordering is semantically equivalent to Claude Code for mixed
+  read/write rounds.
+- Parallelism is retained only inside safe consecutive read batches.
+
+Progress, 2026-05-22:
+
+- Implemented ordered tool execution in `ToolExecutionController`: consecutive
+  concurrency-safe calls run as bounded concurrent read batches, while mutating
+  or unsafe calls execute serially at their original position.
+- Tool results are returned in assistant tool-call order, including read-only
+  batches that complete out of order internally.
+- Pre-executed read-only results now keep their original position when they are
+  still before a serial boundary; pre-executed reads after a write/serial
+  boundary are rerun in order so they cannot observe stale pre-write state.
+- Tool lifecycle completion preserves the earlier parallel/pre-executed flags
+  instead of resetting them on completion.
+- Added regression coverage for:
+  - `read -> write -> read`
+  - `read -> read -> write -> read -> read`
+  - denied tool between read batches
+  - pre-executed read-only result before a write
+  - pre-executed read-only result after a write reruns in order
+- Validation:
+  - `cargo test -q tool_execution` - passed, 24 tests.
+  - `cargo test -q tool_call_lifecycle` - passed, 2 tests.
+  - `cargo test -q provider_protocol` - passed, 12 tests.
+  - `cargo test -q closeout` - passed, 23 tests.
+  - `cargo fmt --check` - passed.
+  - `cargo check -q` - passed.
+  - `cargo test -q` - passed, 1577 tests.
+  - `cargo clippy -q -- -D warnings` - passed.
+  - `cargo check --features experimental-api-server -q` - passed.
+  - `cargo clippy --all-features -q -- -D warnings` - passed.
+  - `git diff --check` - passed.
+
+## Phase 2: Tool Contract Completion
+
+Purpose: make tools product objects, not just JSON executors.
+
+Already present:
+
+- Basic schema, execution, output schema hook, operation kind, read-only,
+  concurrency-safe, destructive, max result size, user-facing name, summary,
+  activity label, provider payload, classifier input.
+
+Remaining parity work:
+
+1. Add or finish contract concepts:
+   - aliases
+   - search hints
+   - deferred loading / tool search visibility
+   - strict-schema capability
+   - `interrupt_behavior`
+   - `requires_user_interaction`
+   - `is_open_world`
+   - `is_search_or_read_command`
+   - path extraction
+   - permission matcher preparation
+   - observable input backfill for hooks/transcript
+   - transcript/search summary extraction
+   - UI render metadata hooks
+2. Deepen the core tools first:
+   - `file_read`
+   - `file_edit`
+   - `file_write`
+   - `file_patch`
+   - `bash`
+   - `bash_output`
+   - `bash_cancel`
+   - `grep`
+   - `glob`
+   - `todo_write`
+   - `agent`
+   - `task_*`
+3. Store all tool execution facts in one durable record path.
+4. Use records for provider payload, TUI rows, closeout evidence, trace, and
+   replay assertions.
+
+Primary files:
+
+- `src/tools/mod.rs`
+- `src/engine/evidence_ledger.rs`
+- `src/engine/conversation_loop/tool_metadata.rs`
+- `src/engine/conversation_loop/tool_result_controller.rs`
+- `src/tui/tool_view.rs`
+
+Validation:
+
+- `cargo test -q tool_contract`
+- `cargo test -q evidence_ledger`
+- `cargo test -q tool_result`
+- `cargo test -q closeout`
+- `cargo check -q`
+
+Acceptance:
+
+- A tool's runtime behavior, permission review, UI summary, and final evidence
+  come from structured tool facts, not string parsing.
+
+## Phase 3: Bash And Terminal Productization
+
+Purpose: make shell execution safe, visible, and reliable enough for daily
+coding work.
+
+Tasks:
+
+1. Replace broad string matching with a safer parser/classifier path for shell
+   commands where possible.
+2. Mirror Claude's command-safety decision tree at the behavior level:
+   - cheap normalization first;
+   - bounded parsing for compound commands;
+   - conservative fallback to ask when safety cannot be proven;
+   - stable rule suggestion only when the prefix is specific enough.
+3. Expand command facts:
+   - search/read/list
+   - validation/test
+   - dev server
+   - package install
+   - git mutation
+   - file mutation
+   - destructive
+   - network access
+   - external path access
+   - PTY required
+   - expected silent output
+4. Add command-specific permission review:
+   - stable rule pattern suggestions;
+   - exact-command and prefix-command options;
+   - deny dangerous shell wrappers;
+   - explain shell risk in the approval panel.
+5. Implement Claude-like task output behavior:
+   - durable output file for large/long-running shell output;
+   - preview plus path;
+   - `bash_output` reads by task id;
+   - `bash_cancel` cancels by task id;
+   - `/tasks` and `/status` show task state.
+6. Add auto-background policy for long blocking commands with a configurable
+   threshold.
+7. Improve PTY recovery:
+   - detect interactive commands;
+   - tell the model to retry with PTY or foreground when needed;
+   - avoid hanging non-interactive sessions.
+8. Track git/file mutations from shell commands where feasible.
+
+Primary files:
+
+- `src/tools/bash_tool/`
+- `src/task_manager/`
+- `src/state/runtime_state.rs`
+- `src/tui/runtime_panels.rs`
+- `src/tui/tool_view.rs`
+- `src/permissions/`
+
+Validation:
+
+- `cargo test -q command_classifier`
+- `cargo test -q bash_tool`
+- `cargo test -q shell_lifecycle`
+- `cargo test -q runtime_state`
+- `cargo test -q permissions`
+- `cargo check -q`
+
+Acceptance:
+
+- Long shell commands do not disappear.
+- Validation commands become machine-readable evidence.
+- Risky shell commands produce understandable, command-specific review.
+
+## Phase 4: File Tools, History, Diff, And Rewind
+
+Purpose: make code mutation recoverable and inspectable.
+
+Tasks:
+
+1. Move file read state fully into `ToolUseContext`/runtime state:
+   - content hash
+   - mtime
+   - canonical path
+   - lexical path
+   - line range
+   - encoding
+   - line endings
+2. Mirror Claude's file-edit safety sequence as behavior:
+   - expand and normalize the path;
+   - reject invalid edits before writing;
+   - apply permission checks before mutation;
+   - require full or relevant read coverage;
+   - compare stale state by mtime and content hash;
+   - handle exact-match ambiguity and replace-all behavior;
+   - preserve line endings and encoding;
+   - update file state after the write.
+3. Ensure every mutation creates checkpoint-backed evidence before writing.
+4. Add turn-level file history snapshots, not only per-tool change records.
+5. Make `/diff` and `/rewind` read from the same source of truth as file tools.
+6. Add restore coverage for:
+   - last file change
+   - explicit file change id
+   - checkpoint id
+   - whole-turn rollback
+7. Add optional editor/LSP/IDE notification hooks where available.
+8. Strengthen edge cases:
+   - empty file creation
+   - multiple matches
+   - partial reads
+   - file changed by formatter after read
+   - non-UTF8 or BOM files
+   - very large files
+
+Primary files:
+
+- `src/tools/file_tool/`
+- `src/engine/checkpoint.rs`
+- `src/tools/diff_tool/`
+- `src/tools/rewind_tool/`
+- `src/session_store/`
+- `src/state/runtime_state.rs`
+
+Validation:
+
+- `cargo test -q file_tool`
+- `cargo test -q file_state`
+- `cargo test -q checkpoint`
+- `cargo test -q rewind`
+- `cargo test -q diff`
+- `cargo check -q`
+
+Acceptance:
+
+- Every meaningful file mutation has before/after evidence and a usable restore
+  path.
+- Final closeout can cite exact changed files and validation evidence from
+  records.
+
+## Phase 5: Permission, Hook, And Human Review Runtime
+
+Purpose: make safety review one coherent product path.
+
+Tasks:
+
+1. Unify review requests for:
+   - tool permission
+   - destructive action
+   - plan approval
+   - model question to user
+   - hook-originated question
+   - subagent bubbled permission
+   - remote/bridge action
+2. Add durable review records:
+   - input summary
+   - risk facts
+   - matched allow/deny/ask rules
+   - classifier result
+   - hook decision
+   - user decision
+   - persistence scope
+   - saved config path
+3. Expand hook lifecycle:
+   - session start/end
+   - user prompt submit
+   - pre/post tool
+   - post tool failure
+   - permission request/resolution
+   - file change
+   - validation start/end
+   - subagent start/end
+   - pre/post compact
+   - notification
+4. Preserve env hooks as one provider while preparing project/user config.
+5. Make denial recovery first-class:
+   - safe fallback suggestion;
+   - retry classification;
+   - permission explanation command;
+   - TUI review panel.
+
+Primary files:
+
+- `src/engine/human_review.rs`
+- `src/engine/hooks.rs`
+- `src/engine/conversation_loop/permission_controller.rs`
+- `src/tui/slash_handler/permissions.rs`
+- `src/tui/runtime_panels.rs`
+
+Validation:
+
+- `cargo test -q human_review`
+- `cargo test -q permission_controller`
+- `cargo test -q hooks`
+- `cargo test -q recovery_plan`
+- `cargo check -q`
+
+Acceptance:
+
+- Permission behavior is explainable without reading logs.
+- Hooks can block, allow, annotate, or ask without bypassing explicit deny
+  policy.
+
+## Phase 6: TUI Product Experience
+
+Purpose: make the product feel stable instead of debug-heavy.
+
+Priority surfaces:
+
+1. Status line and `/status`
+2. Tool progress and expandable output
+3. Diff viewer
+4. Permission approval panel
+5. Task/terminal panel
+6. Agent panel
+7. Context/memory/skill panel
+8. MCP/auth/repair panel
+9. Trace/replay panel
+10. Command palette and help maturity labels
+
+Tasks:
+
+1. Make all high-use panels read from `RuntimeAppState` selectors.
+2. Add stable renderers for:
+   - active tool rows;
+   - completed/failed/denied tools;
+   - file diff summaries;
+   - pending approvals;
+   - background tasks;
+   - subagent tasks;
+   - context pressure;
+   - MCP health/auth state.
+3. Hide or gate placeholder commands unless explicitly requested.
+4. Add smoke/snapshot tests for the high-use surfaces.
+5. Keep UI copy short and action-oriented.
+6. Add `doctor` output that tells the user whether the install/runtime is
+   product-ready.
+
+Primary files:
+
+- `src/tui/app.rs`
+- `src/tui/commands.rs`
+- `src/tui/runtime_panels.rs`
+- `src/tui/tool_view.rs`
+- `src/tui/screens/`
+- `src/tui/components/`
+- `src/tui/slash_handler/`
+
+Validation:
+
+- `cargo test -q commands`
+- `cargo test -q runtime_panels`
+- `cargo test -q status_bar`
+- `cargo test -q tool_view`
+- `cargo check -q`
+
+Acceptance:
+
+- During a real coding task, the user can see progress, risk, diffs, validation,
+  and background work without opening raw trace logs.
+
+## Phase 7: Subagents, Tasks, And Worktrees
+
+Purpose: make parallel coding work dependable.
+
+Tasks:
+
+1. Harden agent definitions:
+   - role
+   - when to use
+   - allowed/disallowed tools
+   - MCP scope
+   - permission mode
+   - context mode
+   - model policy
+   - max turns
+   - output contract
+2. Support context modes:
+   - minimal
+   - inherited summary
+   - full fork
+   - isolated worktree fork
+3. Make agent tasks durable:
+   - status
+   - transcript path
+   - output file
+   - in-progress tool ids
+   - permission requests
+   - worktree path/branch
+   - cleanup action
+4. Add background lifecycle:
+   - launch
+   - progress
+   - wait/read output
+   - cancel
+   - merge/review/cleanup for worktree workers
+5. Add result fusion only after artifacts are durable.
+6. Add tests for worker failure, timeout, cancellation, merge conflict, and
+   cleanup safety.
+
+Primary files:
+
+- `src/agent/`
+- `src/tools/agent_tool/`
+- `src/tools/task_tool/`
+- `src/tools/worktree_tool/`
+- `src/session_store/`
+- `src/tui/slash_handler/agents.rs`
+
+Validation:
+
+- `cargo test -q agent_tool`
+- `cargo test -q forked_context`
+- `cargo test -q worktree_tool`
+- `cargo test -q session_store`
+- `cargo check -q`
+
+Acceptance:
+
+- Mutating parallel workers use isolated worktrees by default.
+- Parent sessions can inspect, merge, or clean up worker output safely.
+
+## Phase 8: Context, Compaction, Memory, And Skills
+
+Purpose: keep long coding sessions coherent.
+
+Tasks:
+
+1. Treat compaction as runtime state:
+   - token pressure
+   - trigger
+   - strategy
+   - preserved messages
+   - compact boundary id
+   - retained tools/memory/skills
+2. Support strategies:
+   - no-op
+   - snip/read-search collapse
+   - microcompact
+   - auto compact
+   - reactive compact after context errors
+   - session-memory compact
+3. Add background memory extraction with strict quality gates.
+4. Keep project memory, nested memory, and skill triggers explicit.
+5. Add skill discovery/activation evidence without bloating prompts.
+6. Make `/context`, `/memory`, and `/skills` explain inclusion reasons.
+
+Primary files:
+
+- `src/engine/context_compressor.rs`
+- `src/engine/context_collapse.rs`
+- `src/engine/conversation_loop/context_budget_controller.rs`
+- `src/engine/conversation_loop/memory_sync_controller.rs`
+- `src/memory/`
+- `src/skills/`
+
+Validation:
+
+- `cargo test -q context_compressor`
+- `cargo test -q context_collapse`
+- `cargo test -q memory_sync_controller`
+- `cargo test -q retained_context`
+- `cargo check -q`
+
+Acceptance:
+
+- A long task survives compaction without losing the active objective, changed
+  files, validation state, or active subagent/task state.
+
+## Phase 9: MCP, Plugins, Bridge, Remote, And Providers
+
+Purpose: productize integrations after the local programming harness is stable.
+
+Tasks:
+
+1. MCP:
+   - tools/resources/prompts/commands as runtime facts;
+   - auth and approval repair;
+   - per-agent server scopes;
+   - reconnect and health status.
+2. Plugins:
+   - install/enable/disable/reload;
+   - trust/signature policy;
+   - tool/command/skill contributions;
+   - diagnostic errors.
+3. Bridge/remote:
+   - remote state in runtime state;
+   - permission callbacks;
+   - replay cursor;
+   - reconnect;
+   - status panel.
+4. Providers:
+   - capability records;
+   - normalized message/tool-result conversion;
+   - typed recovery for protocol/context/rate/auth failures;
+   - fallback model policy;
+   - context-too-long reactive compaction.
+
+Primary files:
+
+- `src/engine/mcp.rs`
+- `src/tools/mcp_tool/`
+- `src/plugins/`
+- `src/bridge/`
+- `src/remote/`
+- `src/services/api/`
+- `src/engine/error_classifier.rs`
+
+Validation:
+
+- `cargo test -q mcp`
+- `cargo test -q mcp_tool`
+- `cargo test -q plugins`
+- `cargo test -q provider_protocol`
+- `cargo check --features experimental-api-server -q`
+- `cargo check -q`
+
+Acceptance:
+
+- Integration failures are visible, diagnosable, and recoverable from the CLI.
+
+## Phase 10: Release Hardening
+
+Purpose: make the project shippable, not only impressive locally.
+
+Tasks:
+
+1. Install/update:
+   - fast install path;
+   - clear dependency checks;
+   - rollback on failed update;
+   - version reporting.
+2. Doctor:
+   - provider config;
+   - model/tool-call support;
+   - shell backend;
+   - permissions config;
+   - MCP/plugin status;
+   - writable state directories;
+   - git/worktree availability.
+3. Configuration:
+   - stable config schema;
+   - migration checks;
+   - user/project/global scope;
+   - redacted export.
+4. Packaging:
+   - binary release process;
+   - checksums;
+   - install script smoke test;
+   - release notes.
+5. CI/release gates:
+   - `cargo fmt --check`
+   - `cargo check -q`
+   - `cargo test -q`
+   - `cargo clippy --all-features -- -D warnings`
+   - feature checks
+   - replay matrix
+   - external parity report import validation
+6. Documentation:
+   - quick start;
+   - safety model;
+   - tool permissions;
+   - common workflows;
+   - debugging/doctor guide;
+   - known gaps.
+
+Primary files:
+
+- `install.sh`
+- `Cargo.toml`
+- `scripts/`
+- `.github/workflows/`
+- `docs/`
+- `src/tui/slash_handler/diagnostics.rs`
+
+Acceptance:
+
+- A fresh user can install, configure, run a code task, inspect permissions, and
+  recover from common failures without reading source code.
+
+## Immediate Development Queue
+
+The next concrete batches should be:
+
+1. **Ordered tool orchestration.**
+   Fix mixed read/write tool ordering and add regression tests.
+2. **Real external baseline capture.**
+   Run Claude Code and Codex CLI on the six parity scenarios, import, validate,
+   and record parity reports.
+3. **Bash safety and task-output hardening.**
+   Deepen command facts, durable output, auto-background, and permission review.
+4. **File history and rewind hardening.**
+   Add turn-level snapshots, restore coverage, and closeout evidence plumbing.
+5. **TUI product pass for coding loop.**
+   Polish status, tool output, diff, approval, tasks, agents, and context panels.
+6. **Subagent lifecycle hardening.**
+   Make worker progress, output, cancellation, merge, and cleanup reliable.
+7. **Context/memory long-session pass.**
+   Prove compaction and memory retention on long real coding tasks.
+8. **Release hardening.**
+   Install/update/doctor/config/docs/CI.
+
+Do not start broad UI or release packaging before ordered tool execution and
+real external baseline evidence exist. Those two items are the fastest way to
+separate real programming gaps from guessed gaps.
+
+## Verification Policy
+
+Use the narrowest validation gate for each batch, then broaden when shared
+contracts move.
+
+Common targeted gates:
+
+```bash
+cargo test -q tool_execution
+cargo test -q command_classifier
+cargo test -q file_tool
+cargo test -q runtime_state
+cargo test -q human_review
+cargo test -q hooks
+cargo test -q agent_tool
+cargo test -q context_compressor
+cargo test -q provider_protocol
+cargo check -q
+```
+
+Broader gates before marking a phase complete:
+
+```bash
+cargo fmt --check
+cargo test -q
+cargo clippy --all-features -- -D warnings
+cargo check --features experimental-api-server -q
+bash scripts/workflow-production-gates.sh
+git diff --check
+```
+
+External parity gates:
+
+```text
+/eval baseline-import <artifact_path> claude-code <model>
+/eval baseline-import <artifact_path> codex <model>
+/eval baseline-validate all
+/eval parity all
+/eval parity-record all
+```
+
+## Decision Log
+
+- The project should pursue Claude Code-like product completeness for
+  programming tasks before heavy differentiation.
+- Priority Agent should still remain narrow, deep, personal, and verifiable;
+  personalization comes after the mainstream coding-agent harness is reliable.
+- The most urgent implementation gap is ordered mixed tool-call execution.
+- Real Claude Code/Codex baseline artifacts should be collected early, not
+  postponed until after every planned improvement.
+- Parity must be proven through runtime behavior and evidence, not tool count.

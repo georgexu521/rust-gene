@@ -1290,8 +1290,8 @@ pub const CMD_EVAL: CommandDef = CommandDef::new(
     "/eval",
     &[],
     "Info",
-    "/eval [list|matrix|baseline|baseline-template|baseline-write|run]",
-    "Run evalsets, compare external baselines, or create baseline templates",
+    "/eval [list|matrix|parity|parity-record|baseline|baseline-validate|baseline-template|baseline-write|baseline-import|run]",
+    "Run evalsets, report/record parity, or manage baseline files",
 );
 
 pub const CMD_RESOURCE: CommandDef = CommandDef::new(

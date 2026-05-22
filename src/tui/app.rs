@@ -197,7 +197,7 @@ fn runtime_terminal_task_from_view(run: &ToolRunView) -> Option<RuntimeTerminalT
     let status = task
         .get("status")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| match run.status {
+        .unwrap_or(match run.status {
             ToolRunStatus::Queued => "queued",
             ToolRunStatus::Running => "running",
             ToolRunStatus::Backgrounded => "running",

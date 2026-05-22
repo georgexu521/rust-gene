@@ -243,7 +243,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         phase: "Phase 12",
         user_task: "edit a file, verify checkpoint evidence, then rewind the edit",
         status: ReplayStatus::ReplayFixtureReady,
-        external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
+        external_baseline: ExternalBaselineStatus::Ready,
         evidence: FILE_EDIT_REWIND_EVIDENCE,
     },
     DeterministicScenario {
@@ -253,7 +253,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         phase: "Phase 12",
         user_task: "start a long-running shell command, poll output, then cancel or close out",
         status: ReplayStatus::ReplayFixtureReady,
-        external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
+        external_baseline: ExternalBaselineStatus::Ready,
         evidence: BASH_BACKGROUND_EVIDENCE,
     },
     DeterministicScenario {
@@ -263,7 +263,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         phase: "Phase 12",
         user_task: "deny a risky tool call, explain recovery, then retry through an allowed path",
         status: ReplayStatus::ReplayFixtureReady,
-        external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
+        external_baseline: ExternalBaselineStatus::Ready,
         evidence: PERMISSION_DENIAL_EVIDENCE,
     },
     DeterministicScenario {
@@ -273,7 +273,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         phase: "Phase 12",
         user_task: "force context pressure, compact with provenance, then resume the task",
         status: ReplayStatus::ReplayFixtureReady,
-        external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
+        external_baseline: ExternalBaselineStatus::Ready,
         evidence: COMPACTION_BOUNDARY_EVIDENCE,
     },
     DeterministicScenario {
@@ -283,7 +283,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         phase: "Phase 12",
         user_task: "fork a child worker into an isolated worktree, review output, and clean up",
         status: ReplayStatus::ReplayFixtureReady,
-        external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
+        external_baseline: ExternalBaselineStatus::Ready,
         evidence: SUBAGENT_WORKTREE_EVIDENCE,
     },
     DeterministicScenario {
@@ -293,7 +293,7 @@ const SCENARIOS: &[DeterministicScenario] = &[
         phase: "Phase 12",
         user_task: "hit an MCP auth/server failure, surface repair, then retry after approval",
         status: ReplayStatus::ReplayFixtureReady,
-        external_baseline: ExternalBaselineStatus::DeferredUntilReplayFixture,
+        external_baseline: ExternalBaselineStatus::Ready,
         evidence: MCP_AUTH_REPAIR_EVIDENCE,
     },
 ];
@@ -355,7 +355,7 @@ pub fn format_scenario_matrix() -> String {
         lines.push(format!("  evidence: {}", evidence));
     }
 
-    lines.push("Next gate: record external Claude/Codex baseline files under evalsets/external_baselines/ and compare them with /eval baseline.".to_string());
+    lines.push("Next gate: generate real external Claude/Codex run artifacts, import them with /eval baseline-import, validate with /eval baseline-validate, then compare with /eval parity.".to_string());
     lines.join("\n")
 }
 
@@ -423,14 +423,13 @@ mod tests {
     }
 
     #[test]
-    fn external_baseline_stays_deferred_until_replays_are_ready() {
+    fn external_baseline_is_ready_after_replay_fixtures_land() {
         let summary = scenario_matrix_summary();
         assert_eq!(summary.replay_ready, 6);
-        assert!(!summary.external_baseline_ready);
+        assert!(summary.external_baseline_ready);
         assert!(deterministic_scenarios()
             .iter()
-            .all(|scenario| scenario.external_baseline
-                == ExternalBaselineStatus::DeferredUntilReplayFixture));
+            .all(|scenario| scenario.external_baseline == ExternalBaselineStatus::Ready));
     }
 
     #[test]
@@ -461,7 +460,8 @@ mod tests {
             assert!(rendered.contains(scenario.id), "missing {}", scenario.id);
         }
         assert!(rendered.contains("Next gate"));
-        assert!(rendered.contains("External baseline: deferred"));
-        assert!(rendered.contains("/eval baseline"));
+        assert!(rendered.contains("External baseline: ready"));
+        assert!(rendered.contains("/eval baseline-import"));
+        assert!(rendered.contains("/eval parity"));
     }
 }

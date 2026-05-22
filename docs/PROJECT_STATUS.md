@@ -67,11 +67,12 @@ Current stage:
   failed/blocked hooks emit `/hooks` recovery plans, pre-tool hook blocks are
   classified as hook runtime failures, and permission denials emit
   `/permissions explain` recovery plans in trace.
-- Phase 12 verification work has started with a deterministic scenario matrix
-  skeleton: `src/engine/scenario_matrix.rs` declares the six required parity
-  scenarios and maps each one to concrete runtime/trace/recovery evidence, with
-  `/eval matrix` exposing the current readout. All six local deterministic
-  replay fixtures are now replay-ready: `file_edit_rewind`,
+- Phase 12 verification work has completed its local deterministic replay and
+  external-baseline ingestion surfaces: `src/engine/scenario_matrix.rs`
+  declares the six required parity scenarios and maps each one to concrete
+  runtime/trace/recovery evidence, with `/eval matrix` exposing the current
+  readout. All six local deterministic replay fixtures are now replay-ready:
+  `file_edit_rewind`,
   `bash_background_task`, `permission_denial_retry`, `compaction_boundary`,
   `subagent_worktree_worker`, and `mcp_auth_repair`. Deterministic eval replay
   can emit permission
@@ -86,12 +87,16 @@ Current stage:
   `permission-denial-retry-recovery`, upgraded `context-compaction-safe`, and
   `subagent-worktree-worker-review-merge`, and
   `mcp-auth-repair-approval-retry`. External Claude/Codex baselines are still
-  pending, but the import/compare path now exists: `/eval baseline
+  pending as real evidence artifacts, but the import/validate/compare path is
+  now in place: `/eval baseline
   [provider|all]` loads YAML/JSON files from `evalsets/external_baselines/`
   and reports provider coverage, pass/fail/blocked/not-run counts, missing
   scenario ids, and per-scenario evidence metadata. `/eval baseline-template
   <provider> [model]` and `/eval baseline-write <provider> [model]` generate
-  complete `not_run` templates for the six scenario ids.
+  complete `not_run` templates for the six scenario ids, and
+  `scripts/external-baseline-artifact.py` creates a Markdown run-record
+  skeleton under `target/external-runs/` for real external-agent transcripts,
+  including per-scenario run cards and minimum evidence notes.
 
 The recent closure plan is complete:
 
@@ -520,9 +525,19 @@ current passing run with a real code diff.
 - Evalsets include a deterministic coding replay matrix, JSON report output,
   `/eval record <name|all>` persisted report files for pass/fail trend
   collection, and `/eval baseline [provider|all]` external-provider comparison
-  plus template generation for Phase 12 parity scenarios. `/eval trend [limit]`
-  summarizes recent persisted reports, deltas against the previous run, and
-  optional external baseline metadata when present.
+  plus template/import generation for Phase 12 parity scenarios. `/eval
+  baseline-import <artifact_path> <provider> [model]` converts existing
+  baseline YAML/JSON or Markdown run tables into the shared external-baseline
+  schema; `scripts/external-baseline-artifact.py` creates a Markdown
+  run-record skeleton with per-scenario evidence cards first. `/eval
+  baseline-validate [provider|all]` checks those files for missing scenarios,
+  unknown/duplicate ids, placeholder evidence, and pass records that lack
+  validation/evidence-backed metadata. `/eval parity [provider|all]` combines
+  local replay readiness with imported external provider outcomes and labels
+  each Phase 12 scenario gap. `/eval parity-record [provider|all]` writes the
+  same report to `target/eval-reports/` as an auditable timestamped artifact.
+  `/eval trend [limit]` summarizes recent persisted reports, deltas against
+  the previous run, and optional external baseline metadata when present.
 - The layered workflow gates now cover focused, standard, full-local, and
   opt-in live-smoke validation; the latest live smoke exercised the real
   code-change repair path and passed with full-suite validation.

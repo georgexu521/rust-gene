@@ -266,7 +266,7 @@ pub fn select_tool_viewer_tool_id(
 ) -> Option<String> {
     preferred_id
         .and_then(|id| runtime.tool_uses.iter().find(|tool| tool.id == id))
-        .or_else(|| runtime.tool_uses.iter().rev().next())
+        .or_else(|| runtime.tool_uses.iter().next_back())
         .map(|tool| tool.id.clone())
 }
 

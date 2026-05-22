@@ -215,6 +215,7 @@ async fn commits_ahead(target_dir: &Path, branch: Option<&str>) -> Result<usize,
     Ok(output.trim().parse::<usize>().unwrap_or(0))
 }
 
+#[allow(clippy::result_large_err)]
 fn required_agent_id(params: &serde_json::Value) -> Result<&str, ToolResult> {
     params["agent_id"]
         .as_str()

@@ -23,6 +23,7 @@ pub(super) struct TurnRuntimeContext<'a> {
     pub(super) retained_context: &'a ToolContextRetainedContext,
 }
 
+#[derive(Default)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct SessionRuntimeState {
     pub(super) companion_context_keys: HashSet<String>,
@@ -35,17 +36,6 @@ impl SessionRuntimeState {
     #[cfg(test)]
     pub(super) fn new() -> Self {
         Self::default()
-    }
-}
-
-impl Default for SessionRuntimeState {
-    fn default() -> Self {
-        Self {
-            companion_context_keys: HashSet::new(),
-            failed_tool_fingerprints: HashMap::new(),
-            failed_tool_names: HashMap::new(),
-            successful_required_validation_commands: HashSet::new(),
-        }
     }
 }
 

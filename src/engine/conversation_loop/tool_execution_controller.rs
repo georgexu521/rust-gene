@@ -110,6 +110,15 @@ pub(super) struct ToolExecutionRequest<'a> {
     pub(super) lifecycle: &'a mut ToolCallLifecycle,
 }
 
+struct ReadWriteExecutionContext<'a> {
+    tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    trace: &'a Option<TraceCollector>,
+    runtime_context: &'a ToolRuntimeContext,
+    retained_context: &'a ToolContextRetainedContext,
+    parent_tool_calls: &'a [ToolCall],
+    parent_assistant_content: &'a str,
+}
+
 pub(super) struct ToolExecutionContext {
     tool_registry: Arc<ToolRegistry>,
     cost_tracker: Arc<Mutex<crate::cost_tracker::CostTracker>>,
@@ -576,7 +585,7 @@ impl ToolExecutionController {
 
     async fn collect_read_only_results<F>(
         &self,
-        read_only_jobs: Vec<F>,
+        read_only_jobs: Vec<(usize, F)>,
         concurrency: usize,
         tx: Option<&mpsc::Sender<StreamEvent>>,
         lifecycle: &mut ToolCallLifecycle,
@@ -585,11 +594,15 @@ impl ToolExecutionController {
         F: Future<Output = (ToolCall, ToolResult)>,
     {
         let execution = &self.context;
-        let mut results = Vec::new();
+        let mut completed = Vec::new();
         let mut readonly_stream =
-            futures::stream::iter(read_only_jobs).buffer_unordered(concurrency);
+            futures::stream::iter(read_only_jobs.into_iter().map(|(order, job)| async move {
+                let result = job.await;
+                (order, result)
+            }))
+            .buffer_unordered(concurrency);
 
-        while let Some((tc, result)) = readonly_stream.next().await {
+        while let Some((order, (tc, result))) = readonly_stream.next().await {
             lifecycle.completed(&tc, &result);
             persist_tool_outcome_learning_event(
                 execution.session_store.as_ref(),
@@ -607,21 +620,17 @@ impl ToolExecutionController {
                     })
                     .await;
             }
-            results.push((tc, result));
+            completed.push((order, (tc, result)));
         }
 
-        results
+        completed.sort_by_key(|(order, _)| *order);
+        completed.into_iter().map(|(_, result)| result).collect()
     }
 
     async fn execute_read_write_calls(
         &self,
         read_write_calls: Vec<ToolCall>,
-        tx: Option<&mpsc::Sender<StreamEvent>>,
-        trace: &Option<TraceCollector>,
-        runtime_context: &ToolRuntimeContext,
-        retained_context: &ToolContextRetainedContext,
-        parent_tool_calls: &[ToolCall],
-        parent_assistant_content: &str,
+        exec_context: ReadWriteExecutionContext<'_>,
         lifecycle: &mut ToolCallLifecycle,
     ) -> Vec<(ToolCall, ToolResult)> {
         let execution = &self.context;
@@ -632,7 +641,7 @@ impl ToolExecutionController {
             let tool_name = tc.name.clone();
             if !tool_allowed_by_context(&execution.allowed_tools, &tool_name) {
                 let mut result = tool_not_allowed_result(&tc);
-                runtime_context.attach(
+                exec_context.runtime_context.attach(
                     &mut result,
                     false,
                     false,
@@ -650,7 +659,7 @@ impl ToolExecutionController {
             }
             lifecycle.running(&tc, false, false);
 
-            if let Some(tx) = tx {
+            if let Some(tx) = exec_context.tx {
                 let _ = tx
                     .send(StreamEvent::ToolExecutionStart {
                         id: tool_id.clone(),
@@ -658,7 +667,7 @@ impl ToolExecutionController {
                     })
                     .await;
             }
-            if let Some(ref trace) = trace {
+            if let Some(ref trace) = exec_context.trace {
                 trace.record(TraceEvent::ToolStarted {
                     tool: tool_name.clone(),
                     call_id: tool_id.clone(),
@@ -670,11 +679,11 @@ impl ToolExecutionController {
             let (result, hook_context) = if let Some(tool) = execution.tool_registry.get(&tool_name)
             {
                 let mut context = execution
-                    .tool_context(trace, retained_context)
+                    .tool_context(exec_context.trace, exec_context.retained_context)
                     .with_tool_call_metadata(tool_name.clone(), tool_id.clone())
                     .with_parent_assistant_tool_calls(
-                        parent_tool_calls.to_vec(),
-                        parent_assistant_content.to_string(),
+                        exec_context.parent_tool_calls.to_vec(),
+                        exec_context.parent_assistant_content.to_string(),
                     );
                 let drift_check = execution
                     .active_goal
@@ -687,7 +696,7 @@ impl ToolExecutionController {
                     let hook_start = hooks.current_record_sequence();
                     let decision = hooks.run_pre_tool(&tc, &context).await;
                     let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
-                    record_hook_traces(trace, &hook_records);
+                    record_hook_traces(exec_context.trace, &hook_records);
                     decision
                 } else {
                     HookDecision {
@@ -716,8 +725,8 @@ impl ToolExecutionController {
                         &tc,
                         &permission_evaluation,
                         execution.approval_channel.as_ref(),
-                        tx,
-                        trace,
+                        exec_context.tx,
+                        exec_context.trace,
                     )
                     .await;
                     if approved {
@@ -725,7 +734,7 @@ impl ToolExecutionController {
                             &mut context,
                             &tool_name,
                         );
-                        if let Some(tx) = tx {
+                        if let Some(tx) = exec_context.tx {
                             let _ = tx
                                 .send(StreamEvent::ToolExecutionProgress {
                                     id: tool_id.clone(),
@@ -752,7 +761,7 @@ impl ToolExecutionController {
                         )
                     }
                 } else {
-                    if let Some(tx) = tx {
+                    if let Some(tx) = exec_context.tx {
                         let _ = tx
                             .send(StreamEvent::ToolExecutionProgress {
                                 id: tool_id.clone(),
@@ -768,7 +777,7 @@ impl ToolExecutionController {
                 }
                 attach_tool_execution_metadata(&tc, &mut result);
                 attach_tool_contract_metadata(tool, &tc, &mut result);
-                runtime_context.attach(
+                exec_context.runtime_context.attach(
                     &mut result,
                     false,
                     false,
@@ -832,7 +841,7 @@ impl ToolExecutionController {
                 if let Some(tool) = execution.tool_registry.get(&tc.name) {
                     attach_tool_contract_metadata(tool, &tc, &mut result);
                 }
-                runtime_context.attach(
+                exec_context.runtime_context.attach(
                     &mut result,
                     false,
                     false,
@@ -845,10 +854,10 @@ impl ToolExecutionController {
                 let hook_start = hooks.current_record_sequence();
                 hooks.run_post_tool(&tc, &result, context).await;
                 let hook_records = hooks.recent_records_after_for(hook_start, &tc.id);
-                record_hook_traces(trace, &hook_records);
+                record_hook_traces(exec_context.trace, &hook_records);
             }
 
-            if let Some(tx) = tx {
+            if let Some(tx) = exec_context.tx {
                 let result_content = ToolResultNormalizer::normalize(&tc, &result).ui_content;
                 let _ = tx
                     .send(StreamEvent::ToolExecutionComplete {
@@ -858,7 +867,7 @@ impl ToolExecutionController {
                     })
                     .await;
             }
-            if let Some(ref trace) = trace {
+            if let Some(ref trace) = exec_context.trace {
                 trace.record(TraceEvent::ToolCompleted {
                     tool: tool_name,
                     call_id: tool_id,
@@ -911,9 +920,9 @@ impl ToolExecutionController {
         } = request;
         let execution = &self.context;
         let mut read_only_jobs = Vec::new();
-        let mut read_write_calls = Vec::new();
-        let mut denied_results = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
+        let mut scheduled_count = 0usize;
+        let mut serial_boundary_seen = false;
         lifecycle.pending_batch(tool_calls);
         let runtime_context = ToolRuntimeContext::new(
             route,
@@ -937,16 +946,43 @@ impl ToolExecutionController {
             trace: &trace,
             runtime_context: &runtime_context,
         };
+        let concurrency =
+            read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
 
         for (i, tc) in tool_calls.iter().enumerate() {
             if tc.name.is_empty() {
                 continue;
             }
-            let scheduled_count = results.len()
-                + denied_results.len()
-                + read_only_jobs.len()
-                + read_write_calls.len();
+
+            let concurrency_safe = tool_call_is_concurrency_safe(
+                execution.tool_registry.as_ref(),
+                &tc.name,
+                &tc.arguments,
+            );
+            if !concurrency_safe && !read_only_jobs.is_empty() {
+                let read_only_results = self
+                    .collect_read_only_results(
+                        std::mem::take(&mut read_only_jobs),
+                        concurrency,
+                        tx,
+                        lifecycle,
+                    )
+                    .await;
+                results.extend(read_only_results);
+            }
+
             if let ToolExecutionGateOutcome::Deny(result) = gate.evaluate(tc, scheduled_count) {
+                if !read_only_jobs.is_empty() {
+                    let read_only_results = self
+                        .collect_read_only_results(
+                            std::mem::take(&mut read_only_jobs),
+                            concurrency,
+                            tx,
+                            lifecycle,
+                        )
+                        .await;
+                    results.extend(read_only_results);
+                }
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -954,11 +990,24 @@ impl ToolExecutionController {
                     &result,
                 );
                 lifecycle.denied(tc);
-                denied_results.push((tc.clone(), result));
+                results.push((tc.clone(), result));
+                scheduled_count += 1;
+                serial_boundary_seen = true;
                 continue;
             }
 
-            if let Some(pre_result) = pre_executed.get(&i) {
+            if let Some(pre_result) = pre_executed.get(&i).filter(|_| !serial_boundary_seen) {
+                if !read_only_jobs.is_empty() {
+                    let read_only_results = self
+                        .collect_read_only_results(
+                            std::mem::take(&mut read_only_jobs),
+                            concurrency,
+                            tx,
+                            lifecycle,
+                        )
+                        .await;
+                    results.extend(read_only_results);
+                }
                 let mut pre_result = pre_result.clone();
                 attach_tool_execution_metadata(tc, &mut pre_result);
                 if let Some(tool) = execution.tool_registry.get(&tc.name) {
@@ -1008,14 +1057,11 @@ impl ToolExecutionController {
                         })
                         .await;
                 }
+                scheduled_count += 1;
                 continue;
             }
 
-            if tool_call_is_concurrency_safe(
-                execution.tool_registry.as_ref(),
-                &tc.name,
-                &tc.arguments,
-            ) {
+            if concurrency_safe {
                 lifecycle.running(tc, true, false);
                 if let Some(tx) = tx {
                     let _ = tx
@@ -1025,41 +1071,45 @@ impl ToolExecutionController {
                         })
                         .await;
                 }
-                read_only_jobs.push(self.read_only_job(
-                    &trace,
-                    &runtime_context,
-                    retained_context,
-                    tc,
-                    tool_calls.to_vec(),
-                    parent_assistant_content.to_string(),
+                read_only_jobs.push((
+                    i,
+                    self.read_only_job(
+                        &trace,
+                        &runtime_context,
+                        retained_context,
+                        tc,
+                        tool_calls.to_vec(),
+                        parent_assistant_content.to_string(),
+                    ),
                 ));
+                scheduled_count += 1;
             } else {
-                read_write_calls.push(tc.clone());
+                let read_write_results = self
+                    .execute_read_write_calls(
+                        vec![tc.clone()],
+                        ReadWriteExecutionContext {
+                            tx,
+                            trace: &trace,
+                            runtime_context: &runtime_context,
+                            retained_context,
+                            parent_tool_calls: tool_calls,
+                            parent_assistant_content,
+                        },
+                        lifecycle,
+                    )
+                    .await;
+                results.extend(read_write_results);
+                scheduled_count += 1;
+                serial_boundary_seen = true;
             }
         }
 
-        results.append(&mut denied_results);
-
-        let concurrency =
-            read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
-        let read_only_results = self
-            .collect_read_only_results(read_only_jobs, concurrency, tx, lifecycle)
-            .await;
-        results.extend(read_only_results);
-
-        let read_write_results = self
-            .execute_read_write_calls(
-                read_write_calls,
-                tx,
-                &trace,
-                &runtime_context,
-                retained_context,
-                tool_calls,
-                parent_assistant_content,
-                lifecycle,
-            )
-            .await;
-        results.extend(read_write_results);
+        if !read_only_jobs.is_empty() {
+            let read_only_results = self
+                .collect_read_only_results(read_only_jobs, concurrency, tx, lifecycle)
+                .await;
+            results.extend(read_only_results);
+        }
 
         let lifecycle_snapshot = lifecycle.snapshot();
         let lifecycle_summary = lifecycle_snapshot
@@ -1097,6 +1147,17 @@ fn tool_completion_metadata(result: &ToolResult) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::destructive_scope::DestructiveScopeContract;
+    use crate::engine::intent_router::IntentRouter;
+    use crate::engine::resource_policy::ResourcePolicy;
+    use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
+    use crate::tools::{Tool, ToolContext};
+    use async_openai::types::ChatCompletionResponseStream;
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     fn tool_call(id: &str, name: &str) -> ToolCall {
         ToolCall {
@@ -1104,6 +1165,143 @@ mod tests {
             name: name.to_string(),
             arguments: serde_json::json!({}),
         }
+    }
+
+    struct NoopProvider;
+
+    #[async_trait]
+    impl LlmProvider for NoopProvider {
+        async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            Ok(ChatResponse {
+                content: String::new(),
+                tool_calls: None,
+                usage: None,
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("unused test provider stream"))
+        }
+
+        fn base_url(&self) -> &str {
+            "test://noop"
+        }
+
+        fn default_model(&self) -> &str {
+            "test"
+        }
+    }
+
+    struct ProbeReadTool {
+        writes: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for ProbeReadTool {
+        fn name(&self) -> &str {
+            "probe_read"
+        }
+
+        fn description(&self) -> &str {
+            "Read the probe write counter"
+        }
+
+        fn parameters(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+
+        async fn execute(&self, _params: Value, _context: ToolContext) -> ToolResult {
+            ToolResult::success(format!(
+                "writes_seen={}",
+                self.writes.load(Ordering::SeqCst)
+            ))
+        }
+
+        fn is_read_only(&self, _params: &Value) -> bool {
+            true
+        }
+
+        fn is_concurrency_safe(&self, _params: &Value) -> bool {
+            true
+        }
+    }
+
+    struct ProbeWriteTool {
+        writes: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for ProbeWriteTool {
+        fn name(&self) -> &str {
+            "probe_write"
+        }
+
+        fn description(&self) -> &str {
+            "Increment the probe write counter"
+        }
+
+        fn parameters(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+
+        async fn execute(&self, _params: Value, _context: ToolContext) -> ToolResult {
+            let previous = self.writes.fetch_add(1, Ordering::SeqCst);
+            ToolResult::success(format!("writes_before={previous}"))
+        }
+    }
+
+    fn probe_loop(writes: Arc<AtomicUsize>) -> ConversationLoop {
+        let mut registry = ToolRegistry::new();
+        registry.register(ProbeReadTool {
+            writes: writes.clone(),
+        });
+        registry.register(ProbeWriteTool { writes });
+        ConversationLoop::new(
+            Arc::new(NoopProvider),
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        )
+    }
+
+    async fn execute_probe_tools(
+        loop_instance: &ConversationLoop,
+        tool_calls: &[ToolCall],
+        pre_executed: HashMap<usize, ToolResult>,
+    ) -> ToolExecutionBatch {
+        let route = IntentRouter::new().route("probe ordered tools");
+        let mut policy = ResourcePolicy::from_route(&route);
+        policy.max_tool_calls = 20;
+        policy.parallelism_limit = 4;
+        let destructive_scope = DestructiveScopeContract::from_user_request(
+            "probe ordered tools",
+            &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        );
+        let exposed_tool_names =
+            HashSet::from(["probe_read".to_string(), "probe_write".to_string()]);
+        let mut lifecycle = ToolCallLifecycle::default();
+
+        ToolExecutionController::new(ToolExecutionContext::from_conversation(loop_instance))
+            .execute_tools_parallel(ToolExecutionRequest {
+                tool_calls,
+                parent_assistant_content: "",
+                tx: None,
+                pre_executed,
+                trace: None,
+                route: Some(&route),
+                resource_policy: &policy,
+                exposed_tool_names: &exposed_tool_names,
+                retained_context: &crate::tools::ToolContextRetainedContext::default(),
+                action_checkpoint_active: false,
+                action_checkpoint_lookup_count: 0,
+                has_changes_before_tools: false,
+                destructive_scope: &destructive_scope,
+                lifecycle: &mut lifecycle,
+            })
+            .await
     }
 
     #[test]
@@ -1139,5 +1337,143 @@ mod tests {
         assert_eq!(batch.denied_count(), 1);
         assert_eq!(batch.failed_count(), 1);
         assert_eq!(batch.pre_executed_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn mixed_read_write_round_preserves_tool_call_order() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let tool_calls = vec![
+            tool_call("call_read_before", "probe_read"),
+            tool_call("call_write", "probe_write"),
+            tool_call("call_read_after", "probe_read"),
+        ];
+
+        let batch = execute_probe_tools(&loop_instance, &tool_calls, HashMap::new()).await;
+        let results = batch.results();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|(call, _)| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call_read_before", "call_write", "call_read_after"]
+        );
+        assert_eq!(results[0].1.content, "writes_seen=0");
+        assert_eq!(results[1].1.content, "writes_before=0");
+        assert_eq!(results[2].1.content, "writes_seen=1");
+    }
+
+    #[tokio::test]
+    async fn consecutive_read_batches_stay_ordered_across_writes() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let tool_calls = vec![
+            tool_call("read_1", "probe_read"),
+            tool_call("read_2", "probe_read"),
+            tool_call("write_1", "probe_write"),
+            tool_call("read_3", "probe_read"),
+            tool_call("read_4", "probe_read"),
+        ];
+
+        let batch = execute_probe_tools(&loop_instance, &tool_calls, HashMap::new()).await;
+        let results = batch.results();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|(call, result)| (call.id.as_str(), result.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("read_1", "writes_seen=0"),
+                ("read_2", "writes_seen=0"),
+                ("write_1", "writes_before=0"),
+                ("read_3", "writes_seen=1"),
+                ("read_4", "writes_seen=1"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn denied_tool_between_read_batches_preserves_result_order() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let tool_calls = vec![
+            tool_call("read_before", "probe_read"),
+            tool_call("denied", "probe_denied"),
+            tool_call("read_after", "probe_read"),
+        ];
+
+        let batch = execute_probe_tools(&loop_instance, &tool_calls, HashMap::new()).await;
+        let results = batch.results();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|(call, _)| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["read_before", "denied", "read_after"]
+        );
+        assert_eq!(results[0].1.content, "writes_seen=0");
+        assert!(!results[1].1.success);
+        assert!(results[1].1.content.contains("was not exposed"));
+        assert_eq!(results[2].1.content, "writes_seen=0");
+        assert_eq!(batch.denied_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn pre_executed_read_only_result_before_serial_boundary_keeps_original_position() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let tool_calls = vec![
+            tool_call("read_pre_executed", "probe_read"),
+            tool_call("write", "probe_write"),
+            tool_call("read_after", "probe_read"),
+        ];
+        let pre_executed = HashMap::from([(0usize, ToolResult::success("pre_executed_read"))]);
+
+        let batch = execute_probe_tools(&loop_instance, &tool_calls, pre_executed).await;
+        let results = batch.results();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|(call, result)| (call.id.as_str(), result.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("read_pre_executed", "pre_executed_read"),
+                ("write", "writes_before=0"),
+                ("read_after", "writes_seen=1"),
+            ]
+        );
+        assert_eq!(batch.pre_executed_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn pre_executed_read_only_result_after_serial_boundary_is_rerun() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let tool_calls = vec![
+            tool_call("read_before", "probe_read"),
+            tool_call("write", "probe_write"),
+            tool_call("read_pre_executed", "probe_read"),
+        ];
+        let pre_executed = HashMap::from([(2usize, ToolResult::success("pre_executed_read"))]);
+
+        let batch = execute_probe_tools(&loop_instance, &tool_calls, pre_executed).await;
+        let results = batch.results();
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|(call, result)| (call.id.as_str(), result.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("read_before", "writes_seen=0"),
+                ("write", "writes_before=0"),
+                ("read_pre_executed", "writes_seen=1"),
+            ]
+        );
+        assert_eq!(batch.pre_executed_count(), 0);
     }
 }

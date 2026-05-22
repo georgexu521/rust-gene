@@ -53,7 +53,12 @@ impl ToolCallLifecycle {
         } else {
             ToolCallStatus::Failed
         };
-        self.update(tool_call, status, false, false);
+        let (parallel, pre_executed) = self
+            .records
+            .get(&tool_call.id)
+            .map(|record| (record.parallel, record.pre_executed))
+            .unwrap_or((false, false));
+        self.update(tool_call, status, parallel, pre_executed);
     }
 
     pub(super) fn denied(&mut self, tool_call: &ToolCall) {

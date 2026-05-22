@@ -242,6 +242,45 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Eval baseline failed: {}", e),
             }
         }
+        "baseline-validate" => {
+            let provider = parts.next();
+            let baseline_dir = eval_dir.join("external_baselines");
+            match crate::engine::evalset::load_external_baselines_from_dir(&baseline_dir) {
+                Ok(baselines) => {
+                    crate::engine::evalset::format_external_baseline_validation(&baselines, provider)
+                }
+                Err(e) => format!("Eval baseline validate failed: {}", e),
+            }
+        }
+        "parity" | "baseline-parity" => {
+            let provider = parts.next();
+            let baseline_dir = eval_dir.join("external_baselines");
+            match crate::engine::evalset::load_external_baselines_from_dir(&baseline_dir) {
+                Ok(baselines) => {
+                    crate::engine::evalset::format_external_parity_report(&baselines, provider)
+                }
+                Err(e) => format!("Eval parity report failed: {}", e),
+            }
+        }
+        "parity-record" | "baseline-parity-record" => {
+            let provider = parts.next();
+            let baseline_dir = eval_dir.join("external_baselines");
+            let report_dir = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("target")
+                .join("eval-reports");
+            match crate::engine::evalset::load_external_baselines_from_dir(&baseline_dir)
+                .and_then(|baselines| {
+                    crate::engine::evalset::write_external_parity_report(
+                        &baselines,
+                        provider,
+                        &report_dir,
+                    )
+                }) {
+                Ok(path) => format!("Parity report recorded: {}", path.display()),
+                Err(e) => format!("Eval parity record failed: {}", e),
+            }
+        }
         "baseline-template" | "baseline-draft" => {
             let provider = parts.next().unwrap_or("external-agent");
             let model = parts.next();
@@ -261,7 +300,25 @@ pub fn handle_eval(_app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Eval baseline write failed: {}", e),
             }
         }
-        _ => "Usage: /eval [list|matrix|baseline [provider|all]|baseline-template <provider> [model]|baseline-write <provider> [model]|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
+        "baseline-import" => {
+            let Some(artifact) = parts.next() else {
+                return "Usage: /eval baseline-import <artifact_path> <provider> [model]"
+                    .to_string();
+            };
+            let provider = parts.next().unwrap_or("external-agent");
+            let model = parts.next();
+            let baseline_dir = eval_dir.join("external_baselines");
+            match crate::engine::evalset::write_external_baseline_import(
+                artifact,
+                &baseline_dir,
+                provider,
+                model,
+            ) {
+                Ok(path) => format!("External baseline imported: {}", path.display()),
+                Err(e) => format!("Eval baseline import failed: {}", e),
+            }
+        }
+        _ => "Usage: /eval [list|matrix|parity [provider|all]|parity-record [provider|all]|baseline [provider|all]|baseline-validate [provider|all]|baseline-template <provider> [model]|baseline-write <provider> [model]|baseline-import <artifact_path> <provider> [model]|run <name|all>|json <name|all>|record <name|all>|trend [limit]]"
             .to_string(),
     }
 }
@@ -537,6 +594,7 @@ mod tests {
         assert!(output.contains("Phase 12 Deterministic Scenario Matrix"));
         assert!(output.contains("file_edit_rewind"));
         assert!(output.contains("mcp_auth_repair"));
-        assert!(output.contains("External baseline: deferred"));
+        assert!(output.contains("External baseline: ready"));
+        assert!(output.contains("/eval baseline-import"));
     }
 }

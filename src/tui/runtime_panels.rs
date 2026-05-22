@@ -513,8 +513,7 @@ pub fn render_bridge_panel(app: &TuiApp) -> String {
                 session.id,
                 serde_json::to_string(&session.status)
                     .unwrap_or_else(|_| "unknown".to_string())
-                    .trim_matches('"')
-                    .to_string(),
+                    .trim_matches('"'),
                 session.config.username,
                 session.config.host,
                 session.config.port
