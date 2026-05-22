@@ -1348,6 +1348,11 @@ The next concrete batches should be:
 
 1. **Ordered tool orchestration.**
    Fix mixed read/write tool ordering and add regression tests.
+   - Progress on 2026-05-22: `src/engine/tool_orchestration.rs` now preserves
+     assistant tool-call order by flushing each contiguous read-only batch before
+     the next write/unknown tool, instead of globally moving all reads before
+     writes. Added regression coverage for `[read, write, read]` and
+     `[write, read]`.
 2. **Real external baseline capture.**
    Run Claude Code and Codex CLI on the six parity scenarios, import, validate,
    and record parity reports.

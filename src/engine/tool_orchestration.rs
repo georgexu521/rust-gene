@@ -163,31 +163,57 @@ impl ToolOrchestrator {
         }
 
         let start = std::time::Instant::now();
-        let (read_calls, write_calls) = self.partition_tool_calls(&calls);
+        let read_total = calls
+            .iter()
+            .filter(|call| Self::get_tool_safety(&call.name) == ToolConcurrencySafety::ReadOnly)
+            .count();
+        let write_total = calls.len().saturating_sub(read_total);
 
         info!(
             "Tool orchestration: {} read (parallel), {} write (serial)",
-            read_calls.len(),
-            write_calls.len()
+            read_total, write_total
         );
 
-        // 并行执行读工具
-        let read_start = std::time::Instant::now();
-        let read_results = self
-            .execute_read_parallel(read_calls, context, tool_registry)
-            .await;
-        let read_duration = read_start.elapsed().as_millis() as u64;
+        let mut all_results = Vec::new();
+        let mut pending_reads = Vec::new();
+        let mut read_duration = 0u64;
+        let mut write_duration = 0u64;
 
-        // 串行执行写工具
-        let write_start = std::time::Instant::now();
-        let write_results = self
-            .execute_write_serial(write_calls, context, tool_registry)
-            .await;
-        let write_duration = write_start.elapsed().as_millis() as u64;
+        for call in calls {
+            if Self::get_tool_safety(&call.name) == ToolConcurrencySafety::ReadOnly {
+                pending_reads.push(call);
+                continue;
+            }
 
-        // 合并结果
-        let mut all_results = read_results;
-        all_results.extend(write_results);
+            if !pending_reads.is_empty() {
+                let read_start = std::time::Instant::now();
+                let read_results = self
+                    .execute_read_parallel(
+                        std::mem::take(&mut pending_reads),
+                        context,
+                        tool_registry,
+                    )
+                    .await;
+                read_duration += read_start.elapsed().as_millis() as u64;
+                all_results.extend(read_results);
+            }
+
+            let write_start = std::time::Instant::now();
+            let write_results = self
+                .execute_write_serial(vec![call], context, tool_registry)
+                .await;
+            write_duration += write_start.elapsed().as_millis() as u64;
+            all_results.extend(write_results);
+        }
+
+        if !pending_reads.is_empty() {
+            let read_start = std::time::Instant::now();
+            let read_results = self
+                .execute_read_parallel(pending_reads, context, tool_registry)
+                .await;
+            read_duration += read_start.elapsed().as_millis() as u64;
+            all_results.extend(read_results);
+        }
 
         let total = start.elapsed().as_millis() as u64;
 
@@ -439,6 +465,11 @@ pub fn describe_partition(read_count: usize, write_count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::{Tool, ToolRegistry};
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn test_tool_safety() {
@@ -524,6 +555,146 @@ mod tests {
         assert_eq!(
             describe_partition(2, 3),
             "2 read (parallel) + 3 write (serial)"
+        );
+    }
+
+    fn test_call(id: &str, name: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: json!({}),
+        }
+    }
+
+    struct CounterReadTool {
+        writes: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for CounterReadTool {
+        fn name(&self) -> &str {
+            "file_read"
+        }
+
+        fn description(&self) -> &str {
+            "Read write counter"
+        }
+
+        fn parameters(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+
+        async fn execute(&self, _params: Value, _context: crate::tools::ToolContext) -> ToolResult {
+            ToolResult::success(format!(
+                "writes_seen={}",
+                self.writes.load(Ordering::SeqCst)
+            ))
+        }
+    }
+
+    struct CounterWriteTool {
+        writes: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for CounterWriteTool {
+        fn name(&self) -> &str {
+            "file_write"
+        }
+
+        fn description(&self) -> &str {
+            "Increment write counter"
+        }
+
+        fn parameters(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+
+        async fn execute(&self, _params: Value, _context: crate::tools::ToolContext) -> ToolResult {
+            let previous = self.writes.fetch_add(1, Ordering::SeqCst);
+            ToolResult::success(format!("writes_before={previous}"))
+        }
+    }
+
+    fn counter_registry(writes: Arc<AtomicUsize>) -> Arc<ToolRegistry> {
+        let mut registry = ToolRegistry::new();
+        registry.register(CounterReadTool {
+            writes: writes.clone(),
+        });
+        registry.register(CounterWriteTool { writes });
+        Arc::new(registry)
+    }
+
+    #[tokio::test]
+    async fn orchestrated_execution_preserves_mixed_read_write_order() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let registry = counter_registry(writes);
+        let context = crate::tools::ToolContext::new(std::env::temp_dir(), "orchestration-test");
+        let orchestrator = ToolOrchestrator::new();
+
+        let result = orchestrator
+            .execute_orchestrated(
+                vec![
+                    test_call("read_before", "file_read"),
+                    test_call("write", "file_write"),
+                    test_call("read_after", "file_read"),
+                ],
+                &context,
+                &registry,
+            )
+            .await;
+
+        assert_eq!(
+            result
+                .results
+                .iter()
+                .map(|item| item.call_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["read_before", "write", "read_after"]
+        );
+        assert_eq!(
+            result
+                .results
+                .iter()
+                .map(|item| item.result.as_ref().unwrap().content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["writes_seen=0", "writes_before=0", "writes_seen=1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrated_execution_does_not_move_read_before_prior_write() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let registry = counter_registry(writes);
+        let context = crate::tools::ToolContext::new(std::env::temp_dir(), "orchestration-test");
+        let orchestrator = ToolOrchestrator::new();
+
+        let result = orchestrator
+            .execute_orchestrated(
+                vec![
+                    test_call("write", "file_write"),
+                    test_call("read_after", "file_read"),
+                ],
+                &context,
+                &registry,
+            )
+            .await;
+
+        assert_eq!(
+            result
+                .results
+                .iter()
+                .map(|item| item.call_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["write", "read_after"]
+        );
+        assert_eq!(
+            result
+                .results
+                .iter()
+                .map(|item| item.result.as_ref().unwrap().content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["writes_before=0", "writes_seen=1"]
         );
     }
 }
