@@ -391,10 +391,47 @@ export async function pickProjectDirectory(): Promise<string | null> {
 
 export function sendMessage(message: string): Promise<void> {
   if (!isTauriRuntime()) {
-    emitWebPreview({ type: "run_started", run_id: crypto.randomUUID() });
+    const runId = crypto.randomUUID();
+    const toolId = crypto.randomUUID();
+    emitWebPreview({ type: "run_started", run_id: runId });
+    emitWebPreview({ type: "thinking_started" });
+    emitWebPreview({ type: "thinking_completed" });
+    emitWebPreview({ type: "tool_started", id: toolId, name: "project_inspect" });
+    emitWebPreview({
+      type: "tool_execution_progress",
+      id: toolId,
+      progress: "Scanning project context",
+    });
+    emitWebPreview({
+      type: "tool_completed",
+      id: toolId,
+      result_preview: "Found desktop app workspace and active web preview fixtures.",
+      metadata: {
+        tool: "bash",
+        call_id: toolId,
+        success: true,
+        command: "corepack pnpm --dir apps/desktop test:ui-smoke",
+        command_category: "validation",
+        validation_family: "pnpm_test",
+        command_kind: "package_script",
+        duration_ms: 1240,
+        output_chars: 63,
+        terminal_task: {
+          status: "completed",
+          exit_code: 0,
+          duration_ms: 1240,
+        },
+      },
+    });
     emitWebPreview({
       type: "assistant_delta",
       text: `Web preview received: ${message}\n\nRun this inside Tauri to stream the Rust agent runtime.`,
+    });
+    emitWebPreview({
+      type: "usage",
+      prompt_tokens: 128,
+      completion_tokens: 42,
+      cached_tokens: 16,
     });
     emitWebPreview({ type: "run_completed" });
     return Promise.resolve();

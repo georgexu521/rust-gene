@@ -10,6 +10,13 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Provider")).toBeVisible();
     await expect(page.getByLabel("Model")).toBeVisible();
 
+    await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("Pnpm Test")).toBeVisible();
+    await expect(page.getByText("corepack pnpm --dir apps/desktop test:ui-smoke")).toBeVisible();
+    await expect(page.getByText("validation pnpm_test")).toBeVisible();
+    await expect(page.getByText("exit 0")).toBeVisible();
+
     await assertNoHorizontalOverflow(page);
     await assertStableVerticalStack(page, [
       ".topbar",

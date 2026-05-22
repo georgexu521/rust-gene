@@ -35,6 +35,16 @@ export function applyRunEvent(
         state: {
           ...state,
           selectedSessionId: event.session_id || state.selectedSessionId,
+          items: [
+            ...state.items,
+            timelineEvent({
+              id: event.run_id,
+              kind: "run",
+              title: "Agent run",
+              detail: event.session_id ? `Session ${event.session_id}` : undefined,
+              status: "running",
+            }),
+          ],
           traceItems: [
             ...state.traceItems,
             {
@@ -77,7 +87,13 @@ export function applyRunEvent(
     case "tool_started":
       return appendToolNote(
         state,
-        `Running ${event.name}`,
+        {
+          id: event.id,
+          kind: "tool",
+          title: event.name,
+          detail: "Tool started",
+          status: "running",
+        },
         () => event.id,
         traceTool(event.id, `Tool started: ${event.name}`),
       );
@@ -89,17 +105,28 @@ export function applyRunEvent(
     case "tool_call_completed":
       return appendTraceOnly(state, traceTool(`${event.id}-call`, "Tool call prepared"));
     case "tool_execution_progress":
-      return appendToolNote(
+      return updateToolNote(
         state,
-        event.progress,
-        () => `${event.id}-progress-${createId()}`,
+        {
+          id: event.id,
+          kind: "tool",
+          detail: event.progress,
+          status: "running",
+        },
         traceTool(`${event.id}-progress`, "Tool progress", event.progress),
       );
     case "tool_completed":
-      return appendToolNote(
+      const toolPresentation = presentToolCompletion(event.result_preview, event.metadata);
+      return updateToolNote(
         state,
-        event.result_preview,
-        () => `${event.id}-done`,
+        {
+          id: event.id,
+          kind: "tool",
+          title: toolPresentation.title,
+          detail: toolPresentation.detail,
+          facts: toolPresentation.facts,
+          status: toolPresentation.status,
+        },
         traceTool(`${event.id}-done`, "Tool completed", event.result_preview),
       );
     case "permission_request":
@@ -118,40 +145,59 @@ export function applyRunEvent(
           ],
           items: [
             ...state.items,
-            {
+            timelineEvent({
               id: event.id,
-              role: "tool",
-              text: `Permission needed: ${event.tool_name} - ${event.prompt}`,
-            },
+              kind: "permission",
+              title: `Permission needed: ${event.tool_name}`,
+              detail: event.prompt,
+              status: "waiting",
+            }),
           ],
         },
         shouldRefreshSessions: false,
       };
     case "usage":
+      const usageDetail = [
+        `prompt ${event.prompt_tokens}`,
+        `completion ${event.completion_tokens}`,
+        event.reasoning_tokens ? `reasoning ${event.reasoning_tokens}` : null,
+        event.cached_tokens ? `cached ${event.cached_tokens}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
       return {
         state: {
           ...state,
+          items: [
+            ...state.items,
+            timelineEvent({
+              id: createId(),
+              kind: "usage",
+              title: "Token usage",
+              detail: usageDetail,
+              status: "info",
+            }),
+          ],
           traceItems: [
             ...state.traceItems,
             {
               id: createId(),
               kind: "usage",
               title: "Usage",
-              detail: [
-                `prompt ${event.prompt_tokens}`,
-                `completion ${event.completion_tokens}`,
-                event.reasoning_tokens ? `reasoning ${event.reasoning_tokens}` : null,
-                event.cached_tokens ? `cached ${event.cached_tokens}` : null,
-              ]
-                .filter(Boolean)
-                .join(" · "),
+              detail: usageDetail,
             },
           ],
         },
         shouldRefreshSessions: false,
       };
     case "output_truncated":
-      return appendTraceOnly(state, {
+      return appendTimelineAndTrace(state, timelineEvent({
+        id: createId(),
+        kind: "run",
+        title: "Output truncated",
+        detail: "Open trace for the complete runtime details.",
+        status: "info",
+      }), {
         id: createId(),
         kind: "run",
         title: "Output truncated",
@@ -163,6 +209,16 @@ export function applyRunEvent(
           error: event.message,
           isRunning: false,
           pendingPermission: null,
+          items: [
+            ...state.items,
+            timelineEvent({
+              id: createId(),
+              kind: "error",
+              title: "Run error",
+              detail: event.message,
+              status: "failed",
+            }),
+          ],
           traceItems: [
             ...state.traceItems,
             {
@@ -181,6 +237,7 @@ export function applyRunEvent(
           ...state,
           isRunning: false,
           pendingPermission: null,
+          items: completeLatestRun(state.items),
           traceItems: [
             ...state.traceItems,
             {
@@ -251,15 +308,16 @@ export function appendPermissionAnswer(
     ],
     items: [
       ...state.items,
-      {
+      timelineEvent({
         id: createId(),
-        role: "tool",
-        text: answered
+        kind: "permission",
+        title: answered
           ? approved
             ? "Permission approved"
             : "Permission rejected"
           : "No pending permission request was available",
-      },
+        status: approved ? "completed" : "failed",
+      }),
     ],
   };
 }
@@ -281,7 +339,9 @@ function messageToTranscriptItem(message: DesktopMessage): TranscriptItem {
   };
 }
 
-function normalizeRole(role: string): TranscriptItem["role"] {
+type MessageTranscriptRole = Exclude<TranscriptItem["role"], "timeline">;
+
+function normalizeRole(role: string): MessageTranscriptRole {
   if (role === "user" || role === "assistant") {
     return role;
   }
@@ -304,7 +364,7 @@ function appendAssistantDelta(
 
 function appendToolNote(
   state: RunViewState,
-  text: string,
+  event: Omit<Extract<TranscriptItem, { role: "timeline" }>, "role"> & { title: string },
   createId: () => string,
   traceItem?: TraceItem,
 ): RunEventResult {
@@ -312,7 +372,49 @@ function appendToolNote(
     state: {
       ...state,
       traceItems: traceItem ? [...state.traceItems, traceItem] : state.traceItems,
-      items: [...state.items, { id: createId(), role: "tool", text }],
+      items: [...state.items, timelineEvent({ ...event, id: event.id || createId() })],
+    },
+    shouldRefreshSessions: false,
+  };
+}
+
+function updateToolNote(
+  state: RunViewState,
+  patch: Partial<Omit<Extract<TranscriptItem, { role: "timeline" }>, "role">> & {
+    id: string;
+    kind: "tool";
+  },
+  traceItem?: TraceItem,
+): RunEventResult {
+  return {
+    state: {
+      ...state,
+      items: state.items.map((item) => {
+        if (item.role !== "timeline" || item.id !== patch.id) {
+          return item;
+        }
+        return {
+          ...item,
+          ...patch,
+          title: patch.title || item.title,
+        };
+      }),
+      traceItems: traceItem ? [...state.traceItems, traceItem] : state.traceItems,
+    },
+    shouldRefreshSessions: false,
+  };
+}
+
+function appendTimelineAndTrace(
+  state: RunViewState,
+  item: Extract<TranscriptItem, { role: "timeline" }>,
+  traceItem: TraceItem,
+): RunEventResult {
+  return {
+    state: {
+      ...state,
+      items: [...state.items, item],
+      traceItems: [...state.traceItems, traceItem],
     },
     shouldRefreshSessions: false,
   };
@@ -328,6 +430,48 @@ function appendTraceOnly(state: RunViewState, traceItem: TraceItem): RunEventRes
   };
 }
 
+function timelineEvent(
+  item: Omit<Extract<TranscriptItem, { role: "timeline" }>, "role">,
+): Extract<TranscriptItem, { role: "timeline" }> {
+  return {
+    role: "timeline",
+    ...item,
+  };
+}
+
+function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
+  let index = -1;
+  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = items[itemIndex];
+    if (item.role === "timeline" && item.kind === "run" && item.status === "running") {
+      index = itemIndex;
+      break;
+    }
+  }
+  if (index < 0) {
+    return [
+      ...items,
+      timelineEvent({
+        id: `run-completed-${Date.now()}`,
+        kind: "run",
+        title: "Agent run",
+        status: "completed",
+      }),
+    ];
+  }
+
+  const nextItems = [...items];
+  const item = nextItems[index];
+  if (item.role === "timeline") {
+    nextItems[index] = {
+      ...item,
+      detail: item.detail || "Completed",
+      status: "completed",
+    };
+  }
+  return nextItems;
+}
+
 function traceTool(id: string, title: string, detail?: string): TraceItem {
   return {
     id,
@@ -335,4 +479,156 @@ function traceTool(id: string, title: string, detail?: string): TraceItem {
     title,
     detail,
   };
+}
+
+type ToolPresentation = {
+  title: string;
+  detail?: string;
+  facts?: string[];
+  status: "completed" | "failed";
+};
+
+type ToolSummary = {
+  tool?: string;
+  success?: boolean;
+  duration_ms?: number;
+  command?: string;
+  command_category?: string;
+  validation_family?: string;
+  command_kind?: string;
+  path?: string;
+  pattern?: string;
+  action?: string;
+  replacements?: number;
+  operations?: number;
+  output_chars?: number;
+  terminal_task?: Record<string, unknown>;
+  terminal_tasks_count?: number;
+  error_preview?: string;
+};
+
+function presentToolCompletion(resultPreview: string, metadata: unknown): ToolPresentation {
+  const summary = toolSummary(metadata);
+  if (!summary) {
+    return {
+      title: "Tool completed",
+      detail: resultPreview,
+      status: "completed",
+    };
+  }
+
+  const status = summary.success === false ? "failed" : "completed";
+  const title = toolTitle(summary);
+  const detail = toolDetail(summary, resultPreview);
+  const facts = toolFacts(summary);
+
+  return {
+    title,
+    detail,
+    facts,
+    status,
+  };
+}
+
+function toolSummary(metadata: unknown): ToolSummary | null {
+  if (!isRecord(metadata)) {
+    return null;
+  }
+  return metadata as ToolSummary;
+}
+
+function toolTitle(summary: ToolSummary): string {
+  switch (summary.tool) {
+    case "bash":
+      return summary.validation_family
+        ? validationLabel(summary.validation_family)
+        : "Shell command";
+    case "file_edit":
+      return "Edited file";
+    case "file_write":
+      return "Wrote file";
+    case "file_read":
+      return "Read file";
+    case "file_patch":
+      return "Patched files";
+    case "grep":
+      return "Searched project";
+    case "git":
+      return summary.action ? `Git ${summary.action}` : "Git";
+    default:
+      return summary.tool || "Tool completed";
+  }
+}
+
+function toolDetail(summary: ToolSummary, resultPreview: string): string | undefined {
+  if (summary.error_preview) {
+    return summary.error_preview;
+  }
+  if (summary.command) {
+    return summary.command;
+  }
+  if (summary.path) {
+    return summary.path;
+  }
+  if (summary.pattern) {
+    return summary.pattern;
+  }
+  return resultPreview || undefined;
+}
+
+function toolFacts(summary: ToolSummary): string[] {
+  const facts = compactFacts([
+    summary.tool ? `tool ${summary.tool}` : null,
+    summary.validation_family ? `validation ${summary.validation_family}` : null,
+    summary.command_category ? `category ${summary.command_category}` : null,
+    summary.command_kind ? `kind ${summary.command_kind}` : null,
+    summary.path ? `path ${summary.path}` : null,
+    summary.replacements !== undefined ? `${summary.replacements} replacements` : null,
+    summary.operations !== undefined ? `${summary.operations} operations` : null,
+    summary.action ? `action ${summary.action}` : null,
+    durationFact(summary.duration_ms),
+    terminalFact(summary.terminal_task),
+    summary.terminal_tasks_count ? `${summary.terminal_tasks_count} terminal tasks` : null,
+    summary.output_chars !== undefined ? `${summary.output_chars} chars` : null,
+  ]);
+
+  return facts.slice(0, 6);
+}
+
+function terminalFact(task: Record<string, unknown> | undefined) {
+  if (!task) {
+    return null;
+  }
+  const exitCode = typeof task.exit_code === "number" ? task.exit_code : null;
+  const status = typeof task.status === "string" ? task.status : null;
+  if (exitCode !== null) {
+    return `exit ${exitCode}`;
+  }
+  return status ? `terminal ${status}` : null;
+}
+
+function durationFact(durationMs: number | undefined) {
+  if (typeof durationMs !== "number") {
+    return null;
+  }
+  if (durationMs >= 1000) {
+    return `${(durationMs / 1000).toFixed(1)}s`;
+  }
+  return `${durationMs}ms`;
+}
+
+function validationLabel(value: string) {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function compactFacts(values: Array<string | null | undefined>) {
+  return values.filter((value): value is string => Boolean(value && value.trim()));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

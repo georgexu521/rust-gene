@@ -420,6 +420,123 @@ h1 {
   font-size: 15px;
 }
 
+.timeline-event {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  width: min(760px, 100%);
+  padding: 8px 10px;
+  border: 1px solid #e5e9ee;
+  border-radius: 9px;
+  color: #323842;
+  background: #fbfcfd;
+}
+
+.timeline-event.tool {
+  border-color: #dde6ef;
+  background: #f8fbfd;
+}
+
+.timeline-event.permission,
+.timeline-event.waiting {
+  border-color: #e6c26a;
+  background: #fffaf0;
+}
+
+.timeline-event.error,
+.timeline-event.failed {
+  border-color: #efb0b0;
+  background: #fff5f5;
+}
+
+.timeline-event.completed {
+  border-color: #d9e7df;
+  background: #f7fcf9;
+}
+
+.timeline-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #dbe1e7;
+  border-radius: 50%;
+  color: #69727d;
+  background: #ffffff;
+}
+
+.timeline-event.completed .timeline-icon {
+  color: #247247;
+}
+
+.timeline-event.failed .timeline-icon,
+.timeline-event.error .timeline-icon {
+  color: #a22b2b;
+}
+
+.timeline-event.waiting .timeline-icon,
+.timeline-event.permission .timeline-icon {
+  color: #8a6517;
+}
+
+.timeline-content {
+  min-width: 0;
+}
+
+.timeline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.timeline-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-status {
+  flex: 0 0 auto;
+  color: #7b838e;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.timeline-detail {
+  margin-top: 4px;
+  color: #5f6874;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.timeline-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.timeline-facts span {
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid #dbe1e7;
+  border-radius: 999px;
+  color: #58616c;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .trace-drawer {
   position: fixed;
   top: 0;
