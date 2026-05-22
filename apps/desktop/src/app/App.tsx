@@ -385,12 +385,15 @@ export function App() {
         />
 
         <Transcript
+          diagnostics={diagnostics}
           items={runState.items}
           onOpenTrace={(traceId) => {
             setActiveTraceId(traceId);
             setIsTraceOpen(true);
           }}
           onPermissionAnswer={(approved) => void handlePermission(approved)}
+          projectPath={projectPath}
+          providerStatus={providerStatus}
         />
 
         <TraceDrawer

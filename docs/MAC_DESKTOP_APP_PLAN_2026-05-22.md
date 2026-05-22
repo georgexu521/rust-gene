@@ -543,6 +543,177 @@ corepack pnpm --dir apps/desktop test:ui-smoke
 corepack pnpm --dir apps/desktop tauri dev
 ```
 
+Codex-like desktop workbench foundations are implemented:
+
+- The desktop UI has been visually reworked toward a denser Codex-like
+  workbench: tighter sidebar spacing, mature topbar chrome, more deliberate
+  empty state, clearer transcript hierarchy, and a higher-density Settings
+  drawer.
+- The transcript now renders agent run activity as first-class timeline cards
+  instead of plain tool log rows.
+- Tool events are grouped by tool id, with specialized cards for shell
+  validation, file edits/patches, diff previews, long output previews, failed
+  tools, permission requests, and usage/completion events.
+- Permission cards can be approved/rejected directly from the timeline, and
+  timeline cards can open the trace drawer on the corresponding debug event.
+- Desktop run/session ergonomics now include new chat, persisted active
+  session restore, session rename, real SQLite/FTS-backed session search,
+  archive/delete, recent project shortcuts, project switching, and clearer
+  startup state in Settings.
+- Validation passed:
+
+```bash
+cargo fmt --check
+corepack pnpm --dir apps/desktop build
+cargo test -q session_store::tests::test_search_sessions_matches_title_and_message_fts
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
+corepack pnpm --dir apps/desktop test:ui-smoke
+cargo check -q
+git diff --check
+```
+
+Current product assessment:
+
+- The desktop app has crossed from scaffold into usable MVP. It can run the
+  real Rust runtime, stream agent activity, resume sessions, manage common
+  session/project state, show diagnostics, and package locally.
+- The UI is not yet mature commercial-software quality. It is good enough to
+  continue using as the primary development surface, but it still needs focused
+  product design work before it should be considered a polished user-facing
+  release.
+- Desktop remains the product priority. Mobile, plugins, automations,
+  marketplace, cloud sync, and broad generic surfaces should stay deferred
+  until the desktop workflow feels excellent for daily coding.
+
+### Next Desktop UI And Frontend Maturity Stage
+
+Goal: move the desktop app from "functional Codex-like MVP" to "credible
+commercial desktop coding app". User adoption will depend heavily on visual
+density, interaction clarity, and trust in the interface, so this stage should
+prioritize UI quality as a product feature, not cosmetic cleanup.
+
+#### Track A - Visual Density And Layout Maturity
+
+- Refine the window chrome, topbar, sidebar, transcript, composer, and Settings
+  drawer as one coherent desktop layout system.
+- Make spacing, type scale, icon sizing, borders, hover states, selected states,
+  disabled states, and section hierarchy consistent across the app.
+- Keep the app dense and work-focused: avoid marketing-page composition,
+  oversized decorative areas, nested cards, and vague empty filler.
+- Improve the empty state so it feels like the real starting point of a coding
+  workbench: current project, provider/model, diagnostics summary, recent
+  session affordances, and a clear composer path.
+- Tighten responsive behavior for small MacBook windows and mobile-width smoke
+  without making the desktop UI feel sparse.
+
+Acceptance:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+```
+
+Also review screenshots in:
+
+```text
+apps/desktop/test-results/
+```
+
+#### Track B - Transcript And Timeline Product Polish
+
+- Make assistant messages, user messages, timeline events, tool cards, and
+  final answers visually distinct without increasing clutter.
+- Improve timeline card hierarchy for common real runs: command, path, file
+  diff, validation status, failure reason, permission decision, and trace link.
+- Add better empty/running/completed/failed states for the run timeline.
+- Keep trace details available in the drawer, but make the main transcript
+  enough for normal use.
+- Defer stop/retry until the Rust runtime exposes reliable cancellation/retry
+  controls.
+
+Acceptance:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
+```
+
+#### Track C - Session And Project Ergonomics
+
+- Turn search into a more complete desktop interaction: keyboard focus,
+  empty/no-result states, result highlighting, and faster switching.
+- Add safer session management affordances: archive visibility, undo or restore
+  for archived sessions, clearer delete confirmation, and selected-session
+  status.
+- Improve project switching with a real recent-project list, current-project
+  metadata, and diagnostics after switching.
+- Make startup restore explicit: user should know whether the app restored a
+  previous session, opened a project with no active session, or needs provider
+  setup.
+
+Acceptance:
+
+```bash
+cargo test -q session_store
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
+corepack pnpm --dir apps/desktop test:ui-smoke
+```
+
+#### Track D - Frontend Architecture And Test Hardening
+
+- Add focused tests for `runEventState.ts` and session/search/archive/delete
+  state transitions.
+- Keep `App.tsx` as a coordinator, but split more UI-specific state and panels
+  when the component starts carrying too many workflows.
+- Prefer stable component props and typed API wrappers over ad hoc state
+  coupling between Sidebar, Transcript, Composer, Settings, and TraceDrawer.
+- Add screenshot assertions or visual diff thresholds once the UI stops
+  changing rapidly.
+- Add a real native WebView/Tauri automation path so Chromium preview smoke is
+  not the only frontend confidence gate.
+
+Acceptance:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+cargo check -q
+```
+
+#### Track E - Release-Quality Desktop Hardening
+
+- Add app-level crash/log diagnostics and a visible way to open diagnostic logs.
+- Complete the formal macOS distribution path: Developer ID signing,
+  notarization, DMG polish, first-run install notes, and update mechanism.
+- Keep local/ad-hoc builds fast for development, but document the difference
+  between dev builds, local signed builds, and release builds.
+- Revisit permissions after more real desktop runs: approvals should feel
+  predictable, scoped, and easy to audit.
+
+Acceptance:
+
+```bash
+scripts/package-macos-app.sh --help
+bash -n scripts/package-macos-app.sh
+corepack pnpm --dir apps/desktop tauri build --bundles app,dmg
+```
+
+#### Recommended Execution Order
+
+1. Track A first: visual density and layout maturity. This has the highest
+   impact on whether the app feels worth using every day.
+2. Track D in parallel where cheap: add focused frontend state tests before
+   large UI rewrites make regressions hard to spot.
+3. Track B next: transcript and timeline are the main product surface during
+   real agent work.
+4. Track C after the main layout settles: session/project ergonomics should
+   feel integrated, not bolted onto the sidebar.
+5. Track E before any external distribution: packaging polish matters only
+   after the core desktop experience is strong.
+
 ### Phase 0 - Runtime Extraction
 
 - Add `src/lib.rs` and turn `src/main.rs` into a thin binary entrypoint.
@@ -603,24 +774,17 @@ cargo check --features experimental-api-server -q
 
 ## Immediate Next Slice
 
-The next concrete code slice should deepen Phase 1:
+The next concrete slice should start Track A:
 
-1. Add native WebView/Tauri window automation once a stable driver path is
-   chosen; the current smoke covers the frontend UI in Chromium and the Rust
-   command bridge separately.
-2. Add focused tests around `runEventState.ts` once a frontend test runner is
-   introduced.
-3. Add visual regression thresholds after the UI stops changing rapidly.
+1. Audit current desktop screenshots and list the highest-impact UI density
+   problems in sidebar, topbar, transcript, composer, and Settings drawer.
+2. Refactor CSS into clearer layout/component groups if needed before changing
+   many visual rules.
+3. Polish one full first-screen workflow: restored session or new chat empty
+   state, diagnostics strip, transcript area, composer, and session sidebar.
+4. Keep `corepack pnpm --dir apps/desktop test:ui-smoke` passing after each
+   visual batch.
 
-The first shell, macOS `.app` bundle, session resume, and command smoke now
-exist. The frontend is split, icons are reproducible, and local packaging has a
-single script entrypoint. Desktop project/session state now persists across app
-launches, and startup diagnostics now identify missing provider/tooling setup.
-The settings drawer now exposes that state and provider setup entrypoints. The
-first-run provider setup flow now guides shell profile setup without exposing
-secrets. Permission defaults and provider/model choices now persist and are
-applied to active and future runtime sessions. A Chromium screenshot smoke now
-checks the desktop shell, Settings drawer, selectors, diagnostics, and mobile
-layout. Native dev now defaults to the real repo root instead of the Tauri
-crate directory. The next useful work is a native WebView/Tauri automation path
-plus focused frontend state tests.
+The immediate success criterion is not "looks prettier"; it is that the desktop
+app feels like a focused, mature coding workbench when opened, before any agent
+run starts.

@@ -118,7 +118,10 @@ export function Sidebar({
             </button>
           ))}
       </div>
-      <div className="sidebar-section">Recent</div>
+      <div className="sidebar-section sidebar-section-row">
+        <span>Recent</span>
+        <small>{sessions.length}</small>
+      </div>
       <div className="recent-list">
         {sessions.length === 0 ? (
           <div className="recent-empty">
@@ -161,10 +164,13 @@ export function Sidebar({
                     onClick={() => onLoadSession(session)}
                     type="button"
                   >
-                    <span>{session.title}</span>
-                    <small>
-                      <Clock3 aria-hidden="true" size={12} />
-                      {session.message_count} msgs · {session.model}
+                    <span className="recent-title">{session.title}</span>
+                    <small className="recent-meta">
+                      <span>
+                        <Clock3 aria-hidden="true" size={12} />
+                        {session.message_count} msgs
+                      </span>
+                      <span>{session.model}</span>
                     </small>
                   </button>
                   <button

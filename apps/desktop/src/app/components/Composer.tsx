@@ -39,18 +39,30 @@ export function Composer({
         placeholder="Ask Liz to inspect, edit, or verify this project..."
       />
       <div className="composer-toolbar">
-        <input
-          aria-label="Project path"
-          value={projectPath}
-          onChange={(event) => onProjectPathChange(event.target.value)}
-        />
-        <button aria-label="Apply project path" title="Apply project path" type="button" onClick={onSelectProject}>
-          <RotateCcw aria-hidden="true" size={16} />
-        </button>
-        <button aria-label="Browse project" title="Browse project" type="button" onClick={onBrowseProject}>
-          <FolderOpen aria-hidden="true" size={16} />
-        </button>
-        <div className="runtime-selectors" aria-label="Runtime selectors">
+        <div className="composer-project-controls">
+          <input
+            aria-label="Project path"
+            value={projectPath}
+            onChange={(event) => onProjectPathChange(event.target.value)}
+          />
+          <button
+            aria-label="Apply project path"
+            title="Apply project path"
+            type="button"
+            onClick={onSelectProject}
+          >
+            <RotateCcw aria-hidden="true" size={16} />
+          </button>
+          <button
+            aria-label="Browse project"
+            title="Browse project"
+            type="button"
+            onClick={onBrowseProject}
+          >
+            <FolderOpen aria-hidden="true" size={16} />
+          </button>
+        </div>
+        <div className="composer-runtime-controls" aria-label="Runtime selectors">
           <select
             aria-label="Provider"
             value={activeProvider}
@@ -77,6 +89,7 @@ export function Composer({
               </option>
             ))}
           </select>
+          <span className="runtime-divider" aria-hidden="true" />
           <select
             aria-label="Model"
             disabled={!activeProvider || providerStatus?.models.length === 0}
@@ -97,11 +110,11 @@ export function Composer({
               </option>
             ))}
           </select>
-        </div>
-        <div className="runtime-status">
-          {providerStatus
-            ? `${providerStatus.configured_count} configured · ${activeModel}`
-            : "Checking provider"}
+          <div className="runtime-status">
+            {providerStatus
+              ? `${providerStatus.configured_count} configured`
+              : "Checking provider"}
+          </div>
         </div>
         <button
           aria-label="Send message"

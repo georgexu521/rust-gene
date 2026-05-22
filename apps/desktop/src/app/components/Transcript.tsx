@@ -8,23 +8,34 @@ import {
   KeyRound,
   TerminalSquare,
 } from "lucide-react";
+import { DesktopDiagnostic, ProviderModelStatus } from "../../runtime/desktopApi";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
 
 type TranscriptProps = {
   items: TranscriptItem[];
+  diagnostics: DesktopDiagnostic[];
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenTrace?: (traceId: string) => void;
+  projectPath: string;
+  providerStatus: ProviderModelStatus | null;
 };
 
-export function Transcript({ items, onPermissionAnswer, onOpenTrace }: TranscriptProps) {
+export function Transcript({
+  items,
+  diagnostics,
+  onPermissionAnswer,
+  onOpenTrace,
+  projectPath,
+  providerStatus,
+}: TranscriptProps) {
   return (
     <section className="transcript" aria-live="polite">
       {items.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-kicker">Local runtime ready</div>
-          <h2>What should we build in rust-agent?</h2>
-          <p>Ask for an edit, review, diagnosis, or verification pass.</p>
-        </div>
+        <EmptyState
+          diagnostics={diagnostics}
+          projectPath={projectPath}
+          providerStatus={providerStatus}
+        />
       ) : (
         items.map((item) =>
           item.role === "timeline" ? (
@@ -43,6 +54,48 @@ export function Transcript({ items, onPermissionAnswer, onOpenTrace }: Transcrip
         )
       )}
     </section>
+  );
+}
+
+function EmptyState({
+  diagnostics,
+  projectPath,
+  providerStatus,
+}: {
+  diagnostics: DesktopDiagnostic[];
+  projectPath: string;
+  providerStatus: ProviderModelStatus | null;
+}) {
+  const projectName = basename(projectPath) || "selected project";
+  const errors = diagnostics.filter((item) => item.status === "error").length;
+  const warnings = diagnostics.filter((item) => item.status === "warning").length;
+  const readiness =
+    errors > 0
+      ? `${errors} setup issue${errors === 1 ? "" : "s"} to resolve`
+      : warnings > 0
+        ? `${warnings} warning${warnings === 1 ? "" : "s"} before long runs`
+        : "Ready for local agent runs";
+
+  return (
+    <div className="empty-state">
+      <div className="empty-kicker">Priority Agent desktop</div>
+      <h2>Start a focused run in {projectName}</h2>
+      <p>Ask Liz to inspect code, make an edit, review a diff, or verify behavior.</p>
+      <div className="empty-state-grid">
+        <div>
+          <span>Project</span>
+          <strong title={projectPath}>{projectName}</strong>
+        </div>
+        <div>
+          <span>Runtime</span>
+          <strong>{providerStatus?.active_model || "Checking provider"}</strong>
+        </div>
+        <div>
+          <span>Diagnostics</span>
+          <strong>{readiness}</strong>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -251,4 +304,8 @@ function fileActionLabel(action: Extract<TimelineSummary, { kind: "file" }>["act
 
 function compactSummaryMeta(values: Array<string | null | undefined>) {
   return values.filter((value): value is string => Boolean(value && value.trim()));
+}
+
+function basename(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 }
