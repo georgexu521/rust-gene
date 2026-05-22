@@ -570,6 +570,16 @@ Progress on 2026-05-22:
   reason in shell result, background task, and terminal-task metadata.
 - Bash file/git mutation commands now contribute classifier path patterns to
   changed-path evidence when the shell command succeeds.
+- Bash permission persistence now uses command-scoped rule keys instead of the
+  broad `bash` tool name. Stable validation commands save as prefix rules such
+  as `bash:cargo test*`; other shell approvals save exact command rules such as
+  `bash:npm run dev`. Runtime permission matching keeps compatibility with old
+  broad `bash` rules.
+- The TUI approval preview for bash now shows command category/kind, validation
+  family, risk flags such as network or PTY-required, visible path patterns, and
+  the exact command-scoped rule that will be saved.
+- `bash_output` and `bash_cancel` now accept `task_id` as an alias for
+  `handle`, matching the terminal-task metadata returned by background bash.
 
 Validation so far:
 
@@ -577,8 +587,13 @@ Validation so far:
 - `cargo test -q tool_metadata` - passed, 8 tests.
 - `cargo test -q permission_controller` - passed, 8 tests.
 - `cargo test -q evidence_ledger` - passed, 22 tests.
-- `cargo test -q bash_tool` - passed, 33 tests.
-- `cargo test -q permissions` - passed, 50 tests.
+- `cargo test -q bash_tool` - passed, 34 tests.
+- `cargo test -q permissions` - passed, 51 tests.
+- `cargo test -q human_review` - passed, 7 tests.
+- `cargo test -q test_bash_session_permission_rule_uses_command_scope` -
+  passed.
+- `cargo test -q render_permission_approval_shows_bash_risk_and_decisions` -
+  passed.
 - `cargo check -q` - passed.
 - `cargo fmt --check` - passed.
 - `cargo clippy -q -- -D warnings` - passed.

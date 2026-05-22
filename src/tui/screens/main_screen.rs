@@ -1757,10 +1757,7 @@ fn permission_scope_label(tool_name: &str, args: &serde_json::Value) -> String {
 fn permission_preview(tool_name: &str, args: &serde_json::Value) -> Option<(&'static str, String)> {
     let name = tool_name.to_ascii_lowercase();
     if name.contains("bash") {
-        return args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(|cmd| ("Command", format!("$ {}", cmd)));
+        return bash_permission_preview(args);
     }
     if name.contains("file") || name.contains("format") {
         let path = args
@@ -1796,6 +1793,66 @@ fn permission_preview(tool_name: &str, args: &serde_json::Value) -> Option<(&'st
         return Some(("MCP", format!("{} / {}", server, tool)));
     }
     None
+}
+
+fn bash_permission_preview(args: &serde_json::Value) -> Option<(&'static str, String)> {
+    let cmd = args.get("command").and_then(|v| v.as_str())?;
+    let classification = crate::tools::bash_tool::command_classifier::classify_command(cmd);
+    let mut lines = vec![format!("$ {}", compact_permission_line(cmd, 96))];
+    lines.push(format!(
+        "category={} kind={}",
+        serde_enum_label(classification.category),
+        serde_enum_label(classification.command_kind)
+    ));
+    if let Some(family) = classification.validation_family {
+        lines.push(format!("validation={}", serde_enum_label(family)));
+    }
+    let mut flags = Vec::new();
+    if classification.network_access {
+        flags.push("network");
+    }
+    if classification.external_path_access {
+        flags.push("external-path");
+    }
+    if classification.requires_pty() {
+        flags.push("pty-required");
+    }
+    if classification.expected_silent_output {
+        flags.push("silent-on-success");
+    }
+    if classification.risky_shell_wrapper {
+        flags.push("risky-wrapper");
+    }
+    if !flags.is_empty() {
+        lines.push(format!("flags={}", flags.join(",")));
+    }
+    if !classification.path_patterns.is_empty() {
+        lines.push(format!(
+            "paths={}",
+            classification
+                .path_patterns
+                .iter()
+                .take(4)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    lines.push(format!(
+        "rule={}",
+        crate::tui::app::permission_rule_pattern("bash", args)
+    ));
+    Some(("Command", lines.join("\n")))
+}
+
+fn serde_enum_label<T>(value: T) -> String
+where
+    T: serde::Serialize + std::fmt::Debug,
+{
+    serde_json::to_value(&value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{:?}", value))
 }
 
 fn compact_permission_line(text: &str, max_chars: usize) -> String {
@@ -2448,6 +2505,8 @@ mod tests {
         assert!(rendered.contains("Risk"));
         assert!(rendered.contains("high"));
         assert!(rendered.contains("$ rm -rf /tmp/demo"));
+        assert!(rendered.contains("category=file_mutation"));
+        assert!(rendered.contains("rule=bash:rm -rf /tmp/demo"));
         assert!(rendered.contains("allow once"));
         assert!(rendered.contains("allow session"));
         assert!(rendered.contains("deny global"));

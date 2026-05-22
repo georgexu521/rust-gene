@@ -239,6 +239,25 @@ pub fn permission_rule_pattern(tool_name: &str, args: &serde_json::Value) -> Str
             return format!("mcp/{}/{}", server, tool);
         }
     }
+    if tool_name == "bash" {
+        if let Some(command) = args["command"].as_str().or_else(|| args["cmd"].as_str()) {
+            let classification =
+                crate::tools::bash_tool::command_classifier::classify_command(command);
+            if let Some(stable_prefix) = classification
+                .permission_rule_suggestions
+                .iter()
+                .find(|rule| rule.stable)
+            {
+                return format!("bash:{}*", stable_prefix.pattern);
+            }
+            if let Some(exact) = classification.permission_rule_suggestions.first() {
+                return format!("bash:{}", exact.pattern);
+            }
+            if !classification.normalized_command.trim().is_empty() {
+                return format!("bash:{}", classification.normalized_command.trim());
+            }
+        }
+    }
     tool_name.to_string()
 }
 
@@ -419,7 +438,7 @@ mod tests {
             "Allow bash?",
         );
 
-        assert_eq!(review.rule_pattern, "bash");
+        assert_eq!(review.rule_pattern, "bash:npm run dev");
         assert_eq!(
             review.option_for_key("y").unwrap().decision,
             PermissionReviewDecision::ApproveOnce
@@ -447,6 +466,18 @@ mod tests {
                 &serde_json::json!({"server_name": "filesystem", "tool_name": "write_file"})
             ),
             "mcp/filesystem/write_file"
+        );
+    }
+
+    #[test]
+    fn permission_rule_pattern_uses_bash_command_scope() {
+        assert_eq!(
+            permission_rule_pattern("bash", &serde_json::json!({"command": "cargo test -q"})),
+            "bash:cargo test*"
+        );
+        assert_eq!(
+            permission_rule_pattern("bash", &serde_json::json!({"command": "npm run dev"})),
+            "bash:npm run dev"
         );
     }
 }

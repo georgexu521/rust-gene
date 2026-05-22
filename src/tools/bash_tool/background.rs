@@ -191,6 +191,13 @@ impl BackgroundShellSnapshot {
     }
 }
 
+fn background_handle_param(params: &serde_json::Value) -> &str {
+    params["handle"]
+        .as_str()
+        .or_else(|| params["task_id"].as_str())
+        .unwrap_or("")
+}
+
 impl BackgroundShellManager {
     fn new() -> Self {
         Self {
@@ -554,7 +561,7 @@ impl Tool for BashOutputTool {
     }
 
     fn description(&self) -> &str {
-        "Read output from a background bash handle returned by bash mode=background."
+        "Read output from a background bash task returned by bash mode=background."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -565,13 +572,17 @@ impl Tool for BashOutputTool {
                     "type": "string",
                     "description": "Background shell handle returned by bash"
                 },
+                "task_id": {
+                    "type": "string",
+                    "description": "Terminal task id returned by bash; accepted as an alias for handle"
+                },
                 "max_chars": {
                     "type": "integer",
                     "description": "Maximum output preview characters (default: 4000)",
                     "default": 4000
                 }
             },
-            "required": ["handle"]
+            "required": []
         })
     }
 
@@ -596,9 +607,9 @@ impl Tool for BashOutputTool {
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
-        let handle = params["handle"].as_str().unwrap_or("");
+        let handle = background_handle_param(&params);
         if handle.trim().is_empty() {
-            return ToolResult::error("handle cannot be empty");
+            return ToolResult::error("handle or task_id cannot be empty");
         }
         let max_chars = params["max_chars"]
             .as_u64()
@@ -627,7 +638,7 @@ impl Tool for BashCancelTool {
     }
 
     fn description(&self) -> &str {
-        "Cancel a background bash command by handle."
+        "Cancel a background bash task by handle or task_id."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -637,9 +648,13 @@ impl Tool for BashCancelTool {
                 "handle": {
                     "type": "string",
                     "description": "Background shell handle returned by bash"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Terminal task id returned by bash; accepted as an alias for handle"
                 }
             },
-            "required": ["handle"]
+            "required": []
         })
     }
 
@@ -664,9 +679,9 @@ impl Tool for BashCancelTool {
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
-        let handle = params["handle"].as_str().unwrap_or("");
+        let handle = background_handle_param(&params);
         if handle.trim().is_empty() {
-            return ToolResult::error("handle cannot be empty");
+            return ToolResult::error("handle or task_id cannot be empty");
         }
 
         match cancel_background_shell(handle).await {
@@ -838,7 +853,7 @@ mod tests {
         let tool = BashOutputTool;
         let result = tool
             .execute(
-                json!({"handle": snapshot.handle, "max_chars": 1000}),
+                json!({"task_id": snapshot.handle, "max_chars": 1000}),
                 ToolContext::new(dir.path(), "test-background-output"),
             )
             .await;
@@ -941,5 +956,32 @@ mod tests {
         assert_eq!(terminal_task["read_tool"], "bash_output");
 
         let _ = cancel_background_shell(&snapshot.handle).await;
+    }
+
+    #[tokio::test]
+    async fn bash_cancel_tool_accepts_task_id_alias() {
+        let dir = tempdir().expect("temp dir");
+        let snapshot = start_background_shell(
+            "printf cancel-alias; sleep 5",
+            "printf cancel-alias; sleep 5",
+            dir.path(),
+            BashExecutionBackend::Local,
+            30,
+        )
+        .await
+        .expect("start background shell");
+
+        let result = BashCancelTool
+            .execute(
+                json!({"task_id": snapshot.handle}),
+                ToolContext::new(dir.path(), "test-background-cancel-alias"),
+            )
+            .await;
+
+        assert!(result.success, "cancel failed: {:?}", result.error);
+        assert_eq!(
+            result.data.as_ref().unwrap()["shell_background"]["status"],
+            "cancelled"
+        );
     }
 }

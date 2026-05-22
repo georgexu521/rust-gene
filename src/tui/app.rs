@@ -4409,6 +4409,41 @@ mod tests {
     }
 
     #[test]
+    fn test_bash_session_permission_rule_uses_command_scope() {
+        let engine = Arc::new(crate::engine::streaming::StreamingQueryEngine::new(
+            Arc::new(MockProvider),
+            Arc::new(crate::tools::ToolRegistry::new()),
+            "gpt-4o",
+        ));
+        let mut app = TuiApp::with_engine(engine.clone(), None, None);
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        app.pending_permission_request =
+            Some(crate::engine::conversation_loop::ToolApprovalRequest {
+                tool_call: crate::services::api::ToolCall {
+                    id: "tc_bash".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({"command": "cargo test -q"}),
+                },
+                prompt: "Approve bash?".to_string(),
+                review: None,
+            });
+        app.permission_response_tx = Some(tx);
+        app.mode = AppMode::PermissionApproval;
+
+        app.respond_to_permission_with_rule(true, Some("allow"), Some(RuleSource::User));
+
+        let response = rx.try_recv().unwrap();
+        assert!(response.approved);
+        assert_eq!(response.rule_pattern.as_deref(), Some("bash:cargo test*"));
+        let rules = engine.session_permission_rules();
+        assert!(rules
+            .always_allow
+            .iter()
+            .any(|rule| rule.pattern == "bash:cargo test*"));
+        assert_eq!(app.mode, AppMode::Chat);
+    }
+
+    #[test]
     fn test_model_selection_updates_engine_model() {
         let mut app = TuiApp::new();
         app.streaming_engine = Some(Arc::new(

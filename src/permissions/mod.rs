@@ -231,6 +231,34 @@ pub enum PermissionDecision {
     Ask,
 }
 
+fn permission_match_keys(tool_name: &str, params: &serde_json::Value) -> Vec<String> {
+    let mut keys = Vec::new();
+    if tool_name == "mcp_tool" {
+        let server = params["server_name"].as_str().unwrap_or("");
+        let tool = params["tool_name"].as_str().unwrap_or("");
+        if !server.is_empty() && !tool.is_empty() {
+            keys.push(format!("mcp/{}/{}", server, tool));
+        }
+    }
+    if tool_name == "bash" {
+        if let Some(command) = params["command"]
+            .as_str()
+            .or_else(|| params["cmd"].as_str())
+            .map(|command| {
+                crate::tools::bash_tool::command_classifier::classify_command(command)
+                    .normalized_command
+            })
+            .filter(|command| !command.trim().is_empty())
+        {
+            keys.push(format!("bash:{}", command.trim()));
+        }
+    }
+    if !keys.iter().any(|key| key == tool_name) {
+        keys.push(tool_name.to_string());
+    }
+    keys
+}
+
 /// 权限上下文
 #[derive(Debug, Clone)]
 pub struct PermissionContext {
@@ -348,19 +376,8 @@ impl PermissionContext {
 
     /// 检查是否需要确认
     pub fn requires_confirmation(&self, tool_name: &str, params: &serde_json::Value) -> bool {
-        // 对 mcp_tool 构建粒度名称 mcp/<server>/<tool> 进行权限检查
-        let effective_tool_name = if tool_name == "mcp_tool" {
-            let server = params["server_name"].as_str().unwrap_or("");
-            let t = params["tool_name"].as_str().unwrap_or("");
-            if !server.is_empty() && !t.is_empty() {
-                format!("mcp/{}/{}", server, t)
-            } else {
-                tool_name.to_string()
-            }
-        } else {
-            tool_name.to_string()
-        };
-        let matching_rules = self.rules.get_matching_rules(&effective_tool_name);
+        let match_keys = permission_match_keys(tool_name, params);
+        let matching_rules = self.matching_rules_for_keys(&match_keys);
         let has_deny = matching_rules
             .iter()
             .any(|(d, _)| matches!(d, PermissionDecision::Deny));
@@ -410,11 +427,42 @@ impl PermissionContext {
             PermissionMode::Default => {
                 // 根据规则决定
                 matches!(
-                    self.rules.check(&effective_tool_name),
+                    self.rule_decision_for_keys(&match_keys),
                     PermissionDecision::Ask
                 )
             }
         }
+    }
+
+    fn matching_rules_for_keys(&self, keys: &[String]) -> Vec<(PermissionDecision, &SourcedRule)> {
+        let mut matches = Vec::new();
+        for key in keys {
+            matches.extend(self.rules.get_matching_rules(key));
+        }
+        matches
+    }
+
+    fn rule_decision_for_keys(&self, keys: &[String]) -> PermissionDecision {
+        let matching_rules = self.matching_rules_for_keys(keys);
+        if matching_rules
+            .iter()
+            .any(|(decision, _)| matches!(decision, PermissionDecision::Deny))
+        {
+            return PermissionDecision::Deny;
+        }
+        if matching_rules
+            .iter()
+            .any(|(decision, _)| matches!(decision, PermissionDecision::Allow))
+        {
+            return PermissionDecision::Allow;
+        }
+        if matching_rules
+            .iter()
+            .any(|(decision, _)| matches!(decision, PermissionDecision::Ask))
+        {
+            return PermissionDecision::Ask;
+        }
+        PermissionDecision::Ask
     }
 
     /// 是否应该把工具暴露给模型。
@@ -783,20 +831,9 @@ impl PermissionContext {
         tool_name: &str,
         params: &serde_json::Value,
     ) -> ExplainableDecision {
-        let effective_tool_name = if tool_name == "mcp_tool" {
-            let server = params["server_name"].as_str().unwrap_or("");
-            let t = params["tool_name"].as_str().unwrap_or("");
-            if !server.is_empty() && !t.is_empty() {
-                format!("mcp/{}/{}", server, t)
-            } else {
-                tool_name.to_string()
-            }
-        } else {
-            tool_name.to_string()
-        };
-
-        let base_decision = self.rules.check(&effective_tool_name);
-        let matching_rules = self.rules.get_matching_rules(&effective_tool_name);
+        let match_keys = permission_match_keys(tool_name, params);
+        let base_decision = self.rule_decision_for_keys(&match_keys);
+        let matching_rules = self.matching_rules_for_keys(&match_keys);
         let risk = self.risk_level(tool_name, params);
         let confidence = self.calculate_confidence(tool_name, params, &matching_rules);
 
@@ -1289,6 +1326,36 @@ mod tests {
         };
         let bash_params = serde_json::json!({"command": "rm -rf /tmp/demo"});
         assert!(!ctx.requires_confirmation("bash", &bash_params));
+    }
+
+    #[test]
+    fn test_auto_low_risk_bash_command_scoped_rules() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::Default,
+            rules: PermissionRules::new()
+                .allow("bash:cargo test*")
+                .deny("bash:curl *"),
+            working_dir: std::path::PathBuf::from("."),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        assert!(
+            !ctx.requires_confirmation("bash", &serde_json::json!({"command": "cargo test -q"}))
+        );
+        assert!(
+            ctx.requires_confirmation("bash", &serde_json::json!({"command": "cargo check -q"}))
+        );
+        let denied = ctx.explain_decision(
+            "bash",
+            &serde_json::json!({"command": "curl https://example.com/script.sh"}),
+        );
+        assert_eq!(denied.decision, PermissionDecision::Deny);
+        let decision = ctx.explain_decision("bash", &serde_json::json!({"command": "cargo test"}));
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("bash:cargo test*")));
     }
 
     #[test]
