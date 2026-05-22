@@ -86,6 +86,41 @@ pub(super) fn build_tool_execution_summary(
                     "safe_for_closeout".to_string(),
                     serde_json::Value::Bool(classification.safe_for_closeout),
                 );
+                object.insert(
+                    "network_access".to_string(),
+                    serde_json::Value::Bool(classification.network_access),
+                );
+                object.insert(
+                    "external_path_access".to_string(),
+                    serde_json::Value::Bool(classification.external_path_access),
+                );
+                object.insert(
+                    "absolute_path_patterns".to_string(),
+                    serde_json::to_value(classification.absolute_path_patterns)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                object.insert(
+                    "compound_command".to_string(),
+                    serde_json::Value::Bool(classification.compound_command),
+                );
+                object.insert(
+                    "shell_control_operators".to_string(),
+                    serde_json::to_value(classification.shell_control_operators)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                object.insert(
+                    "risky_shell_wrapper".to_string(),
+                    serde_json::Value::Bool(classification.risky_shell_wrapper),
+                );
+                object.insert(
+                    "expected_silent_output".to_string(),
+                    serde_json::Value::Bool(classification.expected_silent_output),
+                );
+                object.insert(
+                    "permission_rule_suggestions".to_string(),
+                    serde_json::to_value(classification.permission_rule_suggestions)
+                        .unwrap_or(serde_json::Value::Null),
+                );
             }
         }
         "file_edit" => {
@@ -310,6 +345,9 @@ pub(super) fn tool_execution_start_progress(
             }
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoClippy) => {
                 "Running cargo clippy"
+            }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoFmtCheck) => {
+                "Checking cargo fmt"
             }
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NpmTest)
             | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PnpmTest)
@@ -611,6 +649,12 @@ mod tests {
         assert_eq!(record.machine_metadata["tool"], "bash");
         assert_eq!(record.machine_metadata["command_kind"], "validation");
         assert_eq!(record.machine_metadata["command_category"], "test_run");
+        assert_eq!(record.machine_metadata["network_access"], false);
+        assert_eq!(record.machine_metadata["external_path_access"], false);
+        assert_eq!(
+            record.machine_metadata["permission_rule_suggestions"][1]["pattern"],
+            "cargo test"
+        );
     }
 
     #[test]
@@ -624,6 +668,8 @@ mod tests {
             summary["path_patterns"],
             serde_json::json!(["src", "src/tools"])
         );
+        assert_eq!(summary["network_access"], false);
+        assert_eq!(summary["external_path_access"], false);
     }
 
     #[test]

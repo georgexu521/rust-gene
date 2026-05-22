@@ -398,6 +398,14 @@ fn permission_command_classification(
         "path_patterns": classification.path_patterns,
         "safe_for_closeout": classification.safe_for_closeout,
         "requires_pty": classification.requires_pty(),
+        "network_access": classification.network_access,
+        "external_path_access": classification.external_path_access,
+        "absolute_path_patterns": classification.absolute_path_patterns,
+        "compound_command": classification.compound_command,
+        "shell_control_operators": classification.shell_control_operators,
+        "risky_shell_wrapper": classification.risky_shell_wrapper,
+        "expected_silent_output": classification.expected_silent_output,
+        "permission_rule_suggestions": classification.permission_rule_suggestions,
     })
 }
 
@@ -655,6 +663,18 @@ mod tests {
         assert_eq!(
             metadata["command_classification"]["requires_pty"],
             serde_json::Value::Bool(false)
+        );
+        assert_eq!(
+            metadata["command_classification"]["network_access"],
+            serde_json::Value::Bool(false)
+        );
+        assert_eq!(
+            metadata["command_classification"]["external_path_access"],
+            serde_json::Value::Bool(false)
+        );
+        assert_eq!(
+            metadata["command_classification"]["permission_rule_suggestions"][0]["scope"],
+            "exact"
         );
         assert_eq!(
             metadata["permission_matcher_input"],

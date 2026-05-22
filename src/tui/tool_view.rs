@@ -436,7 +436,8 @@ fn summarize_bash(args: Option<&Value>, run: &ToolRunView) -> String {
             terminal_summary(run, "Running tests", "Ran tests")
         }
         Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoCheck)
-        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoClippy) => {
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoClippy)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoFmtCheck) => {
             terminal_summary(run, "Running cargo", "Ran cargo")
         }
         Some(crate::tools::bash_tool::command_classifier::ValidationFamily::RgAssertion) => {

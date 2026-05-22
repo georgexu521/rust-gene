@@ -12,7 +12,7 @@ use crate::tools::{
 use async_trait::async_trait;
 use background::{background_shell_result_data, background_started_content};
 pub use background::{BashCancelTool, BashOutputTool, BashTasksTool};
-use command_classifier::{classify_command, ShellCommandCategory};
+use command_classifier::{classify_command, CommandClassification, ShellCommandCategory};
 use serde_json::json;
 use std::process::Stdio;
 use std::{
@@ -78,6 +78,113 @@ fn effective_timeout_secs(requested: Option<u64>) -> u64 {
         .unwrap_or(0)
         .min(3600);
     requested.max(floor).min(3600)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutoBackgroundDecision {
+    reason: &'static str,
+    threshold_secs: u64,
+    timeout_secs: u64,
+}
+
+fn auto_background_enabled() -> bool {
+    std::env::var("PRIORITY_AGENT_BASH_AUTO_BACKGROUND")
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
+        .unwrap_or(true)
+}
+
+fn auto_background_threshold_secs() -> u64 {
+    std::env::var("PRIORITY_AGENT_BASH_AUTO_BACKGROUND_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(30)
+        .clamp(1, 3600)
+}
+
+fn auto_background_decision(
+    command: &str,
+    classification: &CommandClassification,
+    mode: &str,
+    timeout_secs: u64,
+) -> Option<AutoBackgroundDecision> {
+    if mode != "foreground" || !auto_background_enabled() || classification.requires_pty() {
+        return None;
+    }
+
+    let threshold_secs = auto_background_threshold_secs();
+    if timeout_secs < threshold_secs {
+        return None;
+    }
+
+    let reason = if classification.category == ShellCommandCategory::DevServer {
+        Some("dev_server")
+    } else {
+        watch_like_command_reason(command)
+    }?;
+
+    Some(AutoBackgroundDecision {
+        reason,
+        threshold_secs,
+        timeout_secs,
+    })
+}
+
+fn watch_like_command_reason(command: &str) -> Option<&'static str> {
+    let lower = command.trim().to_ascii_lowercase();
+    let words = lower.split_whitespace().collect::<Vec<_>>();
+    let first = words.first().copied();
+    let second = words.get(1).copied();
+
+    if matches!(first, Some("watch" | "watchexec")) {
+        return Some("watch_mode");
+    }
+    if matches!((first, second), (Some("cargo"), Some("watch"))) {
+        return Some("watch_mode");
+    }
+    if matches!(first, Some("npm" | "pnpm" | "yarn")) && words.contains(&"watch") {
+        return Some("watch_mode");
+    }
+    if matches!(
+        first,
+        Some("tsc" | "jest" | "vitest" | "webpack" | "rollup" | "parcel" | "deno" | "bun")
+    ) && words
+        .iter()
+        .any(|word| *word == "--watch" || word.starts_with("--watch="))
+    {
+        return Some("watch_mode");
+    }
+    if matches!((first, second), (Some("tail"), Some("-f"))) {
+        return Some("follow_output");
+    }
+    None
+}
+
+fn attach_auto_background_metadata(
+    data: &mut serde_json::Value,
+    decision: &AutoBackgroundDecision,
+) {
+    let metadata = json!({
+        "enabled": true,
+        "reason": decision.reason,
+        "threshold_secs": decision.threshold_secs,
+        "timeout_secs": decision.timeout_secs,
+    });
+    if let Some(object) = data.as_object_mut() {
+        object.insert("auto_background".to_string(), metadata.clone());
+        for key in ["shell_result", "shell_background", "terminal_task"] {
+            if let Some(child) = object
+                .get_mut(key)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                child.insert("auto_background".to_string(), metadata.clone());
+            }
+        }
+    }
 }
 
 fn sanitize_agent_runtime_env(cmd: &mut Command) {
@@ -951,7 +1058,8 @@ impl Tool for BashTool {
             },
         };
 
-        if mode == "background" {
+        let auto_background = auto_background_decision(command, &classification, mode, timeout);
+        if mode == "background" || auto_background.is_some() {
             return match background::start_background_shell(
                 command,
                 &actual_command,
@@ -961,10 +1069,18 @@ impl Tool for BashTool {
             )
             .await
             {
-                Ok(snapshot) => ToolResult::success_with_data(
-                    background_started_content(&snapshot),
-                    background_shell_result_data(&snapshot),
-                ),
+                Ok(snapshot) => {
+                    let mut content = background_started_content(&snapshot);
+                    let mut data = background_shell_result_data(&snapshot);
+                    if let Some(decision) = auto_background.as_ref() {
+                        content.push_str(&format!(
+                            "\nAuto-background: {} command exceeded {}s foreground threshold.",
+                            decision.reason, decision.threshold_secs
+                        ));
+                        attach_auto_background_metadata(&mut data, decision);
+                    }
+                    ToolResult::success_with_data(content, data)
+                }
                 Err(err) => error_with_audit(err, None, &audit, command),
             };
         }
@@ -1376,6 +1492,13 @@ mod tests {
         assert_eq!(classification["category"], "unknown");
         assert_eq!(classification["env_prefixed"], true);
         assert_eq!(classification["safe_for_closeout"], false);
+        assert_eq!(classification["network_access"], false);
+        assert_eq!(classification["external_path_access"], false);
+        assert_eq!(classification["expected_silent_output"], false);
+        assert_eq!(
+            classification["permission_rule_suggestions"][0]["scope"],
+            "exact"
+        );
         let shell_result = result
             .data
             .as_ref()
@@ -1533,6 +1656,69 @@ mod tests {
             cancelled.data.as_ref().unwrap()["shell_background"]["status"],
             "cancelled"
         );
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_auto_backgrounds_dev_server_candidates() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.remove("PRIORITY_AGENT_BASH_AUTO_BACKGROUND");
+        env.set("PRIORITY_AGENT_BASH_AUTO_BACKGROUND_SECS", "1");
+
+        let tool = BashTool;
+        let dir = tempdir().expect("create temp dir");
+        let context = ToolContext::new(dir.path(), "test-session-auto-background");
+        let result = tool
+            .execute(
+                json!({
+                    "command": "npm run dev",
+                    "description": "Start dev server",
+                    "backend": "local",
+                    "working_dir": dir.path(),
+                    "timeout": 60
+                }),
+                context.clone(),
+            )
+            .await;
+
+        assert!(result.success, "bash failed: {:?}", result.error);
+        assert!(result.content.contains("Auto-background"));
+        let data = result.data.as_ref().expect("auto background data");
+        assert_eq!(data["shell_result"]["background"], true);
+        assert_eq!(
+            data["shell_result"]["auto_background"]["reason"],
+            "dev_server"
+        );
+        assert_eq!(data["auto_background"]["threshold_secs"], 1);
+        assert_eq!(data["terminal_task"]["terminal_kind"], "background_shell");
+        assert_eq!(data["terminal_task"]["read_tool"], "bash_output");
+        let handle = data["shell_result"]["handle"]
+            .as_str()
+            .expect("background handle");
+        let _ = BashCancelTool
+            .execute(json!({"handle": handle}), context)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_auto_background_policy_is_conservative() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.remove("PRIORITY_AGENT_BASH_AUTO_BACKGROUND");
+        env.set("PRIORITY_AGENT_BASH_AUTO_BACKGROUND_SECS", "1");
+
+        let grep = classify_command("grep -w needle src/lib.rs");
+        assert!(
+            auto_background_decision("grep -w needle src/lib.rs", &grep, "foreground", 60)
+                .is_none()
+        );
+
+        let tail = classify_command("tail -f logs/app.log");
+        assert!(
+            auto_background_decision("tail -f logs/app.log", &tail, "foreground", 60).is_some()
+        );
+
+        let short = classify_command("npm run dev");
+        assert!(auto_background_decision("npm run dev", &short, "foreground", 1).is_some());
+        assert!(auto_background_decision("npm run dev", &short, "background", 60).is_none());
     }
 
     #[tokio::test]

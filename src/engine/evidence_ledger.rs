@@ -74,7 +74,23 @@ pub struct ToolExecutionRecord {
     pub validation_family: Option<String>,
     #[serde(default)]
     pub path_patterns: Vec<String>,
+    #[serde(default)]
+    pub absolute_path_patterns: Vec<String>,
     pub safe_for_closeout: Option<bool>,
+    #[serde(default)]
+    pub network_access: Option<bool>,
+    #[serde(default)]
+    pub external_path_access: Option<bool>,
+    #[serde(default)]
+    pub compound_command: Option<bool>,
+    #[serde(default)]
+    pub shell_control_operators: Vec<String>,
+    #[serde(default)]
+    pub risky_shell_wrapper: Option<bool>,
+    #[serde(default)]
+    pub expected_silent_output: Option<bool>,
+    #[serde(default)]
+    pub permission_rule_suggestions: Vec<serde_json::Value>,
     pub terminal_task: Option<TerminalTaskRecord>,
     pub changed_paths: Vec<String>,
     pub file_evidence: Vec<ToolFileEvidenceLink>,
@@ -237,7 +253,21 @@ pub struct CommandEvidence {
     pub validation_family: Option<String>,
     #[serde(default)]
     pub path_patterns: Vec<String>,
+    #[serde(default)]
+    pub absolute_path_patterns: Vec<String>,
     pub safe_for_closeout: bool,
+    #[serde(default)]
+    pub network_access: bool,
+    #[serde(default)]
+    pub external_path_access: bool,
+    #[serde(default)]
+    pub compound_command: bool,
+    #[serde(default)]
+    pub shell_control_operators: Vec<String>,
+    #[serde(default)]
+    pub risky_shell_wrapper: bool,
+    #[serde(default)]
+    pub expected_silent_output: bool,
     pub summary: String,
 }
 
@@ -754,7 +784,14 @@ impl EvidenceLedger {
             command_category,
             validation_family,
             path_patterns: classification.path_patterns.clone(),
+            absolute_path_patterns: classification.absolute_path_patterns.clone(),
             safe_for_closeout,
+            network_access: classification.network_access,
+            external_path_access: classification.external_path_access,
+            compound_command: classification.compound_command,
+            shell_control_operators: classification.shell_control_operators.clone(),
+            risky_shell_wrapper: classification.risky_shell_wrapper,
+            expected_silent_output: classification.expected_silent_output,
             summary: summary.clone(),
         });
         if classification.is_safe_validation() {
@@ -800,6 +837,18 @@ impl EvidenceLedger {
         let command_category = summary_string(summary, "command_category");
         let validation_family = summary_string(summary, "validation_family");
         let path_patterns = summary_string_array(summary, "path_patterns");
+        let absolute_path_patterns = summary_string_array(summary, "absolute_path_patterns");
+        let network_access = summary_bool(summary, "network_access");
+        let external_path_access = summary_bool(summary, "external_path_access");
+        let compound_command = summary_bool(summary, "compound_command");
+        let shell_control_operators = summary_string_array(summary, "shell_control_operators");
+        let risky_shell_wrapper = summary_bool(summary, "risky_shell_wrapper");
+        let expected_silent_output = summary_bool(summary, "expected_silent_output");
+        let permission_rule_suggestions = summary
+            .and_then(|summary| summary.get("permission_rule_suggestions"))
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         let operation_kind = summary_string(summary, "operation_kind");
         let read_only = summary_bool(summary, "read_only");
         let concurrency_safe = summary_bool(summary, "concurrency_safe");
@@ -876,7 +925,15 @@ impl EvidenceLedger {
             command_category,
             validation_family,
             path_patterns,
+            absolute_path_patterns,
             safe_for_closeout,
+            network_access,
+            external_path_access,
+            compound_command,
+            shell_control_operators,
+            risky_shell_wrapper,
+            expected_silent_output,
+            permission_rule_suggestions,
             terminal_task: terminal_task_record(result),
             changed_paths,
             file_evidence,
@@ -1168,6 +1225,19 @@ fn changed_paths_for_tool_result(tool_call: &ToolCall, result: &ToolResult) -> V
                 {
                     paths.insert(path.to_string());
                 }
+            }
+        }
+    }
+    if tool_call.name == "bash" && result.success {
+        if let Some(command) = tool_call.arguments["command"].as_str() {
+            let classification =
+                crate::tools::bash_tool::command_classifier::classify_command(command);
+            if matches!(
+                classification.category,
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::FileMutation
+                    | crate::tools::bash_tool::command_classifier::ShellCommandCategory::GitMutation
+            ) {
+                paths.extend(classification.path_patterns);
             }
         }
     }
@@ -1649,13 +1719,25 @@ fn format_repair_tool_record(record: &ToolExecutionRecord, file_facts: &[FileEvi
     };
 
     preview(&format!(
-        "tool record evidence: tool={} status={} command={} normalized_command={} validation_family={} path_patterns={} safe_for_closeout={} duration_ms={} output_chars={} terminal={} changed_paths={} file_evidence={} repair_reasons={} error={}",
+        "tool record evidence: tool={} status={} command={} normalized_command={} validation_family={} path_patterns={} network_access={} external_path_access={} expected_silent_output={} safe_for_closeout={} duration_ms={} output_chars={} terminal={} changed_paths={} file_evidence={} repair_reasons={} error={}",
         record.tool,
         status,
         record.command.as_deref().unwrap_or("none"),
         record.normalized_command.as_deref().unwrap_or("none"),
         record.validation_family.as_deref().unwrap_or("none"),
         path_patterns,
+        record
+            .network_access
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record
+            .external_path_access
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record
+            .expected_silent_output
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
         record
             .safe_for_closeout
             .map(|value| value.to_string())
@@ -1916,6 +1998,68 @@ mod tests {
             "cargo test -q src"
         );
         assert_eq!(ledger.command_facts[0].path_patterns, vec!["src"]);
+        assert!(!ledger.command_facts[0].network_access);
+        assert!(!ledger.command_facts[0].external_path_access);
+        assert!(!ledger.command_facts[0].compound_command);
+    }
+
+    #[test]
+    fn records_shell_risk_facts_from_tool_summary() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "ok",
+            serde_json::json!({
+                "tool_summary": {
+                    "command": "curl https://example.com -o /tmp/out.json",
+                    "network_access": true,
+                    "external_path_access": true,
+                    "absolute_path_patterns": ["/tmp/out.json"],
+                    "compound_command": false,
+                    "shell_control_operators": [],
+                    "risky_shell_wrapper": false,
+                    "expected_silent_output": false,
+                    "permission_rule_suggestions": [
+                        {
+                            "pattern": "curl https://example.com -o /tmp/out.json",
+                            "scope": "exact",
+                            "stable": false,
+                            "reason": "exact command for this permission review"
+                        }
+                    ]
+                }
+            }),
+        );
+
+        ledger.record_tool_result(
+            &tool_call(
+                "bash",
+                serde_json::json!({"command": "curl https://example.com -o /tmp/out.json"}),
+            ),
+            &result,
+        );
+
+        let record = &ledger.tool_execution_records()[0];
+        assert_eq!(record.network_access, Some(true));
+        assert_eq!(record.external_path_access, Some(true));
+        assert_eq!(record.absolute_path_patterns, vec!["/tmp/out.json"]);
+        assert_eq!(record.compound_command, Some(false));
+        assert_eq!(record.risky_shell_wrapper, Some(false));
+        assert_eq!(record.expected_silent_output, Some(false));
+        assert_eq!(record.permission_rule_suggestions.len(), 1);
+    }
+
+    #[test]
+    fn records_bash_mutation_path_patterns_as_changed_paths() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call("bash", serde_json::json!({"command": "git add src/lib.rs"})),
+            &ToolResult::success(""),
+        );
+
+        let record = &ledger.tool_execution_records()[0];
+        assert_eq!(record.changed_paths, vec!["src/lib.rs"]);
+        assert!(record.relevance.closeout);
+        assert!(record.relevance.repair);
     }
 
     #[test]

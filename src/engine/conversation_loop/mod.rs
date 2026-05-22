@@ -734,6 +734,13 @@ mod tests {
         assert_eq!(summary["command_category"], "test_run");
         assert_eq!(summary["validation_family"], "cargo_test");
         assert_eq!(summary["safe_for_closeout"], true);
+        assert_eq!(summary["network_access"], false);
+        assert_eq!(summary["external_path_access"], false);
+        assert_eq!(summary["expected_silent_output"], false);
+        assert_eq!(
+            summary["permission_rule_suggestions"][1]["pattern"],
+            "cargo test"
+        );
         let recovery = result
             .data
             .as_ref()

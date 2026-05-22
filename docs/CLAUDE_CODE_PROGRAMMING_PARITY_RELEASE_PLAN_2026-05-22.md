@@ -548,6 +548,42 @@ Acceptance:
 - Validation commands become machine-readable evidence.
 - Risky shell commands produce understandable, command-specific review.
 
+Progress on 2026-05-22:
+
+- Started Phase 3 with the shell-command classifier and metadata path.
+- Added machine-readable command facts for network access, external/absolute
+  path access, compound shell operators, risky shell wrappers, PTY requirement,
+  expected silent output, and exact/prefix permission rule suggestions.
+- Added `cargo fmt --check` as a validation family and classified `cargo fmt`
+  without `--check` as a file mutation.
+- Expanded package/network detection for `npm ci`, Go install/get, git
+  clone/fetch/submodule, and common remote/network tools.
+- Propagated the new command facts into bash result metadata, provider tool
+  summaries, permission review records, evidence ledger command facts, and tool
+  execution records.
+- Permission explanations now warn on shell network access, risky shell
+  wrappers, and commands whose successful execution may be silent.
+- Added a conservative auto-background policy for foreground dev-server/watch
+  commands when the requested timeout meets
+  `PRIORITY_AGENT_BASH_AUTO_BACKGROUND_SECS` (default 30s). It can be disabled
+  with `PRIORITY_AGENT_BASH_AUTO_BACKGROUND=0` and records the auto-background
+  reason in shell result, background task, and terminal-task metadata.
+- Bash file/git mutation commands now contribute classifier path patterns to
+  changed-path evidence when the shell command succeeds.
+
+Validation so far:
+
+- `cargo test -q command_classifier` - passed, 8 tests.
+- `cargo test -q tool_metadata` - passed, 8 tests.
+- `cargo test -q permission_controller` - passed, 8 tests.
+- `cargo test -q evidence_ledger` - passed, 22 tests.
+- `cargo test -q bash_tool` - passed, 33 tests.
+- `cargo test -q permissions` - passed, 50 tests.
+- `cargo check -q` - passed.
+- `cargo fmt --check` - passed.
+- `cargo clippy -q -- -D warnings` - passed.
+- `git diff --check` - passed.
+
 ## Phase 4: File Tools, History, Diff, And Rewind
 
 Purpose: make code mutation recoverable and inspectable.

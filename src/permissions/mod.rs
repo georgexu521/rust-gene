@@ -520,8 +520,7 @@ impl PermissionContext {
                 let classification =
                     crate::tools::bash_tool::command_classifier::classify_command(cmd);
                 if Self::is_high_risk_command(cmd)
-                    || Self::has_external_network_command(&lower)
-                    || Self::has_remote_git_command(&lower)
+                    || classification.network_access
                     || self.bash_references_outside_workspace_path(&lower)
                 {
                     RiskLevel::High
@@ -748,18 +747,6 @@ impl PermissionContext {
         dangerous_patterns.iter().any(|p| cmd.contains(p))
     }
 
-    fn has_external_network_command(cmd: &str) -> bool {
-        let lower = cmd.to_ascii_lowercase();
-        ["curl ", "wget ", "ssh ", "scp ", "rsync ", "nc ", "ncat "]
-            .iter()
-            .any(|pattern| lower.contains(pattern))
-    }
-
-    fn has_remote_git_command(cmd: &str) -> bool {
-        let lower = cmd.to_ascii_lowercase();
-        lower.contains("git push") || lower.contains("git fetch") || lower.contains("git pull")
-    }
-
     fn is_high_risk_path(path: &str) -> bool {
         if path.is_empty() {
             return true;
@@ -836,6 +823,21 @@ impl PermissionContext {
             ));
             if Self::is_high_risk_command(cmd) {
                 warnings.push("HIGH_RISK_COMMAND: dangerous shell command detected".to_string());
+            }
+            if classification.network_access {
+                warnings.push("NETWORK_ACCESS: shell command may access the network".to_string());
+            }
+            if classification.risky_shell_wrapper {
+                warnings.push(
+                    "RISKY_SHELL_WRAPPER: shell wrapper contains risky or compound behavior"
+                        .to_string(),
+                );
+            }
+            if classification.expected_silent_output {
+                warnings.push(
+                    "EXPECTED_SILENT_OUTPUT: success may produce little or no terminal output"
+                        .to_string(),
+                );
             }
             if self.bash_references_outside_workspace_path(cmd) {
                 warnings.push(

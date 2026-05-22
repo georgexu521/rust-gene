@@ -34,6 +34,7 @@ pub enum ValidationFamily {
     CargoTest,
     CargoCheck,
     CargoClippy,
+    CargoFmtCheck,
     NpmTest,
     PnpmTest,
     YarnTest,
@@ -47,6 +48,21 @@ pub enum ValidationFamily {
     ShellAssertion,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandPermissionRuleScope {
+    Exact,
+    Prefix,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandPermissionRuleSuggestion {
+    pub pattern: String,
+    pub scope: CommandPermissionRuleScope,
+    pub stable: bool,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandClassification {
     pub normalized_command: String,
@@ -57,6 +73,14 @@ pub struct CommandClassification {
     pub safe_for_closeout: bool,
     pub shell_wrapped: bool,
     pub env_prefixed: bool,
+    pub network_access: bool,
+    pub external_path_access: bool,
+    pub absolute_path_patterns: Vec<String>,
+    pub compound_command: bool,
+    pub shell_control_operators: Vec<String>,
+    pub risky_shell_wrapper: bool,
+    pub expected_silent_output: bool,
+    pub permission_rule_suggestions: Vec<CommandPermissionRuleSuggestion>,
 }
 
 impl CommandClassification {
@@ -76,16 +100,16 @@ pub fn classify_command(command: &str) -> CommandClassification {
     let base_command = base_command.to_string();
 
     if crate::security::is_dangerous_command(command) {
-        return CommandClassification {
+        return build_command_classification(CommandClassificationInput {
             normalized_command: normalized,
+            base_command: &base_command,
             command_kind: CommandKind::Dangerous,
             category: ShellCommandCategory::Destructive,
             validation_family: None,
-            path_patterns: extract_path_patterns(&base_command),
             safe_for_closeout: false,
             shell_wrapped,
             env_prefixed,
-        };
+        });
     }
 
     if let Some(family) = validation_family(&base_command) {
@@ -94,30 +118,91 @@ pub fn classify_command(command: &str) -> CommandClassification {
         } else {
             ShellCommandCategory::Validation
         };
-        return CommandClassification {
+        return build_command_classification(CommandClassificationInput {
             normalized_command: normalized,
+            base_command: &base_command,
             command_kind: CommandKind::Validation,
             category,
             validation_family: Some(family),
-            path_patterns: extract_path_patterns(&base_command),
             safe_for_closeout: true,
             shell_wrapped,
             env_prefixed,
-        };
+        });
     }
 
     let category = shell_command_category(&base_command);
     let command_kind = command_kind_for_category(category);
 
-    CommandClassification {
+    build_command_classification(CommandClassificationInput {
         normalized_command: normalized,
+        base_command: &base_command,
         command_kind,
         category,
         validation_family: None,
-        path_patterns: extract_path_patterns(&base_command),
         safe_for_closeout: false,
         shell_wrapped,
         env_prefixed,
+    })
+}
+
+struct CommandClassificationInput<'a> {
+    normalized_command: String,
+    base_command: &'a str,
+    command_kind: CommandKind,
+    category: ShellCommandCategory,
+    validation_family: Option<ValidationFamily>,
+    safe_for_closeout: bool,
+    shell_wrapped: bool,
+    env_prefixed: bool,
+}
+
+fn build_command_classification(input: CommandClassificationInput<'_>) -> CommandClassification {
+    let path_patterns = extract_path_patterns(input.base_command);
+    let absolute_path_patterns = absolute_path_patterns(&path_patterns);
+    let external_path_access = path_patterns.iter().any(|path| external_path_pattern(path));
+    let network_access = command_has_network_access(input.base_command, input.category);
+    let shell_control_operators = shell_control_operators(input.base_command);
+    let compound_command = !shell_control_operators.is_empty();
+    let risky_shell_wrapper = input.shell_wrapped
+        && (compound_command
+            || network_access
+            || external_path_access
+            || matches!(
+                input.category,
+                ShellCommandCategory::Destructive
+                    | ShellCommandCategory::FileMutation
+                    | ShellCommandCategory::GitMutation
+                    | ShellCommandCategory::PackageInstall
+            ));
+    let expected_silent_output =
+        command_expected_silent_output(input.base_command, input.validation_family);
+    let permission_rule_suggestions = command_permission_rule_suggestions(
+        input.base_command,
+        input.category,
+        input.validation_family,
+        input.safe_for_closeout,
+        network_access,
+        external_path_access,
+        compound_command,
+    );
+
+    CommandClassification {
+        normalized_command: input.normalized_command,
+        command_kind: input.command_kind,
+        category: input.category,
+        validation_family: input.validation_family,
+        path_patterns,
+        safe_for_closeout: input.safe_for_closeout,
+        shell_wrapped: input.shell_wrapped,
+        env_prefixed: input.env_prefixed,
+        network_access,
+        external_path_access,
+        absolute_path_patterns,
+        compound_command,
+        shell_control_operators,
+        risky_shell_wrapper,
+        expected_silent_output,
+        permission_rule_suggestions,
     }
 }
 
@@ -210,6 +295,8 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
         Some(ValidationFamily::CargoCheck)
     } else if lower.contains("cargo clippy") {
         Some(ValidationFamily::CargoClippy)
+    } else if lower.contains("cargo fmt") && lower.contains("--check") {
+        Some(ValidationFamily::CargoFmtCheck)
     } else if lower == "npm test"
         || lower.starts_with("npm test ")
         || lower.contains("npm run test")
@@ -497,6 +584,8 @@ fn is_package_install_command(lower: &str) -> bool {
         || lower.starts_with("uv pip install ")
         || lower == "npm install"
         || lower.starts_with("npm install ")
+        || lower == "npm ci"
+        || lower.starts_with("npm ci ")
         || lower.starts_with("npm i ")
         || lower.starts_with("npm add ")
         || lower.starts_with("pnpm install")
@@ -505,6 +594,8 @@ fn is_package_install_command(lower: &str) -> bool {
         || lower.starts_with("yarn add ")
         || lower.starts_with("cargo add ")
         || lower.starts_with("cargo install ")
+        || lower.starts_with("go get ")
+        || lower.starts_with("go install ")
         || lower.starts_with("brew install ")
 }
 
@@ -525,6 +616,16 @@ fn is_dev_server_command(lower: &str) -> bool {
         || lower.starts_with("vite ")
         || lower == "next dev"
         || lower.starts_with("next dev ")
+        || lower == "cargo watch"
+        || lower.starts_with("cargo watch ")
+        || lower == "watchexec"
+        || lower.starts_with("watchexec ")
+        || lower == "trunk serve"
+        || lower.starts_with("trunk serve ")
+        || lower == "python -m http.server"
+        || lower.starts_with("python -m http.server ")
+        || lower == "python3 -m http.server"
+        || lower.starts_with("python3 -m http.server ")
 }
 
 fn is_interactive_command(lower: &str) -> bool {
@@ -606,8 +707,11 @@ fn is_git_mutation_command(lower: &str) -> bool {
         || lower.starts_with("git merge")
         || lower.starts_with("git rebase")
         || lower.starts_with("git apply")
+        || lower.starts_with("git clone")
+        || lower.starts_with("git fetch")
         || lower.starts_with("git push")
         || lower.starts_with("git pull")
+        || lower.starts_with("git submodule")
 }
 
 fn is_legacy_mutation_command(command: &str) -> bool {
@@ -618,13 +722,15 @@ fn is_legacy_mutation_command(command: &str) -> bool {
     ) || lower.contains(" > ")
         || lower.contains(" >> ")
         || lower.starts_with("patch ")
+        || lower == "cargo fmt"
+        || lower.starts_with("cargo fmt ")
         || lower.contains("sed -i")
 }
 
 fn extract_path_patterns(command: &str) -> Vec<String> {
-    let tokens = command
-        .split_whitespace()
-        .map(clean_shell_token)
+    let tokens = shell_tokens(command)
+        .into_iter()
+        .map(|token| clean_shell_token(&token))
         .collect::<Vec<_>>();
     let mut paths = tokens
         .iter()
@@ -642,6 +748,282 @@ fn extract_path_patterns(command: &str) -> Vec<String> {
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn shell_tokens(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in command.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if quote != Some('\'') && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            if ch == active_quote {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        current.push(ch);
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn absolute_path_patterns(path_patterns: &[String]) -> Vec<String> {
+    let mut paths = path_patterns
+        .iter()
+        .filter(|path| path.starts_with('/') || path.starts_with("~/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn external_path_pattern(path: &str) -> bool {
+    path.starts_with('/') || path.starts_with("~/") || path.starts_with("../")
+}
+
+fn shell_control_operators(command: &str) -> Vec<String> {
+    let mut operators = Vec::new();
+    for (label, found) in [
+        ("and", command.contains("&&")),
+        ("or", command.contains("||")),
+        ("semicolon", command.contains(';')),
+        ("pipe", contains_single_pipe(command)),
+        ("redirect", contains_shell_redirection(command)),
+        (
+            "background",
+            command.trim_end().ends_with('&') || command.contains(" & "),
+        ),
+        (
+            "command_substitution",
+            command.contains("$(") || command.contains('`'),
+        ),
+    ] {
+        if found {
+            operators.push(label.to_string());
+        }
+    }
+    operators
+}
+
+fn contains_single_pipe(command: &str) -> bool {
+    let bytes = command.as_bytes();
+    bytes.iter().enumerate().any(|(index, byte)| {
+        *byte == b'|'
+            && bytes.get(index.wrapping_sub(1)) != Some(&b'|')
+            && bytes.get(index + 1) != Some(&b'|')
+    })
+}
+
+fn contains_shell_redirection(command: &str) -> bool {
+    command.contains(" >")
+        || command.contains("> ")
+        || command.contains(" <")
+        || command.contains("< ")
+        || command.contains("2>")
+        || command.contains("&>")
+}
+
+fn command_has_network_access(command: &str, category: ShellCommandCategory) -> bool {
+    if category == ShellCommandCategory::PackageInstall {
+        return true;
+    }
+    let lower = command.to_ascii_lowercase();
+    if lower.contains("://") || lower.contains("git@") {
+        return true;
+    }
+    let tokens = shell_tokens(&lower);
+    tokens
+        .iter()
+        .enumerate()
+        .any(|(index, token)| is_network_executable(token) || is_network_subcommand(&tokens, index))
+}
+
+fn is_network_executable(token: &str) -> bool {
+    matches!(
+        token,
+        "curl"
+            | "wget"
+            | "ssh"
+            | "scp"
+            | "sftp"
+            | "rsync"
+            | "nc"
+            | "ncat"
+            | "netcat"
+            | "telnet"
+            | "ftp"
+    )
+}
+
+fn is_network_subcommand(tokens: &[String], index: usize) -> bool {
+    let Some(token) = tokens.get(index).map(String::as_str) else {
+        return false;
+    };
+    let next = tokens.get(index + 1).map(String::as_str);
+    match token {
+        "git" => matches!(
+            next,
+            Some("clone" | "fetch" | "pull" | "push" | "ls-remote")
+        ),
+        "gh" => true,
+        "brew" => matches!(next, Some("install" | "update" | "upgrade" | "tap")),
+        "cargo" => matches!(next, Some("add" | "fetch" | "install" | "update")),
+        "go" => matches!(next, Some("get" | "install")),
+        "npm" => matches!(next, Some("install" | "i" | "ci" | "add" | "publish")),
+        "pnpm" | "yarn" => matches!(next, Some("install" | "add" | "publish" | "dlx")),
+        "pip" | "pip3" => matches!(next, Some("install" | "download")),
+        _ => false,
+    }
+}
+
+fn command_expected_silent_output(
+    command: &str,
+    validation_family: Option<ValidationFamily>,
+) -> bool {
+    let lower = command.trim().to_ascii_lowercase();
+    let shell_assertion_prints = lower.contains(" echo ") || lower.starts_with("echo ");
+    if matches!(validation_family, Some(ValidationFamily::ShellAssertion))
+        && !shell_assertion_prints
+    {
+        return true;
+    }
+    lower.starts_with("git diff --quiet")
+        || lower.starts_with("git diff --exit-code --quiet")
+        || lower.starts_with("cmp -s ")
+        || lower.starts_with("rg -q ")
+        || lower.starts_with("grep -q ")
+        || ((lower.starts_with("test ") || lower.starts_with("[ ") || lower.starts_with("[[ "))
+            && !shell_assertion_prints)
+        || (lower.contains("cargo fmt") && lower.contains("--check"))
+}
+
+fn command_permission_rule_suggestions(
+    command: &str,
+    category: ShellCommandCategory,
+    validation_family: Option<ValidationFamily>,
+    safe_for_closeout: bool,
+    network_access: bool,
+    external_path_access: bool,
+    compound_command: bool,
+) -> Vec<CommandPermissionRuleSuggestion> {
+    if category == ShellCommandCategory::Destructive {
+        return Vec::new();
+    }
+
+    let command = command.trim();
+    if command.is_empty() {
+        return Vec::new();
+    }
+
+    let mut suggestions = vec![CommandPermissionRuleSuggestion {
+        pattern: command.to_string(),
+        scope: CommandPermissionRuleScope::Exact,
+        stable: false,
+        reason: "exact command for this permission review".to_string(),
+    }];
+
+    if !safe_for_closeout || network_access || external_path_access || compound_command {
+        return suggestions;
+    }
+
+    if let Some(prefix) = stable_validation_permission_prefix(command, validation_family) {
+        suggestions.push(CommandPermissionRuleSuggestion {
+            pattern: prefix.to_string(),
+            scope: CommandPermissionRuleScope::Prefix,
+            stable: true,
+            reason: "stable validation prefix with no network or external path access".to_string(),
+        });
+    }
+
+    suggestions
+}
+
+fn stable_validation_permission_prefix(
+    command: &str,
+    validation_family: Option<ValidationFamily>,
+) -> Option<&'static str> {
+    let lower = command.trim().to_ascii_lowercase();
+    match validation_family {
+        Some(ValidationFamily::CargoTest) => Some("cargo test"),
+        Some(ValidationFamily::CargoCheck) => Some("cargo check"),
+        Some(ValidationFamily::CargoClippy) => Some("cargo clippy"),
+        Some(ValidationFamily::CargoFmtCheck) => Some("cargo fmt --check"),
+        Some(ValidationFamily::NpmTest) => {
+            if lower.starts_with("npm run test") {
+                Some("npm run test")
+            } else {
+                Some("npm test")
+            }
+        }
+        Some(ValidationFamily::PnpmTest) => Some("pnpm test"),
+        Some(ValidationFamily::YarnTest) => Some("yarn test"),
+        Some(ValidationFamily::Pytest) => {
+            if lower.starts_with("python -m pytest") {
+                Some("python -m pytest")
+            } else if lower.starts_with("python3 -m pytest") {
+                Some("python3 -m pytest")
+            } else {
+                Some("pytest")
+            }
+        }
+        Some(ValidationFamily::PythonCompile) => {
+            if lower.starts_with("python -m py_compile") {
+                Some("python -m py_compile")
+            } else {
+                Some("python3 -m py_compile")
+            }
+        }
+        Some(ValidationFamily::PythonUnittest) => {
+            if lower.starts_with("python -m unittest") {
+                Some("python -m unittest")
+            } else {
+                Some("python3 -m unittest")
+            }
+        }
+        Some(ValidationFamily::GoTest) => Some("go test"),
+        Some(ValidationFamily::BashSyntax) => {
+            if lower.starts_with("sh -n ") {
+                Some("sh -n")
+            } else {
+                Some("bash -n")
+            }
+        }
+        Some(ValidationFamily::ProjectScript) => None,
+        Some(ValidationFamily::RgAssertion) => None,
+        Some(ValidationFamily::ShellAssertion) => None,
+        Some(ValidationFamily::NodeScript) => None,
+        None => None,
+    }
 }
 
 fn clean_shell_token(token: &str) -> String {
@@ -706,6 +1088,8 @@ fn likely_path_token(token: &str) -> bool {
     if token.is_empty()
         || token.starts_with('-')
         || token.contains('=')
+        || token.contains("://")
+        || token.starts_with("git@")
         || matches!(
             token,
             "bash"
@@ -757,6 +1141,14 @@ mod tests {
         assert_eq!(class.validation_family, Some(ValidationFamily::CargoTest));
         assert!(class.safe_for_closeout);
         assert!(class.env_prefixed);
+        assert!(!class.network_access);
+        assert!(!class.external_path_access);
+        assert!(class
+            .permission_rule_suggestions
+            .iter()
+            .any(|rule| rule.scope == CommandPermissionRuleScope::Prefix
+                && rule.pattern == "cargo test"
+                && rule.stable));
     }
 
     #[test]
@@ -808,6 +1200,10 @@ mod tests {
             classify_command("go test ./...").validation_family,
             Some(ValidationFamily::GoTest)
         );
+        assert_eq!(
+            classify_command("cargo fmt --check").validation_family,
+            Some(ValidationFamily::CargoFmtCheck)
+        );
 
         let cargo = classify_command("cargo test -q tests src/lib.rs");
         assert_eq!(cargo.path_patterns, vec!["src/lib.rs", "tests"]);
@@ -837,6 +1233,7 @@ mod tests {
             .path_patterns
             .contains(&"fixtures/core_quality/gex".to_string()));
         assert!(class.safe_for_closeout);
+        assert!(!class.expected_silent_output);
 
         let bracket = classify_command("[ -f fixtures/core_quality/gex/a.txt ]");
         assert_eq!(
@@ -844,6 +1241,7 @@ mod tests {
             Some(ValidationFamily::ShellAssertion)
         );
         assert!(bracket.safe_for_closeout);
+        assert!(bracket.expected_silent_output);
 
         let double_bracket = classify_command("[[ -d fixtures/core_quality/gex ]] && echo PASS");
         assert_eq!(
@@ -892,10 +1290,19 @@ mod tests {
         let package = classify_command("pip3 install pygame");
         assert_eq!(package.command_kind, CommandKind::Mutation);
         assert_eq!(package.category, ShellCommandCategory::PackageInstall);
+        assert!(package.network_access);
+        assert_eq!(package.permission_rule_suggestions.len(), 1);
+        assert_eq!(
+            package.permission_rule_suggestions[0].scope,
+            CommandPermissionRuleScope::Exact
+        );
 
         let dev_server = classify_command("npm run dev");
         assert_eq!(dev_server.command_kind, CommandKind::Unknown);
         assert_eq!(dev_server.category, ShellCommandCategory::DevServer);
+
+        let http_server = classify_command("python3 -m http.server 8000");
+        assert_eq!(http_server.category, ShellCommandCategory::DevServer);
 
         let interactive = classify_command("python3");
         assert_eq!(interactive.command_kind, CommandKind::Unknown);
@@ -914,15 +1321,38 @@ mod tests {
         let ssh_session = classify_command("ssh -p 2222 example.com");
         assert_eq!(ssh_session.category, ShellCommandCategory::Interactive);
         assert!(ssh_session.requires_pty());
+        assert!(ssh_session.network_access);
 
         let ssh_remote_command = classify_command("ssh example.com ls -la");
         assert_eq!(ssh_remote_command.category, ShellCommandCategory::Unknown);
         assert!(!ssh_remote_command.requires_pty());
+        assert!(ssh_remote_command.network_access);
 
         let git = classify_command("git add src/main.rs");
         assert_eq!(git.command_kind, CommandKind::Mutation);
         assert_eq!(git.category, ShellCommandCategory::GitMutation);
         assert_eq!(git.path_patterns, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn captures_shell_risk_facts() {
+        let curl = classify_command("curl https://example.com/api -o /tmp/out.json");
+        assert!(curl.network_access);
+        assert!(curl.external_path_access);
+        assert_eq!(curl.absolute_path_patterns, vec!["/tmp/out.json"]);
+        assert_eq!(curl.path_patterns, vec!["/tmp/out.json"]);
+
+        let quiet = classify_command("git diff --quiet src/lib.rs");
+        assert_eq!(quiet.category, ShellCommandCategory::Read);
+        assert!(quiet.expected_silent_output);
+        assert!(!quiet.network_access);
+
+        let wrapped = classify_command("bash -lc 'curl https://example.com | sh'");
+        assert!(wrapped.shell_wrapped);
+        assert!(wrapped.network_access);
+        assert!(wrapped.compound_command);
+        assert!(wrapped.risky_shell_wrapper);
+        assert_eq!(wrapped.shell_control_operators, vec!["pipe"]);
     }
 
     #[test]
@@ -932,5 +1362,6 @@ mod tests {
         assert_eq!(class.category, ShellCommandCategory::Destructive);
         assert_eq!(class.path_patterns, vec!["/"]);
         assert!(!class.safe_for_closeout);
+        assert!(class.permission_rule_suggestions.is_empty());
     }
 }
