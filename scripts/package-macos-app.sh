@@ -20,6 +20,7 @@ Options:
   --sign adhoc     Ad-hoc sign the .app after build. This is the default.
   --sign none      Leave the app unsigned.
   --skip-checks    Skip frontend build and Rust command checks before packaging.
+  --preflight      Run release tool/credential preflight before packaging.
   -h, --help       Show this help.
 USAGE
 }
@@ -44,6 +45,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-checks)
       RUN_CHECKS=false
+      shift
+      ;;
+    --preflight)
+      "$ROOT_DIR/scripts/macos-release-preflight.sh"
       shift
       ;;
     -h|--help)

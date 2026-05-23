@@ -819,6 +819,7 @@ Acceptance:
 ```bash
 scripts/package-macos-app.sh --help
 bash -n scripts/package-macos-app.sh
+scripts/macos-release-preflight.sh
 corepack pnpm --dir apps/desktop tauri build --bundles app,dmg
 ```
 
@@ -826,6 +827,11 @@ Status: partially complete. Local packaging exists and the app has practical
 diagnostics/provider/permission setup, but this track is not release-complete
 until logs/crash diagnostics, Developer ID signing, notarization, DMG polish,
 first-run install guidance, and an update story are in place.
+`scripts/macos-release-preflight.sh` now checks the future external
+distribution prerequisites: `codesign`, `xcrun notarytool`, `xcrun stapler`,
+`hdiutil`, Developer ID Application identity presence, and optional notarytool
+keychain profile configuration. `scripts/package-macos-app.sh --preflight`
+invokes the same check before packaging.
 
 #### Recommended Execution Order From Here
 
