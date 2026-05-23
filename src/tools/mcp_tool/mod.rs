@@ -2,7 +2,9 @@
 //!
 //! 提供直接调用 MCP 工具、资源发现和读取、以及认证功能。
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{
+    Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics, ToolUiRenderKind,
+};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -72,6 +74,42 @@ impl Tool for MCPTool {
         })
     }
 
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let server = params["server_name"].as_str().unwrap_or("");
+        let tool = params["tool_name"].as_str().unwrap_or("");
+        format!("mcp_tool: {server}/{tool}")
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Task
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
+    fn is_open_world(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn permission_matcher_input(&self, params: &serde_json::Value) -> Option<String> {
+        Some(self.to_classifier_input(params))
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let server = params["server_name"].as_str()?.trim();
+        let tool = params["tool_name"].as_str()?.trim();
+        if server.is_empty() || tool.is_empty() {
+            None
+        } else {
+            Some(format!("{server}/{tool}"))
+        }
+    }
+
+    fn ui_render_kind(&self, _params: &serde_json::Value) -> ToolUiRenderKind {
+        ToolUiRenderKind::Mcp
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let server_name = params["server_name"].as_str().unwrap_or("");
         let tool_name = params["tool_name"].as_str().unwrap_or("");
@@ -134,6 +172,36 @@ impl Tool for McpAuthTool {
         })
     }
 
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let server = params["server_name"].as_str().unwrap_or("");
+        format!("mcp_auth: {server}")
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Network
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        false
+    }
+
+    fn is_open_world(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn permission_matcher_input(&self, params: &serde_json::Value) -> Option<String> {
+        Some(self.to_classifier_input(params))
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let server = params["server_name"].as_str()?.trim();
+        (!server.is_empty()).then(|| server.to_string())
+    }
+
+    fn ui_render_kind(&self, _params: &serde_json::Value) -> ToolUiRenderKind {
+        ToolUiRenderKind::Mcp
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let server_name = params["server_name"].as_str().unwrap_or("");
         if server_name.is_empty() {
@@ -193,6 +261,41 @@ impl Tool for ListMcpResourcesTool {
                 }
             }
         })
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::List
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_open_world(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_search_or_read_command(&self, _params: &serde_json::Value) -> ToolSearchOrReadSemantics {
+        ToolSearchOrReadSemantics {
+            is_list: true,
+            ..Default::default()
+        }
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        params["server_name"]
+            .as_str()
+            .filter(|server| !server.trim().is_empty())
+            .map(|server| format!("resources on {server}"))
+            .or_else(|| Some("all resources".to_string()))
+    }
+
+    fn ui_render_kind(&self, _params: &serde_json::Value) -> ToolUiRenderKind {
+        ToolUiRenderKind::Mcp
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
@@ -309,6 +412,53 @@ impl Tool for ReadMcpResourceTool {
             },
             "required": ["server_name", "uri"]
         })
+    }
+
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let server = params["server_name"].as_str().unwrap_or("");
+        let uri = params["uri"].as_str().unwrap_or("");
+        format!("read_mcp_resource: {server}/{uri}")
+    }
+
+    fn operation_kind(&self, _params: &serde_json::Value) -> ToolOperationKind {
+        ToolOperationKind::Read
+    }
+
+    fn is_read_only(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_open_world(&self, _params: &serde_json::Value) -> bool {
+        true
+    }
+
+    fn is_search_or_read_command(&self, _params: &serde_json::Value) -> ToolSearchOrReadSemantics {
+        ToolSearchOrReadSemantics {
+            is_read: true,
+            ..Default::default()
+        }
+    }
+
+    fn permission_matcher_input(&self, params: &serde_json::Value) -> Option<String> {
+        Some(self.to_classifier_input(params))
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let server = params["server_name"].as_str()?.trim();
+        let uri = params["uri"].as_str()?.trim();
+        if server.is_empty() || uri.is_empty() {
+            None
+        } else {
+            Some(format!("{server}/{uri}"))
+        }
+    }
+
+    fn ui_render_kind(&self, _params: &serde_json::Value) -> ToolUiRenderKind {
+        ToolUiRenderKind::Mcp
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {

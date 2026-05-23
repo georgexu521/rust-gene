@@ -697,7 +697,7 @@ pub const CMD_AUDIT: CommandDef = CommandDef::new(
     "/audit",
     &[],
     "Info",
-    "/audit [summary|recent|export] ...",
+    "/audit [summary|recent|tools|export] ...",
     "Show/export tool audit snapshot",
 );
 

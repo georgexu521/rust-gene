@@ -2,7 +2,7 @@
 //!
 //! 支持列出、创建、删除、清理、切换 worktree
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics};
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -666,6 +666,81 @@ impl Tool for WorktreeTool {
             },
             "required": ["action"]
         })
+    }
+
+    fn to_classifier_input(&self, params: &serde_json::Value) -> String {
+        let action = params["action"].as_str().unwrap_or("");
+        let path = params["path"].as_str().unwrap_or("");
+        let agent = params["agent_id"].as_str().unwrap_or("");
+        let force = params["force"].as_bool().unwrap_or(false);
+        format!("worktree: action={action} path={path} agent={agent} force={force}")
+    }
+
+    fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
+        match params["action"].as_str().unwrap_or("") {
+            "list" | "agent_review" => ToolOperationKind::Read,
+            "create" | "switch" | "agent_merge" => ToolOperationKind::Task,
+            "remove" | "prune" | "agent_cleanup" => ToolOperationKind::Task,
+            _ => ToolOperationKind::Task,
+        }
+    }
+
+    fn is_read_only(&self, params: &serde_json::Value) -> bool {
+        matches!(self.operation_kind(params), ToolOperationKind::Read)
+    }
+
+    fn is_concurrency_safe(&self, params: &serde_json::Value) -> bool {
+        self.is_read_only(params)
+    }
+
+    fn is_destructive(&self, params: &serde_json::Value) -> bool {
+        matches!(
+            params["action"].as_str(),
+            Some("remove" | "prune" | "agent_cleanup")
+        )
+    }
+
+    fn is_search_or_read_command(&self, params: &serde_json::Value) -> ToolSearchOrReadSemantics {
+        if self.is_read_only(params) {
+            ToolSearchOrReadSemantics {
+                is_list: true,
+                ..Default::default()
+            }
+        } else {
+            ToolSearchOrReadSemantics::default()
+        }
+    }
+
+    fn input_paths(&self, params: &serde_json::Value) -> Vec<String> {
+        params["path"]
+            .as_str()
+            .filter(|path| !path.trim().is_empty())
+            .map(|path| vec![path.to_string()])
+            .unwrap_or_default()
+    }
+
+    fn permission_matcher_input(&self, params: &serde_json::Value) -> Option<String> {
+        Some(self.to_classifier_input(params))
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let action = params["action"].as_str()?.trim();
+        if action.is_empty() {
+            return None;
+        }
+        if let Some(path) = params["path"]
+            .as_str()
+            .filter(|path| !path.trim().is_empty())
+        {
+            Some(format!("{action} {path}"))
+        } else if let Some(agent) = params["agent_id"]
+            .as_str()
+            .filter(|agent| !agent.trim().is_empty())
+        {
+            Some(format!("{action} {agent}"))
+        } else {
+            Some(action.to_string())
+        }
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {

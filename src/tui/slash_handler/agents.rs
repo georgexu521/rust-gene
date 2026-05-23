@@ -1047,6 +1047,79 @@ pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
     if let Some(engine) = app.streaming_engine.as_ref() {
         let mut parts = args.split_whitespace();
         let sub = parts.next().unwrap_or("summary");
+
+        if matches!(sub, "tools" | "tool-contracts" | "contracts") {
+            let show_all = parts.any(|part| matches!(part, "all" | "--all"));
+            let profiles = engine.tool_registry().reliability_audit();
+            let total = profiles.len();
+            let errors = profiles
+                .iter()
+                .flat_map(|profile| profile.issues.iter())
+                .filter(|issue| {
+                    issue.severity == crate::tools::reliability::ToolReliabilityIssueSeverity::Error
+                })
+                .count();
+            let warnings = profiles
+                .iter()
+                .flat_map(|profile| profile.issues.iter())
+                .filter(|issue| {
+                    issue.severity
+                        == crate::tools::reliability::ToolReliabilityIssueSeverity::Warning
+                })
+                .count();
+            let mut lines = vec![
+                format!(
+                    "Tool reliability audit: profiles={} errors={} warnings={}",
+                    total, errors, warnings
+                ),
+                "Release gate: hard errors must be zero.".to_string(),
+            ];
+
+            for profile in profiles
+                .iter()
+                .filter(|profile| show_all || !profile.issues.is_empty())
+            {
+                let issue_summary = if profile.issues.is_empty() {
+                    "ok".to_string()
+                } else {
+                    profile
+                        .issues
+                        .iter()
+                        .map(|issue| {
+                            let severity = match issue.severity {
+                                crate::tools::reliability::ToolReliabilityIssueSeverity::Warning => {
+                                    "warn"
+                                }
+                                crate::tools::reliability::ToolReliabilityIssueSeverity::Error => {
+                                    "error"
+                                }
+                            };
+                            format!("{}:{}={}", severity, issue.field, issue.message)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                };
+                lines.push(format!(
+                    "- {}:{} kind={:?} read_only={} concurrent={} ui={:?} {}",
+                    profile.tool_name,
+                    profile.sample_label,
+                    profile.operation_kind,
+                    profile.read_only,
+                    profile.concurrency_safe,
+                    profile.ui_render_kind,
+                    issue_summary
+                ));
+            }
+
+            if lines.len() == 2 {
+                lines.push("No tool reliability issues found.".to_string());
+            } else if !show_all {
+                lines.push("Use `/audit tools all` to include clean profiles.".to_string());
+            }
+
+            return lines.join("\n");
+        }
+
         let tracker = engine.cost_tracker().lock().await;
 
         match sub {
@@ -1112,7 +1185,7 @@ pub async fn handle_audit(app: &TuiApp, args: &str) -> String {
                     Err(e) => format!("Failed to export audit snapshot: {}", e),
                 }
             }
-            _ => "Usage: /audit [summary|recent <n>|export [path]]".to_string(),
+            _ => "Usage: /audit [summary|recent <n>|tools [all]|export [path]]".to_string(),
         }
     } else {
         "Audit unavailable (no engine connected).".to_string()

@@ -14,6 +14,11 @@ This plan focuses on programming ability: tool calling, file editing, bash and
 terminal tasks, permissions, subagents, context handling, TUI feedback, and
 release evidence. It is not a generic feature-count race.
 
+Current focused follow-up:
+`docs/CLAUDE_CODE_TOOL_FILE_RELIABILITY_AUDIT_PLAN_2026-05-23.md`.
+That document is the active next execution plan for closing the remaining
+Claude Code programming-quality gap before more desktop UI polish.
+
 ## Product Target
 
 The target experience is:

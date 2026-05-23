@@ -37,6 +37,7 @@ pub mod plugin_tool;
 pub mod powershell_tool;
 pub mod project_tool;
 pub mod refactor_tool;
+pub mod reliability;
 pub mod remote_dev_tool;
 pub mod remote_trigger_tool;
 pub mod repl_tool;
@@ -90,6 +91,10 @@ pub use plan_mode_tool::{EnterPlanModeTool, ExitPlanModeTool};
 pub use plugin_tool::{PluginListTool, PluginManageTool};
 pub use powershell_tool::PowerShellTool;
 pub use refactor_tool::RefactorTool;
+pub use reliability::{
+    audit_release_tool_contracts, representative_tool_samples, ToolReliabilityIssue,
+    ToolReliabilityProfile, ToolReliabilitySample,
+};
 pub use remote_dev_tool::RemoteDevTool;
 pub use remote_trigger_tool::RemoteTriggerTool;
 pub use repl_tool::REPLTool;
@@ -1270,6 +1275,13 @@ impl ToolRegistry {
     /// 获取所有工具名称
     pub fn tool_names(&self) -> Vec<&str> {
         self.tools.keys().map(|k| k.as_str()).collect()
+    }
+
+    /// Build a Claude-like reliability audit for registered tools using
+    /// representative inputs. The audit is side-effect free: it only calls
+    /// metadata hooks, never `execute`.
+    pub fn reliability_audit(&self) -> Vec<ToolReliabilityProfile> {
+        reliability::audit_registry(self)
     }
 
     /// 获取用户问答通道

@@ -3,7 +3,9 @@
 //! 支持只读操作（status/diff/log/show）和写操作（add/commit/push/checkout/branch）。
 //! 写操作需要用户确认，并有过滤危险参数的安全校验。
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{
+    Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics, ToolUiRenderKind,
+};
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::process::Command;
@@ -170,6 +172,98 @@ impl Tool for GitTool {
                 }
             }
             _ => format!("git {}", action),
+        }
+    }
+
+    fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
+        match params["action"].as_str().unwrap_or("") {
+            "status" | "diff" | "log" | "show" => ToolOperationKind::Read,
+            "add" | "commit" | "checkout" | "branch" => ToolOperationKind::Task,
+            "push" => ToolOperationKind::Network,
+            _ => ToolOperationKind::Task,
+        }
+    }
+
+    fn is_read_only(&self, params: &serde_json::Value) -> bool {
+        matches!(self.operation_kind(params), ToolOperationKind::Read)
+    }
+
+    fn is_concurrency_safe(&self, params: &serde_json::Value) -> bool {
+        self.is_read_only(params)
+    }
+
+    fn is_open_world(&self, params: &serde_json::Value) -> bool {
+        params["action"].as_str() == Some("push")
+    }
+
+    fn is_destructive(&self, params: &serde_json::Value) -> bool {
+        params["action"].as_str() == Some("push") && params["force"].as_bool().unwrap_or(false)
+    }
+
+    fn is_search_or_read_command(&self, params: &serde_json::Value) -> ToolSearchOrReadSemantics {
+        if self.is_read_only(params) {
+            ToolSearchOrReadSemantics {
+                is_read: true,
+                ..Default::default()
+            }
+        } else {
+            ToolSearchOrReadSemantics::default()
+        }
+    }
+
+    fn input_paths(&self, params: &serde_json::Value) -> Vec<String> {
+        let mut paths = Vec::new();
+        if let Some(path) = params["path"]
+            .as_str()
+            .filter(|path| !path.trim().is_empty())
+        {
+            paths.push(path.to_string());
+        }
+        if let Some(items) = params["paths"].as_array() {
+            paths.extend(
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|path| !path.trim().is_empty())
+                    .map(str::to_string),
+            );
+        }
+        paths
+    }
+
+    fn permission_matcher_input(&self, params: &serde_json::Value) -> Option<String> {
+        Some(self.to_classifier_input(params))
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let action = params["action"].as_str()?.trim();
+        if action.is_empty() {
+            return None;
+        }
+        let mut parts = vec![action.to_string()];
+        if let Some(path) = params["path"]
+            .as_str()
+            .filter(|path| !path.trim().is_empty())
+        {
+            parts.push(path.to_string());
+        }
+        if let Some(branch) = params["branch"]
+            .as_str()
+            .filter(|branch| !branch.trim().is_empty())
+        {
+            parts.push(branch.to_string());
+        }
+        if params["force"].as_bool().unwrap_or(false) {
+            parts.push("force".to_string());
+        }
+        Some(parts.join(" "))
+    }
+
+    fn ui_render_kind(&self, params: &serde_json::Value) -> ToolUiRenderKind {
+        if self.is_read_only(params) {
+            ToolUiRenderKind::Search
+        } else {
+            ToolUiRenderKind::Task
         }
     }
 
