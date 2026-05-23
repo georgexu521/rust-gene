@@ -9,6 +9,7 @@ import {
   restoreArchivedSession,
   searchSessions,
   selectProject,
+  setDetailLevel,
 } from "../src/runtime/desktopApi";
 
 test.describe("desktop API web preview state", () => {
@@ -75,5 +76,9 @@ test.describe("desktop API web preview state", () => {
     const newConversationSettings = await newConversation();
     expect(newConversationSettings.active_session_id).toBeNull();
     expect(newConversationSettings.startup_state.detail).toContain("phageGPT");
+
+    await expect(setDetailLevel("daily")).resolves.toEqual(
+      expect.objectContaining({ detail_level: "daily" }),
+    );
   });
 });

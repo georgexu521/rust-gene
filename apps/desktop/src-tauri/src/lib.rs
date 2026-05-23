@@ -14,6 +14,7 @@ struct DesktopAppState {
     selected_project: Mutex<PathBuf>,
     active_session_id: Mutex<Option<String>>,
     permission_mode: Mutex<Option<String>>,
+    detail_level: Mutex<Option<String>>,
     provider_name: Mutex<Option<String>>,
     model: Mutex<Option<String>>,
     recent_projects: Mutex<Vec<PathBuf>>,
@@ -61,6 +62,7 @@ struct DesktopSettings {
     selected_project: Option<String>,
     active_session_id: Option<String>,
     permission_mode: Option<String>,
+    detail_level: Option<String>,
     provider_name: Option<String>,
     model: Option<String>,
     recent_projects: Option<Vec<String>>,
@@ -72,6 +74,7 @@ struct DesktopSettingsResponse {
     selected_project: String,
     active_session_id: Option<String>,
     permission_mode: String,
+    detail_level: String,
     provider_name: Option<String>,
     model: Option<String>,
     settings_path: String,
@@ -184,6 +187,8 @@ async fn desktop_settings(
             state.permission_mode.lock().await.as_deref(),
         )
         .to_string(),
+        detail_level: normalized_detail_level_label(state.detail_level.lock().await.as_deref())
+            .to_string(),
         provider_name: state.provider_name.lock().await.clone(),
         model: state.model.lock().await.clone(),
         settings_path: state.settings_path.display().to_string(),
@@ -209,6 +214,20 @@ async fn set_permission_mode(
                 .streaming_engine()
                 .set_permission_mode(parse_desktop_permission_mode(&normalized));
         }
+    }
+    persist_current_settings(&state).await?;
+    desktop_settings(state).await
+}
+
+#[tauri::command]
+async fn set_detail_level(
+    level: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopSettingsResponse, String> {
+    let normalized = normalized_detail_level_label(Some(&level)).to_string();
+    {
+        let mut detail_level = state.detail_level.lock().await;
+        *detail_level = Some(normalized);
     }
     persist_current_settings(&state).await?;
     desktop_settings(state).await
@@ -575,7 +594,10 @@ fn search_sessions_from_store(
         .collect()
 }
 
-fn recent_session_from_store(store: &SessionStore, session_id: &str) -> Result<RecentSession, String> {
+fn recent_session_from_store(
+    store: &SessionStore,
+    session_id: &str,
+) -> Result<RecentSession, String> {
     let session = store
         .get_session(session_id)
         .map_err(|err| err.to_string())?
@@ -720,6 +742,8 @@ async fn persist_current_settings(state: &State<'_, DesktopAppState>) -> Result<
     let active_session_id = state.active_session_id.lock().await.clone();
     let permission_mode =
         normalized_permission_mode_label(state.permission_mode.lock().await.as_deref()).to_string();
+    let detail_level =
+        normalized_detail_level_label(state.detail_level.lock().await.as_deref()).to_string();
     let provider_name = state.provider_name.lock().await.clone();
     let model = state.model.lock().await.clone();
     let recent_projects = state
@@ -736,6 +760,7 @@ async fn persist_current_settings(state: &State<'_, DesktopAppState>) -> Result<
             selected_project: Some(selected_project.display().to_string()),
             active_session_id,
             permission_mode: Some(permission_mode),
+            detail_level: Some(detail_level),
             provider_name,
             model,
             recent_projects: Some(recent_projects),
@@ -884,6 +909,13 @@ fn normalized_permission_mode_label(mode: Option<&str>) -> &'static str {
         "auto" | "auto_all" | "developer_auto" => "auto",
         "read_only" | "readonly" => "read_only",
         _ => "auto",
+    }
+}
+
+fn normalized_detail_level_label(level: Option<&str>) -> &'static str {
+    match level.unwrap_or("coding").trim() {
+        "default" | "daily" | "daily_work" => "daily",
+        _ => "coding",
     }
 }
 
@@ -1166,6 +1198,9 @@ pub fn run() {
                     normalized_permission_mode_label(settings.permission_mode.as_deref())
                         .to_string(),
                 )),
+                detail_level: Mutex::new(Some(
+                    normalized_detail_level_label(settings.detail_level.as_deref()).to_string(),
+                )),
                 provider_name: Mutex::new(settings.provider_name),
                 model: Mutex::new(settings.model),
                 recent_projects: Mutex::new(recent_projects),
@@ -1178,6 +1213,7 @@ pub fn run() {
             desktop_health,
             desktop_settings,
             set_permission_mode,
+            set_detail_level,
             permission_mode_options,
             provider_model_status,
             set_provider_model,
@@ -1272,8 +1308,7 @@ mod tests {
             .unwrap();
 
         let sessions =
-            list_recent_sessions_from_store(&store, 20, &["archived-session".to_string()])
-                .unwrap();
+            list_recent_sessions_from_store(&store, 20, &["archived-session".to_string()]).unwrap();
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "visible-session");
@@ -1336,6 +1371,7 @@ mod tests {
             selected_project: Some("/tmp/project".to_string()),
             active_session_id: Some("session-1".to_string()),
             permission_mode: Some("auto_low_risk".to_string()),
+            detail_level: Some("daily".to_string()),
             provider_name: Some("kimi".to_string()),
             model: Some("kimi-k2.5".to_string()),
             recent_projects: Some(vec!["/tmp/project".to_string()]),
@@ -1349,6 +1385,7 @@ mod tests {
         assert_eq!(loaded.selected_project.as_deref(), Some("/tmp/project"));
         assert_eq!(loaded.active_session_id.as_deref(), Some("session-1"));
         assert_eq!(loaded.permission_mode.as_deref(), Some("auto_low_risk"));
+        assert_eq!(loaded.detail_level.as_deref(), Some("daily"));
         assert_eq!(loaded.provider_name.as_deref(), Some("kimi"));
         assert_eq!(loaded.model.as_deref(), Some("kimi-k2.5"));
         assert_eq!(
@@ -1374,6 +1411,7 @@ mod tests {
             ),
             active_session_id: None,
             permission_mode: None,
+            detail_level: None,
             provider_name: None,
             model: None,
             recent_projects: None,
@@ -1411,6 +1449,7 @@ mod tests {
             selected_project: Some(tauri_dir.display().to_string()),
             active_session_id: None,
             permission_mode: None,
+            detail_level: None,
             provider_name: None,
             model: None,
             recent_projects: None,
@@ -1486,6 +1525,14 @@ mod tests {
             parse_desktop_permission_mode("read_only"),
             PermissionMode::ReadOnly
         );
+    }
+
+    #[test]
+    fn desktop_smoke_detail_level_normalization() {
+        assert_eq!(normalized_detail_level_label(None), "coding");
+        assert_eq!(normalized_detail_level_label(Some("daily_work")), "daily");
+        assert_eq!(normalized_detail_level_label(Some("default")), "daily");
+        assert_eq!(normalized_detail_level_label(Some("unknown")), "coding");
     }
 
     #[test]

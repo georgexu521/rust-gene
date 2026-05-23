@@ -3,6 +3,7 @@ import { Activity, Folder, GitBranch, Globe, Info, MoreHorizontal, PanelRight, S
 import {
   DesktopDiagnostic,
   DiagnosticStatus,
+  DetailLevelId,
   DesktopHealth,
   ProviderModelStatus,
   DesktopRunEvent,
@@ -33,6 +34,7 @@ import {
   selectProject,
   sendMessage,
   setProviderModel,
+  setDetailLevel,
   setPermissionMode,
 } from "../runtime/desktopApi";
 import { Composer } from "./components/Composer";
@@ -172,6 +174,14 @@ export function App() {
   async function handlePermissionModeChange(mode: PermissionModeId) {
     try {
       setSettings(await setPermissionMode(mode));
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleDetailLevelChange(level: DetailLevelId) {
+    try {
+      setSettings(await setDetailLevel(level));
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -499,6 +509,7 @@ export function App() {
           onClose={() => setIsSettingsOpen(false)}
           onSelectRecentProject={(path) => void handleSelectRecentProject(path)}
           onRefresh={() => void refreshDiagnostics()}
+          onDetailLevelChange={(level) => void handleDetailLevelChange(level)}
           onPermissionModeChange={(mode) => void handlePermissionModeChange(mode)}
           onOpenSettingsFolder={() => void openSettingsFolder()}
           onOpenShellProfile={() => void openShellProfile()}

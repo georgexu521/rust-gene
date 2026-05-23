@@ -141,8 +141,14 @@ test.describe("desktop UI smoke", () => {
 
     await page.getByRole("button", { name: "Settings" }).click();
     await expect(page.getByRole("complementary", { name: "Settings" })).toBeVisible();
+    await expect(page.getByText("Work mode")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Coding/ })).toHaveClass(/active/);
+    await page.getByRole("button", { name: /Daily work/ }).click();
+    await expect(page.getByRole("button", { name: /Daily work/ })).toHaveClass(/active/);
     await expect(page.getByText("Provider setup")).toBeVisible();
     await expect(page.getByText("Permission defaults")).toBeVisible();
+    await page.getByRole("button", { name: /Auto low risk/ }).click();
+    await expect(page.getByRole("button", { name: /Auto low risk/ })).toHaveClass(/active/);
     await expect(page.getByText("Active session", { exact: true })).toBeVisible();
     await expect(page.locator(".settings-project-list")).toContainText("rust-agent");
     await expect(page.locator(".settings-project-list")).toContainText("bioclaw");

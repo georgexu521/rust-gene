@@ -42,6 +42,7 @@ export type DesktopSettings = {
   selected_project: string;
   active_session_id?: string | null;
   permission_mode: PermissionModeId;
+  detail_level: DetailLevelId;
   provider_name?: string | null;
   model?: string | null;
   settings_path: string;
@@ -54,6 +55,8 @@ export type DesktopStartupState = {
   status: string;
   detail: string;
 };
+
+export type DetailLevelId = "coding" | "daily";
 
 export type PermissionModeId = "default" | "auto_low_risk" | "auto" | "read_only";
 
@@ -143,6 +146,7 @@ let webPreviewSettings: DesktopSettings = {
   selected_project: "/Users/georgexu/Desktop/rust-agent",
   active_session_id: "web-preview",
   permission_mode: "auto",
+  detail_level: "coding",
   provider_name: "kimi",
   model: "kimi-k2.5",
   settings_path: "web-preview",
@@ -232,6 +236,15 @@ export function setPermissionMode(mode: PermissionModeId): Promise<DesktopSettin
   }
 
   return invoke("set_permission_mode", { mode });
+}
+
+export function setDetailLevel(level: DetailLevelId): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    webPreviewSettings = { ...webPreviewSettings, detail_level: level };
+    return Promise.resolve(webPreviewSettings);
+  }
+
+  return invoke("set_detail_level", { level });
 }
 
 export function permissionModeOptions(): Promise<PermissionModeOption[]> {

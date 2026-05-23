@@ -1,5 +1,6 @@
-import { Folder, FolderOpen, RefreshCw, Terminal, X } from "lucide-react";
+import { Code2, Folder, FolderOpen, MessageCircle, RefreshCw, Terminal, X } from "lucide-react";
 import {
+  DetailLevelId,
   DesktopDiagnostic,
   DesktopSettings,
   PermissionModeId,
@@ -19,6 +20,7 @@ type SettingsDrawerProps = {
   onClose: () => void;
   onSelectRecentProject: (path: string) => void;
   onRefresh: () => void;
+  onDetailLevelChange: (level: DetailLevelId) => void;
   onPermissionModeChange: (mode: PermissionModeId) => void;
   onOpenSettingsFolder: () => void;
   onOpenShellProfile: () => void;
@@ -36,6 +38,7 @@ export function SettingsDrawer({
   onClose,
   onSelectRecentProject,
   onRefresh,
+  onDetailLevelChange,
   onPermissionModeChange,
   onOpenSettingsFolder,
   onOpenShellProfile,
@@ -145,6 +148,37 @@ export function SettingsDrawer({
         </section>
 
         <section className="settings-section">
+          <h3>Work mode</h3>
+          <p className="settings-copy">Choose how much technical detail Liz shows while working.</p>
+          <div className="work-mode-options">
+            <button
+              className={settings?.detail_level === "coding" ? "active" : ""}
+              type="button"
+              onClick={() => onDetailLevelChange("coding")}
+            >
+              <Code2 aria-hidden="true" size={18} />
+              <span>
+                <strong>Coding</strong>
+                <small>Show commands, tool activity, file changes, and validation details.</small>
+              </span>
+              <i aria-hidden="true" />
+            </button>
+            <button
+              className={settings?.detail_level === "daily" ? "active" : ""}
+              type="button"
+              onClick={() => onDetailLevelChange("daily")}
+            >
+              <MessageCircle aria-hidden="true" size={18} />
+              <span>
+                <strong>Daily work</strong>
+                <small>Keep the transcript quieter and emphasize outcomes.</small>
+              </span>
+              <i aria-hidden="true" />
+            </button>
+          </div>
+        </section>
+
+        <section className="settings-section permission-section">
           <h3>Permission defaults</h3>
           <p className="settings-copy">
             Choose the default approval behavior for new and resumed desktop
@@ -152,23 +186,20 @@ export function SettingsDrawer({
           </p>
           <div className="permission-options">
             {permissionOptions.map((option) => (
-              <label
+              <button
                 className={`permission-option ${
                   settings?.permission_mode === option.id ? "active" : ""
                 }`}
                 key={option.id}
+                type="button"
+                onClick={() => onPermissionModeChange(option.id)}
               >
-                <input
-                  checked={settings?.permission_mode === option.id}
-                  name="permission-mode"
-                  onChange={() => onPermissionModeChange(option.id)}
-                  type="radio"
-                />
                 <span>
                   <strong>{option.label}</strong>
                   <small>{option.description}</small>
                 </span>
-              </label>
+                <i aria-hidden="true" />
+              </button>
             ))}
           </div>
         </section>

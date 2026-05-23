@@ -688,7 +688,9 @@ now lists recent projects with full paths and direct switching controls instead
 of only exposing a count. The main workspace now surfaces startup restore state
 directly, distinguishing restored sessions from new-conversation launches. The
 topbar now includes a Codex-like environment popover for project, provider,
-runtime, permission mode, and diagnostic source context.
+runtime, permission mode, and diagnostic source context. Settings now has a
+persisted work-mode/detail-level selector and a denser permission section styled
+as readable rows with switch-like active indicators.
 
 #### Track D - Frontend Architecture And Test Hardening
 
