@@ -18,9 +18,16 @@ test.describe("desktop UI smoke", () => {
     await composer.getByRole("button", { name: "Mode" }).click();
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Coding");
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Full access");
+    await page.getByRole("button", { name: /Use mode Daily work/ }).click();
+    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Daily work");
+    await page.getByRole("button", { name: /Use permission Auto low risk/ }).click();
+    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Auto low risk");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Mode details" })).not.toBeVisible();
     await composer.getByRole("button", { exact: true, name: "Provider" }).click();
     await expect(page.getByRole("dialog", { name: "Provider controls" })).toContainText("kimi-k2.5");
-    await composer.getByRole("button", { exact: true, name: "Provider" }).click();
+    await page.getByRole("heading", { name: "What should we build in rust-agent?" }).click();
+    await expect(page.getByRole("dialog", { name: "Provider controls" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "New Chat" })).toBeVisible();
     await expect(page.getByRole("button", { name: "rust-agent" })).toBeVisible();
     await expect(page.getByLabel("Current session")).toContainText("Continuing");
@@ -162,6 +169,8 @@ test.describe("desktop UI smoke", () => {
     const settingsNav = page.getByLabel("Settings categories");
     await expect(settingsNav.getByRole("button", { name: "General" })).toHaveClass(/active/);
     await expect(page.getByText("Work mode")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Daily work/ })).toHaveClass(/active/);
+    await page.getByRole("button", { name: /Coding/ }).click();
     await expect(page.getByRole("button", { name: /Coding/ })).toHaveClass(/active/);
     await page.getByRole("button", { name: /Daily work/ }).click();
     await expect(page.getByRole("button", { name: /Daily work/ })).toHaveClass(/active/);

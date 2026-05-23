@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   Check,
@@ -9,20 +9,28 @@ import {
   Plus,
   RotateCcw,
 } from "lucide-react";
-import { ProviderModelStatus } from "../../runtime/desktopApi";
+import {
+  DetailLevelId,
+  PermissionModeId,
+  PermissionModeOption,
+  ProviderModelStatus,
+} from "../../runtime/desktopApi";
 
 type ComposerProps = {
   composer: string;
   projectPath: string;
   providerStatus: ProviderModelStatus | null;
-  detailLevel?: string | null;
-  permissionMode?: string | null;
+  detailLevel?: DetailLevelId | null;
+  permissionMode?: PermissionModeId | null;
+  permissionOptions: PermissionModeOption[];
   isEmptyState?: boolean;
   isRunning: boolean;
   onComposerChange: (value: string) => void;
   onProjectPathChange: (value: string) => void;
   onBrowseProject: () => void;
   onSelectProject: () => void;
+  onDetailLevelChange: (level: DetailLevelId) => void;
+  onPermissionModeChange: (mode: PermissionModeId) => void;
   onProviderModelChange: (providerId: string, model: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
@@ -33,15 +41,19 @@ export function Composer({
   providerStatus,
   detailLevel,
   permissionMode,
+  permissionOptions,
   isEmptyState = false,
   isRunning,
   onComposerChange,
   onProjectPathChange,
   onBrowseProject,
   onSelectProject,
+  onDetailLevelChange,
+  onPermissionModeChange,
   onProviderModelChange,
   onSubmit,
 }: ComposerProps) {
+  const composerRef = useRef<HTMLFormElement | null>(null);
   const [openMenu, setOpenMenu] = useState<"project" | "mode" | "provider" | null>(null);
   const activeProvider = providerStatus?.active_provider || "";
   const activeModel = providerStatus?.active_model || "";
@@ -62,8 +74,39 @@ export function Composer({
     setOpenMenu((current) => (current === menu ? null : menu));
   }
 
+  useEffect(() => {
+    if (!openMenu) {
+      return;
+    }
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!composerRef.current?.contains(event.target as Node)) {
+        setOpenMenu(null);
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenMenu(null);
+      }
+    }
+
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openMenu]);
+
   return (
-    <form className={`composer${isEmptyState ? " empty-composer" : ""}`} onSubmit={onSubmit}>
+    <form
+      className={`composer${isEmptyState ? " empty-composer" : ""}${
+        openMenu ? " composer-menu-open" : ""
+      }`}
+      ref={composerRef}
+      onSubmit={onSubmit}
+    >
       <textarea
         aria-label="Message"
         value={composer}
@@ -155,15 +198,44 @@ export function Composer({
                 role="dialog"
               >
                 <div className="composer-popover-title">Mode</div>
-                <div className="composer-status-row">
-                  <span>Work mode</span>
-                  <strong>{modeLabel}</strong>
+                <div className="composer-option-list">
+                  {detailLevelOptions.map((option) => (
+                    <button
+                      aria-label={`Use mode ${option.label}`}
+                      className={option.id === detailLevel ? "active" : ""}
+                      key={option.id}
+                      type="button"
+                      onClick={() => onDetailLevelChange(option.id)}
+                    >
+                      <span>
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </span>
+                      {option.id === detailLevel ? <Check aria-hidden="true" size={15} /> : null}
+                    </button>
+                  ))}
                 </div>
-                <div className="composer-status-row">
-                  <span>Permission</span>
-                  <strong>{permissionLabel}</strong>
+                <div className="composer-popover-title secondary">Permission</div>
+                <div className="composer-option-list compact">
+                  {permissionOptions.map((option) => (
+                    <button
+                      aria-label={`Use permission ${option.label}`}
+                      className={option.id === permissionMode ? "active" : ""}
+                      key={option.id}
+                      type="button"
+                      onClick={() => onPermissionModeChange(option.id)}
+                    >
+                      <span>
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </span>
+                      {option.id === permissionMode ? (
+                        <Check aria-hidden="true" size={15} />
+                      ) : null}
+                    </button>
+                  ))}
                 </div>
-                <p>Adjust detailed defaults from Settings when a run needs a different safety profile.</p>
+                <p>Current mode: {modeLabel}. Current permission: {permissionLabel}.</p>
               </div>
             ) : null}
           </div>
@@ -253,6 +325,23 @@ export function Composer({
     </form>
   );
 }
+
+const detailLevelOptions: Array<{
+  id: DetailLevelId;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "coding",
+    label: "Coding",
+    description: "More technical detail and controls",
+  },
+  {
+    id: "daily",
+    label: "Daily work",
+    description: "Less technical detail",
+  },
+];
 
 function formatPermissionMode(mode?: string | null) {
   switch (mode) {

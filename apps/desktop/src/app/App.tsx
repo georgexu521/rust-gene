@@ -528,12 +528,15 @@ export function App() {
           providerStatus={providerStatus}
           detailLevel={settings?.detail_level}
           permissionMode={settings?.permission_mode}
+          permissionOptions={permissionOptions}
           isEmptyState={isEmptyConversation}
           isRunning={runState.isRunning}
           onComposerChange={setComposer}
           onProjectPathChange={setProjectPath}
           onBrowseProject={() => void handleBrowseProject()}
           onSelectProject={() => void handleSelectProject()}
+          onDetailLevelChange={(level) => void handleDetailLevelChange(level)}
+          onPermissionModeChange={(mode) => void handlePermissionModeChange(mode)}
           onProviderModelChange={(providerId, model) =>
             void handleProviderModelChange(providerId, model)
           }

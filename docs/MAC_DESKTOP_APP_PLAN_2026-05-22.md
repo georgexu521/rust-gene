@@ -699,6 +699,9 @@ Composer context controls now use compact popover-style entries for project,
 mode, and provider/model, so the empty-state composer can shrink naturally into
 the normal chat composer after the first message without exposing raw select
 controls in the main surface.
+Those popovers now behave like real desktop controls: Escape and outside-click
+close them, and the mode popover can directly update detail level and default
+permission mode without sending users into Settings for routine changes.
 
 #### Track D - Frontend Architecture And Test Hardening
 
