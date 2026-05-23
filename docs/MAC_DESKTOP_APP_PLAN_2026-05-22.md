@@ -686,7 +686,9 @@ Settings drawer now show a readable current-session state, so restored sessions
 and new conversations are distinguishable without inspecting raw ids. Settings
 now lists recent projects with full paths and direct switching controls instead
 of only exposing a count. The main workspace now surfaces startup restore state
-directly, distinguishing restored sessions from new-conversation launches.
+directly, distinguishing restored sessions from new-conversation launches. The
+topbar now includes a Codex-like environment popover for project, provider,
+runtime, permission mode, and diagnostic source context.
 
 #### Track D - Frontend Architecture And Test Hardening
 

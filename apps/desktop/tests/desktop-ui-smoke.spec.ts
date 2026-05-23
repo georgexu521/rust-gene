@@ -15,6 +15,12 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Current session")).toContainText("Desktop app Phase 1");
     await expect(page.locator(".startup-state-card")).toContainText("Restored session");
     await expect(page.locator(".startup-state-card")).toContainText("Desktop app Phase 1");
+    await page.getByRole("button", { name: "Environment information" }).click();
+    await expect(page.getByRole("complementary", { name: "Environment details" })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Environment details" })).toContainText("rust-agent");
+    await expect(page.getByRole("complementary", { name: "Environment details" })).toContainText("Permission mode");
+    await page.getByRole("button", { name: "Environment information" }).click();
+    await expect(page.getByRole("complementary", { name: "Environment details" })).not.toBeVisible();
 
     await page.getByLabel("Search sessions").fill("Release");
     await expect(page.getByText("Release readiness notes")).toBeVisible();

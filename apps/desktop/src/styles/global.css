@@ -461,6 +461,7 @@ h1 {
 }
 
 .health {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -470,7 +471,8 @@ h1 {
 
 .health-status,
 .trace-toggle,
-.title-icon-button {
+.title-icon-button,
+.topbar-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -491,6 +493,22 @@ h1 {
   background: transparent;
 }
 
+.topbar-icon-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  color: #606a75;
+  background: #ffffff;
+}
+
+.topbar-icon-button:hover,
+.topbar-icon-button[aria-expanded="true"] {
+  color: #20242a;
+  background: #f3f6f9;
+}
+
 .trace-toggle {
   gap: 6px;
   min-height: 34px;
@@ -499,6 +517,92 @@ h1 {
   border-radius: 8px;
   color: #30343a;
   background: #ffffff;
+}
+
+.environment-popover {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  width: min(370px, calc(100vw - 28px));
+  padding: 13px;
+  border: 1px solid #dfe4ea;
+  border-radius: 14px;
+  color: #303740;
+  background: #ffffff;
+  box-shadow: 0 18px 45px rgb(18 24 31 / 16%);
+}
+
+.environment-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #7a838f;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.environment-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.environment-section:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.environment-section-title {
+  color: #8b949f;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.environment-row {
+  display: grid;
+  grid-template-columns: 18px minmax(72px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #2f3640;
+  font-size: 13px;
+}
+
+.environment-row svg {
+  color: #68717d;
+}
+
+.environment-row span {
+  min-width: 0;
+  font-weight: 680;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environment-row small {
+  min-width: 0;
+  color: #7a838f;
+  font-size: 12px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environment-row.error small {
+  color: #a22b2b;
+}
+
+.environment-row.warning small {
+  color: #8a6517;
 }
 
 .transcript {

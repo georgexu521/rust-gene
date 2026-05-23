@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useState } from "react";
-import { Activity, MoreHorizontal, PanelRight } from "lucide-react";
+import { FormEvent, useEffect, useState, type ReactNode } from "react";
+import { Activity, Folder, GitBranch, Globe, Info, MoreHorizontal, PanelRight, Settings } from "lucide-react";
 import {
   DesktopDiagnostic,
+  DiagnosticStatus,
   DesktopHealth,
   ProviderModelStatus,
   DesktopRunEvent,
@@ -65,6 +66,7 @@ export function App() {
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isEnvironmentOpen, setIsEnvironmentOpen] = useState(false);
   const [lastArchivedSession, setLastArchivedSession] = useState<RecentSession | null>(null);
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
@@ -417,6 +419,24 @@ export function App() {
               {health ? `${health.status} · ${health.version}` : "Starting..."}
             </span>
             <button
+              aria-expanded={isEnvironmentOpen}
+              aria-label="Environment information"
+              className="topbar-icon-button"
+              type="button"
+              onClick={() => setIsEnvironmentOpen((open) => !open)}
+            >
+              <Info aria-hidden="true" size={16} />
+            </button>
+            {isEnvironmentOpen ? (
+              <EnvironmentPopover
+                diagnostics={diagnostics}
+                health={health}
+                projectPath={projectPath}
+                providerStatus={providerStatus}
+                settings={settings}
+              />
+            ) : null}
+            <button
               className="trace-toggle"
               type="button"
               onClick={() => setIsTraceOpen((open) => !open)}
@@ -568,4 +588,99 @@ function startupStateDetail(
 
 function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
+
+function EnvironmentPopover({
+  diagnostics,
+  health,
+  projectPath,
+  providerStatus,
+  settings,
+}: {
+  diagnostics: DesktopDiagnostic[];
+  health: DesktopHealth | null;
+  projectPath: string;
+  providerStatus: ProviderModelStatus | null;
+  settings: DesktopSettings | null;
+}) {
+  const providerLabel = providerStatus?.active_provider || settings?.provider_name || "Not configured";
+  const modelLabel = providerStatus?.active_model || settings?.model || "Checking model";
+  const blockingDiagnostics = diagnostics.filter((item) => item.status === "error").length;
+
+  return (
+    <aside className="environment-popover" aria-label="Environment details">
+      <div className="environment-popover-header">
+        <span>Environment</span>
+        <Settings aria-hidden="true" size={15} />
+      </div>
+
+      <div className="environment-section">
+        <EnvironmentRow
+          detail={projectPath}
+          icon={<Folder aria-hidden="true" size={15} />}
+          label={basename(projectPath) || "Project"}
+        />
+        <EnvironmentRow
+          detail={modelLabel}
+          icon={<GitBranch aria-hidden="true" size={15} />}
+          label={providerLabel}
+        />
+        <EnvironmentRow
+          detail={health ? `${health.status} ${health.version}` : "Starting"}
+          icon={<Activity aria-hidden="true" size={15} />}
+          label="Runtime"
+        />
+      </div>
+
+      <div className="environment-section">
+        <EnvironmentRow
+          detail={settings?.permission_mode || "Not loaded"}
+          icon={<Info aria-hidden="true" size={15} />}
+          label="Permission mode"
+        />
+        <EnvironmentRow
+          detail={
+            blockingDiagnostics > 0
+              ? `${blockingDiagnostics} issue${blockingDiagnostics === 1 ? "" : "s"}`
+              : "Ready"
+          }
+          icon={<Globe aria-hidden="true" size={15} />}
+          label="Diagnostics"
+        />
+      </div>
+
+      <div className="environment-section">
+        <div className="environment-section-title">Sources</div>
+        {diagnostics.slice(0, 3).map((item) => (
+          <EnvironmentRow
+            detail={item.detail}
+            icon={<Info aria-hidden="true" size={15} />}
+            key={item.id}
+            label={item.label}
+            tone={item.status}
+          />
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function EnvironmentRow({
+  detail,
+  icon,
+  label,
+  tone,
+}: {
+  detail: string;
+  icon: ReactNode;
+  label: string;
+  tone?: DiagnosticStatus;
+}) {
+  return (
+    <div className={`environment-row${tone ? ` ${tone}` : ""}`}>
+      {icon}
+      <span>{label}</span>
+      <small title={detail}>{detail}</small>
+    </div>
+  );
 }
