@@ -599,10 +599,10 @@ Plan completion snapshot as of 2026-05-23:
   signing, notarization, DMG polish, first-run install notes, and update
   mechanics are finished.
 - Phase 4 Product Hardening: partially complete. Provider setup, diagnostics,
-  model/provider selection, permission defaults, and structured context audit
-  are implemented. Startup diagnostic logging and a visible diagnostics folder
-  entrypoint are implemented; crash/error log capture, richer native WebView
-  automation, release update flow, and more real-run permission auditing remain.
+  model/provider selection, permission defaults, structured context audit, and
+  native WebView interaction smoke are implemented. Startup diagnostic logging
+  and a visible diagnostics folder entrypoint are implemented; crash/error log
+  capture, release update flow, and more real-run permission auditing remain.
 
 Remaining non-goals for the current desktop release:
 
@@ -781,16 +781,20 @@ message loading. `apps/desktop/tests/desktop-api-state.spec.ts` now covers the
 web-preview API state flow for session search, rename, archive, delete, project
 selection, and new-conversation startup recovery.
 
-Native launch smoke is now scripted through `scripts/desktop-native-smoke.sh`.
-It builds or reuses the `.app` bundle, starts the real macOS app executable with
-an isolated HOME and explicit project root, verifies that the native process
-stays alive and is frontmost, captures
+Native launch and interaction smoke is now scripted through
+`scripts/desktop-native-smoke.sh`. It builds or reuses the `.app` bundle,
+starts the real macOS app executable with an isolated HOME and explicit project
+root, verifies that the native process stays alive and is frontmost, captures
 `apps/desktop/test-artifacts/native-smoke.png`, verifies the app-created
 `desktop.log`, copies it to
 `apps/desktop/test-artifacts/native-app-desktop.log`, writes a native launcher
-log artifact, and exits cleanly. `scripts/desktop-smoke.sh --native` includes
-this native launch path, and `apps/desktop/package.json` exposes it as
-`test:native-smoke`.
+log artifact, and exits cleanly. With
+`PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE=1`, the app injects a native WebView
+interaction smoke that opens Settings, returns to the app, opens the composer
+Add Context popover, attaches Current diff, opens/closes the context detail
+drawer, opens/closes the Trace drawer, and records the step list in
+`native-app-desktop.log`. `scripts/desktop-smoke.sh --native` includes this
+native path, and `apps/desktop/package.json` exposes it as `test:native-smoke`.
 
 The app now also writes a lightweight startup diagnostic log under its app data
 directory and surfaces the diagnostic log path in Settings. Settings can open
@@ -799,10 +803,10 @@ desktop logs are writable. The log now also records run submission, run
 completion/error, and permission approval/rejection decisions, giving real
 desktop sessions a lightweight audit trail outside the transcript.
 
-Remaining: add richer native WebView interaction assertions and
-screenshot/visual regression thresholds after the current UI shape settles.
-Chromium preview smoke is useful, but it is not enough for final macOS
-confidence.
+Remaining: add screenshot/visual regression thresholds after the current UI
+shape settles, then keep expanding native interaction smoke around real run
+submission, permission decisions, and timeline cards. Chromium preview smoke is
+useful, but it is no longer the only frontend confidence gate.
 
 #### Track E - Release-Quality Desktop Hardening
 
@@ -923,9 +927,9 @@ The next concrete slice should no longer restart Track A from scratch. The UI
 foundation has moved past that point. The next best slice is native desktop
 verification plus real-run product tuning:
 
-1. Extend native Tauri/WebView automation beyond launch/screenshot smoke so it
-   checks Settings, composer popovers, context detail drawer, trace drawer, and
-   timeline layout.
+1. Extend native Tauri/WebView automation from static interaction checks into
+   real run submission, permission decisions, timeline cards, and native
+   screenshot/visual thresholds.
 2. Run several real coding sessions through the desktop app and capture the
    highest-friction moments in transcript readability, permissions, context
    visibility, and final-answer rhythm.

@@ -118,6 +118,7 @@ echo "==> Launching native app"
   cd "$ROOT_DIR"
   HOME="$SMOKE_HOME" \
     PRIORITY_AGENT_DESKTOP_PROJECT_DIR="$ROOT_DIR" \
+    PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE=1 \
     "$APP_EXECUTABLE"
 ) >"$LOG_PATH" 2>&1 &
 APP_PID="$!"
@@ -167,6 +168,20 @@ if ! grep -q "desktop_start" "$APP_DATA_LOG_PATH"; then
   echo "app diagnostic log does not include desktop_start: $APP_DATA_LOG_PATH" >&2
   exit 1
 fi
+deadline=$((SECONDS + TIMEOUT_SECONDS))
+while ! grep -q "native_interaction_smoke ok=true" "$APP_DATA_LOG_PATH" 2>/dev/null; do
+  if grep -q "native_interaction_smoke ok=false" "$APP_DATA_LOG_PATH" 2>/dev/null; then
+    echo "native interaction smoke failed" >&2
+    tail -n 80 "$APP_DATA_LOG_PATH" >&2 || true
+    exit 1
+  fi
+  if [[ "$SECONDS" -ge "$deadline" ]]; then
+    echo "timed out waiting for native interaction smoke" >&2
+    tail -n 80 "$APP_DATA_LOG_PATH" >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
 cp "$APP_DATA_LOG_PATH" "$APP_LOG_ARTIFACT_PATH"
 
 if [[ "$CAPTURE_SCREEN" == true ]]; then

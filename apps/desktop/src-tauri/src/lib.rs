@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::sync::Mutex;
 
 struct DesktopAppState {
@@ -371,6 +371,23 @@ async fn open_shell_profile() -> Result<(), String> {
         std::fs::write(&profile, "").map_err(|err| err.to_string())?;
     }
     open_path(&profile)
+}
+
+#[tauri::command]
+async fn record_native_smoke_result(
+    result: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), String> {
+    let diagnostic_logs_path = state.diagnostic_logs_path.clone();
+    let ok = result.contains("native_interaction_smoke ok=true");
+    let status = if ok { "ok=true" } else { "ok=false" };
+    append_desktop_log(
+        &diagnostic_logs_path,
+        &format!(
+            "native_interaction_smoke {status} result={}",
+            sanitize_log_value(&result)
+        ),
+    )
 }
 
 #[tauri::command]
@@ -1585,6 +1602,90 @@ fn sanitize_log_value(value: &str) -> String {
         .join(" ")
 }
 
+fn schedule_native_interaction_smoke(window: WebviewWindow, log_path: PathBuf) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let result = window.eval(native_interaction_smoke_script());
+        if let Err(err) = result {
+            let _ = append_desktop_log(
+                &log_path,
+                &format!(
+                    "native_interaction_smoke ok=false eval_error={}",
+                    sanitize_log_value(&err.to_string())
+                ),
+            );
+        }
+    });
+}
+
+fn native_interaction_smoke_script() -> &'static str {
+    r#"
+(async () => {
+  const steps = [];
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const text = () => document.body?.innerText || "";
+  const candidates = () => Array.from(document.querySelectorAll("button, [role='button'], [aria-label]"));
+  const buttonCandidates = () => Array.from(document.querySelectorAll("button, [role='button']"));
+  const visible = (element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const byLabel = (label) => candidates().find((element) => element.getAttribute("aria-label") === label && visible(element));
+  const byText = (label) => buttonCandidates().find((element) => element.textContent?.trim() === label && visible(element));
+  const byTextIncludes = (label) => buttonCandidates().find((element) => element.textContent?.trim().includes(label) && visible(element));
+  const click = async (name, findElement) => {
+    const element = findElement();
+    if (!element) {
+      throw new Error(`missing ${name}`);
+    }
+    element.click();
+    steps.push(name);
+    await sleep(350);
+    };
+    const waitFor = async (name, predicate) => {
+    for (let index = 0; index < 30; index += 1) {
+      if (predicate()) {
+        steps.push(name);
+        return;
+      }
+      await sleep(200);
+    }
+    throw new Error(`timeout ${name}`);
+  };
+  const record = async (result) => {
+    if (!window.__TAURI_INTERNALS__?.invoke) {
+      return result;
+    }
+    await window.__TAURI_INTERNALS__.invoke("record_native_smoke_result", { result });
+    return result;
+  };
+
+  try {
+    await waitFor("app-ready", () => text().includes("What should we build in rust-agent?"));
+    await click("settings-open", () => byText("Settings"));
+    await waitFor("settings-visible", () => document.querySelector("[aria-label='Settings']"));
+    await click("settings-close", () => byTextIncludes("Back to app"));
+    await waitFor("settings-closed", () => !document.querySelector("[aria-label='Settings']"));
+    await click("context-menu-open", () => byLabel("Add context"));
+    await waitFor("context-menu-visible", () => text().includes("Add context") && text().includes("Current diff"));
+    await click("current-diff-add", () => byLabel("Reference current diff"));
+    await waitFor("context-chip-visible", () => Boolean(byLabel("Open context Current diff")));
+    await click("context-detail-open", () => byLabel("Open context Current diff"));
+    await waitFor("context-detail-visible", () => document.querySelector("[aria-label='Context details']"));
+    await click("context-detail-close", () => byLabel("Close context details"));
+    await waitFor("context-detail-closed", () => !document.querySelector("[aria-label='Context details']"));
+    await click("trace-open", () => byText("Trace"));
+    await waitFor("trace-visible", () => document.querySelector("[aria-label='Run trace']"));
+    await click("trace-close", () => byText("Close"));
+    await waitFor("trace-closed", () => !document.querySelector("[aria-label='Run trace']"));
+    return await record(`native_interaction_smoke ok=true steps=${steps.join(",")}`);
+  } catch (error) {
+    return await record(`native_interaction_smoke ok=false error=${error?.message || error} steps=${steps.join(",")}`);
+  }
+})()
+"#
+}
+
 fn load_messages_from_store(
     store: &SessionStore,
     session_id: &str,
@@ -1623,6 +1724,11 @@ pub fn run() {
                     settings_path.display()
                 ),
             );
+            if std::env::var("PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE").as_deref() == Ok("1") {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_interaction_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
             app.manage(DesktopAppState {
                 runtime: Mutex::new(None),
                 selected_project: Mutex::new(selected_project),
@@ -1656,6 +1762,7 @@ pub fn run() {
             open_settings_folder,
             open_diagnostics_folder,
             open_shell_profile,
+            record_native_smoke_result,
             select_project,
             new_conversation,
             list_recent_sessions,
