@@ -649,6 +649,11 @@ h1 {
   border-top: 1px solid #dfe5ec;
 }
 
+.message.assistant.final.run-group-final {
+  margin-top: 2px;
+  padding-top: 14px;
+}
+
 .message-label {
   display: flex;
   align-items: center;
@@ -695,6 +700,7 @@ h1 {
 }
 
 .timeline-event {
+  position: relative;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 10px;
@@ -705,6 +711,28 @@ h1 {
   border-radius: 8px;
   color: #323842;
   background: var(--surface);
+}
+
+.timeline-event.run-boundary {
+  margin-top: 6px;
+}
+
+.timeline-event.run-group-start {
+  border-top-width: 2px;
+}
+
+.timeline-event.run-group-step {
+  margin-top: -2px;
+}
+
+.timeline-event.run-group-step::before {
+  position: absolute;
+  top: -10px;
+  bottom: calc(100% - 8px);
+  left: 22px;
+  width: 1px;
+  background: #d8e0e8;
+  content: "";
 }
 
 .timeline-event.tool {

@@ -649,7 +649,9 @@ run/tool activity are now marked as final answers, giving conclusions a clearer
 visual rhythm after the process timeline. Low-value usage and trace controls are
 now visually quieter so the main transcript reads less like a debug log.
 Successful shell/validation tools are compact, while failures, file diffs, and
-permissions stay expanded as high-value cards.
+permissions stay expanded as high-value cards. Consecutive timeline items now
+carry run boundary and run-step classes so long runs scan as one coherent
+section before the final answer.
 
 #### Track C - Session And Project Ergonomics
 

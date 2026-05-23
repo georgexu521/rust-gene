@@ -29,6 +29,8 @@ export function Transcript({
   projectPath,
   providerStatus,
 }: TranscriptProps) {
+  const renderedItems = annotateTranscriptItems(items);
+
   return (
     <section className="transcript" aria-live="polite">
       {items.length === 0 ? (
@@ -38,9 +40,10 @@ export function Transcript({
           providerStatus={providerStatus}
         />
       ) : (
-        items.map((item) =>
+        renderedItems.map(({ className, item }) =>
           item.role === "timeline" ? (
             <TimelineEvent
+              className={className}
               item={item}
               key={item.id}
               onPermissionAnswer={onPermissionAnswer}
@@ -48,7 +51,7 @@ export function Transcript({
             />
           ) : (
             <article
-              className={`message ${item.role}${item.role === "assistant" && item.variant === "final" ? " final" : ""}`}
+              className={`message ${item.role}${item.role === "assistant" && item.variant === "final" ? " final" : ""}${className ? ` ${className}` : ""}`}
               key={item.id}
             >
               <div className="message-label">
@@ -64,6 +67,34 @@ export function Transcript({
       )}
     </section>
   );
+}
+
+type AnnotatedTranscriptItem = {
+  className?: string;
+  item: TranscriptItem;
+};
+
+function annotateTranscriptItems(items: TranscriptItem[]): AnnotatedTranscriptItem[] {
+  let inRunGroup = false;
+  return items.map((item) => {
+    if (item.role === "timeline" && item.kind === "run") {
+      inRunGroup = true;
+      return { className: "run-boundary run-group-start", item };
+    }
+    if (item.role === "assistant" && item.variant === "final") {
+      const className = inRunGroup ? "run-group-final" : undefined;
+      inRunGroup = false;
+      return { className, item };
+    }
+    if (item.role === "user") {
+      inRunGroup = false;
+      return { item };
+    }
+    if (item.role === "timeline" && inRunGroup) {
+      return { className: "run-group-step", item };
+    }
+    return { item };
+  });
 }
 
 function EmptyState({
@@ -118,10 +149,12 @@ function formatRole(role: TranscriptItem["role"]) {
 type TimelineEventItem = Extract<TranscriptItem, { role: "timeline" }>;
 
 function TimelineEvent({
+  className,
   item,
   onPermissionAnswer,
   onOpenTrace,
 }: {
+  className?: string;
   item: TimelineEventItem;
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenTrace?: (traceId: string) => void;
@@ -130,7 +163,7 @@ function TimelineEvent({
 
   if (item.kind === "usage") {
     return (
-      <article className="timeline-event usage">
+      <article className={`timeline-event usage${className ? ` ${className}` : ""}`}>
         <Clock3 aria-hidden="true" size={13} />
         <div className="timeline-usage-content">
           <span>{item.title}</span>
@@ -153,7 +186,7 @@ function TimelineEvent({
 
   return (
     <article
-      className={`timeline-event ${item.kind} ${item.status || "info"}${isCompact ? " compact-shell" : ""}`}
+      className={`timeline-event ${item.kind} ${item.status || "info"}${isCompact ? " compact-shell" : ""}${className ? ` ${className}` : ""}`}
     >
       <div className="timeline-icon" aria-hidden="true">
         {iconForTimeline(item.kind, item.status)}

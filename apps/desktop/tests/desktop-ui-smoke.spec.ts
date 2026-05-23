@@ -39,12 +39,15 @@ test.describe("desktop UI smoke", () => {
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.locator(".timeline-summary.run.completed", { hasText: "Run completed" })).toBeVisible();
+    await expect(page.locator(".timeline-event.run-group-start", { hasText: "Agent run" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "3 tools" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();
     await expect(page.locator(".message.assistant.final", { hasText: "Final answer" })).toBeVisible();
+    await expect(page.locator(".message.assistant.final")).toHaveClass(/run-group-final/);
     const pnpmCard = page.locator(".timeline-event.compact-shell", { hasText: "Pnpm Test" });
     await expect(pnpmCard).toBeVisible();
+    await expect(pnpmCard).toHaveClass(/run-group-step/);
     await expect(
       pnpmCard.locator(".timeline-summary code", {
         hasText: "corepack pnpm --dir apps/desktop test:ui-smoke",
