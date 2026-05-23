@@ -46,6 +46,7 @@ export type DesktopSettings = {
   provider_name?: string | null;
   model?: string | null;
   settings_path: string;
+  diagnostic_logs_path: string;
   recent_projects: string[];
   archived_session_ids: string[];
   startup_state: DesktopStartupState;
@@ -188,6 +189,7 @@ let webPreviewSettings: DesktopSettings = {
   provider_name: "kimi",
   model: "kimi-k2.5",
   settings_path: "web-preview",
+  diagnostic_logs_path: "web-preview/logs/desktop.log",
   recent_projects: ["/Users/georgexu/Desktop/rust-agent", "/Users/georgexu/Desktop/bioclaw"],
   archived_session_ids: [],
   startup_state: {
@@ -330,6 +332,12 @@ export function desktopDiagnostics(): Promise<DesktopDiagnosticsResponse> {
           status: "ok",
           detail: "Preview project path is available.",
         },
+        {
+          id: "diagnostic_logs",
+          label: "Diagnostic logs",
+          status: "ok",
+          detail: "Preview diagnostic logs are available.",
+        },
       ],
     });
   }
@@ -461,6 +469,14 @@ export function openSettingsFolder(): Promise<void> {
   }
 
   return invoke("open_settings_folder");
+}
+
+export function openDiagnosticsFolder(): Promise<void> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve();
+  }
+
+  return invoke("open_diagnostics_folder");
 }
 
 export function openShellProfile(): Promise<void> {

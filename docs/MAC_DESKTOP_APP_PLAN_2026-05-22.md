@@ -600,8 +600,9 @@ Plan completion snapshot as of 2026-05-23:
   mechanics are finished.
 - Phase 4 Product Hardening: partially complete. Provider setup, diagnostics,
   model/provider selection, permission defaults, and structured context audit
-  are implemented. Crash/log diagnostics, native WebView automation, release
-  update flow, and more real-run permission auditing remain.
+  are implemented. Startup diagnostic logging and a visible diagnostics folder
+  entrypoint are implemented; crash/error log capture, richer native WebView
+  automation, release update flow, and more real-run permission auditing remain.
 
 Remaining non-goals for the current desktop release:
 
@@ -783,10 +784,18 @@ selection, and new-conversation startup recovery.
 Native launch smoke is now scripted through `scripts/desktop-native-smoke.sh`.
 It builds or reuses the `.app` bundle, starts the real macOS app executable with
 an isolated HOME and explicit project root, verifies that the native process
-stays alive, captures `apps/desktop/test-artifacts/native-smoke.png`, writes a
-native log artifact, and exits cleanly. `scripts/desktop-smoke.sh --native`
-includes this native launch path, and `apps/desktop/package.json` exposes it as
+stays alive and is frontmost, captures
+`apps/desktop/test-artifacts/native-smoke.png`, verifies the app-created
+`desktop.log`, copies it to
+`apps/desktop/test-artifacts/native-app-desktop.log`, writes a native launcher
+log artifact, and exits cleanly. `scripts/desktop-smoke.sh --native` includes
+this native launch path, and `apps/desktop/package.json` exposes it as
 `test:native-smoke`.
+
+The app now also writes a lightweight startup diagnostic log under its app data
+directory and surfaces the diagnostic log path in Settings. Settings can open
+the diagnostics folder directly, and environment diagnostics now check whether
+desktop logs are writable.
 
 Remaining: add richer native WebView interaction assertions and
 screenshot/visual regression thresholds after the current UI shape settles.
@@ -824,8 +833,9 @@ first-run install guidance, and an update story are in place.
 2. Native UI verification: add a real Tauri/WebView automation path and basic
    screenshot checks so desktop regressions are caught in the native shell, not
    only in Chromium preview.
-3. Release hardening: add visible log/crash diagnostics, tighten permission
-   auditing, and finish the packaging script documentation.
+3. Release hardening: expand the new diagnostic log entrypoint into fuller
+   crash/error diagnostics, tighten permission auditing, and finish packaging
+   script documentation.
 4. Formal macOS distribution: Developer ID signing, notarization, polished DMG,
    first-run install notes, and update mechanism.
 5. Only after the desktop loop feels excellent, reconsider deferred surfaces

@@ -33,6 +33,7 @@ type SettingsDrawerProps = {
   onRefresh: () => void;
   onDetailLevelChange: (level: DetailLevelId) => void;
   onPermissionModeChange: (mode: PermissionModeId) => void;
+  onOpenDiagnosticsFolder: () => void;
   onOpenSettingsFolder: () => void;
   onOpenShellProfile: () => void;
 };
@@ -53,6 +54,7 @@ export function SettingsDrawer({
   onRefresh,
   onDetailLevelChange,
   onPermissionModeChange,
+  onOpenDiagnosticsFolder,
   onOpenSettingsFolder,
   onOpenShellProfile,
 }: SettingsDrawerProps) {
@@ -136,6 +138,10 @@ export function SettingsDrawer({
                     <dt>Settings file</dt>
                     <dd>{settings?.settings_path || "Not loaded"}</dd>
                   </div>
+                  <div>
+                    <dt>Diagnostic log</dt>
+                    <dd>{settings?.diagnostic_logs_path || "Not loaded"}</dd>
+                  </div>
                 </dl>
                 <div className="settings-actions">
                   <button type="button" onClick={onRefresh}>
@@ -145,6 +151,10 @@ export function SettingsDrawer({
                   <button type="button" onClick={onOpenSettingsFolder}>
                     <FolderOpen aria-hidden="true" size={14} />
                     <span>Open settings folder</span>
+                  </button>
+                  <button type="button" onClick={onOpenDiagnosticsFolder}>
+                    <FolderOpen aria-hidden="true" size={14} />
+                    <span>Open diagnostics folder</span>
                   </button>
                 </div>
                 {settings?.recent_projects.length ? (
@@ -259,6 +269,12 @@ export function SettingsDrawer({
           {activeCategory === "diagnostics" ? (
             <section className="settings-section">
               <h3>Diagnostics</h3>
+              <div className="settings-actions">
+                <button type="button" onClick={onOpenDiagnosticsFolder}>
+                  <FolderOpen aria-hidden="true" size={14} />
+                  <span>Open diagnostics folder</span>
+                </button>
+              </div>
               <div className="settings-diagnostics">
                 {diagnostics.map((item) => (
                   <article className={`settings-diagnostic ${item.status}`} key={item.id}>

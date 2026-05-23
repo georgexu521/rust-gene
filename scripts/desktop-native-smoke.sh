@@ -95,7 +95,9 @@ fi
 mkdir -p "$ARTIFACT_DIR"
 SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/priority-agent-native-smoke-home.XXXXXX")"
 LOG_PATH="$ARTIFACT_DIR/native-smoke.log"
+APP_LOG_ARTIFACT_PATH="$ARTIFACT_DIR/native-app-desktop.log"
 SCREENSHOT_PATH="$ARTIFACT_DIR/native-smoke.png"
+APP_DATA_LOG_PATH="$SMOKE_HOME/Library/Application Support/com.priorityagent.desktop/logs/desktop.log"
 
 APP_PID=""
 cleanup() {
@@ -157,6 +159,16 @@ if command -v osascript >/dev/null 2>&1; then
   fi
 fi
 
+if [[ ! -s "$APP_DATA_LOG_PATH" ]]; then
+  echo "expected app diagnostic log was not created: $APP_DATA_LOG_PATH" >&2
+  exit 1
+fi
+if ! grep -q "desktop_start" "$APP_DATA_LOG_PATH"; then
+  echo "app diagnostic log does not include desktop_start: $APP_DATA_LOG_PATH" >&2
+  exit 1
+fi
+cp "$APP_DATA_LOG_PATH" "$APP_LOG_ARTIFACT_PATH"
+
 if [[ "$CAPTURE_SCREEN" == true ]]; then
   if ! command -v screencapture >/dev/null 2>&1; then
     echo "screencapture is not available" >&2
@@ -173,6 +185,7 @@ fi
 
 echo "native desktop smoke passed"
 echo "log: $LOG_PATH"
+echo "app log: $APP_LOG_ARTIFACT_PATH"
 if [[ "$CAPTURE_SCREEN" == true ]]; then
   echo "screenshot: $SCREENSHOT_PATH"
 fi

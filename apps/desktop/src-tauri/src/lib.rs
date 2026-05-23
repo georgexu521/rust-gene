@@ -20,6 +20,7 @@ struct DesktopAppState {
     recent_projects: Mutex<Vec<PathBuf>>,
     archived_session_ids: Mutex<Vec<String>>,
     settings_path: PathBuf,
+    diagnostic_logs_path: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,6 +110,7 @@ struct DesktopSettingsResponse {
     provider_name: Option<String>,
     model: Option<String>,
     settings_path: String,
+    diagnostic_logs_path: String,
     recent_projects: Vec<String>,
     archived_session_ids: Vec<String>,
     startup_state: DesktopStartupState,
@@ -223,6 +225,7 @@ async fn desktop_settings(
         provider_name: state.provider_name.lock().await.clone(),
         model: state.model.lock().await.clone(),
         settings_path: state.settings_path.display().to_string(),
+        diagnostic_logs_path: state.diagnostic_logs_path.display().to_string(),
         recent_projects,
         archived_session_ids,
     })
@@ -323,9 +326,14 @@ async fn desktop_diagnostics(
 ) -> Result<DesktopDiagnosticsResponse, String> {
     let selected_project = state.selected_project.lock().await.clone();
     let settings_path = state.settings_path.clone();
+    let diagnostic_logs_path = state.diagnostic_logs_path.clone();
 
     Ok(DesktopDiagnosticsResponse {
-        items: collect_desktop_diagnostics(&selected_project, &settings_path),
+        items: collect_desktop_diagnostics(
+            &selected_project,
+            &settings_path,
+            &diagnostic_logs_path,
+        ),
     })
 }
 
@@ -340,6 +348,16 @@ async fn open_settings_folder(state: State<'_, DesktopAppState>) -> Result<(), S
         .settings_path
         .parent()
         .ok_or_else(|| "settings path has no parent directory".to_string())?;
+    open_path(folder)
+}
+
+#[tauri::command]
+async fn open_diagnostics_folder(state: State<'_, DesktopAppState>) -> Result<(), String> {
+    let folder = state
+        .diagnostic_logs_path
+        .parent()
+        .ok_or_else(|| "diagnostic log path has no parent directory".to_string())?;
+    std::fs::create_dir_all(folder).map_err(|err| err.to_string())?;
     open_path(folder)
 }
 
@@ -1487,6 +1505,38 @@ fn desktop_settings_path(app: &AppHandle) -> PathBuf {
         .join("desktop-settings.json")
 }
 
+fn desktop_diagnostic_logs_path(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| {
+            SessionStore::default_path()
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(".priority-agent"))
+        })
+        .join("logs")
+        .join("desktop.log")
+}
+
+fn append_desktop_log(path: &Path, message: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string());
+    let line = format!("{timestamp} {message}\n");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| err.to_string())?;
+    use std::io::Write;
+    file.write_all(line.as_bytes())
+        .map_err(|err| err.to_string())
+}
+
 fn load_messages_from_store(
     store: &SessionStore,
     session_id: &str,
@@ -1513,9 +1563,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let settings_path = desktop_settings_path(app.handle());
+            let diagnostic_logs_path = desktop_diagnostic_logs_path(app.handle());
             let settings = load_desktop_settings(&settings_path).unwrap_or_default();
             let selected_project = initial_desktop_project(cwd.clone(), &settings);
             let recent_projects = initial_recent_projects(&selected_project, &settings);
+            let _ = append_desktop_log(
+                &diagnostic_logs_path,
+                &format!(
+                    "desktop_start project={} settings={}",
+                    selected_project.display(),
+                    settings_path.display()
+                ),
+            );
             app.manage(DesktopAppState {
                 runtime: Mutex::new(None),
                 selected_project: Mutex::new(selected_project),
@@ -1532,6 +1591,7 @@ pub fn run() {
                 recent_projects: Mutex::new(recent_projects),
                 archived_session_ids: Mutex::new(settings.archived_session_ids.unwrap_or_default()),
                 settings_path,
+                diagnostic_logs_path,
             });
             Ok(())
         })
@@ -1546,6 +1606,7 @@ pub fn run() {
             desktop_diagnostics,
             provider_setup_info,
             open_settings_folder,
+            open_diagnostics_folder,
             open_shell_profile,
             select_project,
             new_conversation,
@@ -1912,8 +1973,12 @@ mod tests {
         let settings_path = std::env::temp_dir()
             .join(format!("priority-agent-settings-{}", std::process::id()))
             .join("desktop-settings.json");
+        let diagnostic_logs_path = std::env::temp_dir()
+            .join(format!("priority-agent-diagnostics-{}", std::process::id()))
+            .join("desktop.log");
 
-        let diagnostics = collect_desktop_diagnostics(&project, &settings_path);
+        let diagnostics =
+            collect_desktop_diagnostics(&project, &settings_path, &diagnostic_logs_path);
 
         assert!(diagnostics.iter().any(|item| item.id == "provider_keys"));
         assert!(
@@ -1924,6 +1989,9 @@ mod tests {
         );
         assert!(diagnostics.iter().any(
             |item| item.id == "settings_access" && matches!(item.status, DiagnosticStatus::Ok)
+        ));
+        assert!(diagnostics.iter().any(
+            |item| item.id == "diagnostic_logs" && matches!(item.status, DiagnosticStatus::Ok)
         ));
     }
 
@@ -2020,6 +2088,7 @@ mod tests {
 fn collect_desktop_diagnostics(
     selected_project: &Path,
     settings_path: &Path,
+    diagnostic_logs_path: &Path,
 ) -> Vec<DesktopDiagnostic> {
     vec![
         provider_key_diagnostic(),
@@ -2030,6 +2099,7 @@ fn collect_desktop_diagnostics(
         xcode_tools_diagnostic(),
         project_access_diagnostic(selected_project),
         settings_access_diagnostic(settings_path),
+        diagnostic_logs_access_diagnostic(diagnostic_logs_path),
     ]
 }
 
@@ -2214,6 +2284,41 @@ fn settings_access_diagnostic(settings_path: &Path) -> DesktopDiagnostic {
             label: "Settings storage",
             status: DiagnosticStatus::Error,
             detail: format!("Settings directory is not writable: {}", parent.display()),
+        }
+    }
+}
+
+fn diagnostic_logs_access_diagnostic(log_path: &Path) -> DesktopDiagnostic {
+    let Some(parent) = log_path.parent() else {
+        return DesktopDiagnostic {
+            id: "diagnostic_logs",
+            label: "Diagnostic logs",
+            status: DiagnosticStatus::Error,
+            detail: format!(
+                "Diagnostic log path has no parent directory: {}",
+                log_path.display()
+            ),
+        };
+    };
+
+    if directory_writable(parent)
+        || std::fs::create_dir_all(parent).is_ok() && directory_writable(parent)
+    {
+        DesktopDiagnostic {
+            id: "diagnostic_logs",
+            label: "Diagnostic logs",
+            status: DiagnosticStatus::Ok,
+            detail: format!("Desktop logs can be written at {}", log_path.display()),
+        }
+    } else {
+        DesktopDiagnostic {
+            id: "diagnostic_logs",
+            label: "Diagnostic logs",
+            status: DiagnosticStatus::Warning,
+            detail: format!(
+                "Diagnostic log directory is not writable: {}",
+                parent.display()
+            ),
         }
     }
 }

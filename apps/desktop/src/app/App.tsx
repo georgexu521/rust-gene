@@ -23,6 +23,7 @@ import {
   listRecentSessions,
   newConversation,
   onDesktopRunEvent,
+  openDiagnosticsFolder,
   openSettingsFolder,
   openShellProfile,
   permissionModeOptions,
@@ -561,6 +562,7 @@ export function App() {
           onRefresh={() => void refreshDiagnostics()}
           onDetailLevelChange={(level) => void handleDetailLevelChange(level)}
           onPermissionModeChange={(mode) => void handlePermissionModeChange(mode)}
+          onOpenDiagnosticsFolder={() => void openDiagnosticsFolder()}
           onOpenSettingsFolder={() => void openSettingsFolder()}
           onOpenShellProfile={() => void openShellProfile()}
         />

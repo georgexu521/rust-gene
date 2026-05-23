@@ -213,6 +213,8 @@ test.describe("desktop UI smoke", () => {
     await page.getByRole("button", { name: /Daily work/ }).click();
     await expect(page.getByRole("button", { name: /Daily work/ })).toHaveClass(/active/);
     await expect(page.getByText("Active session", { exact: true })).toBeVisible();
+    await expect(page.getByText("Diagnostic log", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open diagnostics folder" })).toBeVisible();
     await expect(page.locator(".settings-project-list")).toContainText("rust-agent");
     await expect(page.locator(".settings-project-list")).toContainText("bioclaw");
     await settingsNav.getByRole("button", { name: "Permissions" }).click();
@@ -226,6 +228,11 @@ test.describe("desktop UI smoke", () => {
     await expect(
       page.getByRole("complementary", { name: "Settings" }).locator(".settings-diagnostic", {
         hasText: "Provider keys",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("complementary", { name: "Settings" }).locator(".settings-diagnostic", {
+        hasText: "Diagnostic logs",
       }),
     ).toBeVisible();
 
