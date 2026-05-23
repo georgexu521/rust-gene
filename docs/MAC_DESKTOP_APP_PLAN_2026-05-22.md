@@ -578,13 +578,38 @@ Current product assessment:
 - The desktop app has crossed from scaffold into usable MVP. It can run the
   real Rust runtime, stream agent activity, resume sessions, manage common
   session/project state, show diagnostics, and package locally.
-- The UI is not yet mature commercial-software quality. It is good enough to
-  continue using as the primary development surface, but it still needs focused
-  product design work before it should be considered a polished user-facing
-  release.
+- The UI is now beyond the first functional MVP. The empty state, composer,
+  Settings surface, timeline, trace drawer, and structured context flow are
+  coherent enough for daily local use, but still need real-run tuning and
+  release-quality hardening before broad distribution.
 - Desktop remains the product priority. Mobile, plugins, automations,
   marketplace, cloud sync, and broad generic surfaces should stay deferred
   until the desktop workflow feels excellent for daily coding.
+
+Plan completion snapshot as of 2026-05-23:
+
+- Phase 0 Runtime Extraction: complete.
+- Phase 1 Tauri Shell: complete.
+- Phase 2 Codex-like MVP UX: mostly complete. The app now has the core
+  Codex-like workbench, real runtime streaming, sessions, search, project
+  switching, Settings, diagnostics, permissions, trace, timeline cards, and
+  structured current-diff/file contexts.
+- Phase 3 macOS Packaging: partially complete. Local `.app`/`.dmg` build
+  plumbing exists, but release distribution is not complete until Developer ID
+  signing, notarization, DMG polish, first-run install notes, and update
+  mechanics are finished.
+- Phase 4 Product Hardening: partially complete. Provider setup, diagnostics,
+  model/provider selection, permission defaults, and structured context audit
+  are implemented. Crash/log diagnostics, native WebView automation, release
+  update flow, and more real-run permission auditing remain.
+
+Remaining non-goals for the current desktop release:
+
+- Mobile client.
+- Plugins and automations.
+- Marketplace or cloud session sync.
+- Generic multi-user/team product surfaces.
+- Mac App Store distribution.
 
 ### Next Desktop UI And Frontend Maturity Stage
 
@@ -640,7 +665,8 @@ corepack pnpm --dir apps/desktop test:ui-smoke
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
 ```
 
-Status: started. The main run timeline card now carries a dedicated run summary
+Status: mostly complete for MVP; continue real-run tuning. The main run timeline
+card now carries a dedicated run summary
 for runtime connection, tool progress, permission waits, completion, and failure
 states, so normal transcript reading no longer depends on opening trace first.
 It also aggregates multi-tool runs into compact stats for tool count, failures,
@@ -676,7 +702,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
 corepack pnpm --dir apps/desktop test:ui-smoke
 ```
 
-Status: started. Session search now shows result counts, highlights title/model
+Status: mostly complete for MVP. Session search now shows result counts, highlights title/model
 matches, and provides a clear-search control so filtered session lists recover
 without manual text deletion. Archive now has an undo path backed by
 `restore_archived_session`, so accidental archives can be recovered without
@@ -754,6 +780,19 @@ message loading. `apps/desktop/tests/desktop-api-state.spec.ts` now covers the
 web-preview API state flow for session search, rename, archive, delete, project
 selection, and new-conversation startup recovery.
 
+Native launch smoke is now scripted through `scripts/desktop-native-smoke.sh`.
+It builds or reuses the `.app` bundle, starts the real macOS app executable with
+an isolated HOME and explicit project root, verifies that the native process
+stays alive, captures `apps/desktop/test-artifacts/native-smoke.png`, writes a
+native log artifact, and exits cleanly. `scripts/desktop-smoke.sh --native`
+includes this native launch path, and `apps/desktop/package.json` exposes it as
+`test:native-smoke`.
+
+Remaining: add richer native WebView interaction assertions and
+screenshot/visual regression thresholds after the current UI shape settles.
+Chromium preview smoke is useful, but it is not enough for final macOS
+confidence.
+
 #### Track E - Release-Quality Desktop Hardening
 
 - Add app-level crash/log diagnostics and a visible way to open diagnostic logs.
@@ -772,20 +811,29 @@ bash -n scripts/package-macos-app.sh
 corepack pnpm --dir apps/desktop tauri build --bundles app,dmg
 ```
 
-#### Recommended Execution Order
+Status: partially complete. Local packaging exists and the app has practical
+diagnostics/provider/permission setup, but this track is not release-complete
+until logs/crash diagnostics, Developer ID signing, notarization, DMG polish,
+first-run install guidance, and an update story are in place.
 
-1. Track A first: visual density and layout maturity. This has the highest
-   impact on whether the app feels worth using every day.
-2. Track D in parallel where cheap: add focused frontend state tests before
-   large UI rewrites make regressions hard to spot.
-3. Track B next: transcript and timeline are the main product surface during
-   real agent work.
-4. Track C after the main layout settles: session/project ergonomics should
-   feel integrated, not bolted onto the sidebar.
-5. Track E before any external distribution: packaging polish matters only
-   after the core desktop experience is strong.
+#### Recommended Execution Order From Here
+
+1. Real-run desktop dogfooding: use the desktop app for several actual coding
+   tasks and record where transcript, timeline, permissions, context chips, and
+   Settings still feel unclear or too log-like.
+2. Native UI verification: add a real Tauri/WebView automation path and basic
+   screenshot checks so desktop regressions are caught in the native shell, not
+   only in Chromium preview.
+3. Release hardening: add visible log/crash diagnostics, tighten permission
+   auditing, and finish the packaging script documentation.
+4. Formal macOS distribution: Developer ID signing, notarization, polished DMG,
+   first-run install notes, and update mechanism.
+5. Only after the desktop loop feels excellent, reconsider deferred surfaces
+   such as plugins, automations, or mobile.
 
 ### Phase 0 - Runtime Extraction
+
+Status: complete.
 
 - Add `src/lib.rs` and turn `src/main.rs` into a thin binary entrypoint.
 - Keep all current CLI/TUI/API behavior unchanged.
@@ -800,6 +848,8 @@ cargo test -q prompt_context
 ```
 
 ### Phase 1 - Tauri Shell
+
+Status: complete.
 
 - Add `apps/desktop` Tauri 2 + React + TypeScript + Vite scaffold.
 - Add commands:
@@ -820,6 +870,8 @@ cargo check --features experimental-api-server -q
 
 ### Phase 2 - Codex-like MVP UX
 
+Status: mostly complete for local daily use.
+
 - Build the left sidebar, centered empty state, bottom composer, session list,
   project selector, permission card, and compact tool progress rendering.
 - Persist active project/session in the existing session store or a small
@@ -829,6 +881,8 @@ cargo check --features experimental-api-server -q
 
 ### Phase 3 - macOS Packaging
 
+Status: partially complete.
+
 - Add `scripts/package-macos-app.sh` that wraps the Tauri build command.
 - Configure app identifier, product name, icons, minimum macOS version, and
   local resources.
@@ -836,6 +890,8 @@ cargo check --features experimental-api-server -q
 - Document dev/ad-hoc signing and Developer ID notarization requirements.
 
 ### Phase 4 - Product Hardening
+
+Status: partially complete.
 
 - Add onboarding for provider config and project workspace selection.
 - Add permission defaults suitable for a desktop app.
@@ -845,17 +901,23 @@ cargo check --features experimental-api-server -q
 
 ## Immediate Next Slice
 
-The next concrete slice should start Track A:
+The next concrete slice should no longer restart Track A from scratch. The UI
+foundation has moved past that point. The next best slice is native desktop
+verification plus real-run product tuning:
 
-1. Audit current desktop screenshots and list the highest-impact UI density
-   problems in sidebar, topbar, transcript, composer, and Settings drawer.
-2. Refactor CSS into clearer layout/component groups if needed before changing
-   many visual rules.
-3. Polish one full first-screen workflow: restored session or new chat empty
-   state, diagnostics strip, transcript area, composer, and session sidebar.
-4. Keep `corepack pnpm --dir apps/desktop test:ui-smoke` passing after each
-   visual batch.
+1. Extend native Tauri/WebView automation beyond launch/screenshot smoke so it
+   checks Settings, composer popovers, context detail drawer, trace drawer, and
+   timeline layout.
+2. Run several real coding sessions through the desktop app and capture the
+   highest-friction moments in transcript readability, permissions, context
+   visibility, and final-answer rhythm.
+3. Convert those findings into small UI/product slices rather than broad visual
+   rewrites.
+4. Start Track E release hardening once native verification is reliable:
+   diagnostic logs, packaging docs, signing/notarization checklist, and update
+   path.
 
-The immediate success criterion is not "looks prettier"; it is that the desktop
-app feels like a focused, mature coding workbench when opened, before any agent
-run starts.
+The immediate success criterion is that a real macOS desktop run can be opened,
+used, inspected, and debugged with confidence in the native shell. The app
+should feel less like a preview around the CLI and more like the primary
+Priority Agent interface.

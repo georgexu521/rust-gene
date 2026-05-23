@@ -5,23 +5,28 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_DIR="$ROOT_DIR/apps/desktop"
 TAURI_MANIFEST="$DESKTOP_DIR/src-tauri/Cargo.toml"
 BUILD_APP=false
+RUN_NATIVE=false
 
 for arg in "$@"; do
   case "$arg" in
     --bundle)
       BUILD_APP=true
       ;;
+    --native)
+      RUN_NATIVE=true
+      ;;
     --quick)
       BUILD_APP=false
       ;;
     -h|--help)
       cat <<'USAGE'
-Usage: scripts/desktop-smoke.sh [--quick|--bundle]
+Usage: scripts/desktop-smoke.sh [--quick|--bundle] [--native]
 
 Runs the macOS desktop app smoke checks.
 
   --quick   Build frontend and run Rust command/runtime smoke tests.
   --bundle  Also build the local macOS .app bundle.
+  --native  Launch the native .app and capture a screenshot artifact.
 USAGE
       exit 0
       ;;
@@ -59,6 +64,14 @@ if [[ "$BUILD_APP" == true ]]; then
   echo "==> Building macOS .app bundle"
   corepack pnpm --dir "$DESKTOP_DIR" tauri build --bundles app
   test -d "$DESKTOP_DIR/src-tauri/target/release/bundle/macos/Priority Agent.app"
+fi
+
+if [[ "$RUN_NATIVE" == true ]]; then
+  if [[ "$BUILD_APP" == true ]]; then
+    "$ROOT_DIR/scripts/desktop-native-smoke.sh" --skip-build
+  else
+    "$ROOT_DIR/scripts/desktop-native-smoke.sh"
+  fi
 fi
 
 echo "desktop smoke passed"
