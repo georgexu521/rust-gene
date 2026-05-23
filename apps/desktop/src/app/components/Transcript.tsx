@@ -10,13 +10,14 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { Fragment } from "react";
-import { DesktopDiagnostic, ProviderModelStatus } from "../../runtime/desktopApi";
+import { DesktopDiagnostic, DesktopRunContext, ProviderModelStatus } from "../../runtime/desktopApi";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
 
 type TranscriptProps = {
   items: TranscriptItem[];
   diagnostics: DesktopDiagnostic[];
   onPermissionAnswer?: (approved: boolean) => void;
+  onOpenContext?: (context: DesktopRunContext) => void;
   onOpenTrace?: (traceId: string) => void;
   projectPath: string;
   providerStatus: ProviderModelStatus | null;
@@ -26,6 +27,7 @@ export function Transcript({
   items,
   diagnostics,
   onPermissionAnswer,
+  onOpenContext,
   onOpenTrace,
   projectPath,
   providerStatus,
@@ -50,6 +52,7 @@ export function Transcript({
               <TimelineEvent
                 className={className}
                 item={item}
+                onOpenContext={onOpenContext}
                 onPermissionAnswer={onPermissionAnswer}
                 onOpenTrace={onOpenTrace}
               />
@@ -159,10 +162,12 @@ function TimelineEvent({
   className,
   item,
   onPermissionAnswer,
+  onOpenContext,
   onOpenTrace,
 }: {
   className?: string;
   item: TimelineEventItem;
+  onOpenContext?: (context: DesktopRunContext) => void;
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenTrace?: (traceId: string) => void;
 }) {
@@ -203,7 +208,13 @@ function TimelineEvent({
           <div className="timeline-title">{item.title}</div>
           <div className="timeline-status">{labelForStatus(item.status)}</div>
         </div>
-        {item.summary ? <TimelineSummaryView compact={isCompact} summary={item.summary} /> : null}
+        {item.summary ? (
+          <TimelineSummaryView
+            compact={isCompact}
+            summary={item.summary}
+            onOpenContext={onOpenContext}
+          />
+        ) : null}
         {!item.summary && item.detail ? (
           <div className="timeline-detail">{item.detail}</div>
         ) : null}
@@ -243,9 +254,11 @@ function TimelineEvent({
 
 function TimelineSummaryView({
   compact = false,
+  onOpenContext,
   summary,
 }: {
   compact?: boolean;
+  onOpenContext?: (context: DesktopRunContext) => void;
   summary: TimelineSummary;
 }) {
   if (summary.kind === "run") {
@@ -268,7 +281,15 @@ function TimelineSummaryView({
             <div className="timeline-attached-contexts" aria-label="Run attached context">
               <span>Attached context</span>
               {summary.contexts.map((context) => (
-                <strong key={context.type}>{context.label}</strong>
+                <button
+                  aria-label={`Open run context ${context.label}`}
+                  disabled={!onOpenContext}
+                  key={context.type}
+                  type="button"
+                  onClick={() => onOpenContext?.(context)}
+                >
+                  {context.label}
+                </button>
               ))}
             </div>
           ) : null}

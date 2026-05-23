@@ -1,14 +1,22 @@
 import { useEffect } from "react";
+import { DesktopRunContext } from "../../runtime/desktopApi";
 import { TraceItem } from "../types";
 
 type TraceDrawerProps = {
   activeItemId: string | null;
   isOpen: boolean;
   items: TraceItem[];
+  onOpenContext?: (context: DesktopRunContext) => void;
   onClose: () => void;
 };
 
-export function TraceDrawer({ activeItemId, isOpen, items, onClose }: TraceDrawerProps) {
+export function TraceDrawer({
+  activeItemId,
+  isOpen,
+  items,
+  onClose,
+  onOpenContext,
+}: TraceDrawerProps) {
   useEffect(() => {
     if (!isOpen || !activeItemId) {
       return;
@@ -54,7 +62,15 @@ export function TraceDrawer({ activeItemId, isOpen, items, onClose }: TraceDrawe
                 <div className="trace-contexts" aria-label="Trace attached context">
                   <span>Attached context</span>
                   {item.contexts.map((context) => (
-                    <strong key={context.type}>{context.label}</strong>
+                    <button
+                      aria-label={`Open trace context ${context.label}`}
+                      disabled={!onOpenContext}
+                      key={context.type}
+                      type="button"
+                      onClick={() => onOpenContext?.(context)}
+                    >
+                      {context.label}
+                    </button>
                   ))}
                 </div>
               ) : null}

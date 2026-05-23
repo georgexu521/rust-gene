@@ -718,6 +718,8 @@ Trace/debug now carries the same attached-context chips on the run-start trace
 item, making it possible to audit structured inputs from the trace drawer.
 Clicking a composer context chip now opens a context detail drawer with changed
 files, git stat output, and bounded patch preview for the current diff context.
+The same drawer is now reachable from run-header and trace context chips after
+the composer has cleared, so sent runs remain auditable.
 
 #### Track D - Frontend Architecture And Test Hardening
 

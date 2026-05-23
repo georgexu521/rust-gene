@@ -508,6 +508,7 @@ export function App() {
         <Transcript
           diagnostics={diagnostics}
           items={runState.items}
+          onOpenContext={setActiveContextDetail}
           onOpenTrace={(traceId) => {
             setActiveTraceId(traceId);
             setIsTraceOpen(true);
@@ -521,6 +522,7 @@ export function App() {
           activeItemId={activeTraceId}
           isOpen={isTraceOpen}
           items={runState.traceItems}
+          onOpenContext={setActiveContextDetail}
           onClose={() => setIsTraceOpen(false)}
         />
 

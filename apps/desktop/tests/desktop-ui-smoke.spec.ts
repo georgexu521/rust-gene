@@ -119,6 +119,9 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-event.run-group-start", { hasText: "Agent run" })).toBeVisible();
     await expect(page.locator(".timeline-event.run-group-start")).toContainText("Attached context");
     await expect(page.locator(".timeline-event.run-group-start")).toContainText("Current diff");
+    await page.locator(".timeline-event.run-group-start").getByRole("button", { name: "Open run context Current diff" }).click();
+    await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Changed files");
+    await page.getByRole("button", { name: "Close context details" }).click();
     await expect(page.locator(".timeline-run-stats span", { hasText: "3 tools" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();
@@ -165,6 +168,9 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("complementary", { name: "Run trace" })).toBeVisible();
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Attached context");
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Current diff");
+    await page.locator(".trace-item.active", { hasText: "Run started" }).getByRole("button", { name: "Open trace context Current diff" }).click();
+    await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Patch preview");
+    await page.getByRole("button", { name: "Close context details" }).click();
     await page.getByRole("complementary", { name: "Run trace" }).getByRole("button", { name: "Close" }).click();
     await page.locator(".timeline-event", { hasText: "Pnpm Test" }).getByRole("button", { name: "Open trace for Pnpm Test" }).click();
     await expect(page.getByRole("complementary", { name: "Run trace" })).toBeVisible();
