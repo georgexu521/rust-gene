@@ -40,8 +40,14 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Loaded preview session: web-preview")).not.toBeVisible();
     await expect(page.getByRole("heading", { name: "Start a focused run in rust-agent" })).toBeVisible();
     await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: /Delete Daily desktop flow/ }).click();
+    await expect(page.getByRole("dialog", { name: "Delete session?" })).toBeVisible();
+    await expect(page.getByRole("dialog")).toContainText("Daily desktop flow");
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByText("Daily desktop flow")).toBeVisible();
+    await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
+    await page.getByRole("button", { name: /Delete Daily desktop flow/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
     await expect(page.getByText("Daily desktop flow")).not.toBeVisible();
 
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");

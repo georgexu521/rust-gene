@@ -65,6 +65,7 @@ export function App() {
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [lastArchivedSession, setLastArchivedSession] = useState<RecentSession | null>(null);
+  const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
 
   useEffect(() => {
@@ -280,13 +281,14 @@ export function App() {
     }
   }
 
-  async function handleDeleteSession(session: RecentSession) {
-    if (!window.confirm(`Delete session "${session.title}"? This cannot be undone.`)) {
+  async function handleConfirmDeleteSession() {
+    if (!pendingDeleteSession) {
       return;
     }
-
+    const session = pendingDeleteSession;
     try {
       setSettings(await deleteSession(session.id));
+      setPendingDeleteSession(null);
       if (lastArchivedSession?.id === session.id) {
         setLastArchivedSession(null);
       }
@@ -359,7 +361,7 @@ export function App() {
         selectedSessionId={runState.selectedSessionId}
         onArchiveSession={(session) => void handleArchiveSession(session)}
         onBrowseProject={() => void handleBrowseProject()}
-        onDeleteSession={(session) => void handleDeleteSession(session)}
+        onDeleteSession={setPendingDeleteSession}
         onNewChat={() => void handleNewChat()}
         onRenameSession={(session, title) => void handleRenameSession(session, title)}
         onSearchChange={(query) => void handleSearchChange(query)}
@@ -469,6 +471,41 @@ export function App() {
 
         {runState.error ? <div className="error-banner">{runState.error}</div> : null}
       </section>
+
+      {pendingDeleteSession ? (
+        <div className="confirm-backdrop" role="presentation">
+          <section
+            aria-labelledby="delete-session-title"
+            aria-modal="true"
+            className="confirm-dialog"
+            role="dialog"
+          >
+            <div>
+              <h2 id="delete-session-title">Delete session?</h2>
+              <p>
+                {pendingDeleteSession.title} will be removed from this desktop app. This
+                cannot be undone.
+              </p>
+            </div>
+            <div className="confirm-dialog-meta">
+              <span>{pendingDeleteSession.model}</span>
+              <span>{pendingDeleteSession.message_count} messages</span>
+            </div>
+            <div className="confirm-dialog-actions">
+              <button type="button" onClick={() => setPendingDeleteSession(null)}>
+                Cancel
+              </button>
+              <button
+                className="danger"
+                type="button"
+                onClick={() => void handleConfirmDeleteSession()}
+              >
+                Delete
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
