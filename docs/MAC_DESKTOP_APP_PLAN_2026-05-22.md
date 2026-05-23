@@ -681,7 +681,9 @@ without manual text deletion. Archive now has an undo path backed by
 deleting session data. Delete now uses an in-app confirmation dialog with
 session metadata instead of the browser-native confirm prompt. The sidebar and
 Settings drawer now show a readable current-session state, so restored sessions
-and new conversations are distinguishable without inspecting raw ids.
+and new conversations are distinguishable without inspecting raw ids. Settings
+now lists recent projects with full paths and direct switching controls instead
+of only exposing a count.
 
 #### Track D - Frontend Architecture And Test Hardening
 

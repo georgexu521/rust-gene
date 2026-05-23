@@ -1457,6 +1457,58 @@ h1 {
   background: #ffffff;
 }
 
+.settings-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.settings-project-list button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 8px;
+  border: 1px solid #dfe4ea;
+  border-radius: 7px;
+  color: #3a414a;
+  background: #ffffff;
+  text-align: left;
+}
+
+.settings-project-list button:hover {
+  background: #f6f8fa;
+}
+
+.settings-project-list button.active {
+  border-color: #b9cbe0;
+  background: #eef5fc;
+}
+
+.settings-project-list span {
+  min-width: 0;
+}
+
+.settings-project-list strong,
+.settings-project-list small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-project-list strong {
+  font-size: 12px;
+}
+
+.settings-project-list small {
+  margin-top: 2px;
+  color: #7a838f;
+  font-size: 11px;
+}
+
 .permission-options {
   display: grid;
   grid-template-columns: 1fr 1fr;

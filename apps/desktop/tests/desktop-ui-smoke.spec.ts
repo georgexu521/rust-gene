@@ -133,6 +133,8 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Provider setup")).toBeVisible();
     await expect(page.getByText("Permission defaults")).toBeVisible();
     await expect(page.getByText("Active session", { exact: true })).toBeVisible();
+    await expect(page.locator(".settings-project-list")).toContainText("rust-agent");
+    await expect(page.locator(".settings-project-list")).toContainText("bioclaw");
 
     await assertNoHorizontalOverflow(page);
     await page.screenshot({

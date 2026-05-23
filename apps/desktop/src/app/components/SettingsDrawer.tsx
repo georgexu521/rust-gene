@@ -1,4 +1,4 @@
-import { FolderOpen, RefreshCw, Terminal, X } from "lucide-react";
+import { Folder, FolderOpen, RefreshCw, Terminal, X } from "lucide-react";
 import {
   DesktopDiagnostic,
   DesktopSettings,
@@ -17,6 +17,7 @@ type SettingsDrawerProps = {
   providerSetup: ProviderSetupInfo | null;
   permissionOptions: PermissionModeOption[];
   onClose: () => void;
+  onSelectRecentProject: (path: string) => void;
   onRefresh: () => void;
   onPermissionModeChange: (mode: PermissionModeId) => void;
   onOpenSettingsFolder: () => void;
@@ -33,6 +34,7 @@ export function SettingsDrawer({
   providerSetup,
   permissionOptions,
   onClose,
+  onSelectRecentProject,
   onRefresh,
   onPermissionModeChange,
   onOpenSettingsFolder,
@@ -96,6 +98,25 @@ export function SettingsDrawer({
               <span>Open settings folder</span>
             </button>
           </div>
+          {settings?.recent_projects.length ? (
+            <div className="settings-project-list" aria-label="Recent projects">
+              {settings.recent_projects.map((path) => (
+                <button
+                  className={path === projectPath ? "active" : ""}
+                  key={path}
+                  title={path}
+                  type="button"
+                  onClick={() => onSelectRecentProject(path)}
+                >
+                  <Folder aria-hidden="true" size={14} />
+                  <span>
+                    <strong>{basename(path)}</strong>
+                    <small>{path}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </section>
 
         <section className="settings-section">
@@ -169,6 +190,10 @@ export function SettingsDrawer({
       </div>
     </aside>
   );
+}
+
+function basename(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 }
 
 type ProviderSetupGuideProps = {

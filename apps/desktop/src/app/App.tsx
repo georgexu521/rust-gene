@@ -470,6 +470,7 @@ export function App() {
           providerSetup={providerSetup}
           permissionOptions={permissionOptions}
           onClose={() => setIsSettingsOpen(false)}
+          onSelectRecentProject={(path) => void handleSelectRecentProject(path)}
           onRefresh={() => void refreshDiagnostics()}
           onPermissionModeChange={(mode) => void handlePermissionModeChange(mode)}
           onOpenSettingsFolder={() => void openSettingsFolder()}
