@@ -7,7 +7,7 @@ use super::text_codec::{
 };
 use super::{
     acquire_file_mutation_lock, check_file_size_limit, edit_diff_summary, edit_diff_summary_json,
-    file_path_identity, file_read_state_guidance, is_file_modified_since_read,
+    edit_preview_json, file_path_identity, file_read_state_guidance, is_file_modified_since_read,
     is_unc_or_network_path, mark_file_read_with_state, path_identity_json, read_before_edit_status,
     resolve_path, FileEditTool, FilePathIdentity, ReadBeforeEditStatus,
     MAX_EDITABLE_FILE_SIZE_BYTES,
@@ -262,10 +262,31 @@ impl Tool for FilePatchTool {
             }
         }
 
+        let checkpoint_json = checkpoint_metadata_json(Some(&checkpoint));
         let files = prepared
             .iter()
             .zip(bytes_written.iter().copied())
-            .map(|(patch, bytes_written)| {
+            .enumerate()
+            .map(|(index, (patch, bytes_written))| {
+                let text_format =
+                    text_write_format_json(patch.encoding, patch.has_bom, patch.line_ending);
+                let file_change = file_changes
+                    .get(index)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let edit_preview = edit_preview_json(
+                    &patch.identity,
+                    patch.existed_before,
+                    patch.before_content.as_deref(),
+                    &patch.after_content,
+                    &patch.diff,
+                    text_format.clone(),
+                    checkpoint_json.clone(),
+                    file_change,
+                    Some(patch.replacements),
+                    bytes_written,
+                    "patch_complete",
+                );
                 json!({
                     "path": patch.path_arg,
                     "resolved_path": patch.identity.resolved_path,
@@ -273,12 +294,9 @@ impl Tool for FilePatchTool {
                     "existed_before": patch.existed_before,
                     "replacements": patch.replacements,
                     "bytes_written": bytes_written,
-                    "text_format": text_write_format_json(
-                        patch.encoding,
-                        patch.has_bom,
-                        patch.line_ending
-                    ),
+                    "text_format": text_format,
                     "diff": edit_diff_summary_json(&patch.diff),
+                    "edit_preview": edit_preview,
                 })
             })
             .collect::<Vec<_>>();
@@ -297,7 +315,7 @@ impl Tool for FilePatchTool {
             json!({
                 "operation_count": prepared.len(),
                 "files": files,
-                "checkpoint": checkpoint_metadata_json(Some(&checkpoint)),
+                "checkpoint": checkpoint_json,
                 "file_changes": file_changes,
                 "diff": {
                     "unified_diff": combined_diff,

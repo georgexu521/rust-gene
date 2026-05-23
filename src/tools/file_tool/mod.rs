@@ -556,6 +556,60 @@ fn edit_diff_summary_json(diff: &EditDiffSummary) -> serde_json::Value {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn edit_preview_json(
+    identity: &FilePathIdentity,
+    existed_before: bool,
+    before_content: Option<&str>,
+    after_content: &str,
+    diff: &EditDiffSummary,
+    text_format: serde_json::Value,
+    checkpoint: serde_json::Value,
+    file_change: serde_json::Value,
+    replacements: Option<usize>,
+    bytes_written: u64,
+    validation_stage: &str,
+) -> serde_json::Value {
+    let checkpoint_id = checkpoint
+        .get("id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let file_change_id = file_change
+        .get("id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    json!({
+        "path": identity.lexical_path.clone(),
+        "resolved_path": identity.resolved_path.clone(),
+        "canonical_path": identity.canonical_path.clone(),
+        "display_path": identity.display_path.clone(),
+        "state_key": identity.state_key.clone(),
+        "existed_before": existed_before,
+        "before_hash": before_content.map(content_hash_hex),
+        "after_hash": content_hash_hex(after_content),
+        "replacements": replacements,
+        "bytes_written": bytes_written,
+        "changed_range": {
+            "start": json_line_number(diff.changed_line_start),
+            "end": json_line_number(diff.changed_line_end),
+        },
+        "additions": diff.additions,
+        "deletions": diff.deletions,
+        "diff_preview": diff.unified_diff.clone(),
+        "diff_preview_truncated": diff.preview_truncated,
+        "text_format": text_format,
+        "validation_stage": validation_stage,
+        "external_modified": false,
+        "checkpoint_id": checkpoint_id,
+        "file_change_id": file_change_id,
+        "rollback": {
+            "kind": "checkpoint",
+            "checkpoint_id": checkpoint.get("id").cloned().unwrap_or(serde_json::Value::Null),
+            "file_change_id": file_change.get("id").cloned().unwrap_or(serde_json::Value::Null),
+        }
+    })
+}
+
 fn file_state_key(path: &Path) -> String {
     canonicalize_or_normalize(path)
         .to_string_lossy()
@@ -1118,6 +1172,22 @@ impl Tool for FileWriteTool {
                     },
                 )
                 .await;
+                let checkpoint_json = checkpoint_metadata_json(checkpoint.as_ref());
+                let file_change_json = file_change.unwrap_or(serde_json::Value::Null);
+                let text_format = text_write_format_json(encoding, has_bom, line_ending);
+                let edit_preview = edit_preview_json(
+                    &identity,
+                    existed_before,
+                    before_content,
+                    content_body,
+                    &diff_summary,
+                    text_format.clone(),
+                    checkpoint_json.clone(),
+                    file_change_json.clone(),
+                    None,
+                    bytes_written as u64,
+                    "write_complete",
+                );
                 ToolResult::success_with_data(
                     format!("File {} successfully: {}", action, path_str),
                     json!({
@@ -1126,10 +1196,11 @@ impl Tool for FileWriteTool {
                         "path_identity": path_identity_json(&identity),
                         "bytes_written": bytes_written,
                         "existed_before": existed_before,
-                        "checkpoint": checkpoint_metadata_json(checkpoint.as_ref()),
-                        "file_change": file_change.unwrap_or(serde_json::Value::Null),
+                        "checkpoint": checkpoint_json,
+                        "file_change": file_change_json,
                         "diff": edit_diff_summary_json(&diff_summary),
-                        "text_format": text_write_format_json(encoding, has_bom, line_ending),
+                        "text_format": text_format,
+                        "edit_preview": edit_preview,
                         "guidance": if existed_before {
                             "file_write replaced the entire file; use file_edit for targeted existing-file changes"
                         } else {
@@ -1738,20 +1809,37 @@ impl Tool for FileEditTool {
                         let diagnostics =
                             collect_file_edit_diagnostics(&context, &path, &new_content).await;
                         let diagnostics_line = file_edit_diagnostics_content_line(&diagnostics);
+                        let checkpoint_json = checkpoint_metadata_json(checkpoint.as_ref());
+                        let file_change_json = file_change.unwrap_or(serde_json::Value::Null);
+                        let text_format = text_write_format_json(
+                            snapshot.encoding,
+                            snapshot.has_bom,
+                            snapshot.line_ending,
+                        );
+                        let edit_preview = edit_preview_json(
+                            &identity,
+                            true,
+                            Some(snapshot.content.as_str()),
+                            &new_content,
+                            &diff_summary,
+                            text_format.clone(),
+                            checkpoint_json.clone(),
+                            file_change_json.clone(),
+                            Some(replacements),
+                            bytes_written as u64,
+                            "edit_complete",
+                        );
                         let data = json!({
                             "path": path_str,
                             "resolved_path": identity.resolved_path,
                             "path_identity": path_identity_json(&identity),
                             "replacements": replacements,
                             "bytes_written": bytes_written,
-                            "text_format": text_write_format_json(
-                                snapshot.encoding,
-                                snapshot.has_bom,
-                                snapshot.line_ending
-                            ),
-                            "checkpoint": checkpoint_metadata_json(checkpoint.as_ref()),
-                            "file_change": file_change.unwrap_or(serde_json::Value::Null),
+                            "text_format": text_format,
+                            "checkpoint": checkpoint_json,
+                            "file_change": file_change_json,
                             "diff": edit_diff_summary_json(&diff_summary),
+                            "edit_preview": edit_preview,
                             "diagnostics": diagnostics,
                         });
                         let mut content = format!(
@@ -2312,6 +2400,21 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .contains("-old"));
+        assert!(data["edit_preview"]["before_hash"].as_str().is_some());
+        assert!(data["edit_preview"]["after_hash"].as_str().is_some());
+        assert_eq!(
+            data["edit_preview"]["checkpoint_id"],
+            data["checkpoint"]["id"]
+        );
+        assert_eq!(
+            data["edit_preview"]["file_change_id"],
+            data["file_change"]["id"]
+        );
+        assert_eq!(data["edit_preview"]["rollback"]["kind"], "checkpoint");
+        assert!(data["edit_preview"]["diff_preview"]
+            .as_str()
+            .unwrap_or("")
+            .contains("-old"));
 
         let _ = tokio::fs::remove_file(path).await;
         checkpoint_manager.lock().await.clear_all().await.unwrap();
@@ -2384,6 +2487,18 @@ mod tests {
         assert_eq!(data["operation_count"], 2);
         assert!(data["checkpoint"]["id"].as_str().is_some());
         assert_eq!(data["file_changes"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            data["files"][0]["edit_preview"]["checkpoint_id"],
+            data["checkpoint"]["id"]
+        );
+        assert!(data["files"][0]["edit_preview"]["file_change_id"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("fc_"));
+        assert_eq!(
+            data["files"][0]["edit_preview"]["validation_stage"],
+            "patch_complete"
+        );
         assert!(data["diff"]["unified_diff"]
             .as_str()
             .unwrap_or("")
@@ -2965,6 +3080,15 @@ mod tests {
         let unified_diff = data["diff"]["unified_diff"].as_str().unwrap_or("");
         assert!(unified_diff.contains("-foo bar"));
         assert!(unified_diff.contains("+baz qux"));
+        assert_eq!(data["edit_preview"]["replacements"], 1);
+        assert!(data["edit_preview"]["before_hash"].as_str().is_some());
+        assert!(data["edit_preview"]["after_hash"].as_str().is_some());
+        assert_eq!(data["edit_preview"]["validation_stage"], "edit_complete");
+        assert_eq!(data["edit_preview"]["changed_range"]["start"], 2);
+        assert!(data["edit_preview"]["diff_preview"]
+            .as_str()
+            .unwrap_or("")
+            .contains("+baz qux"));
         assert_eq!(data["diagnostics"]["status"], "lsp_unavailable");
         assert_eq!(data["diagnostics"]["checked"], false);
         assert_eq!(data["diagnostics"]["diagnostic_count"], 0);

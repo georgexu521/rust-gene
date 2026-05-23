@@ -689,3 +689,11 @@ top of them.
   - fixed first audit findings by giving `git`, MCP tools, and `worktree`
     explicit operation kind, read-only/concurrency, matcher, summary, and UI
     render semantics.
+- Started Track B with unified structured edit previews:
+  - `file_write`, `file_edit`, and `file_patch` now expose `edit_preview`
+    metadata with path identity, hashes, changed range, additions/deletions,
+    diff preview, text format, validation stage, checkpoint id, file change id,
+    and rollback handle;
+  - targeted tests now pin the metadata shape so desktop timeline and trace
+    views can render concrete file-edit evidence instead of generic success
+    messages.
