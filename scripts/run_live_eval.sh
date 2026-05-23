@@ -63,11 +63,20 @@ REAL_PROJECT_CODING_GAUNTLET_CASES=(
   persistent-memory-planning-context
 )
 
+RELEASE_DOGFOOD_CASES=(
+  core-simple-stale-edit
+  core-rust-multi-file-refactor
+  desktop-ui-smoke-polish
+  code-change-verification-repair-loop
+  core-permission-rejection-recovery
+  core-long-output-artifact
+)
+
 usage() {
   cat <<'EOF'
 Usage:
   scripts/run_live_eval.sh --list
-  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
+  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|release-dogfood|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
   scripts/run_live_eval.sh --mode summary --run-id <id>
 
 Modes:
@@ -81,7 +90,7 @@ Modes:
 
 Options:
   --case ID          Live task id, "recommended", "core-coding-quality",
-                     "real-project-coding", or "all".
+                     "real-project-coding", "release-dogfood", or "all".
                      With --list, a suite name lists only that suite.
   --mode MODE        list, prepare, api-plan, agent-run, collect, or full.
   --workdir DIR      Existing task worktree for collect mode.
@@ -412,6 +421,19 @@ real_project_coding_gauntlet_task_files() {
   return "$missing"
 }
 
+release_dogfood_task_files() {
+  local id file missing=0
+  for id in "${RELEASE_DOGFOOD_CASES[@]}"; do
+    if file="$(find_task_file "$id")"; then
+      echo "$file"
+    else
+      echo "Release dogfood live task missing: $id" >&2
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
 task_group_files() {
   local group="$1"
   case "$group" in
@@ -423,6 +445,9 @@ task_group_files() {
       ;;
     real-project-coding)
       real_project_coding_gauntlet_task_files
+      ;;
+    release-dogfood)
+      release_dogfood_task_files
       ;;
     *)
       return 1
@@ -2166,7 +2191,7 @@ run_one() {
 
 main() {
   if [[ "$MODE" == "list" ]]; then
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" ]]; then
       need_yaml
       list_task_group "$CASE_ID"
     else
@@ -2191,9 +2216,9 @@ main() {
 
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
 
-  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" ]]; then
+  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" ]]; then
     local file files failures=0
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" ]]; then
       if ! files="$(task_group_files "$CASE_ID")"; then
         exit 1
       fi

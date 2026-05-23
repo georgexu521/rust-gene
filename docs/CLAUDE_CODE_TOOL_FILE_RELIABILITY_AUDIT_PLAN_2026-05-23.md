@@ -2,10 +2,10 @@
 
 Date: 2026-05-23
 
-Status: implemented reliability foundation. Tracks A-F are functionally
-covered by runtime/frontend changes and targeted tests; Track G now has a
-green targeted gauntlet for this batch, while full dogfood automation remains
-the release-candidate gate.
+Status: implemented reliability foundation and release-gate automation.
+Tracks A-F are functionally covered by runtime/frontend changes and targeted
+tests; Track G now has deterministic replay plus a six-scenario real-project
+dogfood gate for release candidates.
 
 Goal: make Priority Agent reliable enough for daily coding work by deepening
 tool contracts, file editing, bash execution, permission evidence, recovery,
@@ -629,12 +629,29 @@ Current replay fixture:
 
 Real-project dogfood scenarios:
 
-1. Small bug fix in this repo.
-2. Multi-file Rust refactor with tests.
-3. Desktop UI change with build and smoke validation.
-4. Test failure repair from failing command output.
-5. Permission-sensitive file change where user denies first path.
-6. Long run with compaction or large output.
+1. Small bug fix in this repo: `core-simple-stale-edit`.
+2. Multi-file Rust refactor with tests: `core-rust-multi-file-refactor`.
+3. Desktop UI change with build and smoke validation:
+   `desktop-ui-smoke-polish`.
+4. Test failure repair from failing command output:
+   `code-change-verification-repair-loop`.
+5. Permission-sensitive file change where user denies first path:
+   `core-permission-rejection-recovery`.
+6. Long run with compaction or large output: `core-long-output-artifact`.
+
+Current release gate:
+
+- `scripts/release-dogfood-gate.sh quick`
+- `scripts/release-dogfood-gate.sh list`
+- `scripts/release-dogfood-gate.sh prepare`
+- `scripts/release-dogfood-gate.sh agent-run --run-tests`
+- `scripts/release-dogfood-gate.sh summary --run-id <run-id>`
+
+The quick mode is deterministic and provider-free. The `agent-run` mode is the
+actual release-candidate dogfood gate: it runs the six scenarios through
+Priority Agent in isolated worktrees, executes required commands when
+`--run-tests` is passed, collects reports, and fails the gate if any scenario,
+quality check, or required command fails.
 
 Validation:
 
@@ -671,9 +688,9 @@ Acceptance:
 7. Track G: deterministic and dogfood gauntlet.
 
 Current implementation status: Tracks A-F have landed as the first reliability
-foundation. The next implementation should turn Track G from targeted gates into
-repeatable dogfood scenarios and then use failures from those runs to drive the
-next maturity pass.
+foundation. Track G now has repeatable deterministic and real-project dogfood
+gates. The next maturity pass should come from actual release-dogfood
+`agent-run --run-tests` failures rather than from more checklist work.
 
 ## Progress Log
 
@@ -796,3 +813,13 @@ next maturity pass.
   - added `scripts/tool-file-reliability-gauntlet.sh` with `quick`,
     `standard`, and `full` modes;
   - wired the new gauntlet into `scripts/coding-workflow-gates.sh quick`.
+- Converted the real-project dogfood layer into a repeatable release gate:
+  - added the `release-dogfood` suite to `scripts/run_live_eval.sh`;
+  - added `core-rust-multi-file-refactor` for a focused multi-file Rust
+    refactor with cargo validation;
+  - added `desktop-ui-smoke-polish` for desktop build and UI smoke coverage;
+  - added `scripts/release-dogfood-gate.sh` with provider-free `quick`
+    validation and opt-in `agent-run --run-tests` release-candidate execution;
+  - the gate now covers the six required scenarios: small bug fix,
+    multi-file Rust refactor, desktop UI smoke, failed-test repair,
+    permission denial recovery, and long-output handling.

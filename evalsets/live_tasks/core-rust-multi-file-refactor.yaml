@@ -1,0 +1,97 @@
+id: core-rust-multi-file-refactor
+title: multi-file Rust refactor with focused tests
+type: refactor
+eval_intent: seeded_code_change
+complexity: medium
+risk: medium
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/core_quality/rust_refactor/src
+      cat > fixtures/core_quality/rust_refactor/Cargo.toml <<'TOML'
+      [package]
+      name = "core-quality-rust-refactor"
+      version = "0.1.0"
+      edition = "2021"
+      TOML
+      cat > fixtures/core_quality/rust_refactor/src/lib.rs <<'RS'
+      pub mod report;
+
+      pub fn format_total(label: &str, values: &[u32]) -> String {
+          report::format_report(label, values)
+      }
+
+      #[cfg(test)]
+      mod tests {
+          use super::*;
+
+          #[test]
+          fn formats_total_with_average() {
+              assert_eq!(format_total("latency", &[3, 5, 7]), "latency total=15 avg=5");
+          }
+
+          #[test]
+          fn handles_empty_values() {
+              assert_eq!(format_total("latency", &[]), "latency total=0 avg=0");
+          }
+      }
+      RS
+      cat > fixtures/core_quality/rust_refactor/src/report.rs <<'RS'
+      pub fn format_report(label: &str, values: &[u32]) -> String {
+          let total: u32 = values.iter().sum();
+          format!("{label} total={total}")
+      }
+      RS
+
+prompt: |
+  修复 `fixtures/core_quality/rust_refactor` 的 Rust 报告格式回归。
+
+  当前测试要求报告同时包含 total 和 avg，但 `report.rs` 只输出 total。
+
+  要求：
+  - 先检查 `lib.rs` 和 `report.rs`，理解 public API 和测试期望。
+  - 做一个小的多文件 Rust 改动：保留 `format_total` API，并把平均值计算拆成清晰的可测试 helper。
+  - 空数组平均值应为 0。
+  - 运行对应 cargo test。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - file_patch
+  - bash
+
+forbidden_tools:
+  - file_write
+  - git_push
+
+expected_behavior:
+  - The agent reads both Rust files before editing.
+  - The change is a focused Rust refactor, not a broad rewrite.
+  - The fixture tests pass after the edit.
+
+acceptance:
+  required_commands:
+    - cargo test -q --manifest-path fixtures/core_quality/rust_refactor/Cargo.toml
+    - rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs
+    - rg 'fn average' fixtures/core_quality/rust_refactor/src/report.rs
+    - rg 'format_total' fixtures/core_quality/rust_refactor/src/lib.rs
+  diff_constraints:
+    max_files_changed: 4
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the agent inspect the API and implementation before changing code?
+    - Did the edit remain narrow while still touching the right Rust boundaries?
+    - Did the agent validate with the fixture cargo test?
+
+scoring:
+  success: 0.30
+  test_pass: 0.25
+  rust_refactor_quality: 0.20
+  file_state: 0.15
+  diff_discipline: 0.10

@@ -1,0 +1,64 @@
+id: desktop-ui-smoke-polish
+title: desktop UI smoke validation for runtime evidence
+type: ux
+eval_intent: audit_or_regression_check
+complexity: medium
+risk: medium
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  setup:
+    - corepack pnpm --dir apps/desktop build
+
+prompt: |
+  审计桌面端 runtime evidence 的 smoke 覆盖。
+
+  目标是确认桌面 app 的 Settings、composer popover、context drawer、trace drawer、
+  timeline/permission/tool cards 这些 release 关键入口至少有可重复的 UI smoke 或
+  unit-level 状态测试覆盖。
+
+  要求：
+  - 先检查现有 `apps/desktop` 测试和 runtime state 测试。
+  - 如果已有覆盖，补最小断言或整理测试命令即可，不要为了制造 diff 大改 UI。
+  - 如果缺覆盖，添加一个聚焦的 smoke/unit 测试，覆盖 runtime evidence 可见性。
+  - 最后运行桌面 build 和 smoke 测试。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - file_patch
+  - bash
+
+forbidden_tools:
+  - git_push
+
+expected_behavior:
+  - The agent grounds the work in existing desktop tests before editing.
+  - Any UI/test change is small and release-gate oriented.
+  - Desktop build and smoke validation run before closeout.
+
+acceptance:
+  required_commands:
+    - corepack pnpm --dir apps/desktop build
+    - corepack pnpm --dir apps/desktop exec playwright test tests/run-event-state.spec.ts
+    - corepack pnpm --dir apps/desktop test:ui-smoke
+  diff_constraints:
+    max_files_changed: 8
+    forbidden_paths:
+      - target/
+      - apps/desktop/dist/
+      - apps/desktop/src-tauri/target/
+      - .git/
+  human_review:
+    - Did the agent validate the real desktop app test surface instead of only changing visuals?
+    - Are the smoke assertions tied to runtime evidence users can see?
+    - Did the final answer distinguish build, smoke, and any skipped native check?
+
+scoring:
+  success: 0.25
+  test_pass: 0.30
+  ui_release_relevance: 0.20
+  traceability: 0.15
+  diff_discipline: 0.10
