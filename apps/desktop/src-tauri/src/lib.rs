@@ -19,6 +19,7 @@ struct DesktopAppState {
     model: Mutex<Option<String>>,
     recent_projects: Mutex<Vec<PathBuf>>,
     archived_session_ids: Mutex<Vec<String>>,
+    native_smoke_permission_pending: Mutex<bool>,
     settings_path: PathBuf,
     diagnostic_logs_path: PathBuf,
 }
@@ -688,7 +689,6 @@ async fn send_message(
     contexts: Vec<DesktopRunContext>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
-    let runtime = runtime_for_state(&state).await?;
     let diagnostic_logs_path = state.diagnostic_logs_path.clone();
     let _ = append_desktop_log(
         &diagnostic_logs_path,
@@ -698,6 +698,11 @@ async fn send_message(
             contexts.len()
         ),
     );
+    if native_smoke_enabled() {
+        return emit_native_smoke_run_fixture(app, message, state).await;
+    }
+
+    let runtime = runtime_for_state(&state).await?;
     let selected_project = state.selected_project.lock().await.clone();
     let message = match enrich_message_with_desktop_contexts(message, &contexts, &selected_project)
     {
@@ -1044,10 +1049,29 @@ fn escape_context_attr(value: &str) -> String {
 
 #[tauri::command]
 async fn answer_permission(
+    app: AppHandle,
     approved: bool,
     state: State<'_, DesktopAppState>,
 ) -> Result<bool, String> {
     let diagnostic_logs_path = state.diagnostic_logs_path.clone();
+    if native_smoke_enabled() {
+        let mut pending = state.native_smoke_permission_pending.lock().await;
+        if !*pending {
+            return Ok(false);
+        }
+        *pending = false;
+        let _ = append_desktop_log(
+            &diagnostic_logs_path,
+            if approved {
+                "permission_answer approved=true"
+            } else {
+                "permission_answer approved=false"
+            },
+        );
+        emit_native_smoke_permission_resolution(app, diagnostic_logs_path, approved).await;
+        return Ok(true);
+    }
+
     let runtime = {
         let runtime = state.runtime.lock().await;
         runtime.clone()
@@ -1078,6 +1102,173 @@ async fn answer_permission(
     }
 
     Ok(false)
+}
+
+fn native_smoke_enabled() -> bool {
+    std::env::var("PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE").as_deref() == Ok("1")
+}
+
+async fn emit_native_smoke_run_fixture(
+    app: AppHandle,
+    message: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), String> {
+    {
+        let mut pending = state.native_smoke_permission_pending.lock().await;
+        *pending = true;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let session_id = state.active_session_id.lock().await.clone();
+    let events = vec![
+        DesktopRunEvent::RunStarted {
+            run_id: "native-smoke-run".to_string(),
+            session_id,
+        },
+        DesktopRunEvent::ThinkingStarted,
+        DesktopRunEvent::ThinkingCompleted,
+        DesktopRunEvent::ToolStarted {
+            id: "native-smoke-validation".to_string(),
+            name: "bash".to_string(),
+        },
+        DesktopRunEvent::ToolExecutionProgress {
+            id: "native-smoke-validation".to_string(),
+            progress: "Running native validation fixture".to_string(),
+        },
+        DesktopRunEvent::ToolCompleted {
+            id: "native-smoke-validation".to_string(),
+            result_preview: "native smoke validation passed".to_string(),
+            metadata: Some(serde_json::json!({
+                "tool": "bash",
+                "call_id": "native-smoke-validation",
+                "success": true,
+                "command": "scripts/desktop-native-smoke.sh --fixture-run",
+                "command_category": "validation",
+                "validation_family": "native_smoke",
+                "command_kind": "script",
+                "duration_ms": 410,
+                "output_chars": 30,
+                "terminal_task": {
+                    "status": "completed",
+                    "exit_code": 0,
+                    "duration_ms": 410
+                }
+            })),
+        },
+        DesktopRunEvent::ToolStarted {
+            id: "native-smoke-file".to_string(),
+            name: "file_edit".to_string(),
+        },
+        DesktopRunEvent::ToolCompleted {
+            id: "native-smoke-file".to_string(),
+            result_preview: "Edited apps/desktop/src/app/Composer.tsx".to_string(),
+            metadata: Some(serde_json::json!({
+                "tool": "file_edit",
+                "call_id": "native-smoke-file",
+                "success": true,
+                "path": "apps/desktop/src/app/Composer.tsx",
+                "replacements": 1,
+                "additions": 4,
+                "deletions": 1,
+                "diff_preview": "@@ -140,6 +140,9 @@\n <textarea aria-label=\"Message\" />\n+<button aria-label=\"Send message\" />\n",
+                "diff_preview_truncated": false,
+                "duration_ms": 55,
+                "output_chars": 48
+            })),
+        },
+        DesktopRunEvent::PermissionRequest {
+            id: "native-smoke-permission".to_string(),
+            tool_name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "git status --short"
+            }),
+            prompt: format!("Allow native smoke permission check for: {message}"),
+        },
+    ];
+
+    for event in events {
+        app.emit("desktop-run-event", event)
+            .map_err(|err| err.to_string())?;
+        tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+    }
+    let _ = append_desktop_log(
+        &state.diagnostic_logs_path,
+        "native_smoke_fixture permission_request=true",
+    );
+    Ok(())
+}
+
+async fn emit_native_smoke_permission_resolution(
+    app: AppHandle,
+    diagnostic_logs_path: PathBuf,
+    approved: bool,
+) {
+    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+    if approved {
+        let Some(window) = app.get_webview_window("main") else {
+            let _ = append_desktop_log(
+                &diagnostic_logs_path,
+                "native_smoke_fixture emit_error=missing main window",
+            );
+            return;
+        };
+        let events = vec![
+            DesktopRunEvent::ToolCompleted {
+                id: "native-smoke-permission-result".to_string(),
+                result_preview: "Permission approved; inspected git status".to_string(),
+                metadata: Some(serde_json::json!({
+                    "tool": "bash",
+                    "call_id": "native-smoke-permission-result",
+                    "success": true,
+                    "command": "git status --short",
+                    "command_category": "inspection",
+                    "command_kind": "git",
+                    "duration_ms": 75,
+                    "output_chars": 12,
+                    "terminal_task": {
+                        "status": "completed",
+                        "exit_code": 0,
+                        "duration_ms": 75
+                    }
+                })),
+            },
+            DesktopRunEvent::AssistantDelta {
+                text: "Native smoke fixture completed. Timeline cards, permission approval, and final answer rendering are visible.".to_string(),
+            },
+            DesktopRunEvent::Usage {
+                prompt_tokens: 32,
+                completion_tokens: 18,
+                reasoning_tokens: Some(4),
+                cached_tokens: Some(8),
+            },
+            DesktopRunEvent::RunCompleted,
+        ];
+        for event in events {
+            if let Err(err) = window.emit("desktop-run-event", event) {
+                let _ = append_desktop_log(
+                    &diagnostic_logs_path,
+                    &format!(
+                        "native_smoke_fixture emit_error={}",
+                        sanitize_log_value(&err.to_string())
+                    ),
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+        }
+        let _ = append_desktop_log(&diagnostic_logs_path, "run_completed");
+    } else {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.emit(
+                "desktop-run-event",
+                DesktopRunEvent::RunError {
+                    message: "Native smoke permission rejected".to_string(),
+                },
+            );
+        }
+        let _ = append_desktop_log(
+            &diagnostic_logs_path,
+            "run_error message=Native smoke permission rejected",
+        );
+    }
 }
 
 async fn runtime_for_state(state: &State<'_, DesktopAppState>) -> Result<DesktopRuntime, String> {
@@ -1631,8 +1822,20 @@ fn native_interaction_smoke_script() -> &'static str {
     return rect.width > 0 && rect.height > 0;
   };
   const byLabel = (label) => candidates().find((element) => element.getAttribute("aria-label") === label && visible(element));
+  const byEnabledLabel = (label) => candidates().find((element) => element.getAttribute("aria-label") === label && !element.disabled && visible(element));
   const byText = (label) => buttonCandidates().find((element) => element.textContent?.trim() === label && visible(element));
   const byTextIncludes = (label) => buttonCandidates().find((element) => element.textContent?.trim().includes(label) && visible(element));
+  const setTextareaValue = (label, value) => {
+    const element = document.querySelector(`textarea[aria-label="${label}"]`);
+    if (!element) {
+      throw new Error(`missing textarea ${label}`);
+    }
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    setter?.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    steps.push(`typed-${label}`);
+  };
   const click = async (name, findElement) => {
     const element = findElement();
     if (!element) {
@@ -1678,9 +1881,22 @@ fn native_interaction_smoke_script() -> &'static str {
     await waitFor("trace-visible", () => document.querySelector("[aria-label='Run trace']"));
     await click("trace-close", () => byText("Close"));
     await waitFor("trace-closed", () => !document.querySelector("[aria-label='Run trace']"));
+    setTextareaValue("Message", "Native smoke real run");
+    await waitFor("send-enabled", () => Boolean(byEnabledLabel("Send message")));
+    await click("run-submit", () => byEnabledLabel("Send message"));
+    await waitFor("run-started", () => text().includes("Runtime connected"));
+    await waitFor("shell-card-visible", () => text().includes("scripts/desktop-native-smoke.sh --fixture-run"));
+    await waitFor("file-card-visible", () => text().includes("Edited file") && text().includes("Composer.tsx"));
+    await waitFor("permission-waiting", () => text().includes("Permission needed: bash") && Boolean(byText("Approve")));
+    await click("permission-approve", () => byText("Approve"));
+    await waitFor("permission-approved", () => text().includes("Permission approved"));
+    await waitFor("assistant-answer-visible", () => text().includes("Native smoke fixture completed"));
+    await waitFor("assistant-final", () => Boolean(document.querySelector(".message.assistant.final")));
+    await waitFor("run-completed", () => text().includes("Run completed"));
+    await waitFor("usage-visible", () => text().includes("Token usage"));
     return await record(`native_interaction_smoke ok=true steps=${steps.join(",")}`);
   } catch (error) {
-    return await record(`native_interaction_smoke ok=false error=${error?.message || error} steps=${steps.join(",")}`);
+    return await record(`native_interaction_smoke ok=false error=${error?.message || error} steps=${steps.join(",")} text=${text().slice(0, 500)}`);
   }
 })()
 "#
@@ -1744,6 +1960,7 @@ pub fn run() {
                 model: Mutex::new(settings.model),
                 recent_projects: Mutex::new(recent_projects),
                 archived_session_ids: Mutex::new(settings.archived_session_ids.unwrap_or_default()),
+                native_smoke_permission_pending: Mutex::new(false),
                 settings_path,
                 diagnostic_logs_path,
             });

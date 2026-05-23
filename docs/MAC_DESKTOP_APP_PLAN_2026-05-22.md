@@ -599,10 +599,11 @@ Plan completion snapshot as of 2026-05-23:
   signing, notarization, DMG polish, first-run install notes, and update
   mechanics are finished.
 - Phase 4 Product Hardening: partially complete. Provider setup, diagnostics,
-  model/provider selection, permission defaults, structured context audit, and
-  native WebView interaction smoke are implemented. Startup diagnostic logging
-  and a visible diagnostics folder entrypoint are implemented; crash/error log
-  capture, release update flow, and more real-run permission auditing remain.
+  model/provider selection, permission defaults, structured context audit,
+  native WebView interaction smoke, and native run/permission/timeline smoke
+  are implemented. Startup diagnostic logging and a visible diagnostics folder
+  entrypoint are implemented; crash/error log capture, release update flow, and
+  more real-run permission auditing remain.
 
 Remaining non-goals for the current desktop release:
 
@@ -792,9 +793,12 @@ log artifact, and exits cleanly. With
 `PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE=1`, the app injects a native WebView
 interaction smoke that opens Settings, returns to the app, opens the composer
 Add Context popover, attaches Current diff, opens/closes the context detail
-drawer, opens/closes the Trace drawer, and records the step list in
-`native-app-desktop.log`. `scripts/desktop-smoke.sh --native` includes this
-native path, and `apps/desktop/package.json` exposes it as `test:native-smoke`.
+drawer, opens/closes the Trace drawer, submits a local fixture run through the
+real composer path, verifies shell and file timeline cards, approves an in-line
+permission request, verifies final-answer rendering and token usage, and
+records the step list in `native-app-desktop.log`.
+`scripts/desktop-smoke.sh --native` includes this native path, and
+`apps/desktop/package.json` exposes it as `test:native-smoke`.
 
 The app now also writes a lightweight startup diagnostic log under its app data
 directory and surfaces the diagnostic log path in Settings. Settings can open
@@ -803,10 +807,13 @@ desktop logs are writable. The log now also records run submission, run
 completion/error, and permission approval/rejection decisions, giving real
 desktop sessions a lightweight audit trail outside the transcript.
 
-Remaining: add screenshot/visual regression thresholds after the current UI
-shape settles, then keep expanding native interaction smoke around real run
-submission, permission decisions, and timeline cards. Chromium preview smoke is
-useful, but it is no longer the only frontend confidence gate.
+The native smoke now also applies basic screenshot thresholds: the captured
+artifact must be non-empty, large enough to be credible, and at least
+800x500 pixels when `sips` is available. Remaining: add true visual-diff
+thresholds after the current UI shape settles, then keep expanding native
+interaction smoke around real provider-backed runs and more permission edge
+cases. Chromium preview smoke is useful, but it is no longer the only frontend
+confidence gate.
 
 #### Track E - Release-Quality Desktop Hardening
 
@@ -927,15 +934,14 @@ The next concrete slice should no longer restart Track A from scratch. The UI
 foundation has moved past that point. The next best slice is native desktop
 verification plus real-run product tuning:
 
-1. Extend native Tauri/WebView automation from static interaction checks into
-   real run submission, permission decisions, timeline cards, and native
-   screenshot/visual thresholds.
-2. Run several real coding sessions through the desktop app and capture the
+1. Run several real coding sessions through the desktop app and capture the
    highest-friction moments in transcript readability, permissions, context
    visibility, and final-answer rhythm.
-3. Convert those findings into small UI/product slices rather than broad visual
+2. Convert those findings into small UI/product slices rather than broad visual
    rewrites.
-4. Start Track E release hardening once native verification is reliable:
+3. Extend native Tauri/WebView automation from fixture runs into provider-backed
+   run smoke where it can be made deterministic and inexpensive.
+4. Start Track E release hardening now that native verification is reliable:
    diagnostic logs, packaging docs, signing/notarization checklist, and update
    path.
 

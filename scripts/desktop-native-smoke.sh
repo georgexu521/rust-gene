@@ -196,6 +196,19 @@ if [[ "$CAPTURE_SCREEN" == true ]]; then
     echo "native screenshot was not created: $SCREENSHOT_PATH" >&2
     exit 1
   fi
+  SCREENSHOT_BYTES="$(stat -f%z "$SCREENSHOT_PATH")"
+  if [[ "$SCREENSHOT_BYTES" -lt 50000 ]]; then
+    echo "native screenshot is unexpectedly small: ${SCREENSHOT_BYTES} bytes" >&2
+    exit 1
+  fi
+  if command -v sips >/dev/null 2>&1; then
+    SCREENSHOT_WIDTH="$(sips -g pixelWidth "$SCREENSHOT_PATH" 2>/dev/null | awk '/pixelWidth:/ {print $2}')"
+    SCREENSHOT_HEIGHT="$(sips -g pixelHeight "$SCREENSHOT_PATH" 2>/dev/null | awk '/pixelHeight:/ {print $2}')"
+    if [[ "${SCREENSHOT_WIDTH:-0}" -lt 800 || "${SCREENSHOT_HEIGHT:-0}" -lt 500 ]]; then
+      echo "native screenshot dimensions are unexpectedly small: ${SCREENSHOT_WIDTH:-unknown}x${SCREENSHOT_HEIGHT:-unknown}" >&2
+      exit 1
+    fi
+  fi
 fi
 
 echo "native desktop smoke passed"
