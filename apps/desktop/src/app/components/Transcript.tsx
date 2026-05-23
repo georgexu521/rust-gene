@@ -126,6 +126,8 @@ function TimelineEvent({
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenTrace?: (traceId: string) => void;
 }) {
+  const isCompact = isCompactToolEvent(item);
+
   if (item.kind === "usage") {
     return (
       <article className="timeline-event usage">
@@ -150,7 +152,9 @@ function TimelineEvent({
   }
 
   return (
-    <article className={`timeline-event ${item.kind} ${item.status || "info"}`}>
+    <article
+      className={`timeline-event ${item.kind} ${item.status || "info"}${isCompact ? " compact-shell" : ""}`}
+    >
       <div className="timeline-icon" aria-hidden="true">
         {iconForTimeline(item.kind, item.status)}
       </div>
@@ -159,11 +163,11 @@ function TimelineEvent({
           <div className="timeline-title">{item.title}</div>
           <div className="timeline-status">{labelForStatus(item.status)}</div>
         </div>
-        {item.summary ? <TimelineSummaryView summary={item.summary} /> : null}
+        {item.summary ? <TimelineSummaryView compact={isCompact} summary={item.summary} /> : null}
         {!item.summary && item.detail ? (
           <div className="timeline-detail">{item.detail}</div>
         ) : null}
-        {item.facts && item.facts.length > 0 ? (
+        {!isCompact && item.facts && item.facts.length > 0 ? (
           <div className="timeline-facts">
             {item.facts.map((fact) => (
               <span key={fact}>{fact}</span>
@@ -197,7 +201,13 @@ function TimelineEvent({
   );
 }
 
-function TimelineSummaryView({ summary }: { summary: TimelineSummary }) {
+function TimelineSummaryView({
+  compact = false,
+  summary,
+}: {
+  compact?: boolean;
+  summary: TimelineSummary;
+}) {
   if (summary.kind === "run") {
     return (
       <div className={`timeline-summary run ${summary.stage}`}>
@@ -224,7 +234,7 @@ function TimelineSummaryView({ summary }: { summary: TimelineSummary }) {
 
   if (summary.kind === "shell") {
     return (
-      <div className="timeline-summary shell">
+      <div className={`timeline-summary shell${compact ? " compact" : ""}`}>
         <TerminalSquare aria-hidden="true" size={15} />
         <div>
           <code>{summary.command}</code>
@@ -285,6 +295,10 @@ function TimelineSummaryView({ summary }: { summary: TimelineSummary }) {
       </div>
     </div>
   );
+}
+
+function isCompactToolEvent(item: TimelineEventItem) {
+  return item.kind === "tool" && item.status === "completed" && item.summary?.kind === "shell";
 }
 
 function ExpandablePreview({

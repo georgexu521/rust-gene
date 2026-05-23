@@ -43,14 +43,16 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();
     await expect(page.locator(".message.assistant.final", { hasText: "Final answer" })).toBeVisible();
-    await expect(page.locator(".timeline-title", { hasText: "Pnpm Test" })).toBeVisible();
+    const pnpmCard = page.locator(".timeline-event.compact-shell", { hasText: "Pnpm Test" });
+    await expect(pnpmCard).toBeVisible();
     await expect(
-      page.locator(".timeline-summary code", {
+      pnpmCard.locator(".timeline-summary code", {
         hasText: "corepack pnpm --dir apps/desktop test:ui-smoke",
       }),
     ).toBeVisible();
-    await expect(page.getByText("validation pnpm_test")).toBeVisible();
-    await expect(page.locator(".timeline-facts span", { hasText: "exit 0" })).toBeVisible();
+    await expect(pnpmCard.locator(".timeline-summary-meta", { hasText: "Pnpm Test" })).toBeVisible();
+    await expect(pnpmCard.locator(".timeline-summary-meta", { hasText: "exit 0" })).toBeVisible();
+    await expect(pnpmCard.locator(".timeline-facts span")).toHaveCount(0);
     await expect(page.locator(".timeline-title", { hasText: "Edited file" })).toBeVisible();
     await expect(
       page.locator(".timeline-summary.file .timeline-summary-meta", {

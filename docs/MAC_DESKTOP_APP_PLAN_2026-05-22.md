@@ -648,6 +648,8 @@ file changes, validations, and recovery guidance. Assistant replies that follow
 run/tool activity are now marked as final answers, giving conclusions a clearer
 visual rhythm after the process timeline. Low-value usage and trace controls are
 now visually quieter so the main transcript reads less like a debug log.
+Successful shell/validation tools are compact, while failures, file diffs, and
+permissions stay expanded as high-value cards.
 
 #### Track C - Session And Project Ergonomics
 
