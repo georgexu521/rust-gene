@@ -58,7 +58,11 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Current session")).toContainText("New conversation");
     await expect(page.getByLabel("Current session")).toContainText("No active session");
     await expect(page.locator(".startup-state-card")).toContainText("New conversation");
-    await expect(page.getByRole("heading", { name: "Start a focused run in rust-agent" })).toBeVisible();
+    await expect(
+      page.locator(".empty-state").getByRole("heading", { name: "What should we build in rust-agent?" }),
+    ).toBeVisible();
+    await expect(page.locator(".composer")).toHaveClass(/empty-composer/);
+    await expect(page.getByPlaceholder("Ask anything")).toBeVisible();
     await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
     await page.getByRole("button", { name: /Delete Daily desktop flow/ }).click();
     await expect(page.getByRole("dialog", { name: "Delete session?" })).toBeVisible();
@@ -76,6 +80,7 @@ test.describe("desktop UI smoke", () => {
 
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.locator(".composer")).not.toHaveClass(/empty-composer/);
     await expect(page.locator(".timeline-summary.run.completed", { hasText: "Run completed" })).toBeVisible();
     await expect(page.locator(".timeline-section-label", { hasText: "Process" })).toBeVisible();
     await expect(page.locator(".timeline-event.run-group-start", { hasText: "Agent run" })).toBeVisible();

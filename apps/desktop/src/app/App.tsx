@@ -388,6 +388,8 @@ export function App() {
     setIsTraceOpen(false);
   }
 
+  const isEmptyConversation = runState.items.length === 0;
+
   return (
     <main className="app-shell">
       <Sidebar
@@ -408,7 +410,7 @@ export function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
-      <section className="workspace">
+      <section className={`workspace${isEmptyConversation ? " empty-workspace" : ""}`}>
         <header className="topbar">
           <div className="title-cluster">
             <div className="topbar-title-row">
@@ -524,6 +526,7 @@ export function App() {
           composer={composer}
           projectPath={projectPath}
           providerStatus={providerStatus}
+          isEmptyState={isEmptyConversation}
           isRunning={runState.isRunning}
           onComposerChange={setComposer}
           onProjectPathChange={setProjectPath}

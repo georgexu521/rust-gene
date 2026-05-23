@@ -126,8 +126,7 @@ function EmptyState({
 
   return (
     <div className="empty-state">
-      <div className="empty-kicker">Priority Agent desktop</div>
-      <h2>Start a focused run in {projectName}</h2>
+      <h2>What should we build in {projectName}?</h2>
       <p>Ask Liz to inspect code, make an edit, review a diff, or verify behavior.</p>
       <div className="empty-state-grid">
         <div>

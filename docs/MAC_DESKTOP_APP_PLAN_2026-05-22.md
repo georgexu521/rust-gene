@@ -693,6 +693,8 @@ persisted work-mode/detail-level selector and a denser permission section styled
 as readable rows with switch-like active indicators. Settings is now a full-page
 surface with a left category rail for General, Provider, Permissions, and
 Diagnostics instead of a narrow drawer.
+The empty conversation view now uses a Codex-like centered headline and elevated
+composer with a lighter bottom context bar for project/runtime controls.
 
 #### Track D - Frontend Architecture And Test Hardening
 

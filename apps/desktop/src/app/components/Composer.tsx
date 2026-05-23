@@ -6,6 +6,7 @@ type ComposerProps = {
   composer: string;
   projectPath: string;
   providerStatus: ProviderModelStatus | null;
+  isEmptyState?: boolean;
   isRunning: boolean;
   onComposerChange: (value: string) => void;
   onProjectPathChange: (value: string) => void;
@@ -19,6 +20,7 @@ export function Composer({
   composer,
   projectPath,
   providerStatus,
+  isEmptyState = false,
   isRunning,
   onComposerChange,
   onProjectPathChange,
@@ -31,12 +33,12 @@ export function Composer({
   const activeModel = providerStatus?.active_model || "";
 
   return (
-    <form className="composer" onSubmit={onSubmit}>
+    <form className={`composer${isEmptyState ? " empty-composer" : ""}`} onSubmit={onSubmit}>
       <textarea
         aria-label="Message"
         value={composer}
         onChange={(event) => onComposerChange(event.target.value)}
-        placeholder="Ask Liz to inspect, edit, or verify this project..."
+        placeholder={isEmptyState ? "Ask anything" : "Ask Liz to inspect, edit, or verify this project..."}
       />
       <div className="composer-toolbar">
         <div className="composer-project-controls">
