@@ -13,6 +13,8 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("button", { name: "rust-agent" })).toBeVisible();
     await expect(page.getByLabel("Current session")).toContainText("Continuing");
     await expect(page.getByLabel("Current session")).toContainText("Desktop app Phase 1");
+    await expect(page.locator(".startup-state-card")).toContainText("Restored session");
+    await expect(page.locator(".startup-state-card")).toContainText("Desktop app Phase 1");
 
     await page.getByLabel("Search sessions").fill("Release");
     await expect(page.getByText("Release readiness notes")).toBeVisible();
@@ -49,6 +51,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Loaded preview session: web-preview")).not.toBeVisible();
     await expect(page.getByLabel("Current session")).toContainText("New conversation");
     await expect(page.getByLabel("Current session")).toContainText("No active session");
+    await expect(page.locator(".startup-state-card")).toContainText("New conversation");
     await expect(page.getByRole("heading", { name: "Start a focused run in rust-agent" })).toBeVisible();
     await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
     await page.getByRole("button", { name: /Delete Daily desktop flow/ }).click();

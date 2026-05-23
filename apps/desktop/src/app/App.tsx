@@ -432,6 +432,13 @@ export function App() {
           onRefresh={() => void refreshDiagnostics()}
         />
 
+        {settings ? (
+          <div className={`startup-state-card ${settings.startup_state.status}`} role="status">
+            <span>{startupStateLabel(settings.startup_state.status)}</span>
+            <strong>{startupStateDetail(settings, selectedSessionSummary, projectPath)}</strong>
+          </div>
+        ) : null}
+
         {lastArchivedSession ? (
           <div className="session-undo-banner" role="status">
             <span>Archived {lastArchivedSession.title}</span>
@@ -536,4 +543,29 @@ export function App() {
       ) : null}
     </main>
   );
+}
+
+function startupStateLabel(status: string) {
+  if (status === "restored_session") {
+    return "Restored session";
+  }
+  if (status === "new_conversation") {
+    return "New conversation";
+  }
+  return "Startup state";
+}
+
+function startupStateDetail(
+  settings: DesktopSettings,
+  selectedSession: RecentSession | null,
+  projectPath: string,
+) {
+  if (settings.startup_state.status === "restored_session" && selectedSession) {
+    return `Continuing ${selectedSession.title} in ${basename(projectPath)}`;
+  }
+  return settings.startup_state.detail;
+}
+
+function basename(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 }

@@ -528,6 +528,44 @@ h1 {
   border-left-color: #d15d55;
 }
 
+.startup-state-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: min(790px, calc(100% - 56px));
+  margin: 10px auto 0;
+  padding: 7px 9px;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  color: #4d5662;
+  background: #fbfcfd;
+  font-size: 12px;
+}
+
+.startup-state-card span {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: #617080;
+  background: #eef2f6;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.startup-state-card strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #303740;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.startup-state-card.restored_session span {
+  color: #326147;
+  background: #eaf7ef;
+}
+
 .session-undo-banner {
   display: flex;
   align-items: center;

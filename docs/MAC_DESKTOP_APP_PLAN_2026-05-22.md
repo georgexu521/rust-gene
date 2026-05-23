@@ -683,7 +683,8 @@ session metadata instead of the browser-native confirm prompt. The sidebar and
 Settings drawer now show a readable current-session state, so restored sessions
 and new conversations are distinguishable without inspecting raw ids. Settings
 now lists recent projects with full paths and direct switching controls instead
-of only exposing a count.
+of only exposing a count. The main workspace now surfaces startup restore state
+directly, distinguishing restored sessions from new-conversation launches.
 
 #### Track D - Frontend Architecture And Test Hardening
 
