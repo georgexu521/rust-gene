@@ -621,6 +621,12 @@ Minimum deterministic scenarios:
 11. Large diff attached as structured context and visible in trace.
 12. Context compaction preserves changed files and validation state.
 
+Current replay fixture:
+
+- `evalsets/tool_file_reliability_gauntlet.yaml`
+- `scripts/tool-file-reliability-gauntlet.sh quick|standard|full`
+- `cargo test -q bundled_tool_file_reliability_gauntlet_passes`
+
 Real-project dogfood scenarios:
 
 1. Small bug fix in this repo.
@@ -779,3 +785,14 @@ next maturity pass.
   plumbing: convert the deterministic and real-project dogfood scenarios into
   repeatable scripts/fixtures, then require the full suite plus clippy and
   native desktop smoke before a release candidate.
+- Converted the Track G minimum deterministic scenarios into a repeatable
+  fixture and script:
+  - added `evalsets/tool_file_reliability_gauntlet.yaml` with the 12 minimum
+    read/edit, conflict, stale, shell mutation, permission, long-output,
+    background task, context, and compaction scenarios;
+  - extended the deterministic eval runner with context attachment and terminal
+    output artifact expectations so large-diff/current-diff and long-output
+    cases are asserted as structured replay facts;
+  - added `scripts/tool-file-reliability-gauntlet.sh` with `quick`,
+    `standard`, and `full` modes;
+  - wired the new gauntlet into `scripts/coding-workflow-gates.sh quick`.

@@ -64,6 +64,7 @@ pub struct EvalExpect {
     pub terminal_task_status: Option<String>,
     pub terminal_task_read_tool: Option<String>,
     pub terminal_task_cancel_tool: Option<String>,
+    pub terminal_task_output_path: Option<String>,
     pub backgrounded_tool: Option<String>,
     pub file_checkpoint_count: Option<usize>,
     pub file_checkpoint_id: Option<String>,
@@ -118,6 +119,11 @@ pub struct EvalExpect {
     pub mcp_repair_command: Option<String>,
     pub mcp_repair_status: Option<String>,
     pub mcp_panel_command: Option<String>,
+    pub context_attachment_count: Option<usize>,
+    pub context_attachment_type: Option<String>,
+    pub context_attachment_label: Option<String>,
+    pub context_attachment_file: Option<String>,
+    pub context_attachment_patch_preview_min_chars: Option<usize>,
     #[serde(default)]
     pub available_tools: Vec<String>,
     #[serde(default)]
@@ -166,6 +172,8 @@ pub struct EvalReplay {
     pub mcp_resources: Vec<EvalMcpResourceReplay>,
     #[serde(default)]
     pub mcp_repairs: Vec<EvalMcpRepairReplay>,
+    #[serde(default)]
+    pub run_contexts: Vec<EvalRunContextReplay>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +239,19 @@ pub struct EvalTerminalTaskReplay {
     pub output_path: Option<String>,
     #[serde(default)]
     pub backgrounded: bool,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EvalRunContextReplay {
+    #[serde(rename = "type")]
+    pub context_type: String,
+    pub label: String,
+    #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub patch_preview: String,
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -669,6 +690,7 @@ impl EvalRunner {
         self.check_terminal_task_replay(scenario, &mut failures);
         self.check_file_rewind_replay(scenario, &mut failures);
         self.check_context_compaction_replay(trace, scenario, &mut failures);
+        self.check_run_context_replay(scenario, &mut failures);
         self.check_subagent_worktree_replay(scenario, &mut failures);
         self.check_mcp_auth_repair_replay(trace, scenario, &mut failures);
         self.check_feature_reality(scenario, &mut failures);
@@ -700,6 +722,37 @@ impl EvalRunner {
                     expect.terminal_task_read_tool,
                     expect.terminal_task_cancel_tool,
                     expect.backgrounded_tool
+                ),
+            });
+        }
+    }
+
+    fn check_run_context_replay(&self, scenario: &EvalScenario, failures: &mut Vec<EvalFailure>) {
+        let expect = &scenario.expect;
+        if let Some(expected) = expect.context_attachment_count {
+            let actual = scenario.replay.run_contexts.len();
+            if actual != expected {
+                failures.push(EvalFailure {
+                    scenario_id: scenario.id.clone(),
+                    message: format!(
+                        "context_attachment_count expected {}, got {}",
+                        expected, actual
+                    ),
+                });
+            }
+        }
+
+        if has_run_context_expectation(expect)
+            && !replay_has_matching_run_context(&scenario.replay, expect)
+        {
+            failures.push(EvalFailure {
+                scenario_id: scenario.id.clone(),
+                message: format!(
+                    "expected matching run context type={:?} label={:?} file={:?} patch_preview_min_chars={:?}",
+                    expect.context_attachment_type,
+                    expect.context_attachment_label,
+                    expect.context_attachment_file,
+                    expect.context_attachment_patch_preview_min_chars
                 ),
             });
         }
@@ -2568,6 +2621,7 @@ fn has_terminal_task_expectation(expect: &EvalExpect) -> bool {
         || expect.terminal_task_status.is_some()
         || expect.terminal_task_read_tool.is_some()
         || expect.terminal_task_cancel_tool.is_some()
+        || expect.terminal_task_output_path.is_some()
         || expect.backgrounded_tool.is_some()
 }
 
@@ -2590,9 +2644,40 @@ fn replay_has_matching_terminal_task(replay: &EvalReplay, expect: &EvalExpect) -
                 .as_deref()
                 .is_none_or(|expected| task.cancel_tool.as_deref() == Some(expected))
             && expect
+                .terminal_task_output_path
+                .as_deref()
+                .is_none_or(|expected| task.output_path.as_deref() == Some(expected))
+            && expect
                 .backgrounded_tool
                 .as_deref()
                 .is_none_or(|expected| task.backgrounded && task.source_tool == expected)
+    })
+}
+
+fn has_run_context_expectation(expect: &EvalExpect) -> bool {
+    expect.context_attachment_type.is_some()
+        || expect.context_attachment_label.is_some()
+        || expect.context_attachment_file.is_some()
+        || expect.context_attachment_patch_preview_min_chars.is_some()
+}
+
+fn replay_has_matching_run_context(replay: &EvalReplay, expect: &EvalExpect) -> bool {
+    replay.run_contexts.iter().any(|context| {
+        expect
+            .context_attachment_type
+            .as_deref()
+            .is_none_or(|expected| context.context_type == expected)
+            && expect
+                .context_attachment_label
+                .as_deref()
+                .is_none_or(|expected| context.label == expected)
+            && expect
+                .context_attachment_file
+                .as_deref()
+                .is_none_or(|expected| context.files.iter().any(|file| file == expected))
+            && expect
+                .context_attachment_patch_preview_min_chars
+                .is_none_or(|expected| context.patch_preview.chars().count() >= expected)
     })
 }
 
@@ -3680,6 +3765,22 @@ scenarios:
         assert!(
             set.scenarios.len() >= 25,
             "coding replay matrix should cover at least 25 scenarios"
+        );
+        let report = EvalRunner::new().run_set(&set);
+        assert!(report.ok(), "{}", report.summary());
+    }
+
+    #[test]
+    fn bundled_tool_file_reliability_gauntlet_passes() {
+        let path = std::path::Path::new("evalsets/tool_file_reliability_gauntlet.yaml");
+        if !path.exists() {
+            return;
+        }
+        let set = load_evalset(path).unwrap();
+        assert_eq!(
+            set.scenarios.len(),
+            12,
+            "Track G minimum deterministic gauntlet should keep exactly 12 scenarios"
         );
         let report = EvalRunner::new().run_set(&set);
         assert!(report.ok(), "{}", report.summary());

@@ -56,6 +56,8 @@ quick_gate() {
     bash scripts/live-eval-summary-smoke.sh
   run_step "deterministic coding replay matrix" \
     cargo test -q bundled_coding_replay_matrix_passes -- --test-threads=1
+  run_step "tool/file reliability gauntlet" \
+    cargo test -q bundled_tool_file_reliability_gauntlet_passes -- --test-threads=1
 }
 
 standard_gate() {

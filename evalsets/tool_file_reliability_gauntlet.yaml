@@ -1,0 +1,344 @@
+name: tool_file_reliability_gauntlet
+description: Track G deterministic gauntlet for tool, file, bash, permission, context, and compaction reliability.
+scenarios:
+  - id: read-edit-read-visible
+    prompt: "先读取文件，编辑一行，再读取确认新内容可见"
+    replay:
+      tool_calls:
+        - tool: file_read
+          output: "before value"
+        - tool: file_edit
+          output: "edited src/lib.rs with checkpoint cp_read_edit_1"
+        - tool: file_read
+          output: "after value"
+      file_changes:
+        - id: fc_read_edit_1
+          checkpoint_id: cp_read_edit_1
+          path: src/lib.rs
+          tool_name: file_edit
+          existed_before: true
+          before_hash: hash_before
+          after_hash: hash_after
+          diff: "-before\n+after"
+          bytes_written: 12
+      verification_passed: true
+      changed_files: ["src/lib.rs"]
+    expect:
+      tool_sequence: ["file_read", "file_edit", "file_read"]
+      file_checkpoint_count: 1
+      file_change_id: fc_read_edit_1
+      file_checkpoint_id: cp_read_edit_1
+      file_checkpoint_path: src/lib.rs
+      verification_passed: true
+      trace_events: ["tool.start", "tool.done", "verify.done"]
+
+  - id: exact-edit-conflict-recovery
+    prompt: "精确替换 old_string 不存在时拒绝编辑并给恢复建议"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          success: false
+          output: "old_string was not found; reread the file and retry with an exact replacement"
+      recovery_plans:
+        - source: file_edit
+          category: exact_match_not_found
+          action: "reread the file and retry with the current text"
+          retryable: true
+          safe_retry: true
+          suggested_command: file_read
+    expect:
+      tool_sequence: ["file_edit"]
+      failed_tool: file_edit
+      recovery_category: exact_match_not_found
+      recovery_suggested_command: file_read
+      recovery_safe_retry: true
+      trace_events: ["tool.start", "tool.done", "recovery.plan"]
+
+  - id: multiple-match-edit-requires-narrower-anchor
+    prompt: "old_string 出现多次时要求 replace_all 或更窄上下文"
+    replay:
+      tool_calls:
+        - tool: file_edit
+          success: false
+          output: "old_string matched 3 locations; use replace_all or provide a narrower anchor"
+      recovery_plans:
+        - source: file_edit
+          category: multiple_matches
+          action: "use replace_all or provide a more specific old_string"
+          retryable: true
+          safe_retry: true
+          suggested_command: file_edit
+    expect:
+      tool_sequence: ["file_edit"]
+      failed_tool: file_edit
+      recovery_category: multiple_matches
+      recovery_suggested_command: file_edit
+      recovery_safe_retry: true
+      trace_events: ["tool.start", "tool.done", "recovery.plan"]
+
+  - id: partial-read-edit-outside-range-blocked
+    prompt: "只读了部分文件时，编辑未读范围必须被拒绝"
+    replay:
+      tool_calls:
+        - tool: file_read
+          output: "displayed lines 1-40 of 200"
+        - tool: file_edit
+          success: false
+          output: "edit target outside displayed read range"
+      recovery_plans:
+        - source: file_edit
+          category: insufficient_read_coverage
+          action: "read the target range before editing"
+          retryable: true
+          safe_retry: true
+          suggested_command: file_read
+    expect:
+      tool_sequence: ["file_read", "file_edit"]
+      failed_tool: file_edit
+      recovery_category: insufficient_read_coverage
+      recovery_suggested_command: file_read
+      recovery_safe_retry: true
+      trace_events: ["tool.start", "tool.done", "recovery.plan"]
+
+  - id: stale-read-after-external-modification
+    prompt: "文件在读取后被外部修改，旧读数编辑必须 stale-conflict"
+    replay:
+      tool_calls:
+        - tool: file_read
+          output: "content hash read_hash"
+        - tool: file_edit
+          success: false
+          output: "stale read conflict: current hash differs from read hash"
+      recovery_plans:
+        - source: file_edit
+          category: stale_read_conflict
+          action: "reread the file, merge user changes, then retry"
+          retryable: true
+          safe_retry: true
+          suggested_command: file_read
+    expect:
+      tool_sequence: ["file_read", "file_edit"]
+      failed_tool: file_edit
+      recovery_category: stale_read_conflict
+      recovery_suggested_command: file_read
+      recovery_safe_retry: true
+      trace_events: ["tool.start", "tool.done", "recovery.plan"]
+
+  - id: shell-mutation-escalates-with-evidence
+    prompt: "bash 里用 sed -i 改文件时必须识别为 shell mutation 并请求权限"
+    replay:
+      tool_calls:
+        - tool: bash
+          success: false
+          output: "Permission required: shell mutation sed_in_place path src/lib.rs"
+          permission:
+            prompt: "Allow bash file mutation?"
+            approved: false
+            decision: reject_once
+      recovery_plans:
+        - source: bash
+          category: shell_file_mutation
+          action: "use file_edit for auditable mutation evidence"
+          retryable: true
+          safe_retry: false
+          suggested_command: file_edit
+    expect:
+      tool_sequence: ["bash"]
+      failed_tool: bash
+      permission_approved: false
+      permission_decision: reject_once
+      recovery_category: shell_file_mutation
+      recovery_suggested_command: file_edit
+      recovery_safe_retry: false
+      trace_events: ["permission.request", "permission.resolve", "recovery.plan", "tool.done"]
+
+  - id: dangerous-shell-denied-and-recovered
+    prompt: "危险 rm 命令被拒绝，并提示安全替代路径"
+    replay:
+      tool_calls:
+        - tool: bash
+          success: false
+          output: "Permission denied: dangerous command"
+          permission:
+            prompt: "Allow rm -rf target/live-evals?"
+            approved: false
+            decision: reject_once
+        - tool: file_read
+          output: "safe manifest inspection"
+      recovery_plans:
+        - source: bash
+          category: permission_denied
+          action: "explain denial and continue with read-only inspection"
+          retryable: false
+          safe_retry: false
+          suggested_command: "/permissions explain"
+    expect:
+      tool_sequence: ["bash", "file_read"]
+      failed_tool: bash
+      permission_approved: false
+      permission_decision: reject_once
+      recovery_category: permission_denied
+      recovery_suggested_command: "/permissions explain"
+      recovery_safe_retry: false
+      trace_events: ["permission.request", "permission.resolve", "recovery.plan", "tool.done"]
+
+  - id: long-output-stored-as-artifact
+    prompt: "长命令输出要落盘为 artifact，并只给模型摘要"
+    replay:
+      tool_calls:
+        - tool: bash
+          output: "long output summarized; full output stored at .priority-agent/tool-results/long-output.log"
+      terminal_tasks:
+        - id: shell-long-output-1
+          source_tool: bash
+          status: completed
+          command: "python3 scripts/emit_long_output.py"
+          output_path: .priority-agent/tool-results/long-output.log
+          backgrounded: false
+    expect:
+      tool_sequence: ["bash"]
+      terminal_task_count: 1
+      terminal_task_id: shell-long-output-1
+      terminal_task_status: completed
+      terminal_task_output_path: .priority-agent/tool-results/long-output.log
+      trace_events: ["tool.start", "tool.done"]
+
+  - id: background-dev-server-read-cancel
+    prompt: "启动后台 dev server，读取输出，然后取消"
+    replay:
+      tool_calls:
+        - tool: bash
+          output: "Started background shell command. Handle: shell-dev-1"
+        - tool: bash_output
+          output: "server ready"
+        - tool: bash_cancel
+          output: "cancelled shell-dev-1"
+      terminal_tasks:
+        - id: shell-dev-1
+          source_tool: bash
+          status: running
+          command: "npm run dev"
+          handle: shell-dev-1
+          read_tool: bash_output
+          cancel_tool: bash_cancel
+          cancel_handle: shell-dev-1
+          output_path: .priority-agent/tool-results/shell-dev-1.log
+          backgrounded: true
+    expect:
+      tool_sequence: ["bash", "bash_output", "bash_cancel"]
+      terminal_task_count: 1
+      terminal_task_id: shell-dev-1
+      terminal_task_status: running
+      terminal_task_read_tool: bash_output
+      terminal_task_cancel_tool: bash_cancel
+      terminal_task_output_path: .priority-agent/tool-results/shell-dev-1.log
+      backgrounded_tool: bash
+      trace_events: ["tool.start", "tool.done"]
+
+  - id: permission-denied-then-safe-alternative
+    prompt: "用户拒绝写操作后，agent 改用只读检查继续完成任务"
+    replay:
+      tool_calls:
+        - tool: bash
+          success: false
+          output: "Permission denied by user"
+          permission:
+            prompt: "Allow git push?"
+            approved: false
+            decision: reject_once
+        - tool: grep
+          output: "safe readonly result"
+      recovery_plans:
+        - source: tool_execution
+          category: permission_denied
+          action: "continue with safe read-only inspection"
+          retryable: false
+          safe_retry: false
+          suggested_command: "/permissions explain"
+    expect:
+      tool_sequence: ["bash", "grep"]
+      failed_tool: bash
+      permission_approved: false
+      permission_decision: reject_once
+      recovery_category: permission_denied
+      recovery_suggested_command: "/permissions explain"
+      recovery_safe_retry: false
+      repair_required: false
+      trace_events: ["permission.request", "permission.resolve", "recovery.plan", "tool.done"]
+
+  - id: large-diff-context-visible
+    prompt: "把当前大 diff 作为结构化上下文传给 runtime，并能在 trace/debug 里确认"
+    replay:
+      run_contexts:
+        - type: current_diff
+          label: Current diff
+          files:
+            - src/engine/conversation_loop/tool_metadata.rs
+            - apps/desktop/src/app/runEventState.ts
+          patch_preview: |
+            @@ -1,4 +1,8 @@
+            -old line
+            +new line
+            +structured current diff metadata
+            +trace/debug context preview
+          truncated: true
+      tool_calls:
+        - tool: file_read
+          output: "inspected attached diff context"
+    expect:
+      tool_sequence: ["file_read"]
+      context_attachment_count: 1
+      context_attachment_type: current_diff
+      context_attachment_label: Current diff
+      context_attachment_file: apps/desktop/src/app/runEventState.ts
+      context_attachment_patch_preview_min_chars: 40
+
+  - id: compaction-preserves-runtime-state
+    prompt: "长会话触发 compaction 后仍保留 changed files 和 validation state"
+    replay:
+      context_compactions:
+        - before_tokens: 122000
+          after_tokens: 64000
+          strategy: semantic_boundary
+          boundary_id: cb-tool-file-gauntlet-1
+          sequence: 1
+          messages_before: 90
+          messages_after: 24
+          preserved_tail_count: 6
+          provenance:
+            - summary_memory:runtime_continuity
+            - runtime_continuity:runtime_state_changed_files:1
+            - runtime_continuity:runtime_state_validation:1
+            - runtime_continuity:runtime_state_permissions:1
+      runtime_diet:
+        prompt_tokens: 52000
+        tool_schema_tokens: 3200
+        total_request_tokens: 55200
+        max_context_tokens: 128000
+        remaining_context_tokens: 72800
+        tool_result_chars: 9000
+        tool_result_tokens: 2400
+        exposed_tools: 14
+        route_scoped_tools: true
+        workflow_context: strict
+        closeout_visibility: full
+        validation_evidence: passed:2/2
+      tool_calls:
+        - tool: bash
+          output: "Validation passed: cargo test -q runtime_continuity"
+      verification_passed: true
+      changed_files:
+        - src/engine/context_compressor.rs
+    expect:
+      tool_sequence: ["bash"]
+      verification_passed: true
+      context_compaction_count: 1
+      context_boundary_id: cb-tool-file-gauntlet-1
+      context_compaction_strategy: semantic_boundary
+      context_before_tokens: 122000
+      context_after_tokens: 64000
+      context_preserved_tail_count: 6
+      runtime_diet_remaining_context_tokens: 72800
+      runtime_diet_route_scoped_tools: true
+      runtime_diet_workflow_context: strict
+      trace_events: ["context.compact", "runtime.diet", "tool.start", "tool.done", "verify.done"]
