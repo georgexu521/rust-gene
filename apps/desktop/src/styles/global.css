@@ -379,6 +379,35 @@ button:disabled {
   font-size: 11px;
 }
 
+.active-session-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 6px 4px;
+  padding: 8px 10px;
+  border: 1px solid rgb(255 255 255 / 58%);
+  border-radius: 8px;
+  color: #606a76;
+  background: rgb(255 255 255 / 42%);
+}
+
+.active-session-card span {
+  color: #8a939e;
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.active-session-card strong {
+  overflow: hidden;
+  color: #303741;
+  font-size: 12px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-footer {
   margin-top: auto;
 }

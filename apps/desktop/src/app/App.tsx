@@ -58,6 +58,7 @@ export function App() {
   const [providerStatus, setProviderStatus] = useState<ProviderModelStatus | null>(null);
   const [projectPath, setProjectPath] = useState("");
   const [sessions, setSessions] = useState<RecentSession[]>([]);
+  const [selectedSessionSummary, setSelectedSessionSummary] = useState<RecentSession | null>(null);
   const [sessionSearch, setSessionSearch] = useState("");
   const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
   const [composer, setComposer] = useState("");
@@ -106,6 +107,9 @@ export function App() {
       setProviderStatus(nextProviderStatus);
       setProjectPath(nextSettings.selected_project || nextHealth.cwd);
       setSessions(nextSessions);
+      setSelectedSessionSummary(
+        nextSessions.find((session) => session.id === nextSettings.active_session_id) || null,
+      );
       setDiagnostics(nextDiagnostics.items);
       if (nextSettings.active_session_id) {
         const resumed = await resumeSession(nextSettings.active_session_id);
@@ -175,6 +179,7 @@ export function App() {
     try {
       const selected = await selectProject(projectPath);
       setProjectPath(selected.path);
+      setSelectedSessionSummary(null);
       setSettings((current) =>
         current ? { ...current, selected_project: selected.path, active_session_id: null } : current,
       );
@@ -193,6 +198,7 @@ export function App() {
       }
       const selected = await selectProject(selectedPath);
       setProjectPath(selected.path);
+      setSelectedSessionSummary(null);
       setSettings((current) =>
         current ? { ...current, selected_project: selected.path, active_session_id: null } : current,
       );
@@ -207,6 +213,7 @@ export function App() {
     try {
       const selected = await selectProject(path);
       setProjectPath(selected.path);
+      setSelectedSessionSummary(null);
       setSettings((current) =>
         current ? { ...current, selected_project: selected.path, active_session_id: null } : current,
       );
@@ -221,6 +228,7 @@ export function App() {
   async function handleLoadSession(session: RecentSession) {
     try {
       const resumed = await resumeSession(session.id);
+      setSelectedSessionSummary(session);
       setSettings((current) =>
         current ? { ...current, active_session_id: resumed.session_id } : current,
       );
@@ -235,6 +243,7 @@ export function App() {
   async function handleNewChat() {
     try {
       setSettings(await newConversation());
+      setSelectedSessionSummary(null);
       resetConversationView();
       void refreshSessions();
       void refreshDiagnostics();
@@ -246,6 +255,9 @@ export function App() {
   async function handleRenameSession(session: RecentSession, title: string) {
     try {
       const renamed = await renameSession(session.id, title);
+      setSelectedSessionSummary((current) =>
+        current?.id === renamed.id ? { ...current, ...renamed } : current,
+      );
       setSessions((current) =>
         current.map((item) => (item.id === renamed.id ? { ...item, ...renamed } : item)),
       );
@@ -259,6 +271,7 @@ export function App() {
       setSettings(await archiveSession(session.id));
       setLastArchivedSession(session);
       if (runState.selectedSessionId === session.id) {
+        setSelectedSessionSummary(null);
         resetConversationView();
       }
       await refreshSessions();
@@ -293,6 +306,7 @@ export function App() {
         setLastArchivedSession(null);
       }
       if (runState.selectedSessionId === session.id) {
+        setSelectedSessionSummary(null);
         resetConversationView();
       }
       await refreshSessions();
@@ -338,6 +352,17 @@ export function App() {
       void refreshSessions();
     }
     if (event.type === "run_started" && event.session_id) {
+      setSelectedSessionSummary((current) =>
+        current?.id === event.session_id
+          ? current
+          : {
+              id: event.session_id || "",
+              title: "Current run",
+              updated_at: "now",
+              model: providerStatus?.active_model || settings?.model || "active model",
+              message_count: 0,
+            },
+      );
       setSettings((current) =>
         current ? { ...current, active_session_id: event.session_id || null } : current,
       );
@@ -359,6 +384,7 @@ export function App() {
         sessions={sessions}
         sessionSearch={sessionSearch}
         selectedSessionId={runState.selectedSessionId}
+        selectedSessionSummary={selectedSessionSummary}
         onArchiveSession={(session) => void handleArchiveSession(session)}
         onBrowseProject={() => void handleBrowseProject()}
         onDeleteSession={setPendingDeleteSession}
@@ -437,6 +463,7 @@ export function App() {
         <SettingsDrawer
           isOpen={isSettingsOpen}
           projectPath={projectPath}
+          selectedSessionTitle={selectedSessionSummary?.title || null}
           activeSessionId={runState.selectedSessionId}
           settings={settings}
           diagnostics={diagnostics}

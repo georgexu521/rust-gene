@@ -11,12 +11,16 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Model")).toBeVisible();
     await expect(page.getByRole("button", { name: "New Chat" })).toBeVisible();
     await expect(page.getByRole("button", { name: "rust-agent" })).toBeVisible();
+    await expect(page.getByLabel("Current session")).toContainText("Continuing");
+    await expect(page.getByLabel("Current session")).toContainText("Desktop app Phase 1");
 
     await page.getByLabel("Search sessions").fill("Release");
     await expect(page.getByText("Release readiness notes")).toBeVisible();
     await expect(page.locator(".sidebar-section-row small", { hasText: "1 result" })).toBeVisible();
     await expect(page.locator(".recent-title mark", { hasText: "Release" })).toBeVisible();
-    await expect(page.getByText("Desktop app Phase 1")).not.toBeVisible();
+    await expect(
+      page.locator(".recent-list .recent-item", { hasText: "Desktop app Phase 1" }),
+    ).not.toBeVisible();
     await page.locator(".recent-item", { hasText: "Release readiness notes" }).hover();
     await page.getByRole("button", { name: /Archive Release readiness notes/ }).click();
     await expect(page.locator(".session-undo-banner")).toContainText("Archived Release readiness notes");
@@ -26,29 +30,40 @@ test.describe("desktop UI smoke", () => {
     await page.getByRole("button", { name: /Archive Release readiness notes/ }).click();
     await expect(page.getByText("No matching sessions")).toBeVisible();
     await page.getByRole("button", { name: "Clear session search" }).click();
-    await expect(page.getByText("Desktop app Phase 1")).toBeVisible();
+    await expect(
+      page.locator(".recent-list .recent-item", { hasText: "Desktop app Phase 1" }),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: /Rename Desktop app Phase 1/ }).click();
     await page.getByLabel("Session name").fill("Daily desktop flow");
     await page.getByRole("button", { name: "Save session title" }).click();
-    await expect(page.getByText("Daily desktop flow")).toBeVisible();
+    await expect(
+      page.locator(".recent-list .recent-item", { hasText: "Daily desktop flow" }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Current session")).toContainText("Daily desktop flow");
 
     await page.locator(".recent-item-main", { hasText: "Daily desktop flow" }).click();
     await expect(page.getByText("Loaded preview session: web-preview")).toBeVisible();
 
     await page.getByRole("button", { name: "New Chat" }).click();
     await expect(page.getByText("Loaded preview session: web-preview")).not.toBeVisible();
+    await expect(page.getByLabel("Current session")).toContainText("New conversation");
+    await expect(page.getByLabel("Current session")).toContainText("No active session");
     await expect(page.getByRole("heading", { name: "Start a focused run in rust-agent" })).toBeVisible();
     await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
     await page.getByRole("button", { name: /Delete Daily desktop flow/ }).click();
     await expect(page.getByRole("dialog", { name: "Delete session?" })).toBeVisible();
     await expect(page.getByRole("dialog")).toContainText("Daily desktop flow");
     await page.getByRole("button", { name: "Cancel" }).click();
-    await expect(page.getByText("Daily desktop flow")).toBeVisible();
+    await expect(
+      page.locator(".recent-list .recent-item", { hasText: "Daily desktop flow" }),
+    ).toBeVisible();
     await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
     await page.getByRole("button", { name: /Delete Daily desktop flow/ }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
-    await expect(page.getByText("Daily desktop flow")).not.toBeVisible();
+    await expect(
+      page.locator(".recent-list .recent-item", { hasText: "Daily desktop flow" }),
+    ).not.toBeVisible();
 
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
@@ -117,6 +132,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("complementary", { name: "Settings" })).toBeVisible();
     await expect(page.getByText("Provider setup")).toBeVisible();
     await expect(page.getByText("Permission defaults")).toBeVisible();
+    await expect(page.getByText("Active session", { exact: true })).toBeVisible();
 
     await assertNoHorizontalOverflow(page);
     await page.screenshot({

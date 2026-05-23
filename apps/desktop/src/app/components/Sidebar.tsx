@@ -21,6 +21,7 @@ type SidebarProps = {
   sessions: RecentSession[];
   sessionSearch: string;
   selectedSessionId: string | null;
+  selectedSessionSummary: RecentSession | null;
   onArchiveSession: (session: RecentSession) => void;
   onBrowseProject: () => void;
   onDeleteSession: (session: RecentSession) => void;
@@ -38,6 +39,7 @@ export function Sidebar({
   sessions,
   sessionSearch,
   selectedSessionId,
+  selectedSessionSummary,
   onArchiveSession,
   onBrowseProject,
   onDeleteSession,
@@ -135,6 +137,12 @@ export function Sidebar({
       <div className="sidebar-section sidebar-section-row">
         <span>Recent</span>
         <small>{recentStatus}</small>
+      </div>
+      <div className="active-session-card" aria-label="Current session">
+        <span>{selectedSessionSummary ? "Continuing" : "New conversation"}</span>
+        <strong title={selectedSessionSummary?.title || undefined}>
+          {selectedSessionSummary?.title || "No active session"}
+        </strong>
       </div>
       <div className="recent-list">
         {sessions.length === 0 ? (

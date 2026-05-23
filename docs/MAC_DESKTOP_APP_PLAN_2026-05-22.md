@@ -679,7 +679,9 @@ matches, and provides a clear-search control so filtered session lists recover
 without manual text deletion. Archive now has an undo path backed by
 `restore_archived_session`, so accidental archives can be recovered without
 deleting session data. Delete now uses an in-app confirmation dialog with
-session metadata instead of the browser-native confirm prompt.
+session metadata instead of the browser-native confirm prompt. The sidebar and
+Settings drawer now show a readable current-session state, so restored sessions
+and new conversations are distinguishable without inspecting raw ids.
 
 #### Track D - Frontend Architecture And Test Hardening
 

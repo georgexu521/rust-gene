@@ -10,6 +10,7 @@ import {
 type SettingsDrawerProps = {
   isOpen: boolean;
   projectPath: string;
+  selectedSessionTitle: string | null;
   activeSessionId: string | null;
   settings: DesktopSettings | null;
   diagnostics: DesktopDiagnostic[];
@@ -25,6 +26,7 @@ type SettingsDrawerProps = {
 export function SettingsDrawer({
   isOpen,
   projectPath,
+  selectedSessionTitle,
   activeSessionId,
   settings,
   diagnostics,
@@ -65,7 +67,7 @@ export function SettingsDrawer({
             </div>
             <div>
               <dt>Active session</dt>
-              <dd>{activeSessionId || settings?.active_session_id || "None"}</dd>
+              <dd>{selectedSessionTitle || activeSessionId || settings?.active_session_id || "None"}</dd>
             </div>
             <div>
               <dt>Startup</dt>
