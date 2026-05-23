@@ -141,17 +141,29 @@ test.describe("desktop UI smoke", () => {
 
     await page.getByRole("button", { name: "Settings" }).click();
     await expect(page.getByRole("complementary", { name: "Settings" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Back to app" })).toBeVisible();
+    const settingsNav = page.getByLabel("Settings categories");
+    await expect(settingsNav.getByRole("button", { name: "General" })).toHaveClass(/active/);
     await expect(page.getByText("Work mode")).toBeVisible();
     await expect(page.getByRole("button", { name: /Coding/ })).toHaveClass(/active/);
     await page.getByRole("button", { name: /Daily work/ }).click();
     await expect(page.getByRole("button", { name: /Daily work/ })).toHaveClass(/active/);
-    await expect(page.getByText("Provider setup")).toBeVisible();
-    await expect(page.getByText("Permission defaults")).toBeVisible();
-    await page.getByRole("button", { name: /Auto low risk/ }).click();
-    await expect(page.getByRole("button", { name: /Auto low risk/ })).toHaveClass(/active/);
     await expect(page.getByText("Active session", { exact: true })).toBeVisible();
     await expect(page.locator(".settings-project-list")).toContainText("rust-agent");
     await expect(page.locator(".settings-project-list")).toContainText("bioclaw");
+    await settingsNav.getByRole("button", { name: "Permissions" }).click();
+    await expect(settingsNav.getByRole("button", { name: "Permissions" })).toHaveClass(/active/);
+    await expect(page.getByText("Permission defaults")).toBeVisible();
+    await page.getByRole("button", { name: /Auto low risk/ }).click();
+    await expect(page.getByRole("button", { name: /Auto low risk/ })).toHaveClass(/active/);
+    await settingsNav.getByRole("button", { name: "Provider" }).click();
+    await expect(page.getByText("Provider setup")).toBeVisible();
+    await settingsNav.getByRole("button", { name: "Diagnostics" }).click();
+    await expect(
+      page.getByRole("complementary", { name: "Settings" }).locator(".settings-diagnostic", {
+        hasText: "Provider keys",
+      }),
+    ).toBeVisible();
 
     await assertNoHorizontalOverflow(page);
     await page.screenshot({

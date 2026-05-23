@@ -1450,18 +1450,71 @@ h1 {
   position: fixed;
   top: 0;
   right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 30;
-  display: flex;
-  flex-direction: column;
-  width: min(520px, 100vw);
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  width: 100vw;
   height: 100vh;
-  border-left: 1px solid #d8dde3;
   background: #ffffff;
-  box-shadow: -18px 0 48px rgb(15 23 42 / 14%);
 }
 
-.trace-header,
-.settings-header {
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding: 78px 12px 18px;
+  background: linear-gradient(180deg, #d8eef5 0%, #c9d8e3 100%);
+}
+
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  color: #26313a;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 620;
+  text-align: left;
+}
+
+.settings-nav button:hover,
+.settings-nav button.active {
+  background: rgb(255 255 255 / 34%);
+}
+
+.settings-nav svg {
+  color: #26313a;
+}
+
+.settings-back {
+  margin-bottom: 16px;
+  color: #65717d !important;
+}
+
+.settings-back span:first-child {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.settings-page {
+  min-width: 0;
+  overflow: auto;
+  background: #ffffff;
+}
+
+.settings-page-header {
+  width: min(900px, calc(100% - 96px));
+  margin: 68px auto 0;
+}
+
+.trace-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1470,15 +1523,20 @@ h1 {
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.trace-header h2,
-.settings-header h2 {
+.trace-header h2 {
   margin: 3px 0 0;
   font-size: 18px;
   font-weight: 650;
 }
 
-.trace-header button,
-.settings-header button {
+.settings-page-header h2 {
+  margin: 3px 0 0;
+  font-size: 26px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.trace-header button {
   display: grid;
   place-items: center;
   width: 34px;
@@ -1501,24 +1559,24 @@ h1 {
 .settings-content {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 18px;
+  width: min(900px, calc(100% - 96px));
   min-height: 0;
-  padding: 10px;
-  overflow: auto;
+  margin: 70px auto 88px;
 }
 
 .settings-section {
-  padding: 11px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-subtle);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .settings-section h3 {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   color: #20242a;
-  font-size: 14px;
-  font-weight: 720;
+  font-size: 17px;
+  font-weight: 760;
 }
 
 .settings-copy {
@@ -1577,12 +1635,27 @@ h1 {
 .settings-kv {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 7px 10px;
+  gap: 0;
   margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #ffffff;
 }
 
 .settings-kv div {
   min-width: 0;
+  padding: 12px 14px;
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-kv div:nth-child(2n) {
+  border-right: 0;
+}
+
+.settings-kv div:nth-last-child(-n + 2) {
+  border-bottom: 0;
 }
 
 .settings-kv dt {
@@ -1748,8 +1821,8 @@ h1 {
 
 .permission-section h3,
 .permission-section .settings-copy {
-  margin-right: 13px;
-  margin-left: 13px;
+  margin-right: 0;
+  margin-left: 0;
 }
 
 .permission-section h3 {
@@ -1760,7 +1833,10 @@ h1 {
   display: grid;
   grid-template-columns: 1fr;
   gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
   border-top: 1px solid var(--border);
+  border-radius: 10px;
 }
 
 .permission-option {
@@ -2170,5 +2246,50 @@ h1 {
   .runtime-status {
     flex: 1 1 auto;
     white-space: normal;
+  }
+
+  .settings-drawer {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    gap: 5px;
+    padding: 14px;
+    overflow-x: auto;
+  }
+
+  .settings-nav button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    font-size: 13px;
+  }
+
+  .settings-page-header,
+  .settings-content {
+    width: calc(100vw - 40px);
+  }
+
+  .settings-page-header {
+    margin-top: 24px;
+  }
+
+  .settings-content {
+    margin-top: 28px;
+  }
+
+  .settings-kv {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-kv div,
+  .settings-kv div:nth-child(2n),
+  .settings-kv div:nth-last-child(-n + 2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .settings-kv div:last-child {
+    border-bottom: 0;
   }
 }
