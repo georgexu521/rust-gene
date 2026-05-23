@@ -67,6 +67,7 @@ export type TraceItem = {
   kind: "run" | "tool" | "permission" | "usage" | "error";
   title: string;
   detail?: string;
+  contexts?: DesktopRunContext[];
 };
 
 export type PermissionRequest = Extract<DesktopRunEvent, { type: "permission_request" }>;

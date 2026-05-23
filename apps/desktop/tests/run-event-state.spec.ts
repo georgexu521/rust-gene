@@ -68,6 +68,12 @@ test.describe("run event state", () => {
         }),
       }),
     );
+    expect(started.traceItems).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        contexts: [{ type: "current_diff", label: "Current diff" }],
+      }),
+    );
 
     const completed = applyRunEvent(started, { type: "run_completed" }, ids("done-1")).state;
     expect(completed.items).toContainEqual(

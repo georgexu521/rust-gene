@@ -69,6 +69,7 @@ export function applyRunEvent(
               kind: "run",
               title: "Run started",
               detail: event.session_id ? `session ${event.session_id}` : undefined,
+              contexts: state.pendingRunContexts,
             },
           ],
         },

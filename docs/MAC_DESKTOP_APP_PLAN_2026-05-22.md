@@ -714,6 +714,8 @@ bounded patch preview before streaming the agent run.
 When a run starts, the transcript run card now shows attached context chips such
 as `Current diff`, so users can confirm which structured inputs were included
 after the composer clears.
+Trace/debug now carries the same attached-context chips on the run-start trace
+item, making it possible to audit structured inputs from the trace drawer.
 
 #### Track D - Frontend Architecture And Test Hardening
 

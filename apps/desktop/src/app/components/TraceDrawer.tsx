@@ -50,6 +50,14 @@ export function TraceDrawer({ activeItemId, isOpen, items, onClose }: TraceDrawe
               <div className="trace-kind">{item.kind}</div>
               <div className="trace-title">{item.title}</div>
               {item.detail ? <div className="trace-detail">{item.detail}</div> : null}
+              {item.contexts && item.contexts.length > 0 ? (
+                <div className="trace-contexts" aria-label="Trace attached context">
+                  <span>Attached context</span>
+                  {item.contexts.map((context) => (
+                    <strong key={context.type}>{context.label}</strong>
+                  ))}
+                </div>
+              ) : null}
             </article>
           ))}
         </div>
