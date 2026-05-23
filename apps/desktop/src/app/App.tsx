@@ -525,6 +525,7 @@ export function App() {
         <Composer
           composer={composer}
           projectPath={projectPath}
+          recentProjects={settings?.recent_projects || []}
           providerStatus={providerStatus}
           detailLevel={settings?.detail_level}
           permissionMode={settings?.permission_mode}
@@ -535,6 +536,7 @@ export function App() {
           onProjectPathChange={setProjectPath}
           onBrowseProject={() => void handleBrowseProject()}
           onSelectProject={() => void handleSelectProject()}
+          onSelectRecentProject={(path) => void handleSelectRecentProject(path)}
           onDetailLevelChange={(level) => void handleDetailLevelChange(level)}
           onPermissionModeChange={(mode) => void handlePermissionModeChange(mode)}
           onProviderModelChange={(providerId, model) =>

@@ -19,6 +19,7 @@ import {
 type ComposerProps = {
   composer: string;
   projectPath: string;
+  recentProjects: string[];
   providerStatus: ProviderModelStatus | null;
   detailLevel?: DetailLevelId | null;
   permissionMode?: PermissionModeId | null;
@@ -29,6 +30,7 @@ type ComposerProps = {
   onProjectPathChange: (value: string) => void;
   onBrowseProject: () => void;
   onSelectProject: () => void;
+  onSelectRecentProject: (path: string) => void;
   onDetailLevelChange: (level: DetailLevelId) => void;
   onPermissionModeChange: (mode: PermissionModeId) => void;
   onProviderModelChange: (providerId: string, model: string) => void;
@@ -38,6 +40,7 @@ type ComposerProps = {
 export function Composer({
   composer,
   projectPath,
+  recentProjects,
   providerStatus,
   detailLevel,
   permissionMode,
@@ -48,6 +51,7 @@ export function Composer({
   onProjectPathChange,
   onBrowseProject,
   onSelectProject,
+  onSelectRecentProject,
   onDetailLevelChange,
   onPermissionModeChange,
   onProviderModelChange,
@@ -149,6 +153,31 @@ export function Composer({
                   value={projectPath}
                   onChange={(event) => onProjectPathChange(event.target.value)}
                 />
+                {recentProjects.length ? (
+                  <>
+                    <div className="composer-popover-title secondary">Recent projects</div>
+                    <div className="composer-option-list compact project-recent-list">
+                      {recentProjects.map((path) => (
+                        <button
+                          aria-label={`Use recent project ${projectLabel(path)}`}
+                          className={path === projectPath ? "active" : ""}
+                          key={path}
+                          type="button"
+                          onClick={() => {
+                            setOpenMenu(null);
+                            onSelectRecentProject(path);
+                          }}
+                        >
+                          <span>
+                            <strong>{projectLabel(path)}</strong>
+                            <small>{path}</small>
+                          </span>
+                          {path === projectPath ? <Check aria-hidden="true" size={15} /> : null}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
                 <div className="composer-popover-actions">
                   <button
                     aria-label="Apply project path"
@@ -277,7 +306,10 @@ export function Composer({
                       disabled={!provider.configured}
                       key={provider.id}
                       type="button"
-                      onClick={() => onProviderModelChange(provider.id, provider.model)}
+                      onClick={() => {
+                        setOpenMenu(null);
+                        onProviderModelChange(provider.id, provider.model);
+                      }}
                     >
                       <span>
                         <strong>{provider.label}</strong>
@@ -298,7 +330,10 @@ export function Composer({
                       disabled={!activeProvider}
                       key={model.id}
                       type="button"
-                      onClick={() => onProviderModelChange(activeProvider, model.id)}
+                      onClick={() => {
+                        setOpenMenu(null);
+                        onProviderModelChange(activeProvider, model.id);
+                      }}
                     >
                       <span>{model.label}</span>
                       {model.id === activeModel ? <Check aria-hidden="true" size={15} /> : null}
@@ -342,6 +377,11 @@ const detailLevelOptions: Array<{
     description: "Less technical detail",
   },
 ];
+
+function projectLabel(path: string) {
+  const segments = path.split("/").filter(Boolean);
+  return segments[segments.length - 1] || path || "Project";
+}
 
 function formatPermissionMode(mode?: string | null) {
   switch (mode) {

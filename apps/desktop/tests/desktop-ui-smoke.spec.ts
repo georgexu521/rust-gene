@@ -15,6 +15,8 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("textbox", { name: "Project path" })).toHaveValue(
       "/Users/georgexu/Desktop/rust-agent",
     );
+    await expect(page.getByRole("dialog", { name: "Project controls" })).toContainText("Recent projects");
+    await expect(page.getByRole("button", { name: /Use recent project bioclaw/ })).toBeVisible();
     await composer.getByRole("button", { name: "Mode" }).click();
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Coding");
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Full access");
@@ -26,7 +28,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("dialog", { name: "Mode details" })).not.toBeVisible();
     await composer.getByRole("button", { exact: true, name: "Provider" }).click();
     await expect(page.getByRole("dialog", { name: "Provider controls" })).toContainText("kimi-k2.5");
-    await page.getByRole("heading", { name: "What should we build in rust-agent?" }).click();
+    await page.getByRole("button", { exact: true, name: "Use model kimi-k2.5" }).click();
     await expect(page.getByRole("dialog", { name: "Provider controls" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "New Chat" })).toBeVisible();
     await expect(page.getByRole("button", { name: "rust-agent" })).toBeVisible();

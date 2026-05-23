@@ -2302,6 +2302,15 @@ h1 {
   min-height: 32px;
 }
 
+.project-recent-list {
+  max-height: 168px;
+  overflow: auto;
+}
+
+.project-recent-list button {
+  min-height: 44px;
+}
+
 .composer-option-list button:hover,
 .composer-popover-actions button:hover,
 .composer-option-list button.active {

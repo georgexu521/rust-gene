@@ -702,6 +702,9 @@ controls in the main surface.
 Those popovers now behave like real desktop controls: Escape and outside-click
 close them, and the mode popover can directly update detail level and default
 permission mode without sending users into Settings for routine changes.
+Project now exposes recent-project shortcuts in the composer popover, while
+provider/model selections close after a choice so the bottom context rail feels
+closer to a native desktop menu.
 
 #### Track D - Frontend Architecture And Test Hardening
 
