@@ -93,6 +93,12 @@ export type ProviderModelStatus = {
   models: DesktopModelOption[];
 };
 
+export type DesktopRunContext =
+  | {
+      type: "current_diff";
+      label: string;
+    };
+
 export type DesktopProviderOption = {
   id: string;
   label: string;
@@ -542,7 +548,7 @@ export async function pickProjectDirectory(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
-export function sendMessage(message: string): Promise<void> {
+export function sendMessage(message: string, contexts: DesktopRunContext[] = []): Promise<void> {
   if (!isTauriRuntime()) {
     const runId = crypto.randomUUID();
     const toolId = crypto.randomUUID();
@@ -626,7 +632,11 @@ export function sendMessage(message: string): Promise<void> {
     });
     emitWebPreview({
       type: "assistant_delta",
-      text: `Web preview received: ${message}\n\nRun this inside Tauri to stream the Rust agent runtime.`,
+      text: `Web preview received: ${message}\n\n${
+        contexts.length
+          ? `Structured context attached: ${contexts.map((context) => context.label).join(", ")}\n\n`
+          : ""
+      }Run this inside Tauri to stream the Rust agent runtime.`,
     });
     emitWebPreview({
       type: "usage",
@@ -647,7 +657,7 @@ export function sendMessage(message: string): Promise<void> {
     return Promise.resolve();
   }
 
-  return invoke("send_message", { message });
+  return invoke("send_message", { contexts, message });
 }
 
 export function answerPermission(approved: boolean): Promise<boolean> {

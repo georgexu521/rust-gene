@@ -57,6 +57,24 @@ struct ResumedSession {
     messages: Vec<DesktopMessage>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct DesktopRunContext {
+    #[serde(rename = "type")]
+    context_type: String,
+    label: Option<String>,
+}
+
+#[derive(Debug)]
+struct ResolvedDesktopRunContext {
+    context_type: String,
+    label: String,
+    shortstat: String,
+    files: Vec<String>,
+    stat: String,
+    patch_preview: String,
+    truncated: bool,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct DesktopSettings {
     selected_project: Option<String>,
@@ -619,9 +637,12 @@ fn recent_session_from_store(
 async fn send_message(
     app: AppHandle,
     message: String,
+    contexts: Vec<DesktopRunContext>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
     let runtime = runtime_for_state(&state).await?;
+    let selected_project = state.selected_project.lock().await.clone();
+    let message = enrich_message_with_desktop_contexts(message, &contexts, &selected_project)?;
     let engine = runtime.streaming_engine();
     let active_session_id = engine.current_session_id();
     let mut stream = engine.query_stream(message).await;
@@ -650,6 +671,183 @@ async fn send_message(
     }
 
     Ok(())
+}
+
+fn enrich_message_with_desktop_contexts(
+    message: String,
+    contexts: &[DesktopRunContext],
+    project: &Path,
+) -> Result<String, String> {
+    if contexts.is_empty() {
+        return Ok(message);
+    }
+
+    let mut blocks = Vec::new();
+    for context in contexts {
+        match context.context_type.as_str() {
+            "current_diff" => {
+                let resolved = resolve_current_diff_context(context, project)?;
+                blocks.push(format_desktop_context_block(&resolved));
+            }
+            other => {
+                return Err(format!("Unsupported desktop run context: {}", other));
+            }
+        }
+    }
+
+    Ok(format!("{}\n\n{}", message.trim_end(), blocks.join("\n\n")))
+}
+
+fn resolve_current_diff_context(
+    context: &DesktopRunContext,
+    project: &Path,
+) -> Result<ResolvedDesktopRunContext, String> {
+    let unstaged_shortstat = run_git(project, &["diff", "--shortstat"])?;
+    let staged_shortstat = run_git(project, &["diff", "--cached", "--shortstat"])?;
+    let unstaged_stat = run_git(project, &["diff", "--stat", "--find-renames"])?;
+    let staged_stat = run_git(project, &["diff", "--cached", "--stat", "--find-renames"])?;
+    let unstaged_files = run_git(project, &["diff", "--name-only"])?;
+    let staged_files = run_git(project, &["diff", "--cached", "--name-only"])?;
+    let unstaged_patch = run_git(project, &["diff", "--no-ext-diff", "--find-renames"])?;
+    let staged_patch = run_git(
+        project,
+        &["diff", "--cached", "--no-ext-diff", "--find-renames"],
+    )?;
+
+    let shortstat = join_non_empty(&[
+        label_section("unstaged", unstaged_shortstat.trim()),
+        label_section("staged", staged_shortstat.trim()),
+    ])
+    .unwrap_or_else(|| "No staged or unstaged git diff detected.".to_string());
+    let stat = join_non_empty(&[
+        label_section("unstaged", unstaged_stat.trim()),
+        label_section("staged", staged_stat.trim()),
+    ])
+    .unwrap_or_else(|| "No changed files detected.".to_string());
+    let files = collect_diff_files(&unstaged_files, &staged_files);
+    let patch = join_non_empty(&[
+        label_section("unstaged", unstaged_patch.trim()),
+        label_section("staged", staged_patch.trim()),
+    ])
+    .unwrap_or_default();
+    let (patch_preview, truncated) = truncate_chars(&patch, 12_000);
+
+    Ok(ResolvedDesktopRunContext {
+        context_type: context.context_type.clone(),
+        label: context
+            .label
+            .clone()
+            .unwrap_or_else(|| "Current diff".to_string()),
+        shortstat,
+        files,
+        stat,
+        patch_preview,
+        truncated,
+    })
+}
+
+fn format_desktop_context_block(context: &ResolvedDesktopRunContext) -> String {
+    let files = if context.files.is_empty() {
+        "- No changed files detected.".to_string()
+    } else {
+        context
+            .files
+            .iter()
+            .map(|file| format!("- {}", file))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let patch_preview = if context.patch_preview.is_empty() {
+        "No diff preview available.".to_string()
+    } else {
+        context.patch_preview.clone()
+    };
+    let truncated = if context.truncated { "true" } else { "false" };
+
+    format!(
+        "<desktop_context type=\"{}\" label=\"{}\">\nSummary:\n{}\n\nFiles:\n{}\n\nStat:\n{}\n\nPatch preview truncated: {}\n```diff\n{}\n```\n</desktop_context>",
+        escape_context_attr(&context.context_type),
+        escape_context_attr(&context.label),
+        context.shortstat,
+        files,
+        context.stat,
+        truncated,
+        patch_preview
+    )
+}
+
+fn run_git(project: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(args)
+        .output()
+        .map_err(|err| format!("Failed to run git {}: {}", args.join(" "), err))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "git {} failed{}",
+            args.join(" "),
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", stderr)
+            }
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn collect_diff_files(unstaged: &str, staged: &str) -> Vec<String> {
+    let mut files = unstaged
+        .lines()
+        .chain(staged.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn join_non_empty(parts: &[Option<String>]) -> Option<String> {
+    let joined = parts
+        .iter()
+        .filter_map(|part| part.as_ref())
+        .filter(|part| !part.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if joined.trim().is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
+fn label_section(label: &str, text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(format!("{}:\n{}", label, text.trim()))
+    }
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> (String, bool) {
+    let mut iter = text.chars();
+    let preview = iter.by_ref().take(max_chars).collect::<String>();
+    let truncated = iter.next().is_some();
+    (preview, truncated)
+}
+
+fn escape_context_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[tauri::command]
@@ -1360,6 +1558,59 @@ mod tests {
     }
 
     #[test]
+    fn desktop_run_context_enriches_message_with_git_diff() {
+        let project = std::env::temp_dir().join(format!(
+            "priority-agent-desktop-diff-context-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&project);
+        std::fs::create_dir_all(&project).unwrap();
+        run_test_command(&project, &["git", "init"]);
+        run_test_command(
+            &project,
+            &["git", "config", "user.email", "desktop@example.com"],
+        );
+        run_test_command(&project, &["git", "config", "user.name", "Desktop Test"]);
+        std::fs::write(project.join("README.md"), "old\n").unwrap();
+        run_test_command(&project, &["git", "add", "README.md"]);
+        run_test_command(&project, &["git", "commit", "-m", "initial"]);
+        std::fs::write(project.join("README.md"), "new\n").unwrap();
+
+        let message = enrich_message_with_desktop_contexts(
+            "Review this".to_string(),
+            &[DesktopRunContext {
+                context_type: "current_diff".to_string(),
+                label: Some("Current diff".to_string()),
+            }],
+            &project,
+        )
+        .unwrap();
+
+        assert!(message.contains("Review this"));
+        assert!(message.contains("<desktop_context type=\"current_diff\" label=\"Current diff\">"));
+        assert!(message.contains("README.md"));
+        assert!(message.contains("-old"));
+        assert!(message.contains("+new"));
+
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn desktop_run_context_rejects_unknown_context_type() {
+        let err = enrich_message_with_desktop_contexts(
+            "hello".to_string(),
+            &[DesktopRunContext {
+                context_type: "unknown".to_string(),
+                label: None,
+            }],
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("Unsupported desktop run context"));
+    }
+
+    #[test]
     fn desktop_smoke_settings_round_trip() {
         let path = std::env::temp_dir().join(format!(
             "priority-agent-desktop-settings-{}.json",
@@ -1561,6 +1812,15 @@ mod tests {
             .any(|model| model.id == "custom-model" && model.active));
         assert!(models.iter().any(|model| model.id == "gpt-4o"));
         assert!(models.iter().any(|model| model.id == "gpt-4o-mini"));
+    }
+
+    fn run_test_command(project: &Path, command: &[&str]) {
+        let status = Command::new(command[0])
+            .current_dir(project)
+            .args(&command[1..])
+            .status()
+            .unwrap();
+        assert!(status.success(), "command failed: {:?}", command);
     }
 }
 

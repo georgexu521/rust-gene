@@ -708,6 +708,9 @@ closer to a native desktop menu.
 The composer `+` control is now an Add Context popover: current diff inserts an
 explicit composer instruction, while file and screenshot entries are visible but
 disabled until real attachment/capture plumbing is implemented.
+Current diff context is now passed as structured desktop run metadata; the
+Tauri runtime resolves it into changed files, shortstat, stat output, and a
+bounded patch preview before streaming the agent run.
 
 #### Track D - Frontend Architecture And Test Hardening
 

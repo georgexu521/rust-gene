@@ -16,11 +16,13 @@ import {
   DetailLevelId,
   PermissionModeId,
   PermissionModeOption,
+  DesktopRunContext,
   ProviderModelStatus,
 } from "../../runtime/desktopApi";
 
 type ComposerProps = {
   composer: string;
+  contexts: DesktopRunContext[];
   projectPath: string;
   recentProjects: string[];
   providerStatus: ProviderModelStatus | null;
@@ -30,6 +32,8 @@ type ComposerProps = {
   isEmptyState?: boolean;
   isRunning: boolean;
   onComposerChange: (value: string) => void;
+  onAddContext: (context: DesktopRunContext) => void;
+  onRemoveContext: (type: DesktopRunContext["type"]) => void;
   onProjectPathChange: (value: string) => void;
   onBrowseProject: () => void;
   onSelectProject: () => void;
@@ -42,6 +46,7 @@ type ComposerProps = {
 
 export function Composer({
   composer,
+  contexts,
   projectPath,
   recentProjects,
   providerStatus,
@@ -58,6 +63,8 @@ export function Composer({
   onDetailLevelChange,
   onPermissionModeChange,
   onProviderModelChange,
+  onAddContext,
+  onRemoveContext,
   onSubmit,
 }: ComposerProps) {
   const composerRef = useRef<HTMLFormElement | null>(null);
@@ -83,9 +90,11 @@ export function Composer({
     setOpenMenu((current) => (current === menu ? null : menu));
   }
 
-  function appendComposerContext(text: string) {
-    const nextText = composer.trim().length ? `${composer.trimEnd()}\n${text}` : text;
-    onComposerChange(nextText);
+  function addCurrentDiffContext() {
+    onAddContext({
+      type: "current_diff",
+      label: "Current diff",
+    });
     setOpenMenu(null);
   }
 
@@ -130,6 +139,21 @@ export function Composer({
           isEmptyState ? "Ask anything" : "Ask Liz to inspect, edit, or verify this project..."
         }
       />
+      {contexts.length ? (
+        <div className="composer-context-chips" aria-label="Attached context">
+          {contexts.map((context) => (
+            <button
+              aria-label={`Remove context ${context.label}`}
+              key={context.type}
+              type="button"
+              onClick={() => onRemoveContext(context.type)}
+            >
+              <GitCompare aria-hidden="true" size={14} />
+              <span>{context.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="composer-toolbar">
         <button
           aria-expanded={openMenu === "context"}
@@ -152,7 +176,7 @@ export function Composer({
               <button
                 aria-label="Reference current diff"
                 type="button"
-                onClick={() => appendComposerContext("Use the current git diff as context.")}
+                onClick={addCurrentDiffContext}
               >
                 <span>
                   <strong>

@@ -5,6 +5,7 @@ import {
   DiagnosticStatus,
   DetailLevelId,
   DesktopHealth,
+  DesktopRunContext,
   ProviderModelStatus,
   DesktopRunEvent,
   DesktopSettings,
@@ -65,6 +66,7 @@ export function App() {
   const [sessionSearch, setSessionSearch] = useState("");
   const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
   const [composer, setComposer] = useState("");
+  const [runContexts, setRunContexts] = useState<DesktopRunContext[]>([]);
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -335,10 +337,11 @@ export function App() {
     }
 
     setComposer("");
+    setRunContexts([]);
     setRunState((current) => submitUserMessage(current, message));
 
     try {
-      await sendMessage(message);
+      await sendMessage(message, runContexts);
     } catch (err) {
       setRunState((current) => withError(current, err));
       void refreshSessions();
@@ -524,6 +527,7 @@ export function App() {
 
         <Composer
           composer={composer}
+          contexts={runContexts}
           projectPath={projectPath}
           recentProjects={settings?.recent_projects || []}
           providerStatus={providerStatus}
@@ -533,6 +537,16 @@ export function App() {
           isEmptyState={isEmptyConversation}
           isRunning={runState.isRunning}
           onComposerChange={setComposer}
+          onAddContext={(context) =>
+            setRunContexts((current) =>
+              current.some((existing) => existing.type === context.type)
+                ? current
+                : [...current, context],
+            )
+          }
+          onRemoveContext={(type) =>
+            setRunContexts((current) => current.filter((context) => context.type !== type))
+          }
           onProjectPathChange={setProjectPath}
           onBrowseProject={() => void handleBrowseProject()}
           onSelectProject={() => void handleSelectProject()}

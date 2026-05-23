@@ -14,9 +14,8 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("dialog", { name: "Add context options" })).toContainText("Current diff");
     await expect(page.getByRole("button", { name: "Attach file" })).toBeDisabled();
     await page.getByRole("button", { name: "Reference current diff" }).click();
-    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue(
-      "Use the current git diff as context.",
-    );
+    await expect(page.getByLabel("Attached context")).toContainText("Current diff");
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("");
     await expect(page.getByRole("dialog", { name: "Add context options" })).not.toBeVisible();
     await composer.getByRole("button", { name: "Project" }).click();
     await expect(page.getByRole("dialog", { name: "Project controls" })).toBeVisible();
@@ -109,6 +108,7 @@ test.describe("desktop UI smoke", () => {
 
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByLabel("Attached context")).not.toBeVisible();
     await expect(page.locator(".composer")).not.toHaveClass(/empty-composer/);
     await expect(page.locator(".timeline-summary.run.completed", { hasText: "Run completed" })).toBeVisible();
     await expect(page.locator(".timeline-section-label", { hasText: "Process" })).toBeVisible();

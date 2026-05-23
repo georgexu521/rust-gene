@@ -2092,6 +2092,32 @@ h1 {
   font-size: 17px;
 }
 
+.composer-context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 10px;
+  background: #ffffff;
+}
+
+.composer-context-chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid #dfe4ea;
+  border-radius: 999px;
+  color: #47515d;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.composer-context-chips button:hover {
+  background: #eef2f6;
+}
+
 .composer-toolbar {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr) auto 38px;
