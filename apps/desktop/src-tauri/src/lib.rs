@@ -672,8 +672,27 @@ async fn send_message(
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
     let runtime = runtime_for_state(&state).await?;
+    let diagnostic_logs_path = state.diagnostic_logs_path.clone();
+    let _ = append_desktop_log(
+        &diagnostic_logs_path,
+        &format!(
+            "run_submit chars={} contexts={}",
+            message.chars().count(),
+            contexts.len()
+        ),
+    );
     let selected_project = state.selected_project.lock().await.clone();
-    let message = enrich_message_with_desktop_contexts(message, &contexts, &selected_project)?;
+    let message = match enrich_message_with_desktop_contexts(message, &contexts, &selected_project)
+    {
+        Ok(message) => message,
+        Err(err) => {
+            let _ = append_desktop_log(
+                &diagnostic_logs_path,
+                &format!("run_error message={}", sanitize_log_value(&err)),
+            );
+            return Err(err);
+        }
+    };
     let engine = runtime.streaming_engine();
     let active_session_id = engine.current_session_id();
     let mut stream = engine.query_stream(message).await;
@@ -694,8 +713,18 @@ async fn send_message(
             desktop_event,
             DesktopRunEvent::RunCompleted | DesktopRunEvent::RunError { .. }
         );
+        let terminal_log = match &desktop_event {
+            DesktopRunEvent::RunCompleted => Some("run_completed".to_string()),
+            DesktopRunEvent::RunError { message } => {
+                Some(format!("run_error message={}", sanitize_log_value(message)))
+            }
+            _ => None,
+        };
         app.emit("desktop-run-event", desktop_event)
             .map_err(|err| err.to_string())?;
+        if let Some(entry) = terminal_log {
+            let _ = append_desktop_log(&diagnostic_logs_path, &entry);
+        }
         if is_terminal {
             break;
         }
@@ -1001,6 +1030,7 @@ async fn answer_permission(
     approved: bool,
     state: State<'_, DesktopAppState>,
 ) -> Result<bool, String> {
+    let diagnostic_logs_path = state.diagnostic_logs_path.clone();
     let runtime = {
         let runtime = state.runtime.lock().await;
         runtime.clone()
@@ -1019,6 +1049,14 @@ async fn answer_permission(
             priority_agent::engine::conversation_loop::ToolApprovalResponse::rejected_once()
         };
         let _ = tx.send(response);
+        let _ = append_desktop_log(
+            &diagnostic_logs_path,
+            if approved {
+                "permission_answer approved=true"
+            } else {
+                "permission_answer approved=false"
+            },
+        );
         return Ok(true);
     }
 
@@ -1537,6 +1575,16 @@ fn append_desktop_log(path: &Path, message: &str) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
+fn sanitize_log_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn load_messages_from_store(
     store: &SessionStore,
     session_id: &str,
@@ -1993,6 +2041,31 @@ mod tests {
         assert!(diagnostics.iter().any(
             |item| item.id == "diagnostic_logs" && matches!(item.status, DiagnosticStatus::Ok)
         ));
+    }
+
+    #[test]
+    fn desktop_smoke_appends_desktop_log_entries() {
+        let log_path = std::env::temp_dir()
+            .join(format!("priority-agent-desktop-log-{}", std::process::id()))
+            .join("desktop.log");
+        let _ = std::fs::remove_file(&log_path);
+
+        append_desktop_log(&log_path, "run_error message=first line").unwrap();
+        append_desktop_log(&log_path, "run_completed").unwrap();
+
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(log.contains("run_error message=first line"));
+        assert!(log.contains("run_completed"));
+
+        let _ = std::fs::remove_dir_all(log_path.parent().unwrap());
+    }
+
+    #[test]
+    fn desktop_smoke_sanitizes_log_values() {
+        assert_eq!(
+            sanitize_log_value("failed\nwith\tcontrol chars"),
+            "failed with control chars"
+        );
     }
 
     #[test]

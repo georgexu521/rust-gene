@@ -795,7 +795,9 @@ this native launch path, and `apps/desktop/package.json` exposes it as
 The app now also writes a lightweight startup diagnostic log under its app data
 directory and surfaces the diagnostic log path in Settings. Settings can open
 the diagnostics folder directly, and environment diagnostics now check whether
-desktop logs are writable.
+desktop logs are writable. The log now also records run submission, run
+completion/error, and permission approval/rejection decisions, giving real
+desktop sessions a lightweight audit trail outside the transcript.
 
 Remaining: add richer native WebView interaction assertions and
 screenshot/visual regression thresholds after the current UI shape settles.
@@ -834,8 +836,8 @@ first-run install guidance, and an update story are in place.
    screenshot checks so desktop regressions are caught in the native shell, not
    only in Chromium preview.
 3. Release hardening: expand the new diagnostic log entrypoint into fuller
-   crash/error diagnostics, tighten permission auditing, and finish packaging
-   script documentation.
+   crash diagnostics and structured error reports, tighten permission auditing,
+   and finish packaging script documentation.
 4. Formal macOS distribution: Developer ID signing, notarization, polished DMG,
    first-run install notes, and update mechanism.
 5. Only after the desktop loop feels excellent, reconsider deferred surfaces
