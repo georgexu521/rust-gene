@@ -861,8 +861,26 @@ h1 {
 }
 
 .message.assistant.final.run-group-final {
-  margin-top: 2px;
-  padding-top: 14px;
+  margin-top: 4px;
+  padding-top: 10px;
+}
+
+.message-section-label,
+.timeline-section-label {
+  width: min(790px, 100%);
+  color: #8a939e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.message-section-label {
+  margin-bottom: 7px;
+}
+
+.timeline-section-label {
+  margin: 8px 0 -4px;
 }
 
 .message-label {
@@ -925,7 +943,7 @@ h1 {
 }
 
 .timeline-event.run-boundary {
-  margin-top: 6px;
+  margin-top: 0;
 }
 
 .timeline-event.run-group-start {

@@ -9,6 +9,7 @@ import {
   KeyRound,
   TerminalSquare,
 } from "lucide-react";
+import { Fragment } from "react";
 import { DesktopDiagnostic, ProviderModelStatus } from "../../runtime/desktopApi";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
 
@@ -42,18 +43,25 @@ export function Transcript({
       ) : (
         renderedItems.map(({ className, item }) =>
           item.role === "timeline" ? (
-            <TimelineEvent
-              className={className}
-              item={item}
-              key={item.id}
-              onPermissionAnswer={onPermissionAnswer}
-              onOpenTrace={onOpenTrace}
-            />
+            <Fragment key={item.id}>
+              {className?.includes("run-group-start") ? (
+                <div className="timeline-section-label">Process</div>
+              ) : null}
+              <TimelineEvent
+                className={className}
+                item={item}
+                onPermissionAnswer={onPermissionAnswer}
+                onOpenTrace={onOpenTrace}
+              />
+            </Fragment>
           ) : (
             <article
               className={`message ${item.role}${item.role === "assistant" && item.variant === "final" ? " final" : ""}${className ? ` ${className}` : ""}`}
               key={item.id}
             >
+              {className?.includes("run-group-final") ? (
+                <div className="message-section-label">Conclusion</div>
+              ) : null}
               <div className="message-label">
                 <span>{formatRole(item.role)}</span>
                 {item.role === "assistant" && item.variant === "final" ? (

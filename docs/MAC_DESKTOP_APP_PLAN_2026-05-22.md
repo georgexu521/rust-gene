@@ -651,7 +651,9 @@ now visually quieter so the main transcript reads less like a debug log.
 Successful shell/validation tools are compact, while failures, file diffs, and
 permissions stay expanded as high-value cards. Consecutive timeline items now
 carry run boundary and run-step classes so long runs scan as one coherent
-section before the final answer.
+section before the final answer. The transcript now adds explicit Process and
+Conclusion section labels around each run group, making long runs easier to scan
+without reading them as raw logs.
 
 #### Track C - Session And Project Ergonomics
 
