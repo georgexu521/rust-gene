@@ -6,6 +6,7 @@ import {
   listRecentSessions,
   newConversation,
   renameSession,
+  restoreArchivedSession,
   searchSessions,
   selectProject,
 } from "../src/runtime/desktopApi";
@@ -40,6 +41,17 @@ test.describe("desktop API web preview state", () => {
 
     const archivedSettings = await archiveSession("web-preview-release");
     expect(archivedSettings.archived_session_ids).toContain("web-preview-release");
+    expect((await listRecentSessions()).map((session) => session.id)).toEqual(["web-preview"]);
+
+    const restoredSettings = await restoreArchivedSession("web-preview-release");
+    expect(restoredSettings.archived_session_ids).not.toContain("web-preview-release");
+    expect((await listRecentSessions()).map((session) => session.id)).toEqual([
+      "web-preview-release",
+      "web-preview",
+    ]);
+
+    const rearchivedSettings = await archiveSession("web-preview-release");
+    expect(rearchivedSettings.archived_session_ids).toContain("web-preview-release");
     expect((await listRecentSessions()).map((session) => session.id)).toEqual(["web-preview"]);
 
     const clearedSettings = await deleteSession("web-preview");

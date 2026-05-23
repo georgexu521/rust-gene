@@ -169,6 +169,7 @@ let webPreviewSessions: RecentSession[] = [
     message_count: 5,
   },
 ];
+let webPreviewArchivedSessions: RecentSession[] = [];
 
 export function desktopHealth(): Promise<DesktopHealth> {
   if (!isTauriRuntime()) {
@@ -428,7 +429,11 @@ export function renameSession(sessionId: string, title: string): Promise<RecentS
 
 export function archiveSession(sessionId: string): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
+    const archived = webPreviewSessions.find((session) => session.id === sessionId);
     webPreviewSessions = webPreviewSessions.filter((session) => session.id !== sessionId);
+    if (archived && !webPreviewArchivedSessions.some((session) => session.id === sessionId)) {
+      webPreviewArchivedSessions = [archived, ...webPreviewArchivedSessions];
+    }
     webPreviewSettings = {
       ...webPreviewSettings,
       active_session_id:
@@ -443,9 +448,27 @@ export function archiveSession(sessionId: string): Promise<DesktopSettings> {
   return invoke("archive_session", { sessionId });
 }
 
+export function restoreArchivedSession(sessionId: string): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    const restored = webPreviewArchivedSessions.find((session) => session.id === sessionId);
+    webPreviewArchivedSessions = webPreviewArchivedSessions.filter((session) => session.id !== sessionId);
+    if (restored && !webPreviewSessions.some((session) => session.id === sessionId)) {
+      webPreviewSessions = [restored, ...webPreviewSessions];
+    }
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      archived_session_ids: webPreviewSettings.archived_session_ids.filter((id) => id !== sessionId),
+    };
+    return Promise.resolve(webPreviewSettings);
+  }
+
+  return invoke("restore_archived_session", { sessionId });
+}
+
 export function deleteSession(sessionId: string): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
     webPreviewSessions = webPreviewSessions.filter((session) => session.id !== sessionId);
+    webPreviewArchivedSessions = webPreviewArchivedSessions.filter((session) => session.id !== sessionId);
     webPreviewSettings = {
       ...webPreviewSettings,
       active_session_id:

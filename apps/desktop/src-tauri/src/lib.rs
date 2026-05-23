@@ -404,6 +404,19 @@ async fn archive_session(
 }
 
 #[tauri::command]
+async fn restore_archived_session(
+    session_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopSettingsResponse, String> {
+    {
+        let mut archived_session_ids = state.archived_session_ids.lock().await;
+        archived_session_ids.retain(|id| id != &session_id);
+    }
+    persist_current_settings(&state).await?;
+    desktop_settings(state).await
+}
+
+#[tauri::command]
 async fn delete_session(
     session_id: String,
     state: State<'_, DesktopAppState>,
@@ -1178,6 +1191,7 @@ pub fn run() {
             search_sessions,
             rename_session,
             archive_session,
+            restore_archived_session,
             delete_session,
             load_session_messages,
             resume_session,

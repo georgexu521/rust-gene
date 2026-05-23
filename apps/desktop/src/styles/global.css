@@ -499,6 +499,43 @@ h1 {
   border-left-color: #d15d55;
 }
 
+.session-undo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(790px, calc(100% - 56px));
+  margin: 10px auto 0;
+  padding: 7px 9px;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  color: #4d5662;
+  background: #fbfcfd;
+  font-size: 12px;
+}
+
+.session-undo-banner span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-undo-banner button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 1px solid #cdd5de;
+  border-radius: 7px;
+  color: #303740;
+  background: #ffffff;
+  font-weight: 750;
+}
+
+.session-undo-banner button:hover {
+  background: #f1f4f7;
+}
+
 .diagnostics-heading {
   display: flex;
   align-items: center;

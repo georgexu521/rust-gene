@@ -19,6 +19,11 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Desktop app Phase 1")).not.toBeVisible();
     await page.locator(".recent-item", { hasText: "Release readiness notes" }).hover();
     await page.getByRole("button", { name: /Archive Release readiness notes/ }).click();
+    await expect(page.locator(".session-undo-banner")).toContainText("Archived Release readiness notes");
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(page.getByText("Release readiness notes")).toBeVisible();
+    await page.locator(".recent-item", { hasText: "Release readiness notes" }).hover();
+    await page.getByRole("button", { name: /Archive Release readiness notes/ }).click();
     await expect(page.getByText("No matching sessions")).toBeVisible();
     await page.getByRole("button", { name: "Clear session search" }).click();
     await expect(page.getByText("Desktop app Phase 1")).toBeVisible();

@@ -676,7 +676,9 @@ corepack pnpm --dir apps/desktop test:ui-smoke
 
 Status: started. Session search now shows result counts, highlights title/model
 matches, and provides a clear-search control so filtered session lists recover
-without manual text deletion.
+without manual text deletion. Archive now has an undo path backed by
+`restore_archived_session`, so accidental archives can be recovered without
+deleting session data.
 
 #### Track D - Frontend Architecture And Test Hardening
 

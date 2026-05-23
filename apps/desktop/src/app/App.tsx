@@ -26,6 +26,7 @@ import {
   providerModelStatus,
   providerSetupInfo,
   renameSession,
+  restoreArchivedSession,
   resumeSession,
   searchSessions,
   selectProject,
@@ -63,6 +64,7 @@ export function App() {
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [lastArchivedSession, setLastArchivedSession] = useState<RecentSession | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
 
   useEffect(() => {
@@ -254,9 +256,24 @@ export function App() {
   async function handleArchiveSession(session: RecentSession) {
     try {
       setSettings(await archiveSession(session.id));
+      setLastArchivedSession(session);
       if (runState.selectedSessionId === session.id) {
         resetConversationView();
       }
+      await refreshSessions();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleRestoreArchivedSession() {
+    if (!lastArchivedSession) {
+      return;
+    }
+
+    try {
+      setSettings(await restoreArchivedSession(lastArchivedSession.id));
+      setLastArchivedSession(null);
       await refreshSessions();
     } catch (err) {
       setRunState((current) => withError(current, err));
@@ -270,6 +287,9 @@ export function App() {
 
     try {
       setSettings(await deleteSession(session.id));
+      if (lastArchivedSession?.id === session.id) {
+        setLastArchivedSession(null);
+      }
       if (runState.selectedSessionId === session.id) {
         resetConversationView();
       }
@@ -383,6 +403,15 @@ export function App() {
           diagnostics={diagnostics}
           onRefresh={() => void refreshDiagnostics()}
         />
+
+        {lastArchivedSession ? (
+          <div className="session-undo-banner" role="status">
+            <span>Archived {lastArchivedSession.title}</span>
+            <button type="button" onClick={() => void handleRestoreArchivedSession()}>
+              Undo
+            </button>
+          </div>
+        ) : null}
 
         <Transcript
           diagnostics={diagnostics}
