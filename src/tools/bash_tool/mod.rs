@@ -633,6 +633,14 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
     };
     let output_persisted = output_path.is_some();
     let output_available = output_persisted || !input.combined_output.trim().is_empty();
+    let recovery = shell_recovery_metadata(
+        input.command,
+        input.exit_code,
+        input.timed_out,
+        input.stdout,
+        input.stderr,
+        &command_classification,
+    );
     let data = json!({
         "audit": input.audit,
         "command_classification": classification.clone(),
@@ -674,8 +682,11 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
             "cancel_tool": serde_json::Value::Null,
             "cancel_handle": serde_json::Value::Null,
             "terminal_kind": input.terminal_kind,
-            "pty": input.pty
+            "pty": input.pty,
+            "failure_reason": recovery.get("reason").cloned().unwrap_or(serde_json::Value::Null),
+            "recovery_action": recovery.get("action").cloned().unwrap_or(serde_json::Value::Null)
         },
+        "recovery": recovery,
         "execution": {
             "exit_code": input.exit_code,
             "stdout_length": input.stdout.len(),
@@ -686,6 +697,64 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
     });
 
     (content_preview, data)
+}
+
+fn shell_recovery_metadata(
+    command: &str,
+    exit_code: i32,
+    timed_out: bool,
+    stdout: &str,
+    stderr: &str,
+    classification: &CommandClassification,
+) -> serde_json::Value {
+    let output = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    let (category, action, reason) = if timed_out {
+        (
+            "timeout",
+            "retry_background_or_increase_timeout",
+            "command timed out before completion",
+        )
+    } else if exit_code == 0 {
+        ("none", "none", "command completed successfully")
+    } else if output.contains("command not found") || output.contains("not found") {
+        (
+            "command_not_found",
+            "install_or_fix_path",
+            "executable was not found in PATH",
+        )
+    } else if output.contains("permission denied") || output.contains("operation not permitted") {
+        (
+            "permission_denied",
+            "check_file_permissions_or_request_access",
+            "command failed because the OS denied access",
+        )
+    } else if classification.requires_pty() {
+        (
+            "interactive_needs_pty",
+            "retry_with_pty_mode",
+            "interactive command should run in PTY mode",
+        )
+    } else if classification.is_safe_validation() {
+        (
+            "validation_failed",
+            "inspect_output_then_fix_code",
+            "validation command returned a non-zero exit code",
+        )
+    } else {
+        (
+            "nonzero_exit",
+            "inspect_output_before_retry",
+            "command returned a non-zero exit code",
+        )
+    };
+
+    json!({
+        "category": category,
+        "action": action,
+        "reason": reason,
+        "exit_code": exit_code,
+        "command": command,
+    })
 }
 
 fn terminal_task_status(exit_code: i32, timed_out: bool) -> &'static str {
@@ -826,6 +895,13 @@ Retry with mode=\"pty\" for PTY-backed foreground execution.";
             "pty_used": false,
             "reason": "interactive command requires a PTY-backed execution mode",
             "suggested_recovery": "Retry this bash command with mode=\"pty\", or use a non-interactive command/script with explicit arguments."
+        },
+        "recovery": {
+            "category": "interactive_needs_pty",
+            "action": "retry_with_pty_mode",
+            "reason": "interactive command requires a PTY-backed execution mode",
+            "exit_code": serde_json::Value::Null,
+            "command": command
         },
         "shell_result": {
             "command": command,
@@ -1705,6 +1781,59 @@ mod tests {
         assert_eq!(data["terminal_requirement"]["pty_available"], true);
         assert_eq!(data["terminal_requirement"]["pty_used"], false);
         assert_eq!(data["shell_result"]["evidence_status"], "not_run");
+        assert_eq!(data["recovery"]["category"], "interactive_needs_pty");
+        assert_eq!(data["recovery"]["action"], "retry_with_pty_mode");
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_reports_command_not_found_recovery() {
+        let tool = BashTool;
+        let dir = tempdir().expect("create temp dir");
+        let params = json!({
+            "command": "priority-agent-definitely-missing-command",
+            "description": "Missing command",
+            "backend": "local",
+            "working_dir": dir.path(),
+            "timeout": 5
+        });
+        let context = ToolContext::new(dir.path(), "test-session-missing-command");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(!result.success);
+        let data = result.data.as_ref().expect("bash result data");
+        assert_eq!(data["recovery"]["category"], "command_not_found");
+        assert_eq!(data["recovery"]["action"], "install_or_fix_path");
+        assert_eq!(
+            data["terminal_task"]["recovery_action"],
+            "install_or_fix_path"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bash_tool_reports_validation_failure_recovery() {
+        let tool = BashTool;
+        let dir = tempdir().expect("create temp dir");
+        let params = json!({
+            "command": "test -f missing.txt",
+            "description": "Fail validation",
+            "backend": "local",
+            "working_dir": dir.path(),
+            "timeout": 5
+        });
+        let context = ToolContext::new(dir.path(), "test-session-validation-failed");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(!result.success);
+        let data = result.data.as_ref().expect("bash result data");
+        assert_eq!(data["command_classification"]["command_kind"], "validation");
+        assert_eq!(data["recovery"]["category"], "validation_failed");
+        assert_eq!(data["recovery"]["action"], "inspect_output_then_fix_code");
+        assert_eq!(
+            data["terminal_task"]["failure_reason"],
+            "validation command returned a non-zero exit code"
+        );
     }
 
     #[tokio::test]

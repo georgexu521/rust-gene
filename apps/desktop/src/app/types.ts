@@ -46,6 +46,10 @@ export type TimelineSummary =
       deletions?: number;
       diffPreview?: string;
       diffTruncated?: boolean;
+      rollbackId?: string;
+      diagnosticsDelta?: string;
+      diagnosticsErrorDelta?: number;
+      diagnosticsWarningDelta?: number;
     }
   | {
       kind: "failure";
@@ -53,6 +57,18 @@ export type TimelineSummary =
       recovery?: string;
       outputPreview?: string;
       outputTruncated?: boolean;
+    }
+  | {
+      kind: "permission";
+      family?: string;
+      requestKind?: string;
+      risk?: string;
+      decision?: string;
+      reason?: string;
+      recovery?: string;
+      commandCategory?: string;
+      parserStatus?: string;
+      mutation?: boolean;
     };
 
 export type TimelineStatus =

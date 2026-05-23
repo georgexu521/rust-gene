@@ -215,7 +215,7 @@ function TimelineEvent({
             onOpenContext={onOpenContext}
           />
         ) : null}
-        {!item.summary && item.detail ? (
+        {(!item.summary || item.summary.kind === "permission") && item.detail ? (
           <div className="timeline-detail">{item.detail}</div>
         ) : null}
         {!isCompact && item.facts && item.facts.length > 0 ? (
@@ -332,6 +332,8 @@ function TimelineSummaryView({
               summary.operations !== undefined ? `${summary.operations} operations` : null,
               summary.additions !== undefined ? `+${summary.additions}` : null,
               summary.deletions !== undefined ? `-${summary.deletions}` : null,
+              summary.rollbackId ? `rollback ${summary.rollbackId}` : null,
+              diagnosticsDeltaLabel(summary),
             ]).join(" · ")}
           </div>
           {summary.diffPreview ? (
@@ -341,6 +343,28 @@ function TimelineSummaryView({
               text={summary.diffPreview}
             />
           ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (summary.kind === "permission") {
+    return (
+      <div className="timeline-summary permission-review">
+        <KeyRound aria-hidden="true" size={15} />
+        <div>
+          <strong>{permissionHeadline(summary)}</strong>
+          <div className="timeline-summary-meta">
+            {compactSummaryMeta([
+              summary.risk ? `risk ${summary.risk}` : null,
+              summary.requestKind ? summary.requestKind.replaceAll("_", " ") : null,
+              summary.commandCategory ? summary.commandCategory.replaceAll("_", " ") : null,
+              summary.parserStatus ? `parser ${summary.parserStatus}` : null,
+              summary.mutation ? "mutates workspace" : null,
+            ]).join(" · ")}
+          </div>
+          {summary.reason ? <div className="timeline-detail">{summary.reason}</div> : null}
+          {summary.recovery ? <div className="timeline-recovery">{summary.recovery}</div> : null}
         </div>
       </div>
     );
@@ -366,8 +390,34 @@ function TimelineSummaryView({
   );
 }
 
+function permissionHeadline(summary: Extract<TimelineSummary, { kind: "permission" }>) {
+  const family = summary.family ? summary.family.replaceAll("_", " ") : "tool";
+  return `Review ${family} permission`;
+}
+
 function isCompactToolEvent(item: TimelineEventItem) {
   return item.kind === "tool" && item.status === "completed" && item.summary?.kind === "shell";
+}
+
+function diagnosticsDeltaLabel(summary: Extract<TimelineSummary, { kind: "file" }>) {
+  if (!summary.diagnosticsDelta || summary.diagnosticsDelta === "not_checked") {
+    return null;
+  }
+  if (summary.diagnosticsDelta === "unchanged") {
+    return "diagnostics unchanged";
+  }
+  if (summary.diagnosticsDelta === "improved") {
+    return "diagnostics improved";
+  }
+  const parts = compactSummaryMeta([
+    summary.diagnosticsErrorDelta ? `${signed(summary.diagnosticsErrorDelta)} errors` : null,
+    summary.diagnosticsWarningDelta ? `${signed(summary.diagnosticsWarningDelta)} warnings` : null,
+  ]);
+  return parts.length > 0 ? parts.join(", ") : summary.diagnosticsDelta.replaceAll("_", " ");
+}
+
+function signed(value: number) {
+  return value > 0 ? `+${value}` : `${value}`;
 }
 
 function ExpandablePreview({

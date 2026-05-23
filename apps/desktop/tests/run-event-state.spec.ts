@@ -354,6 +354,10 @@ test.describe("run event state", () => {
         additions: 4,
         deletions: 1,
         diff_preview: "@@ -1 +1 @@\n-old\n+new",
+        rollback_id: "cp_123",
+        diagnostics_delta_status: "new_errors",
+        diagnostics_delta_error_count: 1,
+        diagnostics_delta_warning_count: 0,
       },
     }).state;
 
@@ -370,6 +374,45 @@ test.describe("run event state", () => {
           additions: 4,
           deletions: 1,
           diffPreview: "@@ -1 +1 @@\n-old\n+new",
+          rollbackId: "cp_123",
+          diagnosticsDelta: "new_errors",
+          diagnosticsErrorDelta: 1,
+          diagnosticsWarningDelta: 0,
+        }),
+      }),
+    );
+  });
+
+  test("renders file guardrail failures with recovery metadata", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "tool_started",
+      id: "file-guardrail-1",
+      name: "file_edit",
+    }).state;
+    const completed = applyRunEvent(started, {
+      type: "tool_completed",
+      id: "file-guardrail-1",
+      result_preview: "Refusing file_edit for '.env'",
+      metadata: {
+        tool: "file_edit",
+        success: false,
+        path: ".env",
+        failure_kind: "secret_or_credential_target",
+        guardrail_reason: "target looks like an environment, credential, certificate, or SSH key file",
+        recovery_action: "ask_user_for_explicit_secret_file_plan",
+      },
+    }).state;
+
+    expect(completed.items).toContainEqual(
+      expect.objectContaining({
+        id: "file-guardrail-1",
+        role: "timeline",
+        title: "Edited file",
+        status: "failed",
+        summary: expect.objectContaining({
+          kind: "failure",
+          reason: expect.stringContaining("credential"),
+          recovery: "ask_user_for_explicit_secret_file_plan",
         }),
       }),
     );
@@ -401,6 +444,111 @@ test.describe("run event state", () => {
         id: "answer-1-trace",
         kind: "permission",
         title: "Permission approved",
+      }),
+    );
+  });
+
+  test("renders permission evidence in the timeline and trace", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+    }).state;
+    const requested = applyRunEvent(started, {
+      type: "permission_request",
+      id: "permission-1",
+      tool_name: "bash",
+      arguments: { command: "git push" },
+      prompt: "Allow git push?",
+      metadata: {
+        permission_evidence: {
+          schema: "permission_decision_evidence.v1",
+          request_kind: "runtime_rule",
+          permission_family: "shell",
+          decision: "ask",
+          risk_level: "medium",
+          reasons: ["command matched git remote mutation policy"],
+          recovery: {
+            recommended_action: "Approve once if this push is expected.",
+          },
+          command_classification: {
+            parser_status: "simple",
+            category: "git_remote_mutation",
+            mutation: true,
+          },
+        },
+      },
+    }).state;
+
+    expect(requested.items).toContainEqual(
+      expect.objectContaining({
+        id: "permission-1",
+        role: "timeline",
+        kind: "permission",
+        summary: expect.objectContaining({
+          kind: "permission",
+          family: "shell",
+          requestKind: "runtime_rule",
+          risk: "medium",
+          decision: "ask",
+          reason: "command matched git remote mutation policy",
+          recovery: "Approve once if this push is expected.",
+          commandCategory: "git_remote_mutation",
+          parserStatus: "simple",
+          mutation: true,
+        }),
+      }),
+    );
+    expect(requested.traceItems).toContainEqual(
+      expect.objectContaining({
+        id: "permission-1-permission",
+        detail: expect.stringContaining("risk medium"),
+      }),
+    );
+  });
+
+  test("keeps late permission requests visible after final text and completion", () => {
+    const submitted = submitUserMessage(initialRunViewState, "Inspect timeline", [], ids("user-1"));
+    let state = applyRunEvent(submitted, {
+      type: "run_started",
+      run_id: "run-1",
+      session_id: "session-1",
+    }).state;
+    state = applyRunEvent(state, {
+      type: "tool_started",
+      id: "tool-1",
+      name: "bash",
+    }).state;
+    state = applyRunEvent(state, {
+      type: "tool_completed",
+      id: "tool-1",
+      result_preview: "ok",
+      metadata: { tool: "bash", success: true, command: "cargo test -q" },
+    }).state;
+    state = applyRunEvent(state, { type: "assistant_delta", text: "Done" }, ids("assistant-1"))
+      .state;
+    state = applyRunEvent(state, {
+      type: "permission_request",
+      id: "permission-late",
+      tool_name: "bash",
+      arguments: { command: "git push" },
+      prompt: "Allow git push to update the remote branch?",
+      metadata: {
+        permission_evidence: {
+          request_kind: "runtime_rule",
+          permission_family: "shell",
+          risk_level: "medium",
+        },
+      },
+    }).state;
+    state = applyRunEvent(state, { type: "run_completed" }).state;
+
+    expect(state.items).toContainEqual(
+      expect.objectContaining({
+        id: "permission-late",
+        role: "timeline",
+        kind: "permission",
+        detail: "Allow git push to update the remote branch?",
+        status: "waiting",
       }),
     );
   });

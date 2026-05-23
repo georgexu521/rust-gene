@@ -94,11 +94,11 @@ impl DesktopRuntime {
             return;
         }
         if store
-            .message_count(&current_session_id)
+            .message_count(current_session_id)
             .map(|count| count == 0)
             .unwrap_or(false)
         {
-            let _ = store.delete_session(&current_session_id);
+            let _ = store.delete_session(current_session_id);
         }
     }
 }
@@ -154,6 +154,8 @@ pub enum DesktopRunEvent {
         tool_name: String,
         arguments: serde_json::Value,
         prompt: String,
+        metadata: Option<serde_json::Value>,
+        review: Option<Box<crate::engine::human_review::HumanReviewAuditRecord>>,
     },
     Usage {
         prompt_tokens: u32,
@@ -217,12 +219,15 @@ impl DesktopRunEvent {
                 tool_name,
                 arguments,
                 prompt,
-                ..
+                metadata,
+                review,
             } => Self::PermissionRequest {
                 id,
                 tool_name,
                 arguments,
                 prompt,
+                metadata,
+                review,
             },
         }
     }

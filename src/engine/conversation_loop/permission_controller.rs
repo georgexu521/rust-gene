@@ -170,9 +170,27 @@ impl PermissionController {
                 .unwrap_or(serde_json::Value::Null);
         let ui_render_kind = serde_json::to_value(tool.ui_render_kind(&tool_call.arguments))
             .unwrap_or(serde_json::Value::Null);
+        let permission_evidence = permission_decision_evidence_json(PermissionEvidenceInput {
+            kind,
+            family,
+            tool_name,
+            tool_call,
+            context,
+            permission_requires,
+            tool_requires,
+            raw_tool_requires,
+            drift_requires_approval,
+            permission_explanation: &permission_explanation,
+            patterns: &patterns,
+            allowed_always_rules: &allowed_always_rules,
+            command_classification: &command_classification,
+            remote_classification: &remote_classification,
+            recovery_feedback: &recovery_feedback,
+        });
         let metadata = serde_json::json!({
             "tool_name": tool_name,
             "arguments": tool_call.arguments,
+            "permission_evidence": permission_evidence,
             "permission_requires": permission_requires,
             "tool_requires": tool_requires,
             "raw_tool_requires": raw_tool_requires,
@@ -278,6 +296,10 @@ impl PermissionController {
                     tool_name: tool_call.name.clone(),
                     arguments: tool_call.arguments.clone(),
                     prompt: prompt.clone(),
+                    metadata: evaluation
+                        .record
+                        .as_ref()
+                        .map(|record| record.metadata.clone()),
                     review: evaluation
                         .record
                         .as_ref()
@@ -479,6 +501,11 @@ fn permission_command_classification(
         "command_kind": classification.command_kind,
         "command_category": classification.category,
         "validation_family": classification.validation_family,
+        "parser_status": classification.parser_status,
+        "subcommands": classification.subcommands,
+        "redirections": classification.redirections,
+        "mutation_paths": classification.mutation_paths,
+        "mutation_indicators": classification.mutation_indicators,
         "path_patterns": classification.path_patterns,
         "safe_for_closeout": classification.safe_for_closeout,
         "requires_pty": classification.requires_pty(),
@@ -490,6 +517,67 @@ fn permission_command_classification(
         "risky_shell_wrapper": classification.risky_shell_wrapper,
         "expected_silent_output": classification.expected_silent_output,
         "permission_rule_suggestions": classification.permission_rule_suggestions,
+    })
+}
+
+struct PermissionEvidenceInput<'a> {
+    kind: PermissionRequestKind,
+    family: PermissionToolFamily,
+    tool_name: &'a str,
+    tool_call: &'a ToolCall,
+    context: &'a ToolContext,
+    permission_requires: bool,
+    tool_requires: bool,
+    raw_tool_requires: bool,
+    drift_requires_approval: bool,
+    permission_explanation: &'a crate::permissions::ExplainableDecision,
+    patterns: &'a [String],
+    allowed_always_rules: &'a [String],
+    command_classification: &'a serde_json::Value,
+    remote_classification: &'a serde_json::Value,
+    recovery_feedback: &'a str,
+}
+
+fn permission_decision_evidence_json(input: PermissionEvidenceInput<'_>) -> serde_json::Value {
+    let matched_rules = input
+        .permission_explanation
+        .matched_rules
+        .iter()
+        .map(|(decision, rule)| {
+            serde_json::json!({
+                "decision": format!("{:?}", decision),
+                "source": format!("{:?}", rule.source),
+                "pattern": rule.pattern,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "schema": "permission_decision_evidence.v1",
+        "tool_name": input.tool_name,
+        "call_id": input.tool_call.id,
+        "request_kind": input.kind.as_str(),
+        "permission_family": input.family.as_str(),
+        "permission_mode": format!("{:?}", input.context.permission_context.mode),
+        "decision": format!("{:?}", input.permission_explanation.decision),
+        "risk_level": format!("{:?}", input.permission_explanation.risk_level),
+        "confidence": input.permission_explanation.confidence,
+        "requires": {
+            "permission_rule": input.permission_requires,
+            "tool_confirmation": input.tool_requires,
+            "raw_tool_confirmation": input.raw_tool_requires,
+            "goal_drift": input.drift_requires_approval,
+        },
+        "matched_rules": matched_rules,
+        "matched_patterns": input.patterns,
+        "allowed_always_rules": input.allowed_always_rules,
+        "warnings": input.permission_explanation.warnings,
+        "reasons": input.permission_explanation.reasons,
+        "command_classification": input.command_classification,
+        "remote_classification": input.remote_classification,
+        "recovery": {
+            "recommended_action": input.recovery_feedback,
+            "safe_retry": false,
+        }
     })
 }
 
@@ -755,6 +843,22 @@ mod tests {
         assert!(evaluation.requires_approval);
         assert_eq!(metadata["permission_family"], "shell");
         assert_eq!(
+            metadata["permission_evidence"]["schema"],
+            "permission_decision_evidence.v1"
+        );
+        assert_eq!(
+            metadata["permission_evidence"]["request_kind"],
+            "runtime_rule"
+        );
+        assert_eq!(
+            metadata["permission_evidence"]["permission_family"],
+            "shell"
+        );
+        assert_eq!(
+            metadata["permission_evidence"]["requires"]["permission_rule"],
+            true
+        );
+        assert_eq!(
             metadata["command_classification"]["command_category"],
             "dev_server"
         );
@@ -779,6 +883,10 @@ mod tests {
             "exact"
         );
         assert_eq!(
+            metadata["permission_evidence"]["command_classification"]["parser_status"],
+            "simple"
+        );
+        assert_eq!(
             metadata["permission_matcher_input"],
             "npm run dev -- --host 0.0.0.0"
         );
@@ -787,6 +895,44 @@ mod tests {
             metadata["search_or_read"],
             serde_json::json!({"is_search": false, "is_read": false, "is_list": false})
         );
+    }
+
+    #[test]
+    fn bash_permission_evidence_includes_mutation_subcommand_facts() {
+        let tmp = tempdir().expect("tempdir");
+        let mut context = ToolContext::new(tmp.path(), "session-1");
+        context.permission_context.rules = crate::permissions::PermissionRules::new().ask("bash");
+        let tool_call = ToolCall {
+            id: "call_bash_mutation".to_string(),
+            name: "bash".to_string(),
+            arguments: json!({"command": "rg TODO src && sed -i '' 's/a/b/' src/lib.rs"}),
+        };
+
+        let evaluation = PermissionController::evaluate_tool_permission(
+            "session-1",
+            &tool_call,
+            &crate::tools::BashTool,
+            &context,
+            &DriftCheck::ok(),
+        );
+
+        let evidence = &evaluation.record.as_ref().unwrap().metadata["permission_evidence"];
+        assert_eq!(
+            evidence["command_classification"]["parser_status"],
+            "compound"
+        );
+        assert_eq!(
+            evidence["command_classification"]["subcommands"][1]["category"],
+            "file_mutation"
+        );
+        assert_eq!(
+            evidence["command_classification"]["subcommands"][1]["mutation"],
+            true
+        );
+        assert!(evidence["command_classification"]["mutation_indicators"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("sed_in_place")));
     }
 
     #[test]

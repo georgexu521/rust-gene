@@ -290,6 +290,62 @@ pub(super) fn file_edit_diagnostics_content_line(diagnostics: &Value) -> Option<
     ))
 }
 
+pub(super) fn file_edit_diagnostics_delta(before: &Value, after: &Value) -> Value {
+    let before_errors = diagnostic_count_for(before, "error_count");
+    let after_errors = diagnostic_count_for(after, "error_count");
+    let before_warnings = diagnostic_count_for(before, "warning_count");
+    let after_warnings = diagnostic_count_for(after, "warning_count");
+    let before_total = diagnostic_count_for(before, "diagnostic_count");
+    let after_total = diagnostic_count_for(after, "diagnostic_count");
+    let checked = before
+        .get("checked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || after
+            .get("checked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let status = if !checked {
+        "not_checked"
+    } else if after_errors > before_errors {
+        "new_errors"
+    } else if after_warnings > before_warnings {
+        "new_warnings"
+    } else if after_total > before_total {
+        "new_diagnostics"
+    } else if after_total < before_total {
+        "improved"
+    } else {
+        "unchanged"
+    };
+
+    json!({
+        "checked": checked,
+        "status": status,
+        "before": {
+            "diagnostic_count": before_total,
+            "error_count": before_errors,
+            "warning_count": before_warnings,
+        },
+        "after": {
+            "diagnostic_count": after_total,
+            "error_count": after_errors,
+            "warning_count": after_warnings,
+        },
+        "change": {
+            "diagnostic_count": after_total - before_total,
+            "error_count": after_errors - before_errors,
+            "warning_count": after_warnings - before_warnings,
+        },
+        "introduced_error": after_errors > before_errors,
+        "introduced_warning": after_warnings > before_warnings,
+    })
+}
+
+fn diagnostic_count_for(diagnostics: &Value, key: &str) -> i64 {
+    diagnostics.get(key).and_then(Value::as_i64).unwrap_or(0)
+}
+
 fn diagnostic_headline(diagnostics: &Value, key: &str, label: &str) -> Option<String> {
     diagnostics
         .get(key)
@@ -407,5 +463,27 @@ mod tests {
         let summary = diagnostics_summary_with_warning_then_error();
 
         assert_diagnostics_content_prefers_first_error(&summary);
+    }
+
+    #[test]
+    fn diagnostics_delta_flags_new_errors() {
+        let before = file_edit_diagnostics_summary_json(
+            1,
+            1,
+            vec![(
+                "rust-analyzer".to_string(),
+                test_diagnostic(2, 1, "unused variable"),
+            )],
+            Vec::new(),
+            Vec::new(),
+        );
+        let after = diagnostics_summary_with_warning_then_error();
+
+        let delta = file_edit_diagnostics_delta(&before, &after);
+
+        assert_eq!(delta["checked"], true);
+        assert_eq!(delta["status"], "new_errors");
+        assert_eq!(delta["change"]["error_count"], 1);
+        assert_eq!(delta["introduced_error"], true);
     }
 }

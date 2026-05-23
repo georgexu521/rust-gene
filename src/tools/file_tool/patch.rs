@@ -7,10 +7,10 @@ use super::text_codec::{
 };
 use super::{
     acquire_file_mutation_lock, check_file_size_limit, edit_diff_summary, edit_diff_summary_json,
-    edit_preview_json, file_path_identity, file_read_state_guidance, is_file_modified_since_read,
-    is_unc_or_network_path, mark_file_read_with_state, path_identity_json, read_before_edit_status,
-    resolve_path, FileEditTool, FilePathIdentity, ReadBeforeEditStatus,
-    MAX_EDITABLE_FILE_SIZE_BYTES,
+    edit_preview_json, file_path_identity, file_read_state_guidance, high_risk_file_target_result,
+    is_file_modified_since_read, is_unc_or_network_path, mark_file_read_with_state,
+    path_identity_json, read_before_edit_status, resolve_path, FileEditTool, FilePathIdentity,
+    ReadBeforeEditStatus, MAX_EDITABLE_FILE_SIZE_BYTES,
 };
 use crate::engine::checkpoint::RestoreResult;
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
@@ -164,7 +164,7 @@ impl Tool for FilePatchTool {
 
         let specs = match prepare_specs(operations, &context) {
             Ok(specs) => specs,
-            Err(err) => return ToolResult::error(err),
+            Err(result) => return result,
         };
 
         let _guards = acquire_patch_locks(&specs).await;
@@ -409,29 +409,43 @@ fn patch_write_failure_result(
     result
 }
 
-fn prepare_specs(operations: &[Value], context: &ToolContext) -> Result<Vec<PatchSpec>, String> {
+#[allow(clippy::result_large_err)]
+fn prepare_specs(
+    operations: &[Value],
+    context: &ToolContext,
+) -> Result<Vec<PatchSpec>, ToolResult> {
     let mut seen = HashSet::new();
     let mut specs = Vec::with_capacity(operations.len());
     for operation in operations {
         let path_arg = operation["path"]
             .as_str()
-            .ok_or_else(|| "file_patch operation missing path".to_string())?;
+            .ok_or_else(|| ToolResult::error("file_patch operation missing path"))?;
         if path_arg.trim().is_empty() {
-            return Err("file_patch operation path cannot be empty".to_string());
+            return Err(ToolResult::error(
+                "file_patch operation path cannot be empty",
+            ));
         }
         if is_unc_or_network_path(path_arg) {
-            return Err(format!(
+            return Err(ToolResult::error(format!(
                 "Refusing to patch UNC/network path '{}'. Use a local path instead.",
                 path_arg
-            ));
+            )));
         }
-        let path = resolve_path(path_arg, &context.working_dir)?;
+        let path = match resolve_path(path_arg, &context.working_dir) {
+            Ok(path) => path,
+            Err(msg) => return Err(ToolResult::error(msg)),
+        };
         let identity = file_path_identity(path_arg, &path, &context.working_dir);
+        if let Some(result) =
+            high_risk_file_target_result(&path, &identity, &context.working_dir, "file_patch")
+        {
+            return Err(result);
+        }
         if !seen.insert(identity.state_key.clone()) {
-            return Err(format!(
+            return Err(ToolResult::error(format!(
                 "file_patch has multiple operations for the same file: {}",
                 path_arg
-            ));
+            )));
         }
         specs.push(PatchSpec {
             path_arg: path_arg.to_string(),

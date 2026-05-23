@@ -182,10 +182,12 @@ export function applyRunEvent(
       };
     }
     case "permission_request": {
+      const permissionSummary = permissionTimelineSummary(event);
+      const permissionDetail = permissionSummary?.reason || event.prompt;
       const updatedRunState = updateLatestRunSummary(state, {
         stage: "waiting",
         headline: "Waiting for permission",
-        detail: event.prompt,
+        detail: permissionDetail,
         stats: runStats(state.items),
       });
       return {
@@ -198,7 +200,7 @@ export function applyRunEvent(
               id: `${event.id}-permission`,
               kind: "permission",
               title: `Permission requested: ${event.tool_name}`,
-              detail: event.prompt,
+              detail: permissionTraceDetail(event, permissionSummary),
             },
           ],
           items: [
@@ -208,6 +210,8 @@ export function applyRunEvent(
               kind: "permission",
               title: `Permission needed: ${event.tool_name}`,
               detail: event.prompt,
+              facts: [event.prompt],
+              summary: permissionSummary,
               status: "waiting",
               traceId: `${event.id}-permission`,
             }),
@@ -821,6 +825,26 @@ type ToolPresentation = {
   status: "completed" | "failed";
 };
 
+type PermissionEvidenceSummary = {
+  permission_family?: string;
+  request_kind?: string;
+  risk_level?: string;
+  decision?: string;
+  reasons?: unknown;
+  reason?: string;
+  recovery?: unknown;
+  command_classification?: unknown;
+};
+
+type PermissionReviewSummary = {
+  risk?: string;
+  reason?: string;
+  recovery_hint?: string;
+  risk_facts?: unknown;
+  matched_rules?: unknown;
+  classifier_result?: unknown;
+};
+
 type ToolSummary = {
   tool?: string;
   success?: boolean;
@@ -838,6 +862,14 @@ type ToolSummary = {
   deletions?: number;
   diff_preview?: string;
   diff_preview_truncated?: boolean;
+  checkpoint_id?: string;
+  rollback_id?: string;
+  failure_kind?: string;
+  guardrail_reason?: string;
+  diagnostics_delta_status?: string;
+  diagnostics_delta_diagnostic_count?: number;
+  diagnostics_delta_error_count?: number;
+  diagnostics_delta_warning_count?: number;
   output_chars?: number;
   terminal_task?: Record<string, unknown>;
   terminal_tasks_count?: number;
@@ -869,6 +901,79 @@ function presentToolCompletion(resultPreview: string, metadata: unknown): ToolPr
     summary: specialSummary,
     status,
   };
+}
+
+function permissionTimelineSummary(
+  event: PermissionRequest,
+): Extract<TimelineSummary, { kind: "permission" }> | undefined {
+  const evidence = permissionEvidence(event.metadata);
+  const review = permissionReview(event.review);
+  const command = commandClassification(evidence?.command_classification || review?.classifier_result);
+  if (!evidence && !review && !command) {
+    return undefined;
+  }
+  return {
+    kind: "permission",
+    family: evidence?.permission_family,
+    requestKind: evidence?.request_kind,
+    risk: evidence?.risk_level || review?.risk,
+    decision: evidence?.decision,
+    reason: firstString(evidence?.reasons) || evidence?.reason || review?.reason,
+    recovery:
+      recoveryAction(evidence?.recovery) ||
+      review?.recovery_hint ||
+      "Approve only if the request matches the intended task.",
+    commandCategory: stringField(command, "category"),
+    parserStatus: stringField(command, "parser_status"),
+    mutation: booleanField(command, "mutation"),
+  };
+}
+
+function permissionTraceDetail(
+  event: PermissionRequest,
+  summary: Extract<TimelineSummary, { kind: "permission" }> | undefined,
+) {
+  const parts = compactFacts([
+    event.prompt,
+    summary?.risk ? `risk ${summary.risk}` : null,
+    summary?.requestKind ? `kind ${summary.requestKind}` : null,
+    summary?.commandCategory ? `command ${summary.commandCategory}` : null,
+    summary?.recovery,
+  ]);
+  return parts.join(" · ");
+}
+
+function permissionEvidence(metadata: unknown): PermissionEvidenceSummary | null {
+  if (!isRecord(metadata)) {
+    return null;
+  }
+  const evidence = metadata.permission_evidence;
+  return isRecord(evidence) ? (evidence as PermissionEvidenceSummary) : null;
+}
+
+function permissionReview(review: unknown): PermissionReviewSummary | null {
+  return isRecord(review) ? (review as PermissionReviewSummary) : null;
+}
+
+function commandClassification(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function recoveryAction(value: unknown) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return stringField(value, "recommended_action") || stringField(value, "action");
+}
+
+function firstString(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.find((item): item is string => typeof item === "string");
 }
 
 function toolSummary(metadata: unknown): ToolSummary | null {
@@ -940,7 +1045,7 @@ function timelineSummary(summary: ToolSummary, resultPreview: string): TimelineS
   if (summary.success === false) {
     return {
       kind: "failure",
-      reason: summary.error_preview || resultPreview || "Tool failed",
+      reason: summary.guardrail_reason || summary.error_preview || resultPreview || "Tool failed",
       recovery: summary.user_note || summary.recovery_action,
       outputPreview: resultPreview,
       outputTruncated: resultPreview.length >= 2000,
@@ -970,6 +1075,10 @@ function timelineSummary(summary: ToolSummary, resultPreview: string): TimelineS
       deletions: summary.deletions,
       diffPreview: summary.diff_preview,
       diffTruncated: summary.diff_preview_truncated,
+      rollbackId: summary.rollback_id || summary.checkpoint_id,
+      diagnosticsDelta: summary.diagnostics_delta_status,
+      diagnosticsErrorDelta: summary.diagnostics_delta_error_count,
+      diagnosticsWarningDelta: summary.diagnostics_delta_warning_count,
     };
   }
 
@@ -1032,6 +1141,16 @@ function validationLabel(value: string) {
 
 function compactFacts(values: Array<string | null | undefined>) {
   return values.filter((value): value is string => Boolean(value && value.trim()));
+}
+
+function stringField(value: Record<string, unknown> | null, key: string) {
+  const field = value?.[key];
+  return typeof field === "string" ? field : undefined;
+}
+
+function booleanField(value: Record<string, unknown> | null, key: string) {
+  const field = value?.[key];
+  return typeof field === "boolean" ? field : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

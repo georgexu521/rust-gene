@@ -2,8 +2,10 @@
 
 Date: 2026-05-23
 
-Status: focused follow-up plan for closing the programming-quality gap before
-more desktop UI polish.
+Status: implemented reliability foundation. Tracks A-F are functionally
+covered by runtime/frontend changes and targeted tests; Track G now has a
+green targeted gauntlet for this batch, while full dogfood automation remains
+the release-candidate gate.
 
 Goal: make Priority Agent reliable enough for daily coding work by deepening
 tool contracts, file editing, bash execution, permission evidence, recovery,
@@ -662,9 +664,10 @@ Acceptance:
 6. Track E: compaction continuity for long coding sessions.
 7. Track G: deterministic and dogfood gauntlet.
 
-The immediate next implementation should start with Track A. It is the cheapest
-way to find silent default semantics before deeper file and shell work builds on
-top of them.
+Current implementation status: Tracks A-F have landed as the first reliability
+foundation. The next implementation should turn Track G from targeted gates into
+repeatable dogfood scenarios and then use failures from those runs to drive the
+next maturity pass.
 
 ## Progress Log
 
@@ -697,3 +700,82 @@ top of them.
   - targeted tests now pin the metadata shape so desktop timeline and trace
     views can render concrete file-edit evidence instead of generic success
     messages.
+- Continued Track B by making `file_edit` failure recovery structured:
+  - stale-read and pre-write race conflicts now return conflict metadata with
+    read/current hashes, changed flags, path identity, and recommended recovery
+    actions;
+  - exact replacement preflight now rejects no-op edits before checkpointing;
+  - old-string zero/multiple-match failures now return structured match
+    diagnostics with occurrence counts, line numbers, context, and next actions.
+- Continued Track B guardrails for high-risk mutation targets:
+  - `file_write`, `file_edit`, and `file_patch` now reject secret/env/key
+    targets, notebook files, VCS metadata, and generated/build/cache/dependency
+    directories by default;
+  - guardrail rejections include path identity, reason, override environment
+    variable, and recommended recovery action so runtime and desktop surfaces do
+    not need to infer risk from plain text.
+- Continued Track B diagnostics evidence:
+  - successful `file_edit` results now include `diagnostics_before`,
+    `diagnostics_after`, and `diagnostics_delta` alongside the existing
+    after-edit `diagnostics` alias;
+  - diagnostic deltas classify unchanged, improved, new diagnostics, new
+    warnings, and new errors so closeout and desktop cards can distinguish edit
+    evidence from post-edit regressions.
+- Completed Track C's first reliability pass:
+  - bash classification now records parser status, bounded per-subcommand
+    facts, shell redirections, mutation paths, and mutation indicators;
+  - common shell mutation escape paths are detected, including `sed -i`,
+    `perl -pi`, `python -c` writes, `tee`, heredocs/redirections, and
+    `apply_patch`;
+  - terminal task metadata now carries failure reason and recovery action for
+    command-not-found, permission denied, validation failures, PTY needs,
+    timeouts, and generic non-zero exits.
+- Completed Track D's first permission evidence pass:
+  - permission prompts now include `permission_decision_evidence.v1` with
+    request kind, permission family, mode, risk, matched rules/patterns,
+    command/remote classifier facts, reasons, and recovery guidance;
+  - permission request stream events carry metadata/review into the desktop
+    runtime, and denied tool results keep structured recovery data;
+  - tests assert compound bash mutation facts are present in permission
+    evidence, not only in shell execution summaries.
+- Completed Track F's desktop integration pass for the new facts:
+  - file cards show diff previews, rollback/checkpoint ids, guardrail failure
+    reasons, and diagnostics deltas;
+  - shell cards show validation/failure/recovery metadata without requiring
+    raw log parsing;
+  - permission timeline cards, trace entries, and the bottom approval card show
+    review reason, risk, family, request kind, command classifier facts, and
+    deny/approve recovery guidance.
+- Completed Track E's compaction continuity pass:
+  - runtime continuity summaries now preserve pending permissions, attached
+    context/current diff, diagnostics state, terminal/background task state,
+    validation state, changed files, file-change rounds, and subagent tasks;
+  - compaction records retain item counts and provenance tags for these runtime
+    facts so trace/debug output can explain what survived compaction.
+- Ran the targeted Track G gauntlet for this implementation batch:
+  - `cargo fmt --check`
+  - `cargo check -q`
+  - `cargo test -q command_classifier`
+  - `cargo test -q bash_tool -- --test-threads=1`
+  - `cargo test -q permission_controller`
+  - `cargo test -q permissions`
+  - `cargo test -q human_review`
+  - `cargo test -q trace`
+  - `cargo test -q evidence_ledger`
+  - `cargo test -q desktop_runtime`
+  - `cargo test -q file_tool -- --test-threads=1`
+  - `cargo test -q file_patch -- --test-threads=1`
+  - `cargo test -q tool_metadata`
+  - `cargo test -q diagnostics`
+  - `cargo test -q runtime_continuity`
+  - `cargo check --features experimental-api-server -q`
+  - `cargo clippy --all-features -- -D warnings`
+  - `corepack pnpm --dir apps/desktop exec playwright test
+    tests/run-event-state.spec.ts`
+  - `corepack pnpm --dir apps/desktop build`
+  - `corepack pnpm --dir apps/desktop test:ui-smoke`
+  - `git diff --check`
+- Remaining Track G work is product-release automation, not missing runtime
+  plumbing: convert the deterministic and real-project dogfood scenarios into
+  repeatable scripts/fixtures, then require the full suite plus clippy and
+  native desktop smoke before a release candidate.

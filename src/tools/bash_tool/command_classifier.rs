@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+const MAX_SUBCOMMAND_FACTS: usize = 12;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandKind {
@@ -64,6 +66,23 @@ pub struct CommandPermissionRuleSuggestion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellSubcommandFact {
+    pub index: usize,
+    pub command: String,
+    pub category: ShellCommandCategory,
+    pub command_kind: CommandKind,
+    pub mutation: bool,
+    pub redirection: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellRedirectionFact {
+    pub operator: String,
+    pub target: Option<String>,
+    pub writes: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandClassification {
     pub normalized_command: String,
     pub command_kind: CommandKind,
@@ -80,6 +99,11 @@ pub struct CommandClassification {
     pub shell_control_operators: Vec<String>,
     pub risky_shell_wrapper: bool,
     pub expected_silent_output: bool,
+    pub parser_status: String,
+    pub subcommands: Vec<ShellSubcommandFact>,
+    pub redirections: Vec<ShellRedirectionFact>,
+    pub mutation_paths: Vec<String>,
+    pub mutation_indicators: Vec<String>,
     pub permission_rule_suggestions: Vec<CommandPermissionRuleSuggestion>,
 }
 
@@ -132,6 +156,10 @@ pub fn classify_command(command: &str) -> CommandClassification {
 
     let category = shell_command_category(&base_command);
     let command_kind = command_kind_for_category(category);
+    let safe_for_closeout = matches!(
+        category,
+        ShellCommandCategory::Validation | ShellCommandCategory::TestRun
+    );
 
     build_command_classification(CommandClassificationInput {
         normalized_command: normalized,
@@ -139,7 +167,7 @@ pub fn classify_command(command: &str) -> CommandClassification {
         command_kind,
         category,
         validation_family: None,
-        safe_for_closeout: false,
+        safe_for_closeout,
         shell_wrapped,
         env_prefixed,
     })
@@ -163,6 +191,17 @@ fn build_command_classification(input: CommandClassificationInput<'_>) -> Comman
     let network_access = command_has_network_access(input.base_command, input.category);
     let shell_control_operators = shell_control_operators(input.base_command);
     let compound_command = !shell_control_operators.is_empty();
+    let subcommands = shell_subcommand_facts(input.base_command);
+    let redirections = shell_redirection_facts(input.base_command);
+    let mutation_indicators = shell_mutation_indicators(input.base_command);
+    let mutation_paths = shell_mutation_paths(input.base_command, &redirections);
+    let parser_status = if subcommands.len() > MAX_SUBCOMMAND_FACTS {
+        "too_many_subcommands"
+    } else if compound_command {
+        "compound"
+    } else {
+        "simple"
+    };
     let risky_shell_wrapper = input.shell_wrapped
         && (compound_command
             || network_access
@@ -202,6 +241,11 @@ fn build_command_classification(input: CommandClassificationInput<'_>) -> Comman
         shell_control_operators,
         risky_shell_wrapper,
         expected_silent_output,
+        parser_status: parser_status.to_string(),
+        subcommands,
+        redirections,
+        mutation_paths,
+        mutation_indicators,
         permission_rule_suggestions,
     }
 }
@@ -321,8 +365,6 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
         Some(ValidationFamily::GoTest)
     } else if lower.starts_with("node ") && !lower.starts_with("node -i") {
         Some(ValidationFamily::NodeScript)
-    } else if lower.starts_with("python3 -c ") || lower.starts_with("python -c ") {
-        Some(ValidationFamily::Pytest)
     } else {
         None
     }
@@ -544,6 +586,15 @@ fn is_safe_assertion_path(path: &str) -> bool {
 fn shell_command_category(command: &str) -> ShellCommandCategory {
     let lower = command.to_ascii_lowercase();
     let first = lower.split_whitespace().next();
+    if is_git_mutation_command(&lower) {
+        return ShellCommandCategory::GitMutation;
+    }
+    if is_legacy_mutation_command(&lower) {
+        return ShellCommandCategory::FileMutation;
+    }
+    if is_python_inline_probe(&lower) {
+        return ShellCommandCategory::TestRun;
+    }
     if matches!(first, Some("ls" | "find")) {
         return ShellCommandCategory::List;
     }
@@ -566,12 +617,6 @@ fn shell_command_category(command: &str) -> ShellCommandCategory {
     }
     if is_interactive_command(&lower) {
         return ShellCommandCategory::Interactive;
-    }
-    if is_git_mutation_command(&lower) {
-        return ShellCommandCategory::GitMutation;
-    }
-    if is_legacy_mutation_command(&lower) {
-        return ShellCommandCategory::FileMutation;
     }
     ShellCommandCategory::Unknown
 }
@@ -721,10 +766,19 @@ fn is_legacy_mutation_command(command: &str) -> bool {
         Some("touch" | "mkdir" | "cp" | "mv" | "rm" | "chmod" | "chown" | "ln")
     ) || lower.contains(" > ")
         || lower.contains(" >> ")
+        || contains_shell_redirection(command)
+        || lower.contains("tee ")
         || lower.starts_with("patch ")
+        || lower.starts_with("apply_patch")
         || lower == "cargo fmt"
         || lower.starts_with("cargo fmt ")
         || lower.contains("sed -i")
+        || lower.contains("perl -pi")
+        || python_inline_mutates_files(&lower)
+}
+
+fn is_python_inline_probe(lower: &str) -> bool {
+    lower.starts_with("python -c ") || lower.starts_with("python3 -c ")
 }
 
 fn extract_path_patterns(command: &str) -> Vec<String> {
@@ -835,6 +889,219 @@ fn shell_control_operators(command: &str) -> Vec<String> {
     operators
 }
 
+fn shell_subcommand_facts(command: &str) -> Vec<ShellSubcommandFact> {
+    split_shell_subcommands(command)
+        .into_iter()
+        .take(MAX_SUBCOMMAND_FACTS + 1)
+        .enumerate()
+        .map(|(index, subcommand)| {
+            let category = shell_command_category(&subcommand);
+            let command_kind = command_kind_for_category(category);
+            let redirection = contains_shell_redirection(&subcommand);
+            ShellSubcommandFact {
+                index,
+                command: subcommand,
+                category,
+                command_kind,
+                mutation: matches!(
+                    category,
+                    ShellCommandCategory::FileMutation | ShellCommandCategory::GitMutation
+                ),
+                redirection,
+            }
+        })
+        .collect()
+}
+
+fn split_shell_subcommands(command: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let chars = command.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        let ch = chars[index];
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            index += 1;
+            continue;
+        }
+        if quote != Some('\'') && ch == '\\' {
+            current.push(ch);
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            current.push(ch);
+            if ch == active_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            current.push(ch);
+            index += 1;
+            continue;
+        }
+
+        let next = chars.get(index + 1).copied();
+        let is_separator = ch == ';'
+            || ch == '\n'
+            || (ch == '&' && next == Some('&'))
+            || (ch == '|' && next == Some('|'))
+            || (ch == '|' && next != Some('|'));
+        if is_separator {
+            push_shell_subcommand(&mut parts, &mut current);
+            if matches!((ch, next), ('&', Some('&')) | ('|', Some('|'))) {
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+
+        current.push(ch);
+        index += 1;
+    }
+
+    push_shell_subcommand(&mut parts, &mut current);
+    parts
+}
+
+fn push_shell_subcommand(parts: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        parts.push(trimmed.to_string());
+    }
+    current.clear();
+}
+
+fn shell_redirection_facts(command: &str) -> Vec<ShellRedirectionFact> {
+    let tokens = shell_tokens(command);
+    let mut facts = Vec::new();
+    let mut index = 0usize;
+    while index < tokens.len() {
+        let token = tokens[index].as_str();
+        if let Some((operator, inline_target, writes)) = redirection_operator(token) {
+            let target = inline_target
+                .map(str::to_string)
+                .or_else(|| tokens.get(index + 1).cloned())
+                .filter(|target| !target.starts_with('&'));
+            facts.push(ShellRedirectionFact {
+                operator: operator.to_string(),
+                target,
+                writes,
+            });
+        }
+        index += 1;
+    }
+    facts
+}
+
+fn redirection_operator(token: &str) -> Option<(&'static str, Option<&str>, bool)> {
+    for operator in [">>", "2>>", "2>", "&>", ">", "<<"] {
+        if token == operator {
+            return Some((operator, None, operator != "<<"));
+        }
+        if let Some(rest) = token.strip_prefix(operator).filter(|rest| !rest.is_empty()) {
+            return Some((operator, Some(rest), operator != "<<"));
+        }
+    }
+    None
+}
+
+fn shell_mutation_paths(command: &str, redirections: &[ShellRedirectionFact]) -> Vec<String> {
+    let tokens = shell_tokens(command)
+        .into_iter()
+        .map(|token| clean_shell_token(&token))
+        .collect::<Vec<_>>();
+    let mut paths = redirections
+        .iter()
+        .filter(|fact| fact.writes)
+        .filter_map(|fact| fact.target.clone())
+        .collect::<Vec<_>>();
+
+    for (index, token) in tokens.iter().enumerate() {
+        if token == "tee" {
+            paths.extend(
+                tokens
+                    .iter()
+                    .skip(index + 1)
+                    .take_while(|value| !shell_control_token(value))
+                    .filter(|value| !value.starts_with('-'))
+                    .cloned(),
+            );
+        }
+        if matches!(token.as_str(), "touch" | "mkdir" | "cp" | "mv" | "rm") {
+            paths.extend(
+                tokens
+                    .iter()
+                    .skip(index + 1)
+                    .filter(|value| likely_path_token(value))
+                    .cloned(),
+            );
+        }
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn shell_control_token(token: &str) -> bool {
+    matches!(token, "|" | "||" | "&&" | ";")
+}
+
+fn shell_mutation_indicators(command: &str) -> Vec<String> {
+    let lower = command.to_ascii_lowercase();
+    let mut indicators = Vec::new();
+    for (name, detected) in [
+        (
+            "redirection_write",
+            shell_redirection_facts(command)
+                .iter()
+                .any(|fact| fact.writes),
+        ),
+        ("sed_in_place", lower.contains("sed -i")),
+        ("perl_in_place", lower.contains("perl -pi")),
+        ("python_inline_write", python_inline_mutates_files(&lower)),
+        (
+            "tee_write",
+            lower.split_whitespace().any(|token| token == "tee"),
+        ),
+        ("apply_patch", lower.contains("apply_patch")),
+        (
+            "filesystem_mutation",
+            matches!(
+                lower.split_whitespace().next(),
+                Some("touch" | "mkdir" | "cp" | "mv" | "rm" | "chmod" | "chown" | "ln")
+            ),
+        ),
+    ] {
+        if detected {
+            indicators.push(name.to_string());
+        }
+    }
+    indicators
+}
+
+fn python_inline_mutates_files(lower: &str) -> bool {
+    (lower.starts_with("python -c ")
+        || lower.starts_with("python3 -c ")
+        || lower.starts_with("python <<")
+        || lower.starts_with("python3 <<"))
+        && (lower.contains(".write(")
+            || lower.contains("write_text(")
+            || lower.contains("write_bytes(")
+            || lower.contains("open(") && (lower.contains(", 'w") || lower.contains(", \"w")))
+}
+
 fn contains_single_pipe(command: &str) -> bool {
     let bytes = command.as_bytes();
     bytes.iter().enumerate().any(|(index, byte)| {
@@ -849,6 +1116,7 @@ fn contains_shell_redirection(command: &str) -> bool {
         || command.contains("> ")
         || command.contains(" <")
         || command.contains("< ")
+        || command.contains("<<")
         || command.contains("2>")
         || command.contains("&>")
 }
@@ -1353,6 +1621,59 @@ mod tests {
         assert!(wrapped.compound_command);
         assert!(wrapped.risky_shell_wrapper);
         assert_eq!(wrapped.shell_control_operators, vec!["pipe"]);
+    }
+
+    #[test]
+    fn classifies_shell_file_mutation_escape_paths() {
+        let sed = classify_command("sed -i '' 's/old/new/' src/lib.rs");
+        assert_eq!(sed.category, ShellCommandCategory::FileMutation);
+        assert_eq!(sed.command_kind, CommandKind::Mutation);
+        assert!(sed
+            .mutation_indicators
+            .contains(&"sed_in_place".to_string()));
+
+        let tee = classify_command("printf 'hello' | tee src/generated.txt");
+        assert_eq!(tee.category, ShellCommandCategory::FileMutation);
+        assert!(tee.compound_command);
+        assert!(tee
+            .mutation_paths
+            .contains(&"src/generated.txt".to_string()));
+        assert!(tee.subcommands.iter().any(|fact| fact.mutation));
+
+        let python = classify_command("python -c \"open('src/out.txt', 'w').write('x')\"");
+        assert_eq!(python.category, ShellCommandCategory::FileMutation);
+        assert!(python
+            .mutation_indicators
+            .contains(&"python_inline_write".to_string()));
+
+        let python_probe = classify_command("python3 -c \"import package_under_test\"");
+        assert_eq!(python_probe.category, ShellCommandCategory::TestRun);
+        assert!(!python_probe
+            .mutation_indicators
+            .contains(&"python_inline_write".to_string()));
+
+        let redirect = classify_command("cat > src/out.txt");
+        assert_eq!(redirect.category, ShellCommandCategory::FileMutation);
+        assert_eq!(redirect.redirections[0].operator, ">");
+        assert_eq!(
+            redirect.redirections[0].target.as_deref(),
+            Some("src/out.txt")
+        );
+        assert!(redirect.mutation_paths.contains(&"src/out.txt".to_string()));
+    }
+
+    #[test]
+    fn records_compound_subcommand_facts() {
+        let class = classify_command("rg TODO src && sed -i '' 's/a/b/' src/lib.rs");
+
+        assert_eq!(class.parser_status, "compound");
+        assert_eq!(class.subcommands.len(), 2);
+        assert_eq!(class.subcommands[0].category, ShellCommandCategory::Search);
+        assert_eq!(
+            class.subcommands[1].category,
+            ShellCommandCategory::FileMutation
+        );
+        assert!(class.subcommands[1].mutation);
     }
 
     #[test]

@@ -121,7 +121,32 @@ pub(super) fn build_tool_execution_summary(
                     serde_json::to_value(classification.permission_rule_suggestions)
                         .unwrap_or(serde_json::Value::Null),
                 );
+                object.insert(
+                    "parser_status".to_string(),
+                    serde_json::Value::String(classification.parser_status),
+                );
+                object.insert(
+                    "subcommands".to_string(),
+                    serde_json::to_value(classification.subcommands)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                object.insert(
+                    "redirections".to_string(),
+                    serde_json::to_value(classification.redirections)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                object.insert(
+                    "mutation_paths".to_string(),
+                    serde_json::to_value(classification.mutation_paths)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                object.insert(
+                    "mutation_indicators".to_string(),
+                    serde_json::to_value(classification.mutation_indicators)
+                        .unwrap_or(serde_json::Value::Null),
+                );
             }
+            attach_bash_recovery_summary(object, result);
         }
         "file_edit" => {
             if let Some(path) = tool_call.arguments["path"].as_str() {
@@ -131,6 +156,7 @@ pub(super) fn build_tool_execution_summary(
                 );
             }
             attach_diff_summary(object, result);
+            attach_file_reliability_summary(object, result);
             if let Some(replacements) = result
                 .data
                 .as_ref()
@@ -150,6 +176,7 @@ pub(super) fn build_tool_execution_summary(
                     serde_json::Value::String(path.to_string()),
                 );
             }
+            attach_file_reliability_summary(object, result);
         }
         "file_patch" => {
             if let Some(operations) = tool_call.arguments["operations"].as_array() {
@@ -159,6 +186,7 @@ pub(super) fn build_tool_execution_summary(
                 );
             }
             attach_diff_summary(object, result);
+            attach_file_reliability_summary(object, result);
         }
         "grep" => {
             if let Some(pattern) = tool_call.arguments["pattern"].as_str() {
@@ -200,6 +228,105 @@ pub(super) fn build_tool_execution_summary(
     }
 
     summary
+}
+
+fn attach_bash_recovery_summary(
+    summary: &mut serde_json::Map<String, serde_json::Value>,
+    result: &ToolResult,
+) {
+    let Some(recovery) = result.data.as_ref().and_then(|data| data.get("recovery")) else {
+        return;
+    };
+    for (source, target) in [
+        ("category", "recovery_category"),
+        ("action", "recovery_action"),
+        ("reason", "recovery_reason"),
+    ] {
+        if let Some(value) = recovery
+            .get(source)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| *value != "none")
+        {
+            summary.insert(
+                target.to_string(),
+                serde_json::Value::String(safe_prefix_by_bytes(value, 240).to_string()),
+            );
+        }
+    }
+}
+
+fn attach_file_reliability_summary(
+    summary: &mut serde_json::Map<String, serde_json::Value>,
+    result: &ToolResult,
+) {
+    let Some(data) = result.data.as_ref() else {
+        return;
+    };
+
+    if let Some(failure) = data.get("failure").and_then(serde_json::Value::as_str) {
+        summary.insert(
+            "failure_kind".to_string(),
+            serde_json::Value::String(failure.to_string()),
+        );
+    }
+    if let Some(reason) = data
+        .get("guardrail")
+        .and_then(|value| value.get("reason"))
+        .and_then(serde_json::Value::as_str)
+    {
+        summary.insert(
+            "guardrail_reason".to_string(),
+            serde_json::Value::String(safe_prefix_by_bytes(reason, 240).to_string()),
+        );
+    }
+    if let Some(action) = data
+        .get("recovery")
+        .and_then(|value| value.get("recommended_action"))
+        .and_then(serde_json::Value::as_str)
+    {
+        summary.insert(
+            "recovery_action".to_string(),
+            serde_json::Value::String(action.to_string()),
+        );
+    }
+
+    if let Some(checkpoint_id) = data
+        .get("checkpoint")
+        .and_then(|value| value.get("id"))
+        .or_else(|| {
+            data.get("edit_preview")
+                .and_then(|value| value.get("checkpoint_id"))
+        })
+        .and_then(serde_json::Value::as_str)
+    {
+        summary.insert(
+            "checkpoint_id".to_string(),
+            serde_json::Value::String(checkpoint_id.to_string()),
+        );
+        summary.insert(
+            "rollback_id".to_string(),
+            serde_json::Value::String(checkpoint_id.to_string()),
+        );
+    }
+
+    if let Some(delta) = data.get("diagnostics_delta") {
+        if let Some(status) = delta.get("status").and_then(serde_json::Value::as_str) {
+            summary.insert(
+                "diagnostics_delta_status".to_string(),
+                serde_json::Value::String(status.to_string()),
+            );
+        }
+        if let Some(change) = delta.get("change") {
+            for key in ["diagnostic_count", "error_count", "warning_count"] {
+                if let Some(value) = change.get(key).and_then(serde_json::Value::as_i64) {
+                    summary.insert(
+                        format!("diagnostics_delta_{key}"),
+                        serde_json::Value::Number(value.into()),
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn attach_diff_summary(
@@ -293,6 +420,8 @@ fn terminal_task_summary_object(
         "output_path",
         "duration_ms",
         "exit_code",
+        "failure_reason",
+        "recovery_action",
     ] {
         if let Some(value) = task.get(key).filter(|value| !value.is_null()) {
             summary.insert(key.to_string(), value.clone());
@@ -697,19 +826,30 @@ mod tests {
             record.machine_metadata["permission_rule_suggestions"][1]["pattern"],
             "cargo test"
         );
+        assert_eq!(record.machine_metadata["parser_status"], "simple");
+        assert!(record.machine_metadata["subcommands"].is_array());
     }
 
     #[test]
     fn tool_execution_summary_includes_bash_path_patterns() {
         let mut call = tool_call("bash");
-        call.arguments = serde_json::json!({"command": "rg -n TODO src src/tools"});
+        call.arguments = serde_json::json!({
+            "command": "rg -n TODO src src/tools && sed -i '' 's/a/b/' src/lib.rs"
+        });
 
         let summary = build_tool_execution_summary(&call, &ToolResult::success("src/lib.rs:1"));
 
-        assert_eq!(
-            summary["path_patterns"],
-            serde_json::json!(["src", "src/tools"])
-        );
+        assert_eq!(summary["parser_status"], "compound");
+        assert!(summary["path_patterns"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("src/lib.rs")));
+        assert_eq!(summary["subcommands"][1]["category"], "file_mutation");
+        assert_eq!(summary["subcommands"][1]["mutation"], true);
+        assert!(summary["mutation_indicators"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("sed_in_place")));
         assert_eq!(summary["network_access"], false);
         assert_eq!(summary["external_path_access"], false);
     }
@@ -729,7 +869,9 @@ mod tests {
                     "read_tool": null,
                     "cancel_handle": null,
                     "duration_ms": 42,
-                    "exit_code": 0
+                    "exit_code": 101,
+                    "failure_reason": "validation command returned a non-zero exit code",
+                    "recovery_action": "inspect_output_then_fix_code"
                 }
             }),
         );
@@ -744,6 +886,10 @@ mod tests {
         );
         assert_eq!(summary["terminal_task"]["pty"], false);
         assert_eq!(summary["terminal_task"]["duration_ms"], 42);
+        assert_eq!(
+            summary["terminal_task"]["recovery_action"],
+            "inspect_output_then_fix_code"
+        );
     }
 
     #[test]
@@ -790,6 +936,17 @@ mod tests {
                     "deletions": 1,
                     "preview_truncated": false,
                     "unified_diff": "@@ -1 +1 @@\n-old\n+new\n+again\n"
+                },
+                "checkpoint": {
+                    "id": "cp_123"
+                },
+                "diagnostics_delta": {
+                    "status": "new_errors",
+                    "change": {
+                        "diagnostic_count": 1,
+                        "error_count": 1,
+                        "warning_count": 0
+                    }
                 }
             }),
         );
@@ -801,10 +958,58 @@ mod tests {
         assert_eq!(summary["additions"], 2);
         assert_eq!(summary["deletions"], 1);
         assert_eq!(summary["diff_preview_truncated"], false);
+        assert_eq!(summary["checkpoint_id"], "cp_123");
+        assert_eq!(summary["rollback_id"], "cp_123");
+        assert_eq!(summary["diagnostics_delta_status"], "new_errors");
+        assert_eq!(summary["diagnostics_delta_error_count"], 1);
         assert!(summary["diff_preview"]
             .as_str()
             .unwrap_or_default()
             .contains("+new"));
+    }
+
+    #[test]
+    fn tool_execution_summary_includes_file_failure_recovery() {
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: "file_edit".to_string(),
+            arguments: serde_json::json!({"path": ".env"}),
+        };
+        let result = ToolResult::error_with_content(
+            "Refusing file_edit for '.env': target looks like a credential file.",
+            serde_json::json!({
+                "failure": "secret_or_credential_target",
+                "guardrail": {
+                    "reason": "target looks like an environment, credential, certificate, or SSH key file"
+                },
+                "recovery": {
+                    "recommended_action": "ask_user_for_explicit_secret_file_plan"
+                }
+            })
+            .to_string(),
+        );
+        let mut result = result;
+        result.data = Some(serde_json::json!({
+            "failure": "secret_or_credential_target",
+            "guardrail": {
+                "reason": "target looks like an environment, credential, certificate, or SSH key file"
+            },
+            "recovery": {
+                "recommended_action": "ask_user_for_explicit_secret_file_plan"
+            }
+        }));
+
+        let summary = build_tool_execution_summary(&call, &result);
+
+        assert_eq!(summary["failure_kind"], "secret_or_credential_target");
+        assert_eq!(
+            summary["recovery_action"],
+            "ask_user_for_explicit_secret_file_plan"
+        );
+        assert!(summary["guardrail_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("credential"));
     }
 
     #[test]

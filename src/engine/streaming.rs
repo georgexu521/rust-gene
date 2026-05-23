@@ -68,6 +68,7 @@ pub enum StreamEvent {
         tool_name: String,
         arguments: serde_json::Value,
         prompt: String,
+        metadata: Option<serde_json::Value>,
         #[allow(dead_code)]
         review: Option<Box<crate::engine::human_review::HumanReviewAuditRecord>>,
     },

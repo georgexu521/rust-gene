@@ -198,6 +198,9 @@ struct RuntimeContinuityFacts {
     file_change_rounds: Vec<String>,
     validation_states: Vec<String>,
     terminal_task_states: Vec<String>,
+    permission_states: Vec<String>,
+    context_attachments: Vec<String>,
+    diagnostic_states: Vec<String>,
     subagent_task_states: Vec<String>,
 }
 
@@ -233,6 +236,15 @@ impl RuntimeContinuityFacts {
         }
         if Self::is_terminal_task_state(&lower) {
             Self::push_unique(&mut self.terminal_task_states, &line, 8);
+        }
+        if Self::is_permission_state(&lower) {
+            Self::push_unique(&mut self.permission_states, &line, 8);
+        }
+        if Self::is_context_attachment(&lower) {
+            Self::push_unique(&mut self.context_attachments, &line, 8);
+        }
+        if Self::is_diagnostic_state(&lower) {
+            Self::push_unique(&mut self.diagnostic_states, &line, 8);
         }
         if Self::is_subagent_task_state(&lower) {
             Self::push_unique(&mut self.subagent_task_states, &line, 8);
@@ -299,6 +311,33 @@ impl RuntimeContinuityFacts {
             || (lower.contains("shell_") && lower.contains("output"))
     }
 
+    fn is_permission_state(lower: &str) -> bool {
+        lower.starts_with("permission pending:")
+            || lower.starts_with("permission requested:")
+            || lower.starts_with("permission decision:")
+            || lower.starts_with("permission state:")
+            || lower.contains("permission_decision_evidence")
+            || (lower.contains("permission") && lower.contains("risk_level"))
+            || (lower.contains("permission") && lower.contains("matched_rules"))
+    }
+
+    fn is_context_attachment(lower: &str) -> bool {
+        lower.starts_with("attached context:")
+            || lower.starts_with("context attachment:")
+            || lower.starts_with("run context:")
+            || lower.contains("attached_context")
+            || lower.contains("current_diff")
+    }
+
+    fn is_diagnostic_state(lower: &str) -> bool {
+        lower.starts_with("diagnostics:")
+            || lower.starts_with("diagnostic state:")
+            || lower.starts_with("diagnostics delta:")
+            || lower.contains("diagnostics_delta")
+            || lower.contains("diagnostics after")
+            || lower.contains("diagnostics before")
+    }
+
     fn is_subagent_task_state(lower: &str) -> bool {
         lower.starts_with("active subagent:")
             || lower.starts_with("active sub-agent:")
@@ -320,6 +359,9 @@ impl RuntimeContinuityFacts {
         Self::append_group(summary, "File-change rounds", &self.file_change_rounds);
         Self::append_group(summary, "Validation state", &self.validation_states);
         Self::append_group(summary, "Terminal task state", &self.terminal_task_states);
+        Self::append_group(summary, "Permission state", &self.permission_states);
+        Self::append_group(summary, "Attached context", &self.context_attachments);
+        Self::append_group(summary, "Diagnostics state", &self.diagnostic_states);
         Self::append_group(summary, "Subagent/task state", &self.subagent_task_states);
     }
 
@@ -339,6 +381,9 @@ impl RuntimeContinuityFacts {
             && self.file_change_rounds.is_empty()
             && self.validation_states.is_empty()
             && self.terminal_task_states.is_empty()
+            && self.permission_states.is_empty()
+            && self.context_attachments.is_empty()
+            && self.diagnostic_states.is_empty()
             && self.subagent_task_states.is_empty()
     }
 
@@ -372,6 +417,24 @@ impl RuntimeContinuityFacts {
             items.push(format!(
                 "runtime_state_terminal_tasks:{}",
                 self.terminal_task_states.len()
+            ));
+        }
+        if !self.permission_states.is_empty() {
+            items.push(format!(
+                "runtime_state_permissions:{}",
+                self.permission_states.len()
+            ));
+        }
+        if !self.context_attachments.is_empty() {
+            items.push(format!(
+                "runtime_state_context_attachments:{}",
+                self.context_attachments.len()
+            ));
+        }
+        if !self.diagnostic_states.is_empty() {
+            items.push(format!(
+                "runtime_state_diagnostics:{}",
+                self.diagnostic_states.len()
             ));
         }
         if !self.subagent_task_states.is_empty() {
@@ -3276,6 +3339,9 @@ mod tests {
                  Tool round: round_abc checkpoint-backed 2 file changes\n\
                  Validation passed: cargo test -q context_compressor\n\
                  Terminal task: shell_background_1 output_path=.priority-agent/tool-results/out.txt status=running\n\
+                 Permission requested: bash risk_level=medium matched_rules=[git push]\n\
+                 Attached context: current_diff files=src/engine/context_compressor.rs\n\
+                 Diagnostics delta: improved errors -1 warnings 0\n\
                  agent_id=agent_1 task_id=task_1 status=running worktree=/tmp/agent-worktree",
             ),
             Message::user("This unrelated sentence mentions objective but is not runtime state."),
@@ -3288,6 +3354,9 @@ mod tests {
         assert_eq!(facts.file_change_rounds.len(), 1);
         assert_eq!(facts.validation_states.len(), 1);
         assert_eq!(facts.terminal_task_states.len(), 1);
+        assert_eq!(facts.permission_states.len(), 1);
+        assert_eq!(facts.context_attachments.len(), 1);
+        assert_eq!(facts.diagnostic_states.len(), 1);
         assert_eq!(facts.subagent_task_states.len(), 1);
         assert!(facts
             .retained_items()
@@ -3301,6 +3370,15 @@ mod tests {
         assert!(facts
             .retained_items()
             .contains(&"runtime_state_terminal_tasks:1".to_string()));
+        assert!(facts
+            .retained_items()
+            .contains(&"runtime_state_permissions:1".to_string()));
+        assert!(facts
+            .retained_items()
+            .contains(&"runtime_state_context_attachments:1".to_string()));
+        assert!(facts
+            .retained_items()
+            .contains(&"runtime_state_diagnostics:1".to_string()));
     }
 
     #[test]
@@ -3322,6 +3400,9 @@ mod tests {
              Tool round: round_phase8 checkpoint-backed 2 file changes\n\
              Validation passed: cargo test -q context_compressor\n\
              Terminal task: shell_background_1 output_path=.priority-agent/tool-results/out.txt status=running\n\
+             Permission pending: bash risk_level=medium recovery=approve once or reject\n\
+             Attached context: current_diff files=src/engine/context_compressor.rs,docs/CLAUDE_CODE_TOOL_FILE_RELIABILITY_AUDIT_PLAN_2026-05-23.md\n\
+             Diagnostics: cargo check improved after src/engine/context_compressor.rs\n\
              agent_id=agent_1 task_id=task_1 status=running worktree=/tmp/agent-worktree branch=codex/agent-1234",
         ));
         for i in 30..60 {
@@ -3349,6 +3430,9 @@ mod tests {
         assert!(compacted_text.contains("Tool round: round_phase8"));
         assert!(compacted_text.contains("Validation passed: cargo test -q context_compressor"));
         assert!(compacted_text.contains("Terminal task: shell_background_1"));
+        assert!(compacted_text.contains("Permission pending: bash"));
+        assert!(compacted_text.contains("Attached context: current_diff"));
+        assert!(compacted_text.contains("Diagnostics: cargo check improved"));
         assert!(compacted_text.contains("agent_id=agent_1 task_id=task_1"));
         assert!(record
             .retained_items
@@ -3365,6 +3449,15 @@ mod tests {
         assert!(record
             .retained_items
             .contains(&"runtime_state_terminal_tasks:1".to_string()));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_permissions:1".to_string()));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_context_attachments:1".to_string()));
+        assert!(record
+            .retained_items
+            .contains(&"runtime_state_diagnostics:1".to_string()));
         assert!(record
             .retained_items
             .contains(&"runtime_state_subagent_tasks:1".to_string()));

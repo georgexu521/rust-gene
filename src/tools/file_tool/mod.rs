@@ -17,7 +17,9 @@ mod history;
 mod patch;
 mod text_codec;
 
-use diagnostics::{collect_file_edit_diagnostics, file_edit_diagnostics_content_line};
+use diagnostics::{
+    collect_file_edit_diagnostics, file_edit_diagnostics_content_line, file_edit_diagnostics_delta,
+};
 use history::{
     checkpoint_metadata_json, create_file_checkpoint, record_file_change, FileChangeRequest,
 };
@@ -72,6 +74,10 @@ fn allow_bulk_code_edit() -> bool {
     std::env::var("PRIORITY_AGENT_ALLOW_BULK_CODE_EDIT").as_deref() == Ok("1")
 }
 
+fn allow_high_risk_file_mutation() -> bool {
+    std::env::var("PRIORITY_AGENT_ALLOW_HIGH_RISK_FILE_MUTATION").as_deref() == Ok("1")
+}
+
 fn is_code_like_path(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -102,6 +108,136 @@ fn is_code_like_path(path: &Path) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn path_component_names(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().to_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn high_risk_file_target_diagnostic(
+    path: &Path,
+    identity: &FilePathIdentity,
+    working_dir: &Path,
+    operation: &str,
+) -> Option<(String, serde_json::Value)> {
+    if allow_high_risk_file_mutation() {
+        return None;
+    }
+
+    let components = path_component_names(path);
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let extension = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    let classification = if extension == "ipynb" {
+        Some((
+            "wrong_tool_notebook",
+            "notebook files should be changed through notebook-aware tooling, not raw file mutation",
+            "use_notebook_tool",
+        ))
+    } else if file_name == ".env"
+        || file_name.starts_with(".env.")
+        || file_name.ends_with(".env")
+        || matches!(
+            file_name.as_str(),
+            "id_rsa" | "id_dsa" | "id_ecdsa" | "id_ed25519" | "authorized_keys" | "known_hosts"
+        )
+        || matches!(
+            extension.as_str(),
+            "pem" | "key" | "p12" | "pfx" | "crt" | "cer"
+        )
+    {
+        Some((
+            "secret_or_credential_target",
+            "target looks like an environment, credential, certificate, or SSH key file",
+            "ask_user_for_explicit_secret_file_plan",
+        ))
+    } else if components.iter().any(|component| component == ".git") {
+        Some((
+            "vcs_metadata_target",
+            "target is inside .git metadata",
+            "use_git_tool_or_choose_project_file",
+        ))
+    } else if components.iter().any(|component| {
+        matches!(
+            component.as_str(),
+            "target"
+                | "node_modules"
+                | "dist"
+                | "build"
+                | ".next"
+                | ".nuxt"
+                | ".cache"
+                | "coverage"
+        )
+    }) {
+        Some((
+            "generated_or_dependency_target",
+            "target is inside a generated, build, cache, coverage, or dependency directory",
+            "edit_source_file_instead",
+        ))
+    } else {
+        let canonical_path = canonicalize_or_normalize(path);
+        let canonical_working_dir = canonicalize_or_normalize(working_dir);
+        let home_config = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| {
+                canonical_path.starts_with(canonicalize_or_normalize(&home.join(".config")))
+            })
+            .unwrap_or(false);
+        if home_config && !canonical_path.starts_with(&canonical_working_dir) {
+            Some((
+                "home_config_outside_project",
+                "target is a home configuration file outside the selected project",
+                "open_config_setup_or_switch_project",
+            ))
+        } else {
+            None
+        }
+    }?;
+
+    let (failure, reason, recommended_action) = classification;
+    let message = format!(
+        "Refusing {operation} for '{}': {reason}. Set PRIORITY_AGENT_ALLOW_HIGH_RISK_FILE_MUTATION=1 only after an explicit user-approved plan.",
+        identity.lexical_path
+    );
+    Some((
+        message,
+        json!({
+            "failure": failure,
+            "operation": operation,
+            "path_identity": path_identity_json(identity),
+            "guardrail": {
+                "reason": reason,
+                "override_env": "PRIORITY_AGENT_ALLOW_HIGH_RISK_FILE_MUTATION",
+                "override_required_value": "1",
+            },
+            "recovery": {
+                "recommended_action": recommended_action,
+                "next_actions": ["choose_safer_target", "ask_user_for_explicit_approval", "retry_with_source_file"],
+            }
+        }),
+    ))
+}
+
+fn high_risk_file_target_result(
+    path: &Path,
+    identity: &FilePathIdentity,
+    working_dir: &Path,
+    operation: &str,
+) -> Option<ToolResult> {
+    high_risk_file_target_diagnostic(path, identity, working_dir, operation)
+        .map(|(message, data)| file_edit_error_with_data(message, data))
 }
 
 /// 智能引号归一化（Claude Code 模式）
@@ -310,6 +446,14 @@ fn read_before_edit_status(
 ) -> ReadBeforeEditStatus {
     let tracker = FILE_STATE_TRACKER.lock().unwrap_or_else(|e| e.into_inner());
     tracker.read_before_edit_status(session_id, file_path, line_start, line_end)
+}
+
+fn file_state_snapshot(session_id: &str, file_path: &str) -> Option<FileState> {
+    let tracker = FILE_STATE_TRACKER.lock().unwrap_or_else(|e| e.into_inner());
+    tracker
+        .file_states
+        .get(&tracker_key(session_id, file_path))
+        .cloned()
 }
 
 fn file_read_state_guidance(path: &str, status: ReadBeforeEditStatus) -> String {
@@ -1084,6 +1228,11 @@ impl Tool for FileWriteTool {
         };
         info!("Writing file: {:?}", path);
         let identity = file_path_identity(path_str, &path, &context.working_dir);
+        if let Some(result) =
+            high_risk_file_target_result(&path, &identity, &context.working_dir, "file_write")
+        {
+            return result;
+        }
         let file_guard = acquire_file_mutation_lock(&identity.state_key).await;
 
         let existed_before = path.exists();
@@ -1379,6 +1528,217 @@ fn file_read_line_prefix_guidance(field: &str) -> String {
     )
 }
 
+fn file_edit_error_with_data(error: impl Into<String>, data: serde_json::Value) -> ToolResult {
+    let error = error.into();
+    let mut result = ToolResult::error_with_content(error, data.to_string());
+    result.data = Some(data);
+    result
+}
+
+fn occurrence_line_numbers(content: &str, occurrences: &[(usize, usize)]) -> Vec<usize> {
+    occurrences
+        .iter()
+        .take(MAX_MATCH_CONTEXT_OCCURRENCES)
+        .map(|(start, _)| content[..*start].matches('\n').count() + 1)
+        .collect()
+}
+
+fn stale_conflict_json(
+    identity: &FilePathIdentity,
+    session_id: &str,
+    current_content: &str,
+    current_mtime: std::time::SystemTime,
+    stage: &str,
+) -> serde_json::Value {
+    let read_state = file_state_snapshot(session_id, &identity.state_key);
+    let read_hash = read_state
+        .as_ref()
+        .map(|state| format!("{:016x}", state.content_hash));
+    let mtime_changed = read_state
+        .as_ref()
+        .map(|state| state.mtime != current_mtime)
+        .unwrap_or(false);
+    let content_changed = read_state
+        .as_ref()
+        .map(|state| compute_content_hash(current_content) != state.content_hash)
+        .unwrap_or(false);
+    json!({
+        "failure": "stale_read_conflict",
+        "stage": stage,
+        "path_identity": path_identity_json(identity),
+        "conflict": {
+            "read_hash": read_hash,
+            "current_hash": content_hash_hex(current_content),
+            "mtime_changed": mtime_changed,
+            "content_changed": content_changed,
+        },
+        "recovery": {
+            "recommended_action": "re_read_file",
+            "next_actions": ["file_read", "regenerate_patch", "retry_file_edit"],
+            "allow_stale_read_available": true,
+            "allow_stale_read_warning": "Use allow_stale_read=true only for intentional overwrites after reviewing the current file content."
+        }
+    })
+}
+
+fn exact_replace_preflight_error(
+    identity: &FilePathIdentity,
+    content: &str,
+    old_string: &str,
+    new_string: &str,
+    expected: Option<usize>,
+    normalize_whitespace: bool,
+) -> Option<ToolResult> {
+    let base_data = |failure: &str| {
+        json!({
+            "failure": failure,
+            "path_identity": path_identity_json(identity),
+            "operation": "exact_replace",
+            "recovery": {
+                "recommended_action": "adjust_anchor",
+                "next_actions": ["file_read", "use_line_start_line_end", "retry_file_edit"],
+            }
+        })
+    };
+
+    if old_string.trim().is_empty() {
+        let message = "old_string cannot be empty or whitespace-only unless insert_after, insert_before, or line_start/line_end is used. For a known target line, use line_start and line_end instead.";
+        return Some(file_edit_error_with_data(
+            message,
+            json!({
+                "failure": "empty_old_string",
+                "path_identity": path_identity_json(identity),
+                "operation": "exact_replace",
+                "recovery": {
+                    "recommended_action": "use_line_range",
+                    "next_actions": ["file_read", "use_line_start_line_end", "retry_file_edit"],
+                }
+            }),
+        ));
+    }
+
+    if old_string == new_string {
+        return Some(file_edit_error_with_data(
+            "Refusing file_edit no-op: old_string and new_string are identical.",
+            json!({
+                "failure": "no_op_edit",
+                "path_identity": path_identity_json(identity),
+                "operation": "exact_replace",
+                "old_hash": content_hash_hex(old_string),
+                "new_hash": content_hash_hex(new_string),
+                "recovery": {
+                    "recommended_action": "change_replacement_or_skip",
+                    "next_actions": ["skip_edit", "provide_different_new_string"],
+                }
+            }),
+        ));
+    }
+
+    if contains_file_read_line_prefix(old_string) {
+        return Some(file_edit_error_with_data(
+            file_read_line_prefix_guidance("old_string"),
+            json!({
+                "failure": "file_read_line_prefix_in_old_string",
+                "path_identity": path_identity_json(identity),
+                "operation": "exact_replace",
+                "recovery": {
+                    "recommended_action": "remove_display_line_prefix",
+                    "next_actions": ["copy_text_after_pipe", "use_line_start_line_end", "retry_file_edit"],
+                }
+            }),
+        ));
+    }
+
+    let occurrences = if normalize_whitespace {
+        find_occurrences_normalized(content, old_string)
+    } else {
+        find_occurrences(content, old_string)
+    };
+    let expected_count = expected.unwrap_or(1);
+    let max_replacements = max_file_edit_replacements();
+
+    if expected_count > max_replacements {
+        return Some(file_edit_error_with_data(
+            format!(
+                "Refusing file_edit with {} replacement(s): exceeds safety limit {}. Use narrower anchors or set PRIORITY_AGENT_MAX_FILE_EDIT_REPLACEMENTS explicitly for deliberate bulk edits.",
+                expected_count, max_replacements
+            ),
+            json!({
+                "failure": "replacement_limit_exceeded",
+                "path_identity": path_identity_json(identity),
+                "operation": "exact_replace",
+                "expected_replacements": expected_count,
+                "max_replacements": max_replacements,
+                "recovery": {
+                    "recommended_action": "narrow_anchor",
+                    "next_actions": ["use_more_specific_old_string", "use_line_start_line_end"],
+                }
+            }),
+        ));
+    }
+
+    if occurrences.is_empty() {
+        let fuzzy = fuzzy_find_occurrences(content, old_string);
+        let mut data = base_data("old_string_not_found");
+        data["match_diagnostics"] = json!({
+            "expected_occurrences": expected_count,
+            "exact_occurrences": 0,
+            "fuzzy_occurrences": fuzzy.len(),
+            "fuzzy_lines": occurrence_line_numbers(content, &fuzzy),
+            "context": if fuzzy.is_empty() {
+                serde_json::Value::Null
+            } else {
+                json!(build_match_context(content, &fuzzy, 2))
+            },
+        });
+        data["recovery"]["recommended_action"] = if fuzzy.is_empty() {
+            json!("re_read_file")
+        } else {
+            json!("copy_exact_fuzzy_match")
+        };
+        let message = if fuzzy.is_empty() {
+            "Could not find old_string in file. Make sure it matches exactly (including whitespace).".to_string()
+        } else {
+            format!(
+                "old_string not found exactly, but fuzzy matches found:\n{}\n\nPlease adjust old_string to match one of these occurrences precisely.",
+                build_match_context(content, &fuzzy, 2)
+            )
+        };
+        return Some(file_edit_error_with_data(message, data));
+    }
+
+    if occurrences.len() != expected_count {
+        let ctx = build_match_context(content, &occurrences, 2);
+        return Some(file_edit_error_with_data(
+            format!(
+                "Expected {} occurrence(s) of old_string, but found {}.\n{}\n\nPlease provide a more specific old_string or set expected_replacements to {}.",
+                expected_count,
+                occurrences.len(),
+                ctx,
+                occurrences.len()
+            ),
+            json!({
+                "failure": "old_string_occurrence_mismatch",
+                "path_identity": path_identity_json(identity),
+                "operation": "exact_replace",
+                "match_diagnostics": {
+                    "expected_occurrences": expected_count,
+                    "actual_occurrences": occurrences.len(),
+                    "lines": occurrence_line_numbers(content, &occurrences),
+                    "context": ctx,
+                },
+                "recovery": {
+                    "recommended_action": "narrow_anchor",
+                    "next_actions": ["use_more_specific_old_string", "use_line_start_line_end", "set_expected_replacements_if_intentional"],
+                    "safe_expected_replacements": occurrences.len(),
+                }
+            }),
+        ));
+    }
+
+    None
+}
+
 /// 保存文件快照
 #[allow(dead_code)]
 async fn save_snapshot(
@@ -1642,6 +2002,11 @@ impl Tool for FileEditTool {
         };
         info!("Editing file: {:?}", path);
         let identity = file_path_identity(path_str, &path, &context.working_dir);
+        if let Some(result) =
+            high_risk_file_target_result(&path, &identity, &context.working_dir, "file_edit")
+        {
+            return result;
+        }
         let state_key = identity.state_key.clone();
         let file_guard = acquire_file_mutation_lock(&state_key).await;
 
@@ -1678,10 +2043,20 @@ impl Tool for FileEditTool {
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         if is_file_modified_since_read(&context.session_id, &state_key, &content, current_mtime) {
             if !allow_stale_read {
-                return ToolResult::error(format!(
+                let message = format!(
                     "Refusing file_edit for '{}': file changed since this session last read it. Re-read the file and retry, or set allow_stale_read=true if this overwrite is intentional.",
                     path_str
-                ));
+                );
+                return file_edit_error_with_data(
+                    message,
+                    stale_conflict_json(
+                        &identity,
+                        &context.session_id,
+                        &content,
+                        current_mtime,
+                        "pre_write_stale_check",
+                    ),
+                );
             }
             warn!(
                 "File '{}' was modified since it was read; continuing because allow_stale_read=true",
@@ -1706,13 +2081,26 @@ impl Tool for FileEditTool {
             )
         };
 
-        let checkpoint = create_file_checkpoint(&context, "file_edit", &path).await;
-
         // 确定操作模式
         let using_exact_replace = line_start.is_none()
             && line_end.is_none()
             && insert_after.is_none()
             && insert_before.is_none();
+        if using_exact_replace {
+            if let Some(result) = exact_replace_preflight_error(
+                &identity,
+                &content,
+                &old_string,
+                &new_string,
+                expected_replacements,
+                normalize_ws,
+            ) {
+                return result;
+            }
+        }
+
+        let checkpoint = create_file_checkpoint(&context, "file_edit", &path).await;
+
         let result = if let (Some(start), Some(end)) = (line_start, line_end) {
             Self::do_replace_lines(content, start, end, &new_string)
         } else if let Some(after) = insert_after {
@@ -1747,6 +2135,8 @@ impl Tool for FileEditTool {
                         path_str, replacements
                     ));
                 }
+                let diagnostics_before =
+                    collect_file_edit_diagnostics(&context, &path, &snapshot.content).await;
                 let before_write_snapshot = match read_text_file(&path, "verify before edit").await
                 {
                     Ok(snapshot) => snapshot,
@@ -1758,10 +2148,20 @@ impl Tool for FileEditTool {
                 if before_write_mtime != current_mtime
                     || before_write_snapshot.content.as_str() != snapshot.content.as_str()
                 {
-                    return ToolResult::error(format!(
+                    let message = format!(
                         "Refusing file_edit for '{}': file changed while this edit was being prepared. Re-read the file and retry.",
                         path_str
-                    ));
+                    );
+                    return file_edit_error_with_data(
+                        message,
+                        stale_conflict_json(
+                            &identity,
+                            &context.session_id,
+                            &before_write_snapshot.content,
+                            before_write_mtime,
+                            "pre_write_race_check",
+                        ),
+                    );
                 }
                 let diff_summary =
                     edit_diff_summary(&identity.display_path, &snapshot.content, &new_content);
@@ -1808,6 +2208,8 @@ impl Tool for FileEditTool {
                         .await;
                         let diagnostics =
                             collect_file_edit_diagnostics(&context, &path, &new_content).await;
+                        let diagnostics_delta =
+                            file_edit_diagnostics_delta(&diagnostics_before, &diagnostics);
                         let diagnostics_line = file_edit_diagnostics_content_line(&diagnostics);
                         let checkpoint_json = checkpoint_metadata_json(checkpoint.as_ref());
                         let file_change_json = file_change.unwrap_or(serde_json::Value::Null);
@@ -1840,7 +2242,10 @@ impl Tool for FileEditTool {
                             "file_change": file_change_json,
                             "diff": edit_diff_summary_json(&diff_summary),
                             "edit_preview": edit_preview,
-                            "diagnostics": diagnostics,
+                            "diagnostics_before": diagnostics_before,
+                            "diagnostics": diagnostics.clone(),
+                            "diagnostics_after": diagnostics,
+                            "diagnostics_delta": diagnostics_delta,
                         });
                         let mut content = format!(
                             "File edited successfully: {} ({} replacement(s))",
@@ -1929,6 +2334,11 @@ impl FileEditTool {
             return Err(
                 "old_string cannot be empty or whitespace-only unless insert_after, insert_before, or line_start/line_end is used. For a known target line, use line_start and line_end instead."
                     .to_string(),
+            );
+        }
+        if old_string == new_string {
+            return Err(
+                "Refusing file_edit no-op: old_string and new_string are identical.".to_string(),
             );
         }
 
@@ -2421,6 +2831,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_write_rejects_generated_target_with_recovery_data() {
+        let tool = FileWriteTool;
+        let dir = tempfile::tempdir().unwrap();
+        let result = tool
+            .execute(
+                json!({
+                    "path": "target/generated.txt",
+                    "content": "generated\n"
+                }),
+                ToolContext::new(dir.path(), "test-session-write-generated-target"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("generated"));
+        let data = result
+            .data
+            .expect("generated target rejection should return recovery data");
+        assert_eq!(data["failure"], "generated_or_dependency_target");
+        assert_eq!(
+            data["recovery"]["recommended_action"],
+            "edit_source_file_instead"
+        );
+        assert!(!dir.path().join("target/generated.txt").exists());
+    }
+
+    #[tokio::test]
     async fn file_patch_applies_multiple_files_and_records_history() {
         let dir = tempfile::tempdir().unwrap();
         tokio::fs::write(dir.path().join("a.txt"), "alpha\nold-a\n")
@@ -2825,6 +3263,35 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn file_patch_rejects_notebook_target_with_recovery_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let patch_tool = FilePatchTool;
+        let result = patch_tool
+            .execute(
+                json!({
+                    "operations": [
+                        {
+                            "path": "analysis.ipynb",
+                            "mode": "write",
+                            "content": "{}"
+                        }
+                    ]
+                }),
+                ToolContext::new(dir.path(), "test-session-patch-notebook-target"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("notebook"));
+        let data = result
+            .data
+            .expect("notebook target rejection should return recovery data");
+        assert_eq!(data["failure"], "wrong_tool_notebook");
+        assert_eq!(data["recovery"]["recommended_action"], "use_notebook_tool");
+    }
+
     #[test]
     fn test_resolve_path() {
         let working_dir = std::path::Path::new("/home/user/project");
@@ -3092,6 +3559,10 @@ mod tests {
         assert_eq!(data["diagnostics"]["status"], "lsp_unavailable");
         assert_eq!(data["diagnostics"]["checked"], false);
         assert_eq!(data["diagnostics"]["diagnostic_count"], 0);
+        assert_eq!(data["diagnostics_before"]["status"], "lsp_unavailable");
+        assert_eq!(data["diagnostics_after"]["status"], "lsp_unavailable");
+        assert_eq!(data["diagnostics_delta"]["checked"], false);
+        assert_eq!(data["diagnostics_delta"]["status"], "not_checked");
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert!(content.contains("baz qux"));
         assert!(!content.contains("foo bar"));
@@ -3289,6 +3760,13 @@ mod tests {
         assert!(!edit_result.success);
         let err = edit_result.error.unwrap_or_default();
         assert!(err.contains("file changed since this session last read it"));
+        let data = edit_result
+            .data
+            .expect("stale edit should return recovery data");
+        assert_eq!(data["failure"], "stale_read_conflict");
+        assert_eq!(data["recovery"]["recommended_action"], "re_read_file");
+        assert!(data["conflict"]["read_hash"].as_str().is_some());
+        assert!(data["conflict"]["current_hash"].as_str().is_some());
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert_eq!(content, "hello changed\n");
 
@@ -3334,6 +3812,14 @@ mod tests {
         assert!(!edit_result.success);
         let err = edit_result.error.unwrap_or_default();
         assert!(err.contains("file changed since this session last read it"));
+        let data = edit_result
+            .data
+            .expect("stale edit should return recovery data");
+        assert_eq!(data["failure"], "stale_read_conflict");
+        assert_eq!(
+            data["path_identity"]["state_key"],
+            data["path_identity"]["canonical_path"]
+        );
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert_eq!(content, "hello changed\n");
 
@@ -3483,8 +3969,79 @@ mod tests {
         let err = result.error.unwrap_or_default();
         assert!(err.contains("Expected 1 occurrence"));
         assert!(err.contains("but found 3"));
+        let data = result
+            .data
+            .expect("multi-match edit should return match diagnostics");
+        assert_eq!(data["failure"], "old_string_occurrence_mismatch");
+        assert_eq!(data["match_diagnostics"]["actual_occurrences"], 3);
+        assert_eq!(data["recovery"]["recommended_action"], "narrow_anchor");
 
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_no_op_with_recovery_data() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_no_op.txt";
+        tokio::fs::write(path, "aaa\n").await.unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "aaa",
+                    "new_string": "aaa"
+                }),
+                ToolContext::new(".", "test-session-edit-no-op"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("no-op"));
+        let data = result.data.expect("no-op should return recovery data");
+        assert_eq!(data["failure"], "no_op_edit");
+        assert_eq!(
+            data["recovery"]["recommended_action"],
+            "change_replacement_or_skip"
+        );
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_env_secret_target_with_recovery_data() {
+        let tool = FileEditTool;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        tokio::fs::write(&path, "TOKEN=old\n").await.unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": ".env",
+                    "old_string": "TOKEN=old",
+                    "new_string": "TOKEN=new"
+                }),
+                ToolContext::new(dir.path(), "test-session-edit-env-target"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("credential"));
+        let data = result
+            .data
+            .expect("secret target rejection should return recovery data");
+        assert_eq!(data["failure"], "secret_or_credential_target");
+        assert_eq!(
+            data["recovery"]["recommended_action"],
+            "ask_user_for_explicit_secret_file_plan"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "TOKEN=old\n"
+        );
     }
 
     #[tokio::test]
@@ -3596,6 +4153,11 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
         assert!(err.contains("Refusing file_edit with 51 replacement"));
+        let data = result
+            .data
+            .expect("bulk-limit edit should return recovery data");
+        assert_eq!(data["failure"], "replacement_limit_exceeded");
+        assert_eq!(data["expected_replacements"], 51);
 
         let _ = tokio::fs::remove_file(path).await;
     }
@@ -3618,6 +4180,16 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
         assert!(err.contains("fuzzy matches found"));
+        let data = result
+            .data
+            .expect("fuzzy edit should return match diagnostics");
+        assert_eq!(data["failure"], "old_string_not_found");
+        assert_eq!(data["match_diagnostics"]["exact_occurrences"], 0);
+        assert_eq!(data["match_diagnostics"]["fuzzy_occurrences"], 1);
+        assert_eq!(
+            data["recovery"]["recommended_action"],
+            "copy_exact_fuzzy_match"
+        );
 
         let _ = tokio::fs::remove_file(path).await;
     }
@@ -3643,6 +4215,14 @@ mod tests {
         let err = result.error.unwrap_or_default();
         assert!(err.contains("file_read display line prefixes"));
         assert!(err.contains("line_start/line_end"));
+        let data = result
+            .data
+            .expect("line-prefix edit should return recovery data");
+        assert_eq!(data["failure"], "file_read_line_prefix_in_old_string");
+        assert_eq!(
+            data["recovery"]["recommended_action"],
+            "remove_display_line_prefix"
+        );
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert_eq!(content, "hello world\n");
 

@@ -168,6 +168,8 @@ export type DesktopRunEvent =
       tool_name: string;
       arguments: unknown;
       prompt: string;
+      metadata?: unknown;
+      review?: unknown;
     }
   | {
       type: "usage";
@@ -748,6 +750,25 @@ export function sendMessage(message: string, contexts: DesktopRunContext[] = [])
         command: "git push origin claude",
       },
       prompt: "Allow git push to update the remote branch?",
+      metadata: {
+        permission_evidence: {
+          schema: "permission_decision_evidence.v1",
+          request_kind: "runtime_rule",
+          permission_family: "shell",
+          decision: "ask",
+          risk_level: "medium",
+          reasons: ["command matched git remote mutation policy"],
+          matched_patterns: ["git push"],
+          recovery: {
+            recommended_action: "Approve once if this push is expected, otherwise reject and inspect the command.",
+          },
+          command_classification: {
+            parser_status: "simple",
+            category: "git_remote_mutation",
+            mutation: true,
+          },
+        },
+      },
     });
     emitWebPreview({ type: "run_completed" });
     return Promise.resolve();

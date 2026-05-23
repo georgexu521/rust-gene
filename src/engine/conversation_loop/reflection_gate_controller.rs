@@ -93,6 +93,7 @@ impl ReflectionGateController {
                     tool_name: review_call.name.clone(),
                     arguments: review_call.arguments.clone(),
                     prompt: review_prompt.clone(),
+                    metadata: None,
                     review: None,
                 })
                 .await;

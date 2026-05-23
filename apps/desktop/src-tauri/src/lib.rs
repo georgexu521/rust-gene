@@ -1182,6 +1182,24 @@ async fn emit_native_smoke_run_fixture(
                 "command": "git status --short"
             }),
             prompt: format!("Allow native smoke permission check for: {message}"),
+            metadata: Some(serde_json::json!({
+                "permission_evidence": {
+                    "schema": "permission_decision_evidence.v1",
+                    "request_kind": "runtime_rule",
+                    "permission_family": "shell",
+                    "decision": "ask",
+                    "risk_level": "low",
+                    "recovery": {
+                        "recommended_action": "Approve once to continue the native smoke run."
+                    },
+                    "command_classification": {
+                        "parser_status": "simple",
+                        "category": "git",
+                        "mutation": false
+                    }
+                }
+            })),
+            review: None,
         },
     ];
 
