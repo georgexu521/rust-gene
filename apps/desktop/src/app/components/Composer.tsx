@@ -3,8 +3,11 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  FileText,
   FolderOpen,
   GitBranch,
+  GitCompare,
+  Image,
   Laptop,
   Plus,
   RotateCcw,
@@ -58,7 +61,9 @@ export function Composer({
   onSubmit,
 }: ComposerProps) {
   const composerRef = useRef<HTMLFormElement | null>(null);
-  const [openMenu, setOpenMenu] = useState<"project" | "mode" | "provider" | null>(null);
+  const [openMenu, setOpenMenu] = useState<"context" | "project" | "mode" | "provider" | null>(
+    null,
+  );
   const activeProvider = providerStatus?.active_provider || "";
   const activeModel = providerStatus?.active_model || "";
   const projectSegments = projectPath.split("/").filter(Boolean);
@@ -74,8 +79,14 @@ export function Composer({
   const modeLabel = detailLevel === "daily" ? "Daily work" : "Coding";
   const permissionLabel = formatPermissionMode(permissionMode);
 
-  function toggleMenu(menu: "project" | "mode" | "provider") {
+  function toggleMenu(menu: "context" | "project" | "mode" | "provider") {
     setOpenMenu((current) => (current === menu ? null : menu));
+  }
+
+  function appendComposerContext(text: string) {
+    const nextText = composer.trim().length ? `${composer.trimEnd()}\n${text}` : text;
+    onComposerChange(nextText);
+    setOpenMenu(null);
   }
 
   useEffect(() => {
@@ -121,13 +132,57 @@ export function Composer({
       />
       <div className="composer-toolbar">
         <button
+          aria-expanded={openMenu === "context"}
           aria-label="Add context"
           className="composer-add-button"
           title="Add context"
           type="button"
+          onClick={() => toggleMenu("context")}
         >
           <Plus aria-hidden="true" size={18} />
         </button>
+        {openMenu === "context" ? (
+          <div
+            aria-label="Add context options"
+            className="composer-popover context-popover"
+            role="dialog"
+          >
+            <div className="composer-popover-title">Add context</div>
+            <div className="composer-option-list">
+              <button
+                aria-label="Reference current diff"
+                type="button"
+                onClick={() => appendComposerContext("Use the current git diff as context.")}
+              >
+                <span>
+                  <strong>
+                    <GitCompare aria-hidden="true" size={15} />
+                    Current diff
+                  </strong>
+                  <small>Ask Liz to inspect unstaged and staged changes.</small>
+                </span>
+              </button>
+              <button aria-label="Attach file" disabled type="button">
+                <span>
+                  <strong>
+                    <FileText aria-hidden="true" size={15} />
+                    File
+                  </strong>
+                  <small>Attach a specific file once attachment plumbing is enabled.</small>
+                </span>
+              </button>
+              <button aria-label="Add screenshot" disabled type="button">
+                <span>
+                  <strong>
+                    <Image aria-hidden="true" size={15} />
+                    Screenshot
+                  </strong>
+                  <small>Add a screen capture after native capture support lands.</small>
+                </span>
+              </button>
+            </div>
+          </div>
+        ) : null}
         <div className="composer-context-controls" aria-label="Composer context">
           <div className="composer-context-menu">
             <button

@@ -705,6 +705,9 @@ permission mode without sending users into Settings for routine changes.
 Project now exposes recent-project shortcuts in the composer popover, while
 provider/model selections close after a choice so the bottom context rail feels
 closer to a native desktop menu.
+The composer `+` control is now an Add Context popover: current diff inserts an
+explicit composer instruction, while file and screenshot entries are visible but
+disabled until real attachment/capture plumbing is implemented.
 
 #### Track D - Frontend Architecture And Test Hardening
 

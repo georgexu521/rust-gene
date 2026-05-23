@@ -2166,6 +2166,7 @@ h1 {
   font-size: 14px;
 }
 
+.composer-add-button[aria-expanded="true"],
 .composer-context-pill[aria-expanded="true"],
 .composer-context-pill:hover,
 .composer-add-button:hover {
@@ -2189,6 +2190,11 @@ h1 {
 
 .provider-popover {
   width: 340px;
+}
+
+.context-popover {
+  left: 10px;
+  width: 320px;
 }
 
 .mode-popover {
@@ -2336,6 +2342,9 @@ h1 {
 }
 
 .composer-option-list strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 13px;
 }
 

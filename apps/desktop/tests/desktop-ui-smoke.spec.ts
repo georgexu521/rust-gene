@@ -10,6 +10,14 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Provider")).toBeVisible();
     await expect(page.getByLabel("Model")).toBeVisible();
     const composer = page.locator(".composer");
+    await composer.getByRole("button", { name: "Add context" }).click();
+    await expect(page.getByRole("dialog", { name: "Add context options" })).toContainText("Current diff");
+    await expect(page.getByRole("button", { name: "Attach file" })).toBeDisabled();
+    await page.getByRole("button", { name: "Reference current diff" }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue(
+      "Use the current git diff as context.",
+    );
+    await expect(page.getByRole("dialog", { name: "Add context options" })).not.toBeVisible();
     await composer.getByRole("button", { name: "Project" }).click();
     await expect(page.getByRole("dialog", { name: "Project controls" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Project path" })).toHaveValue(
