@@ -674,6 +674,10 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke
 corepack pnpm --dir apps/desktop test:ui-smoke
 ```
 
+Status: started. Session search now shows result counts, highlights title/model
+matches, and provides a clear-search control so filtered session lists recover
+without manual text deletion.
+
 #### Track D - Frontend Architecture And Test Hardening
 
 - Add focused tests for `runEventState.ts` and session/search/archive/delete

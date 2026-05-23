@@ -51,6 +51,10 @@ export function Sidebar({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const projectLabel = basename(projectPath) || "Select project";
+  const trimmedSearch = sessionSearch.trim();
+  const recentStatus = trimmedSearch
+    ? `${sessions.length} result${sessions.length === 1 ? "" : "s"}`
+    : String(sessions.length);
 
   function beginRename(session: RecentSession) {
     setEditingSessionId(session.id);
@@ -91,6 +95,16 @@ export function Sidebar({
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Search"
         />
+        {trimmedSearch ? (
+          <button
+            aria-label="Clear session search"
+            className="sidebar-search-clear"
+            type="button"
+            onClick={() => onSearchChange("")}
+          >
+            <X aria-hidden="true" size={13} />
+          </button>
+        ) : null}
       </label>
       <div className="sidebar-section">Projects</div>
       <button
@@ -120,7 +134,7 @@ export function Sidebar({
       </div>
       <div className="sidebar-section sidebar-section-row">
         <span>Recent</span>
-        <small>{sessions.length}</small>
+        <small>{recentStatus}</small>
       </div>
       <div className="recent-list">
         {sessions.length === 0 ? (
@@ -164,13 +178,17 @@ export function Sidebar({
                     onClick={() => onLoadSession(session)}
                     type="button"
                   >
-                    <span className="recent-title">{session.title}</span>
+                    <span className="recent-title">
+                      <HighlightedText query={trimmedSearch} text={session.title} />
+                    </span>
                     <small className="recent-meta">
                       <span>
                         <Clock3 aria-hidden="true" size={12} />
                         {session.message_count} msgs
                       </span>
-                      <span>{session.model}</span>
+                      <span>
+                        <HighlightedText query={trimmedSearch} text={session.model} />
+                      </span>
                     </small>
                   </button>
                   <button
@@ -213,4 +231,25 @@ export function Sidebar({
 
 function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
+
+function HighlightedText({ query, text }: { query: string; text: string }) {
+  if (!query) {
+    return <>{text}</>;
+  }
+
+  const lowerText = text.toLocaleLowerCase();
+  const lowerQuery = query.toLocaleLowerCase();
+  const index = lowerText.indexOf(lowerQuery);
+  if (index < 0) {
+    return <>{text}</>;
+  }
+
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark>{text.slice(index, index + query.length)}</mark>
+      {text.slice(index + query.length)}
+    </>
+  );
 }

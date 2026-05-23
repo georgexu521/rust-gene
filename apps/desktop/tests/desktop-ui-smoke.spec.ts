@@ -14,11 +14,14 @@ test.describe("desktop UI smoke", () => {
 
     await page.getByLabel("Search sessions").fill("Release");
     await expect(page.getByText("Release readiness notes")).toBeVisible();
+    await expect(page.locator(".sidebar-section-row small", { hasText: "1 result" })).toBeVisible();
+    await expect(page.locator(".recent-title mark", { hasText: "Release" })).toBeVisible();
     await expect(page.getByText("Desktop app Phase 1")).not.toBeVisible();
     await page.locator(".recent-item", { hasText: "Release readiness notes" }).hover();
     await page.getByRole("button", { name: /Archive Release readiness notes/ }).click();
     await expect(page.getByText("No matching sessions")).toBeVisible();
-    await page.getByLabel("Search sessions").fill("");
+    await page.getByRole("button", { name: "Clear session search" }).click();
+    await expect(page.getByText("Desktop app Phase 1")).toBeVisible();
 
     await page.getByRole("button", { name: /Rename Desktop app Phase 1/ }).click();
     await page.getByLabel("Session name").fill("Daily desktop flow");

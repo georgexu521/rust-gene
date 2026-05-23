@@ -170,7 +170,7 @@ button:disabled {
 
 .sidebar-search input {
   min-width: 0;
-  width: 100%;
+  flex: 1;
   border: 0;
   outline: 0;
   color: #2d3239;
@@ -179,6 +179,23 @@ button:disabled {
 
 .sidebar-search input::placeholder {
   color: #737c87;
+}
+
+.sidebar-search-clear {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  color: #7a838f;
+  background: transparent;
+}
+
+.sidebar-search-clear:hover {
+  color: #363b43;
+  background: rgb(255 255 255 / 78%);
 }
 
 .recent-list {
@@ -257,6 +274,14 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.recent-title mark,
+.recent-meta mark {
+  padding: 0 2px;
+  border-radius: 4px;
+  color: #1f2933;
+  background: #ffe8a6;
 }
 
 .recent-icon-button {
