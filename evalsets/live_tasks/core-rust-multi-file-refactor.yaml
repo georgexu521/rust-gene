@@ -19,6 +19,7 @@ repo:
       TOML
       cat > fixtures/core_quality/rust_refactor/src/lib.rs <<'RS'
       pub mod report;
+      pub mod stats;
 
       pub fn format_total(label: &str, values: &[u32]) -> String {
           report::format_report(label, values)
@@ -45,15 +46,21 @@ repo:
           format!("{label} total={total}")
       }
       RS
+      cat > fixtures/core_quality/rust_refactor/src/stats.rs <<'RS'
+      pub fn average(_values: &[u32]) -> u32 {
+          0
+      }
+      RS
 
 prompt: |
   修复 `fixtures/core_quality/rust_refactor` 的 Rust 报告格式回归。
 
-  当前测试要求报告同时包含 total 和 avg，但 `report.rs` 只输出 total。
+  当前测试要求报告同时包含 total 和 avg，但 `report.rs` 只输出 total，
+  且 `stats.rs` 里的 average helper 还没有实现真实平均值。
 
   要求：
-  - 先检查 `lib.rs` 和 `report.rs`，理解 public API 和测试期望。
-  - 做一个小的多文件 Rust 改动：保留 `format_total` API，并把平均值计算拆成清晰的可测试 helper。
+  - 先检查 `lib.rs`、`report.rs` 和 `stats.rs`，理解 public API 和测试期望。
+  - 做一个小的多文件 Rust 改动：保留 `format_total` API，让 `report.rs` 使用 `stats::average`。
   - 空数组平均值应为 0。
   - 运行对应 cargo test。
 
@@ -77,7 +84,8 @@ acceptance:
   required_commands:
     - cargo test -q --manifest-path fixtures/core_quality/rust_refactor/Cargo.toml
     - rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs
-    - rg 'fn average' fixtures/core_quality/rust_refactor/src/report.rs
+    - rg 'stats::average' fixtures/core_quality/rust_refactor/src/report.rs
+    - rg 'pub fn average' fixtures/core_quality/rust_refactor/src/stats.rs
     - rg 'format_total' fixtures/core_quality/rust_refactor/src/lib.rs
   diff_constraints:
     max_files_changed: 4

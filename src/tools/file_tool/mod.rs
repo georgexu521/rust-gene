@@ -78,6 +78,10 @@ fn allow_high_risk_file_mutation() -> bool {
     std::env::var("PRIORITY_AGENT_ALLOW_HIGH_RISK_FILE_MUTATION").as_deref() == Ok("1")
 }
 
+fn allow_edit_without_read() -> bool {
+    std::env::var("PRIORITY_AGENT_ALLOW_EDIT_WITHOUT_READ").as_deref() == Ok("1")
+}
+
 fn is_code_like_path(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -2022,14 +2026,10 @@ impl Tool for FileEditTool {
         };
         let content = snapshot.content.clone();
 
-        // ── Smart Edit 检查 ───────────────────────────────────────────
-        // 1. Must-read-before-edit: 检查文件是否已被读取
-        // 仅在 PRIORITY_AGENT_SMART_EDIT=1 时启用此检查
-        if std::env::var("PRIORITY_AGENT_SMART_EDIT")
-            .as_ref()
-            .map(|v| v.as_str())
-            == Ok("1")
-        {
+        // ── Edit safety checks ────────────────────────────────────────
+        // Claude-like write discipline: existing files must be read in this
+        // session before mutation so stale/partial context cannot silently win.
+        if !allow_edit_without_read() {
             let status =
                 read_before_edit_status(&context.session_id, &state_key, line_start, line_end);
             if status != ReadBeforeEditStatus::Allowed {
@@ -2675,6 +2675,13 @@ fn realpath_deepest_existing(path: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn read_test_file_for_edit(path: &str, session_id: &str) {
+        let read_result = FileReadTool
+            .execute(json!({ "path": path }), ToolContext::new(".", session_id))
+            .await;
+        assert!(read_result.success, "read failed: {:?}", read_result.error);
+    }
 
     #[tokio::test]
     async fn test_file_read() {
@@ -3523,6 +3530,7 @@ mod tests {
         tokio::fs::write(path, "hello world\nfoo bar\n")
             .await
             .unwrap();
+        read_test_file_for_edit(path, "test-session-edit-success").await;
 
         let params = json!({
             "path": path,
@@ -3575,6 +3583,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_no_lsp_clients.txt";
         tokio::fs::write(path, "one\ntwo\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-no-lsp-clients").await;
 
         let context = ToolContext::new(".", "test-session-edit-no-lsp-clients")
             .with_lsp_manager(std::sync::Arc::new(crate::engine::lsp::LspManager::new()));
@@ -3606,6 +3615,7 @@ mod tests {
         tokio::fs::write(path, b"alpha\r\nbeta\r\ngamma\r\n")
             .await
             .unwrap();
+        read_test_file_for_edit(path, "test-session-edit-crlf").await;
 
         let result = tool
             .execute(
@@ -3666,6 +3676,7 @@ mod tests {
             LineEndingStyle::Lf,
         );
         tokio::fs::write(path, original).await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-utf16le").await;
 
         let result = tool
             .execute(
@@ -3699,6 +3710,8 @@ mod tests {
         let right = FileEditTool;
         let left_context = ToolContext::new(".", "test-session-edit-lock-left");
         let right_context = ToolContext::new(".", "test-session-edit-lock-right");
+        read_test_file_for_edit(path, "test-session-edit-lock-left").await;
+        read_test_file_for_edit(path, "test-session-edit-lock-right").await;
         let left_params = json!({
             "path": path,
             "old_string": "start",
@@ -3730,6 +3743,35 @@ mod tests {
         );
 
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_unread_file_by_default() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_unread_default.txt";
+        tokio::fs::write(path, "hello world\n").await.unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "hello",
+                    "new_string": "hi"
+                }),
+                ToolContext::new(".", "test-session-edit-unread-default"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("has not been read yet"), "{err}");
+        assert_eq!(
+            tokio::fs::read_to_string(path).await.unwrap(),
+            "hello world\n"
+        );
+
+        let _ = tokio::fs::remove_file(path).await;
+        clear_read_files("test-session-edit-unread-default");
     }
 
     #[tokio::test]
@@ -3828,9 +3870,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_edit_smart_edit_rejects_exact_edit_after_partial_read() {
-        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
-        env.set("PRIORITY_AGENT_SMART_EDIT", "1");
+    async fn test_file_edit_rejects_exact_edit_after_partial_read() {
         let read_tool = FileReadTool;
         let edit_tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_partial_read_exact.txt";
@@ -3874,9 +3914,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_edit_smart_edit_allows_line_range_after_partial_read() {
-        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
-        env.set("PRIORITY_AGENT_SMART_EDIT", "1");
+    async fn test_file_edit_allows_line_range_after_partial_read() {
         let read_tool = FileReadTool;
         let edit_tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_partial_read_line_range.txt";
@@ -3956,6 +3994,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_multi.txt";
         tokio::fs::write(path, "aaa\naaa\naaa\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-multi").await;
 
         let params = json!({
             "path": path,
@@ -3984,6 +4023,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_no_op.txt";
         tokio::fs::write(path, "aaa\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-no-op").await;
 
         let result = tool
             .execute(
@@ -4053,6 +4093,7 @@ mod tests {
         tokio::fs::write(path, "line1\nline2\nline3\n")
             .await
             .unwrap();
+        read_test_file_for_edit(path, "test-session-edit-blank-anchor").await;
 
         let result = tool
             .execute(
@@ -4092,6 +4133,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_expected.txt";
         tokio::fs::write(path, "aaa\naaa\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-expected").await;
 
         let params = json!({
             "path": path,
@@ -4116,6 +4158,7 @@ mod tests {
         tokio::fs::write(path, "let x = 1;\nlet x = 1;\n")
             .await
             .unwrap();
+        read_test_file_for_edit(path, "test-session-edit-code-bulk").await;
 
         let params = json!({
             "path": path,
@@ -4140,6 +4183,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_bulk_limit.txt";
         tokio::fs::write(path, "aaa\n".repeat(51)).await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-bulk-limit").await;
 
         let params = json!({
             "path": path,
@@ -4167,6 +4211,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_fuzzy.txt";
         tokio::fs::write(path, "    hello world\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-fuzzy").await;
 
         // 提交带有额外空格的 old_string，精确匹配失败但模糊匹配成功
         let params = json!({
@@ -4199,6 +4244,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_line_prefix.txt";
         tokio::fs::write(path, "hello world\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-line-prefix").await;
 
         let result = tool
             .execute(
@@ -4234,6 +4280,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_insert_line_prefix.txt";
         tokio::fs::write(path, "hello world\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-insert-line-prefix").await;
 
         let result = tool
             .execute(
@@ -4258,6 +4305,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_insert_after.txt";
         tokio::fs::write(path, "line1\nline2\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-insert").await;
 
         let params = json!({
             "path": path,
@@ -4279,6 +4327,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_insert_before.txt";
         tokio::fs::write(path, "line1\nline2\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-insert-before").await;
 
         let params = json!({
             "path": path,
@@ -4301,6 +4350,7 @@ mod tests {
         let path = "/tmp/test_priority_agent_edit_checkpoint.txt";
         let original = "original content\n";
         tokio::fs::write(path, original).await.unwrap();
+        read_test_file_for_edit(path, "test-session-checkpoint").await;
 
         let params = json!({
             "path": path,
@@ -4355,6 +4405,7 @@ mod tests {
         tokio::fs::write(path, "line1\nline2\nline3\nline4\n")
             .await
             .unwrap();
+        read_test_file_for_edit(path, "test-session-edit-lines").await;
 
         let params = json!({
             "path": path,
@@ -4379,6 +4430,7 @@ mod tests {
         tokio::fs::write(path, "    hello world    \n")
             .await
             .unwrap();
+        read_test_file_for_edit(path, "test-session-edit-normws").await;
 
         // old_string 有额外空白，但 normalize_whitespace=true 应能匹配
         let params = json!({
@@ -4403,6 +4455,7 @@ mod tests {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_lines_oob.txt";
         tokio::fs::write(path, "line1\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-lines-oob").await;
 
         let params = json!({
             "path": path,

@@ -9,6 +9,7 @@ MODE="list"
 CASE_ID=""
 LABEL="live-eval"
 RUN_ID=""
+RUN_ID_PROVIDED=0
 WORK_ROOT="target/live-evals"
 WORKDIR=""
 REPORT_DIR="docs/benchmarks"
@@ -122,7 +123,7 @@ while [[ $# -gt 0 ]]; do
     --mode) MODE="${2:-}"; shift 2 ;;
     --workdir) WORKDIR="${2:-}"; shift 2 ;;
     --label) LABEL="${2:-}"; shift 2 ;;
-    --run-id) RUN_ID="${2:-}"; shift 2 ;;
+    --run-id) RUN_ID="${2:-}"; RUN_ID_PROVIDED=1; shift 2 ;;
     --run-tests) RUN_TESTS=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-provider-health) SKIP_PROVIDER_HEALTH=1; shift ;;
@@ -134,7 +135,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$RUN_ID" ]]; then
+if [[ -z "$RUN_ID" && "$MODE" != "summary" ]]; then
   RUN_ID="${LABEL}-$(date +%Y%m%d-%H%M%S)"
 fi
 
@@ -2200,7 +2201,7 @@ main() {
     exit 0
   fi
   if [[ "$MODE" == "summary" ]]; then
-    if [[ -z "$RUN_ID" ]]; then
+    if [[ "$RUN_ID_PROVIDED" -eq 0 || -z "$RUN_ID" ]]; then
       echo "--run-id is required for summary mode" >&2
       exit 1
     fi

@@ -316,12 +316,13 @@ ranges, byte offsets, and line hashes. EvidenceLedger keeps those file-fact
 metadata fields so closeout and later repair logic can use structured facts
 instead of relying only on rendered text.
 Read state now distinguishes full-file reads from targeted line-range reads.
-With `PRIORITY_AGENT_SMART_EDIT=1`, exact/insert edits require a full read,
-while line-range edits are allowed when the requested range is covered by a
-previous targeted read. File state is now owned by `FileStateTracker`, and
-file read/edit/write metadata exposes lexical, resolved, canonical, display,
-and state-key path identity so relative, absolute, and canonicalized paths
-share the same stale-read boundary. File reads now expose `text_format`
+Exact/insert edits require a full read by default, while line-range edits are
+allowed when the requested range is covered by a previous targeted read. The
+legacy bypass is explicit via `PRIORITY_AGENT_ALLOW_EDIT_WITHOUT_READ=1`. File
+state is now owned by `FileStateTracker`, and file read/edit/write metadata
+exposes lexical, resolved, canonical, display, and state-key path identity so
+relative, absolute, and canonicalized paths share the same stale-read boundary.
+File reads now expose `text_format`
 metadata for encoding, BOM, and line ending; edits and writes preserve UTF-8
 BOM, UTF-16LE BOM, and LF/CRLF style instead of normalizing files by accident.
 File mutations now share a per-canonical-path async lock, and text writes use

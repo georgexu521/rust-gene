@@ -1389,11 +1389,10 @@
   `evidence_ledger` tests, `cargo check -q`, `cargo clippy --all-features -- -D
   warnings`, and full `cargo test -q` all passed (`1262 passed; 0 failed`).
 - 2026-05-12: Phase 3 Batch 3.1 started. Read state now records full-file reads
-  separately from targeted line-range reads. With `PRIORITY_AGENT_SMART_EDIT=1`,
-  exact/insert edits require a full read, while `line_start`/`line_end` edits
-  are allowed when the requested line range is covered by a previous targeted
-  read. This prevents a narrow `file_read offset/limit` from being treated as
-  full-file context.
+  separately from targeted line-range reads. Exact/insert edits now require a
+  full read by default, while `line_start`/`line_end` edits are allowed when the
+  requested line range is covered by a previous targeted read. This prevents a
+  narrow `file_read offset/limit` from being treated as full-file context.
 - Validation after the partial-read edit-state slice: `cargo fmt --check`, `git
   diff --check`, targeted `file_tool` and `evidence_ledger` tests,
   `cargo check -q`, `cargo clippy --all-features -- -D warnings`,

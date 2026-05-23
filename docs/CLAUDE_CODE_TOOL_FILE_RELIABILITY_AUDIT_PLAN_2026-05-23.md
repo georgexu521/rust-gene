@@ -823,3 +823,8 @@ gates. The next maturity pass should come from actual release-dogfood
   - the gate now covers the six required scenarios: small bug fix,
     multi-file Rust refactor, desktop UI smoke, failed-test repair,
     permission denial recovery, and long-output handling.
+- Follow-up code review tightened this release-gate layer and opened the next
+  algorithm plan in `docs/CLAUDE_CODE_ALGORITHM_GAP_PLAN_2026-05-23.md`:
+  - `file_edit` now defaults to read-before-edit discipline for existing files;
+  - `run_live_eval.sh --mode summary` now requires an explicit `--run-id`;
+  - `core-rust-multi-file-refactor` now requires a true multi-file Rust repair.

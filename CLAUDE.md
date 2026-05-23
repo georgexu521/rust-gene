@@ -905,7 +905,9 @@ PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
 **关键文件**：`src/tools/file_tool/mod.rs`
 
 **环境变量**：
-- `PRIORITY_AGENT_SMART_EDIT=1` — 启用智能编辑
+- `PRIORITY_AGENT_SMART_EDIT=1` — 启用智能引号/desanitize 兼容
+- `PRIORITY_AGENT_ALLOW_EDIT_WITHOUT_READ=1` — 显式回退到允许未读先改；
+  默认情况下 `file_edit` 已要求先 `file_read`
 
 ---
 
@@ -1051,7 +1053,8 @@ PRIORITY_AGENT_THINKING_BUDGET=4096  # 固定 4096 token thinking 预算
 
 - ✅ Task 1（Smart Edit）：已完成
   - `normalize_quotes()` / `desanitize()` 字符串规范化
-  - must-read-before-edit 检查（`PRIORITY_AGENT_SMART_EDIT=1` 启用）
+  - must-read-before-edit 检查默认启用（可用
+    `PRIORITY_AGENT_ALLOW_EDIT_WITHOUT_READ=1` 显式回退）
   - 文件修改检测（基于 inode）
 - ✅ Task 2（Diagnostic Tracking）：已完成
   - `DiagnosticTracker` 捕获 baseline diagnostics

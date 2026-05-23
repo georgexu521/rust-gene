@@ -690,9 +690,9 @@ Progress on 2026-05-22:
   assistant tool-call round. `rewind` and TUI slash rollback can restore the
   latest tool round or a specified round ID, giving Phase 4 a practical
   whole-turn rollback path for multi-tool file changes.
-- File-tool tests that intentionally exercise plain exact edit behavior now
-  clear `PRIORITY_AGENT_SMART_EDIT` under the shared env guard, so the Phase 4
-  `file_tool` gate is stable even when smart-edit tests run in parallel.
+- File-tool tests now read files before exact edits because read-before-edit is
+  the default safety boundary. The old non-read behavior is only available via
+  `PRIORITY_AGENT_ALLOW_EDIT_WITHOUT_READ=1` for explicit compatibility.
 
 Validation so far:
 
