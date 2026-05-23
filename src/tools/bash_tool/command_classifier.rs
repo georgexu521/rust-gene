@@ -83,6 +83,25 @@ pub struct ShellRedirectionFact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BashCommandPlan {
+    pub parser_status: String,
+    pub fail_closed: bool,
+    pub fail_closed_reasons: Vec<String>,
+    pub subcommand_count: usize,
+    pub subcommand_cap: usize,
+    pub has_cd_command: bool,
+    pub cd_targets: Vec<String>,
+    pub has_git_command: bool,
+    pub git_subcommands: Vec<String>,
+    pub has_process_substitution: bool,
+    pub has_command_substitution: bool,
+    pub has_heredoc: bool,
+    pub has_write_redirection: bool,
+    pub write_redirection_targets: Vec<String>,
+    pub ambiguous: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandClassification {
     pub normalized_command: String,
     pub command_kind: CommandKind,
@@ -104,6 +123,7 @@ pub struct CommandClassification {
     pub redirections: Vec<ShellRedirectionFact>,
     pub mutation_paths: Vec<String>,
     pub mutation_indicators: Vec<String>,
+    pub command_plan: BashCommandPlan,
     pub permission_rule_suggestions: Vec<CommandPermissionRuleSuggestion>,
 }
 
@@ -195,13 +215,13 @@ fn build_command_classification(input: CommandClassificationInput<'_>) -> Comman
     let redirections = shell_redirection_facts(input.base_command);
     let mutation_indicators = shell_mutation_indicators(input.base_command);
     let mutation_paths = shell_mutation_paths(input.base_command, &redirections);
-    let parser_status = if subcommands.len() > MAX_SUBCOMMAND_FACTS {
-        "too_many_subcommands"
-    } else if compound_command {
-        "compound"
-    } else {
-        "simple"
-    };
+    let command_plan = bash_command_plan(
+        input.base_command,
+        compound_command,
+        &subcommands,
+        &redirections,
+    );
+    let parser_status = command_plan.parser_status.clone();
     let risky_shell_wrapper = input.shell_wrapped
         && (compound_command
             || network_access
@@ -246,6 +266,7 @@ fn build_command_classification(input: CommandClassificationInput<'_>) -> Comman
         redirections,
         mutation_paths,
         mutation_indicators,
+        command_plan,
         permission_rule_suggestions,
     }
 }
@@ -1091,6 +1112,158 @@ fn shell_mutation_indicators(command: &str) -> Vec<String> {
     indicators
 }
 
+fn bash_command_plan(
+    command: &str,
+    compound_command: bool,
+    subcommands: &[ShellSubcommandFact],
+    redirections: &[ShellRedirectionFact],
+) -> BashCommandPlan {
+    let has_unclosed_quote = shell_has_unclosed_quote(command);
+    let has_process_substitution = command.contains("<(") || command.contains(">(");
+    let has_command_substitution = command.contains("$(") || command.contains('`');
+    let has_heredoc = redirections.iter().any(|fact| fact.operator == "<<");
+    let write_redirection_targets = redirections
+        .iter()
+        .filter(|fact| fact.writes)
+        .filter_map(|fact| fact.target.clone())
+        .collect::<Vec<_>>();
+    let has_write_redirection = !write_redirection_targets.is_empty();
+    let cd_targets = shell_cd_targets(subcommands);
+    let git_subcommands = shell_git_subcommands(subcommands);
+    let ambiguous = has_unclosed_quote || has_process_substitution || has_command_substitution;
+
+    let parser_status = if has_unclosed_quote {
+        "ambiguous_unclosed_quote"
+    } else if subcommands.len() > MAX_SUBCOMMAND_FACTS {
+        "too_many_subcommands"
+    } else if has_process_substitution {
+        "ambiguous_process_substitution"
+    } else if has_command_substitution {
+        "ambiguous_command_substitution"
+    } else if has_heredoc {
+        "heredoc"
+    } else if compound_command {
+        "compound"
+    } else {
+        "simple"
+    }
+    .to_string();
+
+    let mut fail_closed_reasons = Vec::new();
+    if has_unclosed_quote {
+        fail_closed_reasons.push("ambiguous_unclosed_quote".to_string());
+    }
+    if subcommands.len() > MAX_SUBCOMMAND_FACTS {
+        fail_closed_reasons.push("too_many_subcommands".to_string());
+    }
+    if has_process_substitution {
+        fail_closed_reasons.push("process_substitution".to_string());
+    }
+    if has_command_substitution {
+        fail_closed_reasons.push("command_substitution".to_string());
+    }
+    if has_heredoc {
+        fail_closed_reasons.push("heredoc".to_string());
+    }
+    if has_write_redirection {
+        fail_closed_reasons.push("write_redirection".to_string());
+    }
+    if !cd_targets.is_empty() && compound_command {
+        fail_closed_reasons.push("cd_context_shift".to_string());
+    }
+    if subcommands.iter().any(|fact| fact.mutation) {
+        fail_closed_reasons.push("mutation_subcommand".to_string());
+    }
+    if subcommands
+        .iter()
+        .any(|fact| fact.category == ShellCommandCategory::Destructive)
+    {
+        fail_closed_reasons.push("destructive_subcommand".to_string());
+    }
+
+    fail_closed_reasons.sort();
+    fail_closed_reasons.dedup();
+
+    BashCommandPlan {
+        parser_status,
+        fail_closed: !fail_closed_reasons.is_empty(),
+        fail_closed_reasons,
+        subcommand_count: subcommands.len(),
+        subcommand_cap: MAX_SUBCOMMAND_FACTS,
+        has_cd_command: !cd_targets.is_empty(),
+        cd_targets,
+        has_git_command: !git_subcommands.is_empty(),
+        git_subcommands,
+        has_process_substitution,
+        has_command_substitution,
+        has_heredoc,
+        has_write_redirection,
+        write_redirection_targets,
+        ambiguous,
+    }
+}
+
+fn shell_has_unclosed_quote(command: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in command.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if quote != Some('\'') && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+        }
+    }
+
+    quote.is_some()
+}
+
+fn shell_cd_targets(subcommands: &[ShellSubcommandFact]) -> Vec<String> {
+    subcommands
+        .iter()
+        .filter_map(|fact| {
+            let tokens = shell_tokens(&fact.command);
+            if tokens.first().map(String::as_str) == Some("cd") {
+                tokens
+                    .get(1)
+                    .map(|target| clean_shell_token(target))
+                    .filter(|target| !target.is_empty())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn shell_git_subcommands(subcommands: &[ShellSubcommandFact]) -> Vec<String> {
+    subcommands
+        .iter()
+        .filter_map(|fact| {
+            let tokens = shell_tokens(&fact.command);
+            if tokens.first().map(String::as_str) == Some("git") {
+                tokens
+                    .get(1)
+                    .map(|subcommand| clean_shell_token(subcommand))
+                    .filter(|subcommand| !subcommand.is_empty())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn python_inline_mutates_files(lower: &str) -> bool {
     (lower.starts_with("python -c ")
         || lower.starts_with("python3 -c ")
@@ -1674,6 +1847,70 @@ mod tests {
             ShellCommandCategory::FileMutation
         );
         assert!(class.subcommands[1].mutation);
+        assert!(class.command_plan.fail_closed);
+        assert!(class
+            .command_plan
+            .fail_closed_reasons
+            .contains(&"mutation_subcommand".to_string()));
+    }
+
+    #[test]
+    fn command_plan_records_cd_git_and_write_redirects() {
+        let class = classify_command("cd ../outside && git status >> /tmp/status.txt");
+
+        assert_eq!(class.parser_status, "compound");
+        assert!(class.command_plan.has_cd_command);
+        assert_eq!(class.command_plan.cd_targets, vec!["../outside"]);
+        assert!(class.command_plan.has_git_command);
+        assert_eq!(class.command_plan.git_subcommands, vec!["status"]);
+        assert!(class.command_plan.has_write_redirection);
+        assert_eq!(
+            class.command_plan.write_redirection_targets,
+            vec!["/tmp/status.txt"]
+        );
+        assert!(class.command_plan.fail_closed);
+        assert!(class
+            .command_plan
+            .fail_closed_reasons
+            .contains(&"write_redirection".to_string()));
+    }
+
+    #[test]
+    fn command_plan_fails_closed_for_ambiguous_shell_features() {
+        let heredoc = classify_command("python3 <<'PY'\nopen('src/out.txt', 'w').write('x')\nPY");
+        assert_eq!(heredoc.parser_status, "heredoc");
+        assert!(heredoc.command_plan.has_heredoc);
+        assert!(heredoc.command_plan.fail_closed);
+
+        let substitution = classify_command("cat <(python3 -c 'print(1)')");
+        assert_eq!(substitution.parser_status, "ambiguous_process_substitution");
+        assert!(substitution.command_plan.has_process_substitution);
+        assert!(substitution.command_plan.ambiguous);
+        assert!(substitution.command_plan.fail_closed);
+
+        let command_substitution = classify_command("echo $(python3 -c 'print(1)')");
+        assert_eq!(
+            command_substitution.parser_status,
+            "ambiguous_command_substitution"
+        );
+        assert!(command_substitution.command_plan.has_command_substitution);
+        assert!(command_substitution.command_plan.fail_closed);
+    }
+
+    #[test]
+    fn command_plan_caps_subcommand_fanout() {
+        let command = (0..14)
+            .map(|index| format!("echo {index}"))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        let class = classify_command(&command);
+
+        assert_eq!(class.parser_status, "too_many_subcommands");
+        assert!(class.command_plan.fail_closed);
+        assert!(class
+            .command_plan
+            .fail_closed_reasons
+            .contains(&"too_many_subcommands".to_string()));
     }
 
     #[test]

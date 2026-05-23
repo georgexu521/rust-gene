@@ -194,6 +194,10 @@ pub struct CompactionRuntimeRecord {
     pub messages_after: usize,
     pub tokens_before: u64,
     pub tokens_after: u64,
+    #[serde(default)]
+    pub token_delta: i64,
+    #[serde(default)]
+    pub stage_order: Vec<String>,
     pub boundary_id: Option<String>,
     pub sequence: Option<u32>,
     pub preserved_tail_count: Option<usize>,
@@ -693,6 +697,11 @@ mod tests {
             messages_after: 4,
             tokens_before: 1000,
             tokens_after: 300,
+            token_delta: -700,
+            stage_order: vec![
+                "snip_tool_results".to_string(),
+                "sanitize_tool_pairs".to_string(),
+            ],
             boundary_id: Some("cb-test".to_string()),
             sequence: Some(2),
             preserved_tail_count: Some(3),

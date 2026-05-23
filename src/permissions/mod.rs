@@ -569,6 +569,7 @@ impl PermissionContext {
                     crate::tools::bash_tool::command_classifier::classify_command(cmd);
                 if Self::is_high_risk_command(cmd)
                     || classification.network_access
+                    || classification.command_plan.fail_closed
                     || self.bash_references_outside_workspace_path(&lower)
                 {
                     RiskLevel::High
@@ -863,6 +864,12 @@ impl PermissionContext {
             }
             if classification.network_access {
                 warnings.push("NETWORK_ACCESS: shell command may access the network".to_string());
+            }
+            if classification.command_plan.fail_closed {
+                warnings.push(format!(
+                    "SHELL_STRUCTURE_REVIEW: command requires explicit review ({})",
+                    classification.command_plan.fail_closed_reasons.join(", ")
+                ));
             }
             if classification.risky_shell_wrapper {
                 warnings.push(
@@ -1458,6 +1465,31 @@ mod tests {
             "bash",
             &serde_json::json!({"command": "rg memory --glob '*.rs' root=/Users/georgexu/Desktop/rust-agent/src"})
         ));
+    }
+
+    #[test]
+    fn test_auto_all_prompts_for_structurally_risky_bash() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoAll,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("/tmp/priority-agent-workspace"),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        for command in [
+            "echo ok >> src/generated.txt",
+            "cd ../outside && git status",
+            "python3 <<'PY'\nopen('src/out.txt', 'w').write('x')\nPY",
+            "python -c \"open('src/out.txt', 'w').write('x')\"",
+            "printf ok | tee src/generated.txt",
+            "sed -i '' 's/a/b/' src/lib.rs",
+        ] {
+            assert!(
+                ctx.requires_confirmation("bash", &serde_json::json!({"command": command})),
+                "expected structural shell review for {command:?}"
+            );
+        }
     }
 
     #[test]

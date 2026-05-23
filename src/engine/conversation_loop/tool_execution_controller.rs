@@ -42,6 +42,7 @@ impl ToolExecutionBatch {
         results: Vec<(ToolCall, ToolResult)>,
         lifecycle: Vec<(String, ToolCallLifecycleRecord)>,
     ) -> Self {
+        let (results, lifecycle) = complete_provider_result_pairs(results, lifecycle);
         Self { results, lifecycle }
     }
 
@@ -91,6 +92,54 @@ impl ToolExecutionBatch {
             .filter(|(_, record)| record.pre_executed)
             .count()
     }
+}
+
+fn complete_provider_result_pairs(
+    mut results: Vec<(ToolCall, ToolResult)>,
+    mut lifecycle: Vec<(String, ToolCallLifecycleRecord)>,
+) -> (
+    Vec<(ToolCall, ToolResult)>,
+    Vec<(String, ToolCallLifecycleRecord)>,
+) {
+    let result_ids = results
+        .iter()
+        .map(|(tool_call, _)| tool_call.id.clone())
+        .collect::<HashSet<_>>();
+
+    for (call_id, record) in &mut lifecycle {
+        if result_ids.contains(call_id) {
+            continue;
+        }
+
+        let status = record.status;
+        let mut result = ToolResult::error(format!(
+            "Tool '{}' ended with lifecycle status {:?} but no terminal result was recorded. Treating it as interrupted.",
+            record.tool_name, status
+        ));
+        merge_tool_result_metadata(
+            &mut result,
+            "tool_lifecycle_recovery",
+            serde_json::json!({
+                "schema": "tool_lifecycle_recovery.v1",
+                "call_id": call_id,
+                "tool": record.tool_name.clone(),
+                "previous_status": format!("{:?}", status),
+                "terminal_result": "interrupted",
+                "synthesized": true,
+            }),
+        );
+        results.push((
+            ToolCall {
+                id: call_id.clone(),
+                name: record.tool_name.clone(),
+                arguments: serde_json::json!({}),
+            },
+            result,
+        ));
+        record.status = ToolCallStatus::Failed;
+    }
+
+    (results, lifecycle)
 }
 
 pub(super) struct ToolExecutionRequest<'a> {
@@ -1339,6 +1388,31 @@ mod tests {
         assert_eq!(batch.denied_count(), 1);
         assert_eq!(batch.failed_count(), 1);
         assert_eq!(batch.pre_executed_count(), 1);
+    }
+
+    #[test]
+    fn batch_synthesizes_terminal_result_for_missing_lifecycle_result() {
+        let pending = tool_call("call_missing", "bash");
+        let mut lifecycle = ToolCallLifecycle::default();
+        lifecycle.pending_batch(std::slice::from_ref(&pending));
+
+        let batch = ToolExecutionBatch::new(Vec::new(), lifecycle.snapshot());
+
+        assert_eq!(batch.results().len(), 1);
+        assert_eq!(batch.results()[0].0.id, "call_missing");
+        assert!(!batch.results()[0].1.success);
+        assert!(batch.results()[0]
+            .1
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no terminal result was recorded"));
+        assert_eq!(batch.failed_count(), 1);
+        assert_eq!(
+            batch.results()[0].1.data.as_ref().unwrap()["tool_lifecycle_recovery"]
+                ["terminal_result"],
+            "interrupted"
+        );
     }
 
     #[tokio::test]

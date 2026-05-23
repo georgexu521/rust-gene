@@ -1951,6 +1951,10 @@ for row in rows:
     if row["warnings"] != "none":
         for warning in row["warnings"].split(","):
             failure_modes[f"warning:{warning}"] = failure_modes.get(f"warning:{warning}", 0) + 1
+failure_classes = {}
+for row in rows:
+    for klass in row.get("failure_classes", []):
+        failure_classes[klass] = failure_classes.get(klass, 0) + 1
 
 task_count = len(rows)
 passed_count = totals.get("passed", 0)
@@ -2055,6 +2059,30 @@ else:
 
 lines.extend([
     "",
+    "## Release Dogfood Failure Classes",
+    "",
+    "| class | count | meaning |",
+    "|-------|-------|---------|",
+])
+
+failure_class_meanings = {
+    "tool_contract": "Tool schema, exposure, result-pair, or contract boundary failures.",
+    "file_state": "Read-before-edit, stale file, checkpoint, rollback, or diff-state failures.",
+    "bash_permission": "Shell command structure, redirection, heredoc, or shell permission failures.",
+    "permission_recovery": "Permission denial, approval, or recovery-loop failures.",
+    "compaction_continuity": "Context compression, retained context, or long-run continuity failures.",
+    "llm_reasoning": "Model failed to plan, edit, validate, or close out despite available tools.",
+    "desktop_evidence": "Desktop UI, screenshot, native smoke, or visual evidence failures.",
+}
+
+if failure_classes:
+    for key, value in sorted(failure_classes.items(), key=lambda item: (-item[1], item[0])):
+        lines.append(f"| {key} | {value} | {failure_class_meanings.get(key, 'Unclassified failure class.')} |")
+else:
+    lines.append("| none | 0 | No classified failures. |")
+
+lines.extend([
+    "",
     "## Memory And Skill Evidence",
     "",
     "| dimension | count | meaning |",
@@ -2080,37 +2108,37 @@ lines.extend([
     "",
     "## Coding Gauntlet Evidence",
     "",
-    "| task | gauntlet_status | first_pass_signal | coding | required | closeout | contract | risk | first_write | diff | warnings |",
-    "|------|-----------------|-------------------|--------|----------|----------|----------|------|-------------|------|----------|",
+    "| task | gauntlet_status | first_pass_signal | failure_class | coding | required | closeout | contract | risk | first_write | diff | warnings |",
+    "|------|-----------------|-------------------|---------------|--------|----------|----------|----------|------|-------------|------|----------|",
 ])
 
 if coding_rows:
     for row in coding_rows:
         lines.append(
-            "| {task} | {coding_gauntlet_status} | {first_pass_signal} | {coding} | {required} | {closeout} | {workflow_contract_activation} | {risk_signal} | {first_write} | {diff} | {warnings} |".format(
+            "| {task} | {coding_gauntlet_status} | {first_pass_signal} | {failure_class} | {coding} | {required} | {closeout} | {workflow_contract_activation} | {risk_signal} | {first_write} | {diff} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | not_applicable | unknown | tools=0, tool_records=0, validations=0, repair=0, files=0 | missing | missing | missing | missing | missing | no | none |")
+    lines.append("| none | not_applicable | unknown | none | tools=0, tool_records=0, validations=0, repair=0, files=0 | missing | missing | missing | missing | missing | no | none |")
 
 lines.extend([
     "",
     "## Task Matrix",
     "",
-    "| task | status | intent | owner | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | contract | risk | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |",
-    "|------|--------|--------|-------|----------|--------------|---------------|---------------------|----------|--------------|----------|------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|",
+    "| task | status | intent | owner | failure_class | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | contract | risk | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |",
+    "|------|--------|--------|-------|---------------|----------|--------------|---------------|---------------------|----------|--------------|----------|------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|",
 ])
 
 if rows:
     for row in rows:
         lines.append(
-            "| {task} | {status} | {intent} | {owner} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {workflow_contract_activation} | {risk_signal} | {behavior_assertions} | {behavior_assertion_status} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
+            "| {task} | {status} | {intent} | {owner} | {failure_class} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {workflow_contract_activation} | {risk_signal} | {behavior_assertions} | {behavior_assertion_status} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | missing | missing | missing | missing | none | none | unknown | missing | missing | none | missing | none | none | missing | none | no | none | none | none |")
+    lines.append("| none | missing | missing | missing | none | missing | none | none | unknown | missing | missing | none | missing | none | none | missing | none | no | none | none | none |")
 
 lines.extend([
     "",

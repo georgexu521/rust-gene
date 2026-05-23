@@ -6,9 +6,21 @@ use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
 use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolResult};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 use tracing::warn;
+
+const PERMISSION_DENIAL_RECOVERY_LIMIT: usize = 2;
+
+#[derive(Debug, Clone, Default)]
+struct PermissionDenialCounter {
+    count: usize,
+}
+
+static PERMISSION_DENIAL_COUNTERS: OnceLock<Mutex<HashMap<String, PermissionDenialCounter>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PermissionRequestKind {
@@ -161,6 +173,7 @@ impl PermissionController {
             tool_name
         );
         let recovery_feedback = recovery_feedback(kind, family, tool_name);
+        let denial_state = permission_denial_state_json(session_id, family, tool_name, false);
         let command_classification =
             permission_command_classification(tool_name, &tool_call.arguments);
         let remote_classification =
@@ -186,6 +199,7 @@ impl PermissionController {
             command_classification: &command_classification,
             remote_classification: &remote_classification,
             recovery_feedback: &recovery_feedback,
+            denial_state: &denial_state,
         });
         let metadata = serde_json::json!({
             "tool_name": tool_name,
@@ -205,6 +219,7 @@ impl PermissionController {
             "ui_render_kind": ui_render_kind,
             "command_classification": command_classification,
             "remote_classification": remote_classification,
+            "denial_state": denial_state,
             "warnings": permission_explanation.warnings,
             "reasons": permission_explanation.reasons,
             "drift_reason": drift_check.reason,
@@ -384,7 +399,8 @@ impl PermissionController {
         tool_name: &str,
         record: Option<&PermissionRequestRecord>,
     ) -> ToolResult {
-        let message = record
+        let denial_state = record.map(record_permission_denial);
+        let mut message = record
             .map(permission_denied_message)
             .unwrap_or_else(|| {
                 format!(
@@ -392,11 +408,22 @@ impl PermissionController {
                     tool_name
                 )
             });
+        if denial_state
+            .as_ref()
+            .and_then(|state| state.get("bounded_recovery"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            message.push_str(
+                "\nRecovery: This permission family has been denied repeatedly in this session. Stop retrying the same risky action; ask the user for a new approval or choose a lower-risk inspection path.",
+            );
+        }
         let mut result = ToolResult::error(message);
         result.error_code = Some(ToolErrorCode::PermissionDenied);
         if let Some(record) = record {
             result.data = Some(serde_json::json!({
                 "permission_request": record.to_json_with_approval(false),
+                "denial_state": denial_state,
             }));
         }
         result
@@ -425,6 +452,67 @@ fn permission_denied_message(record: &PermissionRequestRecord) -> String {
             "{}\nRecovery: {}",
             record.rejection_feedback, record.recovery_feedback
         )
+    }
+}
+
+fn permission_denial_key(
+    session_id: &str,
+    family: PermissionToolFamily,
+    tool_name: &str,
+) -> String {
+    format!("{}:{}:{}", session_id, family.as_str(), tool_name)
+}
+
+fn permission_denial_state_json(
+    session_id: &str,
+    family: PermissionToolFamily,
+    tool_name: &str,
+    increment: bool,
+) -> serde_json::Value {
+    let key = permission_denial_key(session_id, family, tool_name);
+    let counters = PERMISSION_DENIAL_COUNTERS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut counters = counters
+        .lock()
+        .expect("permission denial counters poisoned");
+    let entry = counters.entry(key).or_default();
+    if increment {
+        entry.count = entry.count.saturating_add(1);
+    }
+    serde_json::json!({
+        "schema": "permission_denial_state.v1",
+        "session_id": session_id,
+        "permission_family": family.as_str(),
+        "tool_name": tool_name,
+        "denials": entry.count,
+        "bounded_recovery": entry.count >= PERMISSION_DENIAL_RECOVERY_LIMIT,
+        "limit": PERMISSION_DENIAL_RECOVERY_LIMIT,
+    })
+}
+
+fn record_permission_denial(record: &PermissionRequestRecord) -> serde_json::Value {
+    let tool_name = record
+        .metadata
+        .get("tool_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let family = record
+        .metadata
+        .get("permission_family")
+        .and_then(serde_json::Value::as_str)
+        .map(permission_tool_family_from_str)
+        .unwrap_or(PermissionToolFamily::Other);
+    permission_denial_state_json(&record.session_id, family, tool_name, true)
+}
+
+fn permission_tool_family_from_str(value: &str) -> PermissionToolFamily {
+    match value {
+        "shell" => PermissionToolFamily::Shell,
+        "file" => PermissionToolFamily::File,
+        "external_directory" => PermissionToolFamily::ExternalDirectory,
+        "task" => PermissionToolFamily::Task,
+        "subagent" => PermissionToolFamily::Subagent,
+        "remote" => PermissionToolFamily::Remote,
+        _ => PermissionToolFamily::Other,
     }
 }
 
@@ -506,6 +594,7 @@ fn permission_command_classification(
         "redirections": classification.redirections,
         "mutation_paths": classification.mutation_paths,
         "mutation_indicators": classification.mutation_indicators,
+        "command_plan": classification.command_plan,
         "path_patterns": classification.path_patterns,
         "safe_for_closeout": classification.safe_for_closeout,
         "requires_pty": classification.requires_pty(),
@@ -536,6 +625,34 @@ struct PermissionEvidenceInput<'a> {
     command_classification: &'a serde_json::Value,
     remote_classification: &'a serde_json::Value,
     recovery_feedback: &'a str,
+    denial_state: &'a serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionPipelineStage {
+    RuleDecision,
+    RiskAssessment,
+    ShellFailClosed,
+    ToolConfirmation,
+    GoalDrift,
+    PromptRequired,
+    DenialTracking,
+    RecoveryGuidance,
+}
+
+impl PermissionPipelineStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            PermissionPipelineStage::RuleDecision => "rule_decision",
+            PermissionPipelineStage::RiskAssessment => "risk_assessment",
+            PermissionPipelineStage::ShellFailClosed => "shell_fail_closed",
+            PermissionPipelineStage::ToolConfirmation => "tool_confirmation",
+            PermissionPipelineStage::GoalDrift => "goal_drift",
+            PermissionPipelineStage::PromptRequired => "prompt_required",
+            PermissionPipelineStage::DenialTracking => "denial_tracking",
+            PermissionPipelineStage::RecoveryGuidance => "recovery_guidance",
+        }
+    }
 }
 
 fn permission_decision_evidence_json(input: PermissionEvidenceInput<'_>) -> serde_json::Value {
@@ -551,6 +668,7 @@ fn permission_decision_evidence_json(input: PermissionEvidenceInput<'_>) -> serd
             })
         })
         .collect::<Vec<_>>();
+    let pipeline_stages = permission_pipeline_stages(&input);
     serde_json::json!({
         "schema": "permission_decision_evidence.v1",
         "tool_name": input.tool_name,
@@ -568,17 +686,98 @@ fn permission_decision_evidence_json(input: PermissionEvidenceInput<'_>) -> serd
             "goal_drift": input.drift_requires_approval,
         },
         "matched_rules": matched_rules,
+        "pipeline_stages": pipeline_stages,
         "matched_patterns": input.patterns,
         "allowed_always_rules": input.allowed_always_rules,
         "warnings": input.permission_explanation.warnings,
         "reasons": input.permission_explanation.reasons,
         "command_classification": input.command_classification,
         "remote_classification": input.remote_classification,
+        "denial_state": input.denial_state,
         "recovery": {
             "recommended_action": input.recovery_feedback,
             "safe_retry": false,
         }
     })
+}
+
+fn permission_pipeline_stages(input: &PermissionEvidenceInput<'_>) -> Vec<serde_json::Value> {
+    let mut stages = vec![
+        serde_json::json!({
+            "stage": PermissionPipelineStage::RuleDecision.as_str(),
+            "decision": format!("{:?}", input.permission_explanation.decision),
+            "matched_rules": input.permission_explanation.matched_rules.len(),
+        }),
+        serde_json::json!({
+            "stage": PermissionPipelineStage::RiskAssessment.as_str(),
+            "risk_level": format!("{:?}", input.permission_explanation.risk_level),
+            "warnings": input.permission_explanation.warnings,
+        }),
+    ];
+
+    let shell_fail_closed = input
+        .command_classification
+        .get("command_plan")
+        .and_then(|plan| plan.get("fail_closed"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if shell_fail_closed {
+        stages.push(serde_json::json!({
+            "stage": PermissionPipelineStage::ShellFailClosed.as_str(),
+            "reasons": input.command_classification
+                .get("command_plan")
+                .and_then(|plan| plan.get("fail_closed_reasons"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        }));
+    }
+
+    if input.raw_tool_requires || input.tool_requires {
+        stages.push(serde_json::json!({
+            "stage": PermissionPipelineStage::ToolConfirmation.as_str(),
+            "raw_tool_confirmation": input.raw_tool_requires,
+            "effective_tool_confirmation": input.tool_requires,
+        }));
+    }
+
+    if input.drift_requires_approval {
+        stages.push(serde_json::json!({
+            "stage": PermissionPipelineStage::GoalDrift.as_str(),
+            "requires_approval": true,
+        }));
+    }
+
+    if input.permission_requires || input.tool_requires || input.drift_requires_approval {
+        stages.push(serde_json::json!({
+            "stage": PermissionPipelineStage::PromptRequired.as_str(),
+            "request_kind": input.kind.as_str(),
+            "permission_family": input.family.as_str(),
+        }));
+    }
+
+    let prior_denials = input
+        .denial_state
+        .get("denials")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if prior_denials > 0 {
+        stages.push(serde_json::json!({
+            "stage": PermissionPipelineStage::DenialTracking.as_str(),
+            "denials": prior_denials,
+            "bounded_recovery": input.denial_state
+                .get("bounded_recovery")
+                .cloned()
+                .unwrap_or(serde_json::Value::Bool(false)),
+        }));
+    }
+
+    stages.push(serde_json::json!({
+        "stage": PermissionPipelineStage::RecoveryGuidance.as_str(),
+        "recommended_action": input.recovery_feedback,
+        "safe_retry": false,
+    }));
+
+    stages
 }
 
 fn permission_remote_classification(
@@ -784,6 +983,60 @@ mod tests {
     }
 
     #[test]
+    fn repeated_permission_denials_emit_bounded_recovery_state() {
+        let record = PermissionRequestRecord {
+            id: "call_repeat".to_string(),
+            session_id: "session-repeat-denial".to_string(),
+            kind: PermissionRequestKind::RuntimeRule,
+            patterns: vec!["bash".to_string()],
+            metadata: json!({
+                "tool_name": "bash",
+                "permission_family": "shell"
+            }),
+            allowed_always_rules: Vec::new(),
+            review: HumanReviewAuditRecord {
+                kind: crate::engine::human_review::HumanReviewKind::ToolPermission,
+                title: "Tool approval".to_string(),
+                risk: crate::engine::human_review::HumanReviewRisk::High,
+                subject: "bash".to_string(),
+                reason: "Allow shell mutation?".to_string(),
+                tool_call_id: Some("call_repeat".to_string()),
+                tool_name: Some("bash".to_string()),
+                input_summary: "bash".to_string(),
+                risk_facts: Vec::new(),
+                matched_rules: vec!["bash".to_string()],
+                classifier_result: None,
+                hook_decision: None,
+                user_decision: None,
+                persistence_scope: Some("this_call".to_string()),
+                saved_config_path: None,
+                recovery_hint: Some("Ask the user before retrying.".to_string()),
+            },
+            rejection_feedback: "Permission denied: 'bash' requires user confirmation.".to_string(),
+            recovery_feedback: "Ask the user before retrying.".to_string(),
+        };
+
+        let first = PermissionController::denied_result("bash", Some(&record));
+        assert_eq!(first.data.as_ref().unwrap()["denial_state"]["denials"], 1);
+        assert_eq!(
+            first.data.as_ref().unwrap()["denial_state"]["bounded_recovery"],
+            false
+        );
+
+        let second = PermissionController::denied_result("bash", Some(&record));
+        assert_eq!(second.data.as_ref().unwrap()["denial_state"]["denials"], 2);
+        assert_eq!(
+            second.data.as_ref().unwrap()["denial_state"]["bounded_recovery"],
+            true
+        );
+        assert!(second
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("denied repeatedly"));
+    }
+
+    #[test]
     fn external_file_edit_records_external_directory_family() {
         let tmp = tempdir().expect("tempdir");
         let context = ToolContext::new(tmp.path(), "session-1");
@@ -933,6 +1186,27 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("sed_in_place")));
+        assert_eq!(
+            evidence["command_classification"]["command_plan"]["fail_closed"],
+            true
+        );
+        assert!(
+            evidence["command_classification"]["command_plan"]["fail_closed_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("mutation_subcommand"))
+        );
+        let stage_names = evidence["pipeline_stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|stage| stage["stage"].as_str())
+            .collect::<Vec<_>>();
+        assert!(stage_names.contains(&"rule_decision"));
+        assert!(stage_names.contains(&"risk_assessment"));
+        assert!(stage_names.contains(&"shell_fail_closed"));
+        assert!(stage_names.contains(&"prompt_required"));
+        assert!(stage_names.contains(&"recovery_guidance"));
     }
 
     #[test]

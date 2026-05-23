@@ -368,6 +368,9 @@ fn bash_permission_review_data(
     if classification.network_access {
         facts.push("network_access");
     }
+    if classification.command_plan.fail_closed {
+        facts.push("shell_structure_review");
+    }
     if classification.external_path_access {
         facts.push("external_path_access");
     }
@@ -399,6 +402,7 @@ fn bash_permission_review_data(
     let risk_level = if classification.command_kind == CommandKind::Dangerous
         || classification.category == ShellCommandCategory::Destructive
         || classification.risky_shell_wrapper
+        || classification.command_plan.fail_closed
     {
         "high"
     } else if classification.network_access
@@ -437,6 +441,7 @@ fn bash_permission_review_data(
         "mode": mode,
         "sandbox": sandbox,
         "suggested_action": suggested_action,
+        "command_plan": classification.command_plan,
         "permission_rule_suggestions": classification.permission_rule_suggestions,
     })
 }

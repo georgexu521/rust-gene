@@ -110,6 +110,142 @@ def report_run_status(tool_boundary, quality_status, test_status, plan_quality):
     return "skipped"
 
 
+FAILURE_CLASS_ORDER = [
+    "tool_contract",
+    "file_state",
+    "bash_permission",
+    "permission_recovery",
+    "compaction_continuity",
+    "llm_reasoning",
+    "desktop_evidence",
+]
+
+
+def classify_failure_classes(
+    task_id,
+    report_text,
+    quality_text,
+    agent_output,
+    warnings,
+    failures,
+    failure_owner,
+    run_status,
+):
+    text = "\n".join(
+        [
+            task_id,
+            report_text,
+            quality_text,
+            agent_output,
+            " ".join(warnings),
+            " ".join(failures),
+            failure_owner,
+        ]
+    ).lower()
+    classes = set()
+
+    if any(
+        marker in text
+        for marker in [
+            "tool_contract",
+            "tool_errors_seen",
+            "forbidden_tool",
+            "invalid tool",
+            "not exposed",
+            "orphan tool",
+            "tool-result",
+            "tool_result",
+            "schema",
+            "strict schema",
+        ]
+    ):
+        classes.add("tool_contract")
+    if any(
+        marker in text
+        for marker in [
+            "file_state",
+            "stale",
+            "read-before-edit",
+            "read before edit",
+            "checkpoint",
+            "rollback",
+            "file_change",
+            "no_code_diff",
+            "diff_files_changed: 0",
+            "settings_schema_validation",
+        ]
+    ):
+        classes.add("file_state")
+    if any(
+        marker in text
+        for marker in [
+            "bash_permission",
+            "shell_fail_closed",
+            "shell_structure_review",
+            "dangerous command",
+            "redirection",
+            "heredoc",
+            "command_substitution",
+            "permission_family: shell",
+        ]
+    ):
+        classes.add("bash_permission")
+    if any(
+        marker in text
+        for marker in [
+            "permission_recovery",
+            "permission denied",
+            "permission_denied",
+            "permission pending",
+            "approval",
+            "rejected",
+            "denial",
+        ]
+    ):
+        classes.add("permission_recovery")
+    if any(
+        marker in text
+        for marker in [
+            "compaction_continuity",
+            "compact",
+            "runtime_continuity",
+            "context too long",
+            "prompt too long",
+            "retained_context",
+            "token_delta",
+        ]
+    ):
+        classes.add("compaction_continuity")
+    if any(
+        marker in text
+        for marker in [
+            "desktop_evidence",
+            "desktop",
+            "screenshot",
+            "ui smoke",
+            "tauri",
+            "visual",
+        ]
+    ):
+        classes.add("desktop_evidence")
+    if (
+        failure_owner == "llm_reasoning"
+        or "llm_reasoning" in text
+        or "missing_closeout" in text
+        or "closeout_not_successful" in text
+        or "empty_agent_output" in text
+        or "no_code_diff" in text
+        or "audit_no_code_diff" in text
+        or "required_commands_not_passing" in text
+    ):
+        classes.add("llm_reasoning")
+
+    if run_status == "failed" and not classes:
+        classes.add("llm_reasoning")
+
+    return [name for name in FAILURE_CLASS_ORDER if name in classes]
+
+
 def specialty_metrics(task_dir, report_text):
     events = jsonl_events(task_dir / "agent-events.jsonl")
     task_name = task_dir.name.lower()
@@ -302,6 +438,16 @@ def report_rows(run_dir):
                 if warning not in warnings
             ]
         )
+        failure_classes = classify_failure_classes(
+            task_id,
+            report_text,
+            quality_text,
+            agent_output,
+            warnings,
+            failures,
+            failure_owner,
+            run_status,
+        )
         specialty = specialty_metrics(task_dir, report_text)
         tool_executions = int_value(report_value(report_text, "tool_executions", 0))
         diff_files_changed = int_value(report_value(report_text, "diff_files_changed", 0))
@@ -369,6 +515,8 @@ def report_rows(run_dir):
                 "diff": "yes" if diff_stat else "no",
                 "warnings": ",".join(warnings) if warnings else "none",
                 "failures": failures,
+                "failure_classes": failure_classes,
+                "failure_class": ",".join(failure_classes) if failure_classes else "none",
                 "has_output": bool(agent_output.strip()),
                 "coding_gauntlet_status": coding_gauntlet_status,
                 "first_pass_signal": first_pass_signal,

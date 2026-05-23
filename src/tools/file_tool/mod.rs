@@ -1285,7 +1285,17 @@ impl Tool for FileWriteTool {
             before_content.unwrap_or(""),
             content_body,
         );
-        let checkpoint = create_file_checkpoint(&context, "file_write", &path).await;
+        if let Some(result) =
+            priority_agent_settings_validation_error(&identity, content_body, "schema_guard")
+        {
+            return result;
+        }
+        let checkpoint = match create_file_checkpoint(&context, "file_write", &path).await {
+            Some(checkpoint) => checkpoint,
+            None => {
+                return checkpoint_creation_failed_result("file_write", path_str, &identity);
+            }
+        };
 
         // 写入文件
         match write_text_file(
@@ -1314,7 +1324,7 @@ impl Tool for FileWriteTool {
                 let file_change = record_file_change(
                     &context,
                     FileChangeRequest {
-                        checkpoint: checkpoint.as_ref(),
+                        checkpoint: Some(&checkpoint),
                         tool_name: "file_write",
                         path: &path,
                         existed_before,
@@ -1325,7 +1335,7 @@ impl Tool for FileWriteTool {
                     },
                 )
                 .await;
-                let checkpoint_json = checkpoint_metadata_json(checkpoint.as_ref());
+                let checkpoint_json = checkpoint_metadata_json(Some(&checkpoint));
                 let file_change_json = file_change.unwrap_or(serde_json::Value::Null);
                 let text_format = text_write_format_json(encoding, has_bom, line_ending);
                 let edit_preview = edit_preview_json(
@@ -1537,6 +1547,145 @@ fn file_edit_error_with_data(error: impl Into<String>, data: serde_json::Value) 
     let mut result = ToolResult::error_with_content(error, data.to_string());
     result.data = Some(data);
     result
+}
+
+fn priority_agent_settings_validation_error(
+    identity: &FilePathIdentity,
+    content: &str,
+    stage: &str,
+) -> Option<ToolResult> {
+    let path = std::path::Path::new(&identity.resolved_path);
+    if !is_priority_agent_settings_path(path) {
+        return None;
+    }
+
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let validation = if filename == "permissions.toml" {
+        validate_permissions_toml(content)
+    } else if filename == "config.toml"
+        || path.extension().and_then(|ext| ext.to_str()) == Some("toml")
+    {
+        toml::from_str::<toml::Value>(content)
+            .map(|_| ())
+            .map_err(|err| format!("invalid TOML: {err}"))
+    } else if filename.ends_with(".json") {
+        serde_json::from_str::<serde_json::Value>(content)
+            .map(|_| ())
+            .map_err(|err| format!("invalid JSON: {err}"))
+    } else {
+        Ok(())
+    };
+
+    validation.err().map(|error| {
+        file_edit_error_with_data(
+            format!(
+                "Refusing to write Priority Agent settings file '{}': {}",
+                identity.display_path, error
+            ),
+            json!({
+                "failure": "settings_schema_validation",
+                "stage": stage,
+                "path_identity": path_identity_json(identity),
+                "schema_error": error,
+            }),
+        )
+    })
+}
+
+fn checkpoint_creation_failed_result(
+    tool_name: &str,
+    path_str: &str,
+    identity: &FilePathIdentity,
+) -> ToolResult {
+    file_edit_error_with_data(
+        format!(
+            "Refusing {tool_name} for '{}': checkpoint creation failed before write, so rollback would be unavailable.",
+            path_str
+        ),
+        json!({
+            "failure": "checkpoint_creation_failed",
+            "stage": "checkpoint_guard",
+            "tool": tool_name,
+            "path_identity": path_identity_json(identity),
+        }),
+    )
+}
+
+fn is_priority_agent_settings_path(path: &std::path::Path) -> bool {
+    let components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    components.windows(2).any(|window| {
+        matches!(
+            window,
+            [".priority-agent", _] | ["priority-agent", "config.toml"]
+        )
+    })
+}
+
+fn validate_permissions_toml(content: &str) -> Result<(), String> {
+    let value =
+        toml::from_str::<toml::Value>(content).map_err(|err| format!("invalid TOML: {err}"))?;
+    let table = value
+        .as_table()
+        .ok_or_else(|| "permissions.toml must be a TOML table".to_string())?;
+
+    for key in table.keys() {
+        if !matches!(key.as_str(), "always_allow" | "always_deny" | "always_ask") {
+            return Err(format!(
+                "unsupported permissions key '{}'; expected always_allow, always_deny, or always_ask",
+                key
+            ));
+        }
+    }
+
+    for key in ["always_allow", "always_deny", "always_ask"] {
+        let Some(value) = table.get(key) else {
+            continue;
+        };
+        let Some(rules) = value.as_array() else {
+            return Err(format!("{key} must be an array of rule tables"));
+        };
+        for (index, rule) in rules.iter().enumerate() {
+            let Some(rule_table) = rule.as_table() else {
+                return Err(format!("{key}[{index}] must be a table with a pattern"));
+            };
+            let pattern = rule_table
+                .get("pattern")
+                .and_then(toml::Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if pattern.is_empty() {
+                return Err(format!("{key}[{index}].pattern must be a non-empty string"));
+            }
+            if let Some(source) = rule_table.get("source") {
+                let source = source
+                    .as_str()
+                    .ok_or_else(|| format!("{key}[{index}].source must be a string"))?;
+                if !matches!(
+                    source,
+                    "global"
+                        | "project"
+                        | "user"
+                        | "system"
+                        | "Global"
+                        | "Project"
+                        | "User"
+                        | "System"
+                ) {
+                    return Err(format!(
+                        "{key}[{index}].source has unsupported value '{source}'"
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn occurrence_line_numbers(content: &str, occurrences: &[(usize, usize)]) -> Vec<usize> {
@@ -2099,8 +2248,6 @@ impl Tool for FileEditTool {
             }
         }
 
-        let checkpoint = create_file_checkpoint(&context, "file_edit", &path).await;
-
         let result = if let (Some(start), Some(end)) = (line_start, line_end) {
             Self::do_replace_lines(content, start, end, &new_string)
         } else if let Some(after) = insert_after {
@@ -2125,6 +2272,13 @@ impl Tool for FileEditTool {
 
         match result {
             Ok((new_content, replacements)) => {
+                if let Some(result) = priority_agent_settings_validation_error(
+                    &identity,
+                    &new_content,
+                    "schema_guard",
+                ) {
+                    return result;
+                }
                 if using_exact_replace
                     && replacements > 1
                     && is_code_like_path(&path)
@@ -2135,6 +2289,12 @@ impl Tool for FileEditTool {
                         path_str, replacements
                     ));
                 }
+                let checkpoint = match create_file_checkpoint(&context, "file_edit", &path).await {
+                    Some(checkpoint) => checkpoint,
+                    None => {
+                        return checkpoint_creation_failed_result("file_edit", path_str, &identity)
+                    }
+                };
                 let diagnostics_before =
                     collect_file_edit_diagnostics(&context, &path, &snapshot.content).await;
                 let before_write_snapshot = match read_text_file(&path, "verify before edit").await
@@ -2195,7 +2355,7 @@ impl Tool for FileEditTool {
                         let file_change = record_file_change(
                             &context,
                             FileChangeRequest {
-                                checkpoint: checkpoint.as_ref(),
+                                checkpoint: Some(&checkpoint),
                                 tool_name: "file_edit",
                                 path: &path,
                                 existed_before: true,
@@ -2211,7 +2371,7 @@ impl Tool for FileEditTool {
                         let diagnostics_delta =
                             file_edit_diagnostics_delta(&diagnostics_before, &diagnostics);
                         let diagnostics_line = file_edit_diagnostics_content_line(&diagnostics);
-                        let checkpoint_json = checkpoint_metadata_json(checkpoint.as_ref());
+                        let checkpoint_json = checkpoint_metadata_json(Some(&checkpoint));
                         let file_change_json = file_change.unwrap_or(serde_json::Value::Null);
                         let text_format = text_write_format_json(
                             snapshot.encoding,
@@ -4396,6 +4556,118 @@ mod tests {
         drop(cp);
         let _ = tokio::fs::remove_file(path).await;
         mgr.lock().await.clear_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_refuses_when_checkpoint_creation_fails() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_checkpoint_failure.txt";
+        tokio::fs::write(path, "before\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-checkpoint-failure").await;
+
+        std::env::set_var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "old_string": "before",
+                    "new_string": "after"
+                }),
+                ToolContext::new(".", "test-session-checkpoint-failure"),
+            )
+            .await;
+        std::env::remove_var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT");
+
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("checkpoint creation failed"));
+        assert_eq!(
+            tokio::fs::read_to_string(path).await.unwrap(),
+            "before\n",
+            "file_edit must not write without rollback checkpoint"
+        );
+        let data = result.data.expect("checkpoint failure metadata");
+        assert_eq!(data["failure"], "checkpoint_creation_failed");
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_write_refuses_when_checkpoint_creation_fails() {
+        let tool = FileWriteTool;
+        let path = "/tmp/test_priority_agent_write_checkpoint_failure.txt";
+        tokio::fs::write(path, "before\n").await.unwrap();
+
+        std::env::set_var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "content": "after\n"
+                }),
+                ToolContext::new(".", "test-session-write-checkpoint-failure"),
+            )
+            .await;
+        std::env::remove_var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT");
+
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("checkpoint creation failed"));
+        assert_eq!(
+            tokio::fs::read_to_string(path).await.unwrap(),
+            "before\n",
+            "file_write must not write without rollback checkpoint"
+        );
+        let data = result.data.expect("checkpoint failure metadata");
+        assert_eq!(data["failure"], "checkpoint_creation_failed");
+        assert_eq!(data["tool"], "file_write");
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_rejects_invalid_priority_agent_permissions_toml() {
+        let tool = FileEditTool;
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".priority-agent");
+        tokio::fs::create_dir_all(&config_dir).await.unwrap();
+        let path = config_dir.join("permissions.toml");
+        tokio::fs::write(
+            &path,
+            "always_allow = [{ pattern = \"file_read\", source = \"Project\" }]\n",
+        )
+        .await
+        .unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        read_test_file_for_edit(&path_str, "test-session-settings-schema").await;
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path_str,
+                    "old_string": "pattern = \"file_read\"",
+                    "new_string": "pattern = \"\""
+                }),
+                ToolContext::new(".", "test-session-settings-schema"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.as_deref().unwrap_or_default();
+        assert!(err.contains("Priority Agent settings file"));
+        assert!(err.contains("pattern must be a non-empty string"));
+        assert!(tokio::fs::read_to_string(&path)
+            .await
+            .unwrap()
+            .contains("file_read"));
+        let data = result.data.expect("schema failure metadata");
+        assert_eq!(data["failure"], "settings_schema_validation");
     }
 
     #[tokio::test]

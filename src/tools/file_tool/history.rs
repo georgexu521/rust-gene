@@ -29,6 +29,12 @@ pub(super) async fn create_files_checkpoint(
     tool_name: &str,
     paths: &[PathBuf],
 ) -> Option<Checkpoint> {
+    #[cfg(test)]
+    if std::env::var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT").as_deref() == Ok("1") {
+        warn!("Simulating checkpoint failure for {}", tool_name);
+        return None;
+    }
+
     let manager = match &context.checkpoint_manager {
         Some(manager) => manager.clone(),
         None => crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await,

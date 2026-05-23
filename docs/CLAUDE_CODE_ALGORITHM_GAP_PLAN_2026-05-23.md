@@ -58,6 +58,41 @@ Priority Agent source anchors:
 - `src/engine/context_compressor.rs`
 - `src/engine/streaming.rs`
 
+## Progress Update 2026-05-23
+
+Status: code implementation pass complete for Tracks 1-5 and the parser/report
+part of Track 6. The only remaining validation item is a full live release
+dogfood run.
+
+Completed in this pass:
+
+1. Track 1: added `BashCommandPlan` facts for parser status, `cd`, git,
+   process substitution, command substitution, heredoc, write redirects,
+   subcommand cap, and fail-closed shell structure review.
+2. Track 2: added `PermissionPipelineStage` evidence into
+   `permission_decision_evidence.v1`, including shell fail-closed, denial
+   tracking, and bounded recovery stages.
+3. Track 3: made `file_edit` and `file_write` refuse writes when checkpoint
+   creation fails and added settings validation for `.priority-agent` TOML/JSON
+   targets, including `permissions.toml` rule-shape checks.
+4. Track 4: added a `ToolExecutionBatch` invariant that synthesizes an
+   interrupted terminal result for any lifecycle-tracked tool call that would
+   otherwise lack a provider-visible result.
+5. Track 5: compaction runtime records now include explicit `stage_order` and
+   `token_delta`, and streaming provider context-too-long failures now try a
+   reactive compact retry before fallback/error.
+6. Track 6: live-eval summary rows now classify misses into the release dogfood
+   buckets: `tool_contract`, `file_state`, `bash_permission`,
+   `permission_recovery`, `compaction_continuity`, `llm_reasoning`, and
+   `desktop_evidence`.
+
+Still not completed:
+
+1. A full `scripts/release-dogfood-gate.sh agent-run --run-tests --timeout 2400`
+   run has not been executed in this pass.
+2. A full live dogfood run may still identify model-side behavior gaps outside
+   this runtime safeguard pass.
+
 ## Remaining Algorithm Gaps
 
 ### Track 1: Bash Permission AST And Redirection Safety

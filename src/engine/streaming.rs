@@ -674,19 +674,7 @@ impl StreamingQueryEngine {
             // 3. 获取当前历史用于查询
             let messages_for_query = {
                 let hist = history.lock().await;
-                // 构建完整消息：stable system prompt + history
-                let mut prompt_context =
-                    crate::engine::prompt_context::PromptContextAssembler::from_current_dir(
-                        &engine.system_prompt,
-                    )
-                    .build_for_turn(&user_msg, &hist);
-                if let Some(mode_context) = agent_mode.runtime_context() {
-                    prompt_context.system_prompt.push_str("\n\n");
-                    prompt_context.system_prompt.push_str(mode_context);
-                }
-                let mut msgs = vec![Message::system(prompt_context.system_prompt)];
-                msgs.extend(hist.clone());
-                msgs
+                build_messages_for_turn(&engine.system_prompt, &user_msg, &hist, agent_mode)
             };
 
             // 4. 执行查询（带 fallback 支持）
@@ -713,118 +701,159 @@ impl StreamingQueryEngine {
                     assistant_tool_calls_made = tool_calls;
                 }
                 Err(e) => {
-                    let err_str = e.to_string().to_lowercase();
+                    let mut err_message = e.to_string();
+                    let err_str = err_message.to_lowercase();
                     let error_type = ErrorType::from_error_str(&err_str);
+                    let mut recovered_by_context_retry = false;
 
-                    // 初始化 fallback_state（如果是第一次错误）
-                    let fb_state = engine
-                        .fallback_state
-                        .take()
-                        .unwrap_or_else(FallbackState::new);
-                    let mut fb_state = fb_state;
+                    if error_type == ErrorType::ContextTooLong {
+                        if let Some(retry_messages) = reactive_context_retry_messages(
+                            history.clone(),
+                            compressor.clone(),
+                            &engine.system_prompt,
+                            &user_msg,
+                            agent_mode,
+                        )
+                        .await
+                        {
+                            match tokio::time::timeout(
+                                turn_timeout,
+                                engine.run_query_with_messages(retry_messages, &tx, agent_mode),
+                            )
+                            .await
+                            {
+                                Ok(Ok((content, tool_calls))) => {
+                                    assistant_content = content;
+                                    assistant_tool_calls_made = tool_calls;
+                                    recovered_by_context_retry = true;
+                                }
+                                Ok(Err(retry_err)) => {
+                                    err_message = retry_err.to_string();
+                                }
+                                Err(_) => {
+                                    err_message = format!(
+                                        "context retry turn execution timed out after {}s",
+                                        turn_timeout.as_secs()
+                                    );
+                                }
+                            }
+                        }
+                    }
 
-                    // 记录错误
-                    fb_state.record_error(error_type);
+                    if !recovered_by_context_retry {
+                        let err_str = err_message.to_lowercase();
+                        let error_type = ErrorType::from_error_str(&err_str);
 
-                    // 检查是否应触发 fallback（连续 3 次 529 或特定错误类型）
-                    let should_try_fallback = if fb_state.fallback_triggered {
-                        // 已触发过 fallback，检查是否还有尝试次数
-                        !fb_state.max_attempts_reached()
-                    } else {
-                        // 检查是否应该触发 fallback
-                        fb_state.should_trigger_fallback()
-                            || error_type == ErrorType::RateLimit
-                            || error_type == ErrorType::ContextTooLong
-                            || error_type == ErrorType::ServerError
-                    };
+                        // 初始化 fallback_state（如果是第一次错误）
+                        let fb_state = engine
+                            .fallback_state
+                            .take()
+                            .unwrap_or_else(FallbackState::new);
+                        let mut fb_state = fb_state;
 
-                    if should_try_fallback && engine.fallback_model.is_some() {
-                        // 如果还没触发过 fallback，标记已触发
-                        if !fb_state.fallback_triggered {
-                            fb_state.fallback_triggered = true;
-                            warn!(
+                        // 记录错误
+                        fb_state.record_error(error_type);
+
+                        // 检查是否应触发 fallback（连续 3 次 529 或特定错误类型）
+                        let should_try_fallback = if fb_state.fallback_triggered {
+                            // 已触发过 fallback，检查是否还有尝试次数
+                            !fb_state.max_attempts_reached()
+                        } else {
+                            // 检查是否应该触发 fallback
+                            fb_state.should_trigger_fallback()
+                                || error_type == ErrorType::RateLimit
+                                || error_type == ErrorType::ContextTooLong
+                                || error_type == ErrorType::ServerError
+                        };
+
+                        if should_try_fallback && engine.fallback_model.is_some() {
+                            // 如果还没触发过 fallback，标记已触发
+                            if !fb_state.fallback_triggered {
+                                fb_state.fallback_triggered = true;
+                                warn!(
                                 "Fallback triggered after {} consecutive errors (type: {:?}), trying fallback model",
                                 fb_state.consecutive_529_count,
                                 error_type
                             );
-                        }
-                        fb_state.fallback_attempts += 1;
+                            }
+                            fb_state.fallback_attempts += 1;
 
-                        // Fallback: 重新执行，stream 事件会继续发送到 tx
-                        let fb_model = engine.fallback_model.clone().unwrap();
-                        let recovery_plan =
-                            crate::engine::recovery_plan::RecoveryPlan::fallback_model(
-                                "streaming_engine",
-                                &e.to_string(),
-                                &fb_model,
-                            );
-                        if let (Some(ref store), Some(ref sid)) =
-                            (&engine.session_store, &engine.session_id)
-                        {
-                            let _ = store.add_learning_event(
-                                sid,
-                                "recovery_plan",
-                                &recovery_plan.source,
-                                &recovery_plan.summary(),
-                                0.8,
-                                &serde_json::to_value(&recovery_plan)
-                                    .unwrap_or_else(|_| serde_json::json!({})),
-                            );
+                            // Fallback: 重新执行，stream 事件会继续发送到 tx
+                            let fb_model = engine.fallback_model.clone().unwrap();
+                            let recovery_plan =
+                                crate::engine::recovery_plan::RecoveryPlan::fallback_model(
+                                    "streaming_engine",
+                                    &err_message,
+                                    &fb_model,
+                                );
+                            if let (Some(ref store), Some(ref sid)) =
+                                (&engine.session_store, &engine.session_id)
+                            {
+                                let _ = store.add_learning_event(
+                                    sid,
+                                    "recovery_plan",
+                                    &recovery_plan.source,
+                                    &recovery_plan.summary(),
+                                    0.8,
+                                    &serde_json::to_value(&recovery_plan)
+                                        .unwrap_or_else(|_| serde_json::json!({})),
+                                );
+                            }
+                            let fb_engine = StreamingEngineInner {
+                                provider: engine.provider.clone(),
+                                tool_registry: engine.tool_registry.clone(),
+                                model: fb_model,
+                                system_prompt: engine.system_prompt.clone(),
+                                max_iterations: engine.max_iterations,
+                                agent_manager: engine.agent_manager.clone(),
+                                task_manager: engine.task_manager.clone(),
+                                mcp_manager: engine.mcp_manager.clone(),
+                                lsp_manager: engine.lsp_manager.clone(),
+                                worktree_manager: engine.worktree_manager.clone(),
+                                memory_manager: engine.memory_manager.clone(),
+                                compressor: engine.compressor.clone(),
+                                session_store: engine.session_store.clone(),
+                                session_id: engine.session_id.clone(),
+                                trace_store: engine.trace_store.clone(),
+                                goal_manager: engine.goal_manager.clone(),
+                                cost_tracker: engine.cost_tracker.clone(),
+                                permission_mode: engine.permission_mode,
+                                session_permission_rules: engine.session_permission_rules.clone(),
+                                llm_memory_extraction: engine.llm_memory_extraction,
+                                approval_channel: engine.approval_channel.clone(),
+                                fallback_model: None, // 防止无限 fallback
+                                fallback_state: Some(fb_state),
+                            };
+                            let turn_timeout = turn_execution_timeout();
+                            match tokio::time::timeout(
+                                turn_timeout,
+                                fb_engine.run_query_with_messages(
+                                    messages_for_query.clone(),
+                                    &tx,
+                                    agent_mode,
+                                ),
+                            )
+                            .await
+                            {
+                                Ok(Ok((content, tool_calls))) => {
+                                    assistant_content = content;
+                                    assistant_tool_calls_made = tool_calls;
+                                }
+                                Ok(Err(fb_err)) => {
+                                    let _ = tx.send(StreamEvent::Error(fb_err.to_string())).await;
+                                }
+                                Err(_) => {
+                                    let _ = tx
+                                        .send(StreamEvent::Error(format!(
+                                            "fallback turn execution timed out after {}s",
+                                            turn_timeout.as_secs()
+                                        )))
+                                        .await;
+                                }
+                            }
+                        } else {
+                            let _ = tx.send(StreamEvent::Error(err_message)).await;
                         }
-                        let fb_engine = StreamingEngineInner {
-                            provider: engine.provider.clone(),
-                            tool_registry: engine.tool_registry.clone(),
-                            model: fb_model,
-                            system_prompt: engine.system_prompt.clone(),
-                            max_iterations: engine.max_iterations,
-                            agent_manager: engine.agent_manager.clone(),
-                            task_manager: engine.task_manager.clone(),
-                            mcp_manager: engine.mcp_manager.clone(),
-                            lsp_manager: engine.lsp_manager.clone(),
-                            worktree_manager: engine.worktree_manager.clone(),
-                            memory_manager: engine.memory_manager.clone(),
-                            compressor: engine.compressor.clone(),
-                            session_store: engine.session_store.clone(),
-                            session_id: engine.session_id.clone(),
-                            trace_store: engine.trace_store.clone(),
-                            goal_manager: engine.goal_manager.clone(),
-                            cost_tracker: engine.cost_tracker.clone(),
-                            permission_mode: engine.permission_mode,
-                            session_permission_rules: engine.session_permission_rules.clone(),
-                            llm_memory_extraction: engine.llm_memory_extraction,
-                            approval_channel: engine.approval_channel.clone(),
-                            fallback_model: None, // 防止无限 fallback
-                            fallback_state: Some(fb_state),
-                        };
-                        let turn_timeout = turn_execution_timeout();
-                        match tokio::time::timeout(
-                            turn_timeout,
-                            fb_engine.run_query_with_messages(
-                                messages_for_query.clone(),
-                                &tx,
-                                agent_mode,
-                            ),
-                        )
-                        .await
-                        {
-                            Ok(Ok((content, tool_calls))) => {
-                                assistant_content = content;
-                                assistant_tool_calls_made = tool_calls;
-                            }
-                            Ok(Err(fb_err)) => {
-                                let _ = tx.send(StreamEvent::Error(fb_err.to_string())).await;
-                            }
-                            Err(_) => {
-                                let _ = tx
-                                    .send(StreamEvent::Error(format!(
-                                        "fallback turn execution timed out after {}s",
-                                        turn_timeout.as_secs()
-                                    )))
-                                    .await;
-                            }
-                        }
-                    } else {
-                        let _ = tx.send(StreamEvent::Error(e.to_string())).await;
                     }
                 }
             }
@@ -901,6 +930,62 @@ fn session_title_from_user_message(message: &str) -> String {
         out.push('…');
     }
     out
+}
+
+fn build_messages_for_turn(
+    system_prompt: &str,
+    user_msg: &str,
+    history: &[Message],
+    agent_mode: crate::engine::agent_mode::AgentMode,
+) -> Vec<Message> {
+    let mut prompt_context =
+        crate::engine::prompt_context::PromptContextAssembler::from_current_dir(system_prompt)
+            .build_for_turn(user_msg, history);
+    if let Some(mode_context) = agent_mode.runtime_context() {
+        prompt_context.system_prompt.push_str("\n\n");
+        prompt_context.system_prompt.push_str(mode_context);
+    }
+    let mut msgs = vec![Message::system(prompt_context.system_prompt)];
+    msgs.extend(history.to_vec());
+    msgs
+}
+
+async fn reactive_context_retry_messages(
+    history: Arc<tokio::sync::Mutex<Vec<Message>>>,
+    compressor: Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
+    system_prompt: &str,
+    user_msg: &str,
+    agent_mode: crate::engine::agent_mode::AgentMode,
+) -> Option<Vec<Message>> {
+    let compressed = {
+        let hist = history.lock().await;
+        if hist.is_empty() {
+            return None;
+        }
+        let mut comp = compressor.lock().await;
+        comp.compress_async_with_strategy(
+            &hist,
+            crate::engine::context_collapse::ContextCompactionStrategy::ReactiveCompact,
+        )
+        .await
+    };
+
+    {
+        let mut hist = history.lock().await;
+        if compressed.len() >= hist.len()
+            && crate::engine::context_compressor::estimate_messages_tokens(&compressed)
+                >= crate::engine::context_compressor::estimate_messages_tokens(&hist)
+        {
+            return None;
+        }
+        *hist = compressed;
+        Some(build_messages_for_turn(
+            system_prompt,
+            user_msg,
+            &hist,
+            agent_mode,
+        ))
+    }
 }
 
 fn estimate_registry_tool_schema_tokens(registry: &ToolRegistry) -> (usize, u64, String) {
@@ -1325,5 +1410,45 @@ mod tests {
         );
 
         let _ = tokio::fs::remove_file(&target).await;
+    }
+
+    #[tokio::test]
+    async fn reactive_context_retry_compacts_history_before_rebuild() {
+        let history = Arc::new(tokio::sync::Mutex::new(vec![
+            Message::user("please inspect the large output"),
+            Message::assistant(&"tool output ".repeat(500)),
+            Message::user("continue"),
+        ]));
+        let compressor = Arc::new(tokio::sync::Mutex::new(
+            crate::engine::context_compressor::ContextCompressor::new(120),
+        ));
+        let before_tokens = {
+            let hist = history.lock().await;
+            crate::engine::context_compressor::estimate_messages_tokens(&hist)
+        };
+
+        let retry_messages = reactive_context_retry_messages(
+            history.clone(),
+            compressor.clone(),
+            "System prompt.",
+            "continue",
+            crate::engine::agent_mode::AgentMode::Build,
+        )
+        .await
+        .expect("reactive context retry should rebuild messages after compaction");
+
+        let after_tokens = {
+            let hist = history.lock().await;
+            crate::engine::context_compressor::estimate_messages_tokens(&hist)
+        };
+        assert!(after_tokens < before_tokens);
+        assert!(matches!(
+            retry_messages.first(),
+            Some(Message::System { .. })
+        ));
+        let runtime_records = compressor.lock().await.compaction_records().to_vec();
+        assert!(runtime_records
+            .iter()
+            .any(|record| record.strategy.label() == "reactive_compact"));
     }
 }

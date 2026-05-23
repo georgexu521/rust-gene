@@ -145,6 +145,11 @@ pub(super) fn build_tool_execution_summary(
                     serde_json::to_value(classification.mutation_indicators)
                         .unwrap_or(serde_json::Value::Null),
                 );
+                object.insert(
+                    "command_plan".to_string(),
+                    serde_json::to_value(classification.command_plan)
+                        .unwrap_or(serde_json::Value::Null),
+                );
             }
             attach_bash_recovery_summary(object, result);
         }

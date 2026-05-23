@@ -717,6 +717,34 @@ fn compaction_retained_items(
     items
 }
 
+fn compaction_token_delta(tokens_before: u64, tokens_after: u64) -> i64 {
+    i64::try_from(tokens_after).unwrap_or(i64::MAX)
+        - i64::try_from(tokens_before).unwrap_or(i64::MAX)
+}
+
+fn compaction_stage_order(strategy: ContextCompactionStrategy) -> Vec<String> {
+    match strategy {
+        ContextCompactionStrategy::Snip => vec!["snip_tool_results"],
+        ContextCompactionStrategy::MicroCompact => vec!["snip_tool_results", "sanitize_tool_pairs"],
+        ContextCompactionStrategy::AutoCompact
+        | ContextCompactionStrategy::ReactiveCompact
+        | ContextCompactionStrategy::SessionMemoryCompact => vec![
+            "snip_tool_results",
+            "split_head",
+            "align_boundary_forward",
+            "split_tail",
+            "summarize_or_merge",
+            "restore_runtime_continuity",
+            "embed_compact_boundary",
+            "sanitize_tool_pairs",
+        ],
+        ContextCompactionStrategy::NoOp => vec!["no_op"],
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 // ── Token 估算 ────────────────────────────────────────────
 
 /// 简单 token 估算（4 字符 ≈ 1 token）
@@ -1190,6 +1218,8 @@ impl ContextCompressor {
             messages_after: result.len(),
             tokens_before,
             tokens_after,
+            token_delta: compaction_token_delta(tokens_before, tokens_after),
+            stage_order: compaction_stage_order(ContextCompactionStrategy::Snip),
             boundary_id: None,
             sequence: None,
             preserved_tail_count: None,
@@ -1224,6 +1254,8 @@ impl ContextCompressor {
             messages_after: result.len(),
             tokens_before,
             tokens_after,
+            token_delta: compaction_token_delta(tokens_before, tokens_after),
+            stage_order: compaction_stage_order(strategy),
             boundary_id: None,
             sequence: None,
             preserved_tail_count: None,
@@ -1335,6 +1367,8 @@ impl ContextCompressor {
                     messages_after: messages.len(),
                     tokens_before,
                     tokens_after: tokens_before,
+                    token_delta: 0,
+                    stage_order: compaction_stage_order(ContextCompactionStrategy::NoOp),
                     boundary_id: None,
                     sequence: None,
                     preserved_tail_count: None,
@@ -1714,6 +1748,8 @@ impl ContextCompressor {
             messages_after: result.len(),
             tokens_before: original_tokens_before,
             tokens_after,
+            token_delta: compaction_token_delta(original_tokens_before, tokens_after),
+            stage_order: compaction_stage_order(strategy),
             boundary_id: recorded_meta.as_ref().map(|meta| meta.boundary_id.clone()),
             sequence: recorded_meta.as_ref().map(|meta| meta.sequence),
             preserved_tail_count: recorded_meta.as_ref().map(|meta| meta.preserved_tail_count),
@@ -3123,6 +3159,12 @@ mod tests {
         assert_eq!(record.strategy, ContextCompactionStrategy::Snip);
         assert_eq!(record.messages_before, messages.len());
         assert_eq!(record.messages_after, compressed.len());
+        assert_eq!(record.stage_order, vec!["snip_tool_results".to_string()]);
+        assert_eq!(
+            record.token_delta,
+            i64::try_from(record.tokens_after).unwrap()
+                - i64::try_from(record.tokens_before).unwrap()
+        );
         assert_eq!(record.token_pressure, Some(ContextTokenPressure::Low));
         assert!(record
             .retained_items
@@ -3141,6 +3183,13 @@ mod tests {
         assert_eq!(record.strategy, ContextCompactionStrategy::MicroCompact);
         assert_eq!(record.level.as_deref(), Some("light"));
         assert_eq!(record.messages_after, compressed.len());
+        assert_eq!(
+            record.stage_order,
+            vec![
+                "snip_tool_results".to_string(),
+                "sanitize_tool_pairs".to_string()
+            ]
+        );
         assert!(record
             .retained_items
             .contains(&"tool_call_pairs:sanitized".to_string()));
@@ -3465,6 +3514,14 @@ mod tests {
             .provenance
             .iter()
             .any(|p| p == "summary_memory:runtime_continuity"));
+        assert!(record
+            .stage_order
+            .contains(&"restore_runtime_continuity".to_string()));
+        assert_eq!(
+            record.token_delta,
+            i64::try_from(record.tokens_after).unwrap()
+                - i64::try_from(record.tokens_before).unwrap()
+        );
     }
 
     #[test]
