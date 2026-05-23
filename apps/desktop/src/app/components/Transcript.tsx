@@ -264,6 +264,14 @@ function TimelineSummaryView({
               ))}
             </div>
           ) : null}
+          {summary.contexts && summary.contexts.length > 0 ? (
+            <div className="timeline-attached-contexts" aria-label="Run attached context">
+              <span>Attached context</span>
+              {summary.contexts.map((context) => (
+                <strong key={context.type}>{context.label}</strong>
+              ))}
+            </div>
+          ) : null}
           {summary.recovery ? (
             <div className="timeline-recovery">{summary.recovery}</div>
           ) : null}

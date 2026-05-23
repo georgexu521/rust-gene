@@ -711,6 +711,9 @@ disabled until real attachment/capture plumbing is implemented.
 Current diff context is now passed as structured desktop run metadata; the
 Tauri runtime resolves it into changed files, shortstat, stat output, and a
 bounded patch preview before streaming the agent run.
+When a run starts, the transcript run card now shows attached context chips such
+as `Current diff`, so users can confirm which structured inputs were included
+after the composer clears.
 
 #### Track D - Frontend Architecture And Test Hardening
 

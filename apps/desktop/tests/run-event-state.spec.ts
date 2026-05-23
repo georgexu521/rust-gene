@@ -14,7 +14,7 @@ function ids(...values: string[]) {
 
 test.describe("run event state", () => {
   test("submits a user message and completes the active run", () => {
-    const submitted = submitUserMessage(initialRunViewState, "Inspect UI", ids("user-1"));
+    const submitted = submitUserMessage(initialRunViewState, "Inspect UI", [], ids("user-1"));
 
     expect(submitted.isRunning).toBe(true);
     expect(submitted.items).toEqual([{ id: "user-1", role: "user", text: "Inspect UI" }]);
@@ -42,6 +42,39 @@ test.describe("run event state", () => {
           headline: "Run completed",
           sessionId: "session-1",
           stats: [],
+        }),
+      }),
+    );
+  });
+
+  test("carries attached contexts into the run summary", () => {
+    const submitted = submitUserMessage(
+      initialRunViewState,
+      "Review diff",
+      [{ type: "current_diff", label: "Current diff" }],
+      ids("user-1"),
+    );
+    const started = applyRunEvent(submitted, {
+      type: "run_started",
+      run_id: "run-1",
+      session_id: null,
+    }).state;
+
+    expect(started.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          contexts: [{ type: "current_diff", label: "Current diff" }],
+        }),
+      }),
+    );
+
+    const completed = applyRunEvent(started, { type: "run_completed" }, ids("done-1")).state;
+    expect(completed.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          contexts: [{ type: "current_diff", label: "Current diff" }],
         }),
       }),
     );

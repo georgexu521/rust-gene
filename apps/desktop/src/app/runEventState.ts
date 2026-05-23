@@ -1,4 +1,4 @@
-import { DesktopMessage, DesktopRunEvent } from "../runtime/desktopApi";
+import { DesktopMessage, DesktopRunContext, DesktopRunEvent } from "../runtime/desktopApi";
 import {
   PermissionRequest,
   TimelineStatus,
@@ -14,6 +14,7 @@ export type RunViewState = {
   isRunning: boolean;
   error: string | null;
   selectedSessionId: string | null;
+  pendingRunContexts: DesktopRunContext[];
 };
 
 export type RunEventResult = {
@@ -28,6 +29,7 @@ export const initialRunViewState: RunViewState = {
   isRunning: false,
   error: null,
   selectedSessionId: null,
+  pendingRunContexts: [],
 };
 
 export function applyRunEvent(
@@ -54,6 +56,7 @@ export function applyRunEvent(
                 headline: "Runtime connected",
                 detail: "Preparing model and tool events",
                 sessionId: event.session_id ?? undefined,
+                contexts: state.pendingRunContexts,
               },
               status: "running",
               traceId: event.run_id,
@@ -277,6 +280,7 @@ export function applyRunEvent(
           error: event.message,
           isRunning: false,
           pendingPermission: null,
+          pendingRunContexts: [],
           items: [
             ...updateLatestRunSummary(state, {
               stage: "failed",
@@ -313,6 +317,7 @@ export function applyRunEvent(
           ...state,
           isRunning: false,
           pendingPermission: null,
+          pendingRunContexts: [],
           items: completeLatestRun(state.items),
           traceItems: [
             ...state.traceItems,
@@ -331,12 +336,14 @@ export function applyRunEvent(
 export function submitUserMessage(
   state: RunViewState,
   text: string,
+  contexts: DesktopRunContext[] = [],
   createId: () => string = () => crypto.randomUUID(),
 ): RunViewState {
   return {
     ...state,
     error: null,
     isRunning: true,
+    pendingRunContexts: contexts,
     items: [...state.items, { id: createId(), role: "user", text }],
     traceItems: [],
   };
@@ -350,6 +357,7 @@ export function loadSessionTranscript(
   return {
     ...state,
     selectedSessionId: sessionId,
+    pendingRunContexts: [],
     items: messages.map(messageToTranscriptItem),
     traceItems: [
       {
@@ -409,6 +417,7 @@ export function appendPermissionAnswer(
   return {
     ...updatedRunState,
     pendingPermission: null,
+    pendingRunContexts: approved ? updatedRunState.pendingRunContexts : [],
     traceItems: [
       ...state.traceItems,
       {
@@ -426,6 +435,7 @@ export function withError(state: RunViewState, error: unknown): RunViewState {
     ...state,
     error: String(error),
     isRunning: false,
+    pendingRunContexts: [],
   };
 }
 
@@ -650,6 +660,7 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
         detail: runCompletionDetail(nextItems),
         sessionId: item.summary?.kind === "run" ? item.summary.sessionId : undefined,
         stats: runStats(nextItems),
+        contexts: item.summary?.kind === "run" ? item.summary.contexts : undefined,
       },
       status: "completed",
     };

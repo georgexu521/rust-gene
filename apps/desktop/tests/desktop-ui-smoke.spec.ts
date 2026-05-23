@@ -108,11 +108,13 @@ test.describe("desktop UI smoke", () => {
 
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.getByLabel("Attached context")).not.toBeVisible();
+    await expect(page.locator(".composer-context-chips")).not.toBeVisible();
     await expect(page.locator(".composer")).not.toHaveClass(/empty-composer/);
     await expect(page.locator(".timeline-summary.run.completed", { hasText: "Run completed" })).toBeVisible();
     await expect(page.locator(".timeline-section-label", { hasText: "Process" })).toBeVisible();
     await expect(page.locator(".timeline-event.run-group-start", { hasText: "Agent run" })).toBeVisible();
+    await expect(page.locator(".timeline-event.run-group-start")).toContainText("Attached context");
+    await expect(page.locator(".timeline-event.run-group-start")).toContainText("Current diff");
     await expect(page.locator(".timeline-run-stats span", { hasText: "3 tools" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();

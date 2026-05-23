@@ -1,4 +1,4 @@
-import { DesktopRunEvent } from "../runtime/desktopApi";
+import { DesktopRunContext, DesktopRunEvent } from "../runtime/desktopApi";
 
 export type TranscriptItem =
   | { id: string; role: "user"; text: string }
@@ -27,6 +27,7 @@ export type TimelineSummary =
       recovery?: string;
       sessionId?: string;
       stats?: string[];
+      contexts?: DesktopRunContext[];
     }
   | {
       kind: "shell";

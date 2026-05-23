@@ -338,7 +338,7 @@ export function App() {
 
     setComposer("");
     setRunContexts([]);
-    setRunState((current) => submitUserMessage(current, message));
+    setRunState((current) => submitUserMessage(current, message, runContexts));
 
     try {
       await sendMessage(message, runContexts);
