@@ -705,9 +705,9 @@ permission mode without sending users into Settings for routine changes.
 Project now exposes recent-project shortcuts in the composer popover, while
 provider/model selections close after a choice so the bottom context rail feels
 closer to a native desktop menu.
-The composer `+` control is now an Add Context popover: current diff inserts an
-explicit composer instruction, while file and screenshot entries are visible but
-disabled until real attachment/capture plumbing is implemented.
+The composer `+` control is now an Add Context popover: current diff and file
+attachments are usable structured contexts, while screenshot remains visible
+but disabled until real capture plumbing is implemented.
 Current diff context is now passed as structured desktop run metadata; the
 Tauri runtime resolves it into changed files, shortstat, stat output, and a
 bounded patch preview before streaming the agent run.
@@ -720,6 +720,10 @@ Clicking a composer context chip now opens a context detail drawer with changed
 files, git stat output, and bounded patch preview for the current diff context.
 The same drawer is now reachable from run-header and trace context chips after
 the composer has cleared, so sent runs remain auditable.
+File context now uses the native file picker, validates that the selected file
+is inside the active project, passes a bounded preview as structured runtime
+metadata, and shows the same preview in composer, transcript, and trace context
+details.
 
 #### Track D - Frontend Architecture And Test Hardening
 

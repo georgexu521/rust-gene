@@ -27,6 +27,7 @@ import {
   openShellProfile,
   permissionModeOptions,
   pickProjectDirectory,
+  pickProjectFile,
   providerModelStatus,
   providerSetupInfo,
   renameSession,
@@ -365,6 +366,20 @@ export function App() {
     }
   }
 
+  async function handleAddFileContext() {
+    const selectedPath = await pickProjectFile();
+    if (!selectedPath) {
+      return;
+    }
+
+    const label = selectedPath.split(/[\\/]/).filter(Boolean).pop() || "File";
+    await handleAddContext({
+      type: "file",
+      label,
+      path: selectedPath,
+    });
+  }
+
   function handleRemoveContext(type: DesktopRunContext["type"]) {
     setRunContexts((current) => current.filter((context) => context.type !== type));
     setActiveContextDetail((current) => (current?.type === type ? null : current));
@@ -568,6 +583,7 @@ export function App() {
           isRunning={runState.isRunning}
           onComposerChange={setComposer}
           onAddContext={(context) => void handleAddContext(context)}
+          onAddFileContext={() => void handleAddFileContext()}
           onOpenContext={setActiveContextDetail}
           onRemoveContext={(type) => handleRemoveContext(type)}
           onProjectPathChange={setProjectPath}

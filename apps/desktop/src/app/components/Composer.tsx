@@ -33,6 +33,7 @@ type ComposerProps = {
   isRunning: boolean;
   onComposerChange: (value: string) => void;
   onAddContext: (context: DesktopRunContext) => void;
+  onAddFileContext: () => void;
   onOpenContext: (context: DesktopRunContext) => void;
   onRemoveContext: (type: DesktopRunContext["type"]) => void;
   onProjectPathChange: (value: string) => void;
@@ -66,6 +67,7 @@ export function Composer({
   onPermissionModeChange,
   onProviderModelChange,
   onAddContext,
+  onAddFileContext,
   onRemoveContext,
   onSubmit,
 }: ComposerProps) {
@@ -98,6 +100,11 @@ export function Composer({
       label: "Current diff",
     });
     setOpenMenu(null);
+  }
+
+  function addFileContext() {
+    setOpenMenu(null);
+    onAddFileContext();
   }
 
   useEffect(() => {
@@ -150,7 +157,11 @@ export function Composer({
               type="button"
               onClick={() => onOpenContext(context)}
             >
-              <GitCompare aria-hidden="true" size={14} />
+              {context.type === "file" ? (
+                <FileText aria-hidden="true" size={14} />
+              ) : (
+                <GitCompare aria-hidden="true" size={14} />
+              )}
               <span>{context.label}</span>
             </button>
           ))}
@@ -188,13 +199,13 @@ export function Composer({
                   <small>Ask Liz to inspect unstaged and staged changes.</small>
                 </span>
               </button>
-              <button aria-label="Attach file" disabled type="button">
+              <button aria-label="Attach file" type="button" onClick={addFileContext}>
                 <span>
                   <strong>
                     <FileText aria-hidden="true" size={15} />
                     File
                   </strong>
-                  <small>Attach a specific file once attachment plumbing is enabled.</small>
+                  <small>Attach a specific project file with a readable preview.</small>
                 </span>
               </button>
               <button aria-label="Add screenshot" disabled type="button">

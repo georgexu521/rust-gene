@@ -93,7 +93,7 @@ export type ProviderModelStatus = {
   models: DesktopModelOption[];
 };
 
-export type DesktopRunContextDetail = {
+export type DesktopCurrentDiffContextDetail = {
   type: "current_diff";
   label: string;
   shortstat: string;
@@ -103,10 +103,31 @@ export type DesktopRunContextDetail = {
   truncated: boolean;
 };
 
+export type DesktopFileContextDetail = {
+  type: "file";
+  label: string;
+  path: string;
+  relative_path: string;
+  size_bytes: number;
+  line_count: number;
+  preview: string;
+  truncated: boolean;
+};
+
+export type DesktopRunContextDetail =
+  | DesktopCurrentDiffContextDetail
+  | DesktopFileContextDetail;
+
 export type DesktopRunContext =
   | {
       type: "current_diff";
       label: string;
+      detail?: DesktopRunContextDetail | null;
+    }
+  | {
+      type: "file";
+      label: string;
+      path: string;
       detail?: DesktopRunContextDetail | null;
     };
 
@@ -320,6 +341,20 @@ export function desktopRunContextDetail(
   context: DesktopRunContext,
 ): Promise<DesktopRunContextDetail> {
   if (!isTauriRuntime()) {
+    if (context.type === "file") {
+      return Promise.resolve({
+        type: "file",
+        label: context.label,
+        path: context.path,
+        relative_path: "apps/desktop/src/app/App.tsx",
+        size_bytes: 18422,
+        line_count: 584,
+        preview:
+          "import { FormEvent, useEffect, useState, type ReactNode } from \"react\";\n\nexport function App() {\n  return <DesktopShell />;\n}\n",
+        truncated: false,
+      });
+    }
+
     return Promise.resolve({
       type: "current_diff",
       label: context.label,
@@ -574,6 +609,20 @@ export async function pickProjectDirectory(): Promise<string | null> {
     directory: true,
     multiple: false,
     title: "Select Priority Agent project",
+  });
+
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function pickProjectFile(): Promise<string | null> {
+  if (!isTauriRuntime()) {
+    return "/Users/georgexu/Desktop/rust-agent/apps/desktop/src/app/App.tsx";
+  }
+
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    title: "Select file context",
   });
 
   return typeof selected === "string" ? selected : null;

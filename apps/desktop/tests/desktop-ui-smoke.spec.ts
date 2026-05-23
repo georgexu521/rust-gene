@@ -12,7 +12,7 @@ test.describe("desktop UI smoke", () => {
     const composer = page.locator(".composer");
     await composer.getByRole("button", { name: "Add context" }).click();
     await expect(page.getByRole("dialog", { name: "Add context options" })).toContainText("Current diff");
-    await expect(page.getByRole("button", { name: "Attach file" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Attach file" })).toBeEnabled();
     await page.getByRole("button", { name: "Reference current diff" }).click();
     await expect(page.getByLabel("Attached context")).toContainText("Current diff");
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("");
@@ -20,6 +20,15 @@ test.describe("desktop UI smoke", () => {
     await page.getByRole("button", { name: "Open context Current diff" }).click();
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Changed files");
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Patch preview");
+    await page.getByRole("button", { name: "Close context details" }).click();
+    await composer.getByRole("button", { name: "Add context" }).click();
+    await page.getByRole("button", { name: "Attach file" }).click();
+    await expect(page.getByLabel("Attached context")).toContainText("App.tsx");
+    await page.getByRole("button", { name: "Open context App.tsx" }).click();
+    await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("File preview");
+    await expect(page.getByRole("complementary", { name: "Context details" })).toContainText(
+      "apps/desktop/src/app/App.tsx",
+    );
     await page.getByRole("button", { name: "Close context details" }).click();
     await composer.getByRole("button", { name: "Project" }).click();
     await expect(page.getByRole("dialog", { name: "Project controls" })).toBeVisible();
@@ -119,6 +128,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-event.run-group-start", { hasText: "Agent run" })).toBeVisible();
     await expect(page.locator(".timeline-event.run-group-start")).toContainText("Attached context");
     await expect(page.locator(".timeline-event.run-group-start")).toContainText("Current diff");
+    await expect(page.locator(".timeline-event.run-group-start")).toContainText("App.tsx");
     await page.locator(".timeline-event.run-group-start").getByRole("button", { name: "Open run context Current diff" }).click();
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Changed files");
     await page.getByRole("button", { name: "Close context details" }).click();
@@ -168,6 +178,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("complementary", { name: "Run trace" })).toBeVisible();
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Attached context");
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Current diff");
+    await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("App.tsx");
     await page.locator(".trace-item.active", { hasText: "Run started" }).getByRole("button", { name: "Open trace context Current diff" }).click();
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Patch preview");
     await page.getByRole("button", { name: "Close context details" }).click();

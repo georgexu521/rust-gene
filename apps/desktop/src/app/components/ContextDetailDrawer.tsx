@@ -28,6 +28,23 @@ export function ContextDetailDrawer({ context, onClose, onRemove }: ContextDetai
 
       {!detail ? (
         <div className="context-detail-empty">No detail has been resolved for this context.</div>
+      ) : detail.type === "file" ? (
+        <div className="context-detail-body">
+          <section>
+            <h3>File</h3>
+            <pre>{detail.relative_path}</pre>
+          </section>
+          <section>
+            <h3>Size</h3>
+            <p>
+              {detail.size_bytes.toLocaleString()} bytes · {detail.line_count.toLocaleString()} lines
+            </p>
+          </section>
+          <section>
+            <h3>File preview{detail.truncated ? " (truncated)" : ""}</h3>
+            <pre className="context-detail-diff">{detail.preview || "No file preview available."}</pre>
+          </section>
+        </div>
       ) : (
         <div className="context-detail-body">
           <section>

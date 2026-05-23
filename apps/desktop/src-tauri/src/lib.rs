@@ -62,6 +62,7 @@ struct DesktopRunContext {
     #[serde(rename = "type")]
     context_type: String,
     label: Option<String>,
+    path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +75,16 @@ struct ResolvedDesktopRunContext {
     stat: String,
     #[serde(rename = "patch_preview")]
     patch_preview: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relative_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<String>,
     truncated: bool,
 }
 
@@ -683,6 +694,7 @@ async fn desktop_run_context_detail(
     let selected_project = state.selected_project.lock().await.clone();
     match context.context_type.as_str() {
         "current_diff" => resolve_current_diff_context(&context, &selected_project),
+        "file" => resolve_file_context(&context, &selected_project),
         other => Err(format!("Unsupported desktop run context: {}", other)),
     }
 }
@@ -701,6 +713,10 @@ fn enrich_message_with_desktop_contexts(
         match context.context_type.as_str() {
             "current_diff" => {
                 let resolved = resolve_current_diff_context(context, project)?;
+                blocks.push(format_desktop_context_block(&resolved));
+            }
+            "file" => {
+                let resolved = resolve_file_context(context, project)?;
                 blocks.push(format_desktop_context_block(&resolved));
             }
             other => {
@@ -756,11 +772,109 @@ fn resolve_current_diff_context(
         files,
         stat,
         patch_preview,
+        path: None,
+        relative_path: None,
+        size_bytes: None,
+        line_count: None,
+        preview: None,
+        truncated,
+    })
+}
+
+fn resolve_file_context(
+    context: &DesktopRunContext,
+    project: &Path,
+) -> Result<ResolvedDesktopRunContext, String> {
+    let raw_path = context
+        .path
+        .as_ref()
+        .ok_or_else(|| "File context requires a path.".to_string())?;
+    let requested_path = PathBuf::from(raw_path);
+    let file_path = if requested_path.is_absolute() {
+        requested_path
+    } else {
+        project.join(requested_path)
+    };
+    let project_root = project
+        .canonicalize()
+        .map_err(|err| format!("Failed to resolve selected project: {}", err))?;
+    let file_path = file_path
+        .canonicalize()
+        .map_err(|err| format!("Failed to resolve file context path: {}", err))?;
+
+    if !file_path.starts_with(&project_root) {
+        return Err("File context must be inside the selected project.".to_string());
+    }
+    if !file_path.is_file() {
+        return Err("File context path is not a file.".to_string());
+    }
+
+    let bytes =
+        std::fs::read(&file_path).map_err(|err| format!("Failed to read file context: {}", err))?;
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let line_count = text.lines().count();
+    let (preview, truncated) = truncate_chars(&text, 12_000);
+    let relative_path = file_path
+        .strip_prefix(&project_root)
+        .unwrap_or(&file_path)
+        .to_string_lossy()
+        .to_string();
+    let label = context.label.clone().unwrap_or_else(|| {
+        file_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("File")
+            .to_string()
+    });
+
+    Ok(ResolvedDesktopRunContext {
+        context_type: context.context_type.clone(),
+        label,
+        shortstat: format!(
+            "{} ({} bytes, {} lines)",
+            relative_path,
+            bytes.len(),
+            line_count
+        ),
+        files: vec![relative_path.clone()],
+        stat: format!(
+            "{} | {} bytes | {} lines",
+            relative_path,
+            bytes.len(),
+            line_count
+        ),
+        patch_preview: String::new(),
+        path: Some(file_path.to_string_lossy().to_string()),
+        relative_path: Some(relative_path),
+        size_bytes: Some(bytes.len() as u64),
+        line_count: Some(line_count),
+        preview: Some(preview),
         truncated,
     })
 }
 
 fn format_desktop_context_block(context: &ResolvedDesktopRunContext) -> String {
+    if context.context_type == "file" {
+        let relative_path = context.relative_path.as_deref().unwrap_or(&context.label);
+        let preview = context
+            .preview
+            .as_deref()
+            .filter(|preview| !preview.is_empty())
+            .unwrap_or("No file preview available.");
+        let truncated = if context.truncated { "true" } else { "false" };
+
+        return format!(
+            "<desktop_context type=\"{}\" label=\"{}\">\nPath: {}\nSize bytes: {}\nLines: {}\nPreview truncated: {}\n```text\n{}\n```\n</desktop_context>",
+            escape_context_attr(&context.context_type),
+            escape_context_attr(&context.label),
+            relative_path,
+            context.size_bytes.unwrap_or_default(),
+            context.line_count.unwrap_or_default(),
+            truncated,
+            preview
+        );
+    }
+
     let files = if context.files.is_empty() {
         "- No changed files detected.".to_string()
     } else {
@@ -1596,6 +1710,7 @@ mod tests {
             &[DesktopRunContext {
                 context_type: "current_diff".to_string(),
                 label: Some("Current diff".to_string()),
+                path: None,
             }],
             &project,
         )
@@ -1617,12 +1732,75 @@ mod tests {
             &[DesktopRunContext {
                 context_type: "unknown".to_string(),
                 label: None,
+                path: None,
             }],
             &std::env::current_dir().unwrap(),
         )
         .unwrap_err();
 
         assert!(err.contains("Unsupported desktop run context"));
+    }
+
+    #[test]
+    fn desktop_run_context_enriches_message_with_file_preview() {
+        let project = std::env::temp_dir().join(format!(
+            "priority-agent-desktop-file-context-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&project);
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        let file = project.join("src/app.rs");
+        std::fs::write(&file, "fn main() {\n    println!(\"desktop\");\n}\n").unwrap();
+
+        let message = enrich_message_with_desktop_contexts(
+            "Review this file".to_string(),
+            &[DesktopRunContext {
+                context_type: "file".to_string(),
+                label: Some("app.rs".to_string()),
+                path: Some(file.to_string_lossy().to_string()),
+            }],
+            &project,
+        )
+        .unwrap();
+
+        assert!(message.contains("Review this file"));
+        assert!(message.contains("<desktop_context type=\"file\" label=\"app.rs\">"));
+        assert!(message.contains("Path: src/app.rs"));
+        assert!(message.contains("println!(\"desktop\")"));
+
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn desktop_run_context_rejects_file_outside_project() {
+        let project = std::env::temp_dir().join(format!(
+            "priority-agent-desktop-file-context-root-{}",
+            std::process::id()
+        ));
+        let outside = std::env::temp_dir().join(format!(
+            "priority-agent-desktop-file-context-outside-{}.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_file(&outside);
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(&outside, "outside\n").unwrap();
+
+        let err = enrich_message_with_desktop_contexts(
+            "Review this file".to_string(),
+            &[DesktopRunContext {
+                context_type: "file".to_string(),
+                label: Some("outside.txt".to_string()),
+                path: Some(outside.to_string_lossy().to_string()),
+            }],
+            &project,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("inside the selected project"));
+
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_file(&outside);
     }
 
     #[test]
