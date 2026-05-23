@@ -9,6 +9,18 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Environment diagnostics")).toBeVisible();
     await expect(page.getByLabel("Provider")).toBeVisible();
     await expect(page.getByLabel("Model")).toBeVisible();
+    const composer = page.locator(".composer");
+    await composer.getByRole("button", { name: "Project" }).click();
+    await expect(page.getByRole("dialog", { name: "Project controls" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Project path" })).toHaveValue(
+      "/Users/georgexu/Desktop/rust-agent",
+    );
+    await composer.getByRole("button", { name: "Mode" }).click();
+    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Coding");
+    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Full access");
+    await composer.getByRole("button", { exact: true, name: "Provider" }).click();
+    await expect(page.getByRole("dialog", { name: "Provider controls" })).toContainText("kimi-k2.5");
+    await composer.getByRole("button", { exact: true, name: "Provider" }).click();
     await expect(page.getByRole("button", { name: "New Chat" })).toBeVisible();
     await expect(page.getByRole("button", { name: "rust-agent" })).toBeVisible();
     await expect(page.getByLabel("Current session")).toContainText("Continuing");

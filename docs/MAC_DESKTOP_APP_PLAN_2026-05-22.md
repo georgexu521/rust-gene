@@ -695,6 +695,10 @@ surface with a left category rail for General, Provider, Permissions, and
 Diagnostics instead of a narrow drawer.
 The empty conversation view now uses a Codex-like centered headline and elevated
 composer with a lighter bottom context bar for project/runtime controls.
+Composer context controls now use compact popover-style entries for project,
+mode, and provider/model, so the empty-state composer can shrink naturally into
+the normal chat composer after the first message without exposing raw select
+controls in the main surface.
 
 #### Track D - Frontend Architecture And Test Hardening
 

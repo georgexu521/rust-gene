@@ -526,6 +526,8 @@ export function App() {
           composer={composer}
           projectPath={projectPath}
           providerStatus={providerStatus}
+          detailLevel={settings?.detail_level}
+          permissionMode={settings?.permission_mode}
           isEmptyState={isEmptyConversation}
           isRunning={runState.isRunning}
           onComposerChange={setComposer}
