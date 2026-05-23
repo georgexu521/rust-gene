@@ -93,10 +93,21 @@ export type ProviderModelStatus = {
   models: DesktopModelOption[];
 };
 
+export type DesktopRunContextDetail = {
+  type: "current_diff";
+  label: string;
+  shortstat: string;
+  files: string[];
+  stat: string;
+  patch_preview: string;
+  truncated: boolean;
+};
+
 export type DesktopRunContext =
   | {
       type: "current_diff";
       label: string;
+      detail?: DesktopRunContextDetail | null;
     };
 
 export type DesktopProviderOption = {
@@ -303,6 +314,26 @@ export function desktopDiagnostics(): Promise<DesktopDiagnosticsResponse> {
   }
 
   return invoke("desktop_diagnostics");
+}
+
+export function desktopRunContextDetail(
+  context: DesktopRunContext,
+): Promise<DesktopRunContextDetail> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      type: "current_diff",
+      label: context.label,
+      shortstat: "unstaged:\n2 files changed, 42 insertions(+), 8 deletions(-)",
+      files: ["apps/desktop/src/app/components/Composer.tsx", "apps/desktop/src/styles/global.css"],
+      stat:
+        "unstaged:\n apps/desktop/src/app/components/Composer.tsx | 24 +++++++++++++++++++-----\n apps/desktop/src/styles/global.css             | 18 ++++++++++++++++--",
+      patch_preview:
+        "@@ -1,3 +1,6 @@\n+type DesktopRunContextDetail = {\n+  patch_preview: string;\n+};\n",
+      truncated: false,
+    });
+  }
+
+  return invoke("desktop_run_context_detail", { context });
 }
 
 export function providerSetupInfo(): Promise<ProviderSetupInfo> {

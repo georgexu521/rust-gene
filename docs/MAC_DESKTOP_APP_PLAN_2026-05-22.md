@@ -716,6 +716,8 @@ as `Current diff`, so users can confirm which structured inputs were included
 after the composer clears.
 Trace/debug now carries the same attached-context chips on the run-start trace
 item, making it possible to audit structured inputs from the trace drawer.
+Clicking a composer context chip now opens a context detail drawer with changed
+files, git stat output, and bounded patch preview for the current diff context.
 
 #### Track D - Frontend Architecture And Test Hardening
 

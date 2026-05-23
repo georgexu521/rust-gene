@@ -17,6 +17,10 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Attached context")).toContainText("Current diff");
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("");
     await expect(page.getByRole("dialog", { name: "Add context options" })).not.toBeVisible();
+    await page.getByRole("button", { name: "Open context Current diff" }).click();
+    await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Changed files");
+    await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Patch preview");
+    await page.getByRole("button", { name: "Close context details" }).click();
     await composer.getByRole("button", { name: "Project" }).click();
     await expect(page.getByRole("dialog", { name: "Project controls" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Project path" })).toHaveValue(

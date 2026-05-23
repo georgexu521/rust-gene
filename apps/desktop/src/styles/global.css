@@ -1484,6 +1484,126 @@ h1 {
   box-shadow: -18px 0 48px rgb(15 23 42 / 12%);
 }
 
+.context-detail-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 24;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100vw);
+  height: 100vh;
+  border-left: 1px solid #d8dde3;
+  background: #ffffff;
+  box-shadow: -18px 0 48px rgb(15 23 42 / 12%);
+}
+
+.context-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 24px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.context-detail-header h2 {
+  margin: 3px 0 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.context-detail-eyebrow {
+  color: #7b8490;
+  font-size: 11px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.context-detail-header button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #dfe4ea;
+  border-radius: 8px;
+  color: #4c5662;
+  background: #ffffff;
+}
+
+.context-detail-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 18px 24px;
+  overflow: auto;
+}
+
+.context-detail-body section {
+  display: grid;
+  gap: 7px;
+}
+
+.context-detail-body h3 {
+  margin: 0;
+  color: #242b34;
+  font-size: 13px;
+}
+
+.context-detail-body p,
+.context-detail-body ul {
+  margin: 0;
+  color: #59636f;
+  font-size: 13px;
+}
+
+.context-detail-body ul {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+}
+
+.context-detail-body pre {
+  max-height: 220px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #e2e6eb;
+  border-radius: 8px;
+  color: #303842;
+  background: #f8fafc;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.context-detail-diff {
+  max-height: 360px;
+}
+
+.context-detail-empty {
+  padding: 18px 24px;
+  color: #6d7681;
+  font-size: 13px;
+}
+
+.context-detail-actions {
+  padding: 14px 24px 20px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.context-detail-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #dfe4ea;
+  border-radius: 8px;
+  color: #6a2f2f;
+  background: #ffffff;
+  font-weight: 650;
+}
+
 .settings-drawer {
   position: fixed;
   top: 0;

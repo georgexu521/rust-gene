@@ -33,6 +33,7 @@ type ComposerProps = {
   isRunning: boolean;
   onComposerChange: (value: string) => void;
   onAddContext: (context: DesktopRunContext) => void;
+  onOpenContext: (context: DesktopRunContext) => void;
   onRemoveContext: (type: DesktopRunContext["type"]) => void;
   onProjectPathChange: (value: string) => void;
   onBrowseProject: () => void;
@@ -57,6 +58,7 @@ export function Composer({
   isRunning,
   onComposerChange,
   onProjectPathChange,
+  onOpenContext,
   onBrowseProject,
   onSelectProject,
   onSelectRecentProject,
@@ -143,10 +145,10 @@ export function Composer({
         <div className="composer-context-chips" aria-label="Attached context">
           {contexts.map((context) => (
             <button
-              aria-label={`Remove context ${context.label}`}
+              aria-label={`Open context ${context.label}`}
               key={context.type}
               type="button"
-              onClick={() => onRemoveContext(context.type)}
+              onClick={() => onOpenContext(context)}
             >
               <GitCompare aria-hidden="true" size={14} />
               <span>{context.label}</span>

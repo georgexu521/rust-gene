@@ -64,13 +64,15 @@ struct DesktopRunContext {
     label: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct ResolvedDesktopRunContext {
+    #[serde(rename = "type")]
     context_type: String,
     label: String,
     shortstat: String,
     files: Vec<String>,
     stat: String,
+    #[serde(rename = "patch_preview")]
     patch_preview: String,
     truncated: bool,
 }
@@ -671,6 +673,18 @@ async fn send_message(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn desktop_run_context_detail(
+    context: DesktopRunContext,
+    state: State<'_, DesktopAppState>,
+) -> Result<ResolvedDesktopRunContext, String> {
+    let selected_project = state.selected_project.lock().await.clone();
+    match context.context_type.as_str() {
+        "current_diff" => resolve_current_diff_context(&context, &selected_project),
+        other => Err(format!("Unsupported desktop run context: {}", other)),
+    }
 }
 
 fn enrich_message_with_desktop_contexts(
@@ -1430,6 +1444,7 @@ pub fn run() {
             load_session_messages,
             resume_session,
             send_message,
+            desktop_run_context_detail,
             answer_permission,
         ])
         .run(tauri::generate_context!())

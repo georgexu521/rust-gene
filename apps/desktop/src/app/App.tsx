@@ -18,6 +18,7 @@ import {
   deleteSession,
   desktopDiagnostics,
   desktopHealth,
+  desktopRunContextDetail,
   desktopSettings,
   listRecentSessions,
   newConversation,
@@ -39,6 +40,7 @@ import {
   setPermissionMode,
 } from "../runtime/desktopApi";
 import { Composer } from "./components/Composer";
+import { ContextDetailDrawer } from "./components/ContextDetailDrawer";
 import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
 import { PermissionCard } from "./components/PermissionCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
@@ -67,6 +69,7 @@ export function App() {
   const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
   const [composer, setComposer] = useState("");
   const [runContexts, setRunContexts] = useState<DesktopRunContext[]>([]);
+  const [activeContextDetail, setActiveContextDetail] = useState<DesktopRunContext | null>(null);
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -348,6 +351,25 @@ export function App() {
     }
   }
 
+  async function handleAddContext(context: DesktopRunContext) {
+    try {
+      const detail = await desktopRunContextDetail(context);
+      const enrichedContext = { ...context, detail };
+      setRunContexts((current) =>
+        current.some((existing) => existing.type === context.type)
+          ? current.map((existing) => (existing.type === context.type ? enrichedContext : existing))
+          : [...current, enrichedContext],
+      );
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  function handleRemoveContext(type: DesktopRunContext["type"]) {
+    setRunContexts((current) => current.filter((context) => context.type !== type));
+    setActiveContextDetail((current) => (current?.type === type ? null : current));
+  }
+
   async function handlePermission(approved: boolean) {
     try {
       const answered = await answerPermission(approved);
@@ -502,6 +524,12 @@ export function App() {
           onClose={() => setIsTraceOpen(false)}
         />
 
+        <ContextDetailDrawer
+          context={activeContextDetail}
+          onClose={() => setActiveContextDetail(null)}
+          onRemove={(type) => handleRemoveContext(type)}
+        />
+
         <SettingsDrawer
           isOpen={isSettingsOpen}
           projectPath={projectPath}
@@ -537,16 +565,9 @@ export function App() {
           isEmptyState={isEmptyConversation}
           isRunning={runState.isRunning}
           onComposerChange={setComposer}
-          onAddContext={(context) =>
-            setRunContexts((current) =>
-              current.some((existing) => existing.type === context.type)
-                ? current
-                : [...current, context],
-            )
-          }
-          onRemoveContext={(type) =>
-            setRunContexts((current) => current.filter((context) => context.type !== type))
-          }
+          onAddContext={(context) => void handleAddContext(context)}
+          onOpenContext={setActiveContextDetail}
+          onRemoveContext={(type) => handleRemoveContext(type)}
           onProjectPathChange={setProjectPath}
           onBrowseProject={() => void handleBrowseProject()}
           onSelectProject={() => void handleSelectProject()}
