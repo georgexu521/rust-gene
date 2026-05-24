@@ -13,11 +13,13 @@ use super::turn_recording::{
     record_web_retrieval_trace,
 };
 use super::ConversationLoop;
+use crate::engine::action_decision::{ActionDecision, ActionDecisionInput};
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::hooks::HookDecision;
-use crate::engine::intent_router::IntentRoute;
+use crate::engine::intent_router::{IntentRoute, RiskLevel, WorkflowKind};
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
+use crate::engine::task_context::{AgentTaskStage, AgentTaskState};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
 use crate::tools::{ToolContext, ToolContextRetainedContext, ToolRegistry, ToolResult};
@@ -31,17 +33,17 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::debug;
 
+type ToolExecutionResults = Vec<(ToolCall, ToolResult)>;
+type ToolLifecycleRecords = Vec<(String, ToolCallLifecycleRecord)>;
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct ToolExecutionBatch {
-    results: Vec<(ToolCall, ToolResult)>,
-    lifecycle: Vec<(String, ToolCallLifecycleRecord)>,
+    results: ToolExecutionResults,
+    lifecycle: ToolLifecycleRecords,
 }
 
 impl ToolExecutionBatch {
-    pub(super) fn new(
-        results: Vec<(ToolCall, ToolResult)>,
-        lifecycle: Vec<(String, ToolCallLifecycleRecord)>,
-    ) -> Self {
+    pub(super) fn new(results: ToolExecutionResults, lifecycle: ToolLifecycleRecords) -> Self {
         let (results, lifecycle) = complete_provider_result_pairs(results, lifecycle);
         Self { results, lifecycle }
     }
@@ -95,12 +97,9 @@ impl ToolExecutionBatch {
 }
 
 fn complete_provider_result_pairs(
-    mut results: Vec<(ToolCall, ToolResult)>,
-    mut lifecycle: Vec<(String, ToolCallLifecycleRecord)>,
-) -> (
-    Vec<(ToolCall, ToolResult)>,
-    Vec<(String, ToolCallLifecycleRecord)>,
-) {
+    mut results: ToolExecutionResults,
+    mut lifecycle: ToolLifecycleRecords,
+) -> (ToolExecutionResults, ToolLifecycleRecords) {
     let result_ids = results
         .iter()
         .map(|(tool_call, _)| tool_call.id.clone())
@@ -152,8 +151,11 @@ pub(super) struct ToolExecutionRequest<'a> {
     pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) exposed_tool_names: &'a HashSet<String>,
     pub(super) retained_context: &'a ToolContextRetainedContext,
+    pub(super) task_stage: AgentTaskStage,
+    pub(super) task_state: Option<&'a AgentTaskState>,
     pub(super) action_checkpoint_active: bool,
     pub(super) action_checkpoint_lookup_count: usize,
+    pub(super) no_progress_rounds: usize,
     pub(super) has_changes_before_tools: bool,
     pub(super) destructive_scope: &'a DestructiveScopeContract,
     pub(super) lifecycle: &'a mut ToolCallLifecycle,
@@ -164,6 +166,7 @@ struct ReadWriteExecutionContext<'a> {
     trace: &'a Option<TraceCollector>,
     runtime_context: &'a ToolRuntimeContext,
     retained_context: &'a ToolContextRetainedContext,
+    task_state: Option<&'a AgentTaskState>,
     parent_tool_calls: &'a [ToolCall],
     parent_assistant_content: &'a str,
 }
@@ -239,11 +242,26 @@ struct ToolRuntimeContext {
     policy_cost_ceiling_usd: String,
     action_checkpoint_active: bool,
     has_changes_before_tools: bool,
+    task_stage: AgentTaskStage,
+    route_workflow_kind: Option<WorkflowKind>,
+    route_risk_level: Option<RiskLevel>,
+    no_progress_rounds: usize,
     exposed_tools_count: usize,
     retained_retrieval_items: usize,
     retained_skill_triggers: usize,
     retained_context_tokens: usize,
     retained_context_provenance: Vec<String>,
+}
+
+struct ToolRuntimeContextInput<'a> {
+    route: Option<&'a IntentRoute>,
+    policy: &'a ResourcePolicy,
+    task_stage: AgentTaskStage,
+    action_checkpoint_active: bool,
+    no_progress_rounds: usize,
+    has_changes_before_tools: bool,
+    exposed_tools_count: usize,
+    retained_context: &'a ToolContextRetainedContext,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -270,14 +288,18 @@ impl ToolRuntimeTiming {
 }
 
 impl ToolRuntimeContext {
-    fn new(
-        route: Option<&IntentRoute>,
-        policy: &ResourcePolicy,
-        action_checkpoint_active: bool,
-        has_changes_before_tools: bool,
-        exposed_tools_count: usize,
-        retained_context: &ToolContextRetainedContext,
-    ) -> Self {
+    fn new(input: ToolRuntimeContextInput<'_>) -> Self {
+        let ToolRuntimeContextInput {
+            route,
+            policy,
+            task_stage,
+            action_checkpoint_active,
+            no_progress_rounds,
+            has_changes_before_tools,
+            exposed_tools_count,
+            retained_context,
+        } = input;
+
         Self {
             has_route: route.is_some(),
             route_intent: route
@@ -303,6 +325,10 @@ impl ToolRuntimeContext {
             policy_cost_ceiling_usd: format!("{:.4}", policy.cost_ceiling_usd),
             action_checkpoint_active,
             has_changes_before_tools,
+            task_stage,
+            route_workflow_kind: route.map(|route| route.workflow),
+            route_risk_level: route.map(|route| route.risk),
+            no_progress_rounds,
             exposed_tools_count,
             retained_retrieval_items: retained_context.retrieval_items.len(),
             retained_skill_triggers: retained_context.skill_triggers.len(),
@@ -345,7 +371,9 @@ impl ToolRuntimeContext {
                 "execution": {
                     "parallel": parallel,
                     "pre_executed": pre_executed,
+                    "task_stage": format!("{:?}", self.task_stage),
                     "action_checkpoint_active": self.action_checkpoint_active,
+                    "no_progress_rounds": self.no_progress_rounds,
                     "has_changes_before_tools": self.has_changes_before_tools,
                     "exposed_tools_count": self.exposed_tools_count,
                     "started_at_unix_ms": timing.and_then(|timing| timing.started_at_unix_ms),
@@ -359,6 +387,27 @@ impl ToolRuntimeContext {
                 },
             }),
         );
+    }
+
+    fn action_decision(&self, tool_call: &ToolCall) -> ActionDecision {
+        ActionDecision::for_tool_call(
+            tool_call,
+            ActionDecisionInput {
+                task_stage: self.task_stage,
+                route_workflow: self.route_workflow_kind,
+                route_risk: self.route_risk_level,
+                action_checkpoint_active: self.action_checkpoint_active,
+                has_changes_before_tools: self.has_changes_before_tools,
+                no_progress_rounds: self.no_progress_rounds,
+            },
+        )
+    }
+
+    fn attach_action_decision(&self, tool_call: &ToolCall, result: &mut ToolResult) {
+        let decision = self.action_decision(tool_call);
+        if let Ok(value) = serde_json::to_value(&decision) {
+            merge_tool_result_metadata(result, "action_decision", value);
+        }
     }
 }
 
@@ -379,9 +428,34 @@ where
         .unwrap_or_else(|| format!("{value:?}"))
 }
 
+fn record_action_decision_if_needed(
+    trace: &Option<TraceCollector>,
+    tool_call: &ToolCall,
+    decision: &ActionDecision,
+) {
+    if !decision.trace_recommended {
+        return;
+    }
+    if let Some(trace) = trace {
+        trace.record(TraceEvent::ActionDecisionEvaluated {
+            tool: tool_call.name.clone(),
+            call_id: tool_call.id.clone(),
+            stage: format!("{:?}", decision.action.stage),
+            value: decision.scores.value,
+            risk: decision.scores.risk,
+            uncertainty_reduction: decision.scores.uncertainty_reduction,
+            cost: decision.scores.cost,
+            reversibility: decision.scores.reversibility,
+            requires_confirmation: decision.requires_confirmation,
+            reason: decision.reason_summary.clone(),
+        });
+    }
+}
+
 struct ToolExecutionGate<'a> {
     tool_registry: &'a ToolRegistry,
     active_goal: Option<&'a crate::engine::session_goal::SessionGoal>,
+    task_state: Option<&'a AgentTaskState>,
     allowed_tools: &'a Option<HashSet<String>>,
     resource_policy: &'a ResourcePolicy,
     exposed_tool_names: &'a HashSet<String>,
@@ -396,6 +470,9 @@ struct ToolExecutionGate<'a> {
 
 impl<'a> ToolExecutionGate<'a> {
     fn evaluate(&self, tool_call: &ToolCall, scheduled_count: usize) -> ToolExecutionGateOutcome {
+        let decision = self.runtime_context.action_decision(tool_call);
+        record_action_decision_if_needed(self.trace, tool_call, &decision);
+
         if !self.exposed_tool_names.contains(&tool_call.name) {
             let error = if self.action_checkpoint_active {
                 ConversationLoop::action_checkpoint_unexposed_tool_message(
@@ -427,7 +504,7 @@ impl<'a> ToolExecutionGate<'a> {
             return self.deny_with_trace(tool_call, result);
         }
 
-        record_goal_drift_if_needed(self.trace, self.active_goal, tool_call);
+        record_goal_drift_if_needed(self.trace, self.active_goal, self.task_state, tool_call);
 
         if !tool_allowed_by_context(self.allowed_tools, &tool_call.name) {
             return ToolExecutionGateOutcome::Deny(tool_not_allowed_result(tool_call));
@@ -499,6 +576,8 @@ impl<'a> ToolExecutionGate<'a> {
             false,
             Some(ToolRuntimeTiming::instant()),
         );
+        self.runtime_context
+            .attach_action_decision(tool_call, &mut result);
         if let Some(ref trace) = self.trace {
             trace.record(TraceEvent::ToolStarted {
                 tool: tool_call.name.clone(),
@@ -605,6 +684,7 @@ impl ToolExecutionController {
                 false,
                 Some(ToolRuntimeTiming::finished(started_at_unix_ms)),
             );
+            runtime_context.attach_action_decision(&tc_clone, &mut result);
             {
                 let mut tracker = cost_tracker.lock().await;
                 tracker.record_tool_execution(
@@ -696,6 +776,9 @@ impl ToolExecutionController {
                     false,
                     Some(ToolRuntimeTiming::instant()),
                 );
+                exec_context
+                    .runtime_context
+                    .attach_action_decision(&tc, &mut result);
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -734,13 +817,14 @@ impl ToolExecutionController {
                         exec_context.parent_tool_calls.to_vec(),
                         exec_context.parent_assistant_content.to_string(),
                     );
-                let drift_check = execution
-                    .active_goal
-                    .as_ref()
-                    .map(|goal| {
-                        crate::engine::goal_drift::GoalDriftDetector::new().check(goal, &tc)
-                    })
-                    .unwrap_or_else(crate::engine::goal_drift::DriftCheck::ok);
+                let drift_check = crate::engine::goal_drift::GoalDriftDetector::new()
+                    .check_with_context(
+                        crate::engine::goal_drift::GoalDriftContext {
+                            goal: execution.active_goal.as_ref(),
+                            task_state: exec_context.task_state,
+                        },
+                        &tc,
+                    );
                 let pre_decision = if let Some(ref hooks) = execution.hook_manager {
                     let hook_start = hooks.current_record_sequence();
                     let decision = hooks.run_pre_tool(&tc, &context).await;
@@ -834,6 +918,9 @@ impl ToolExecutionController {
                     false,
                     Some(ToolRuntimeTiming::finished(started_at_unix_ms)),
                 );
+                exec_context
+                    .runtime_context
+                    .attach_action_decision(&tc, &mut result);
 
                 // ── Security Audit & Denial Tracking ──────────────────────
                 let params_summary = if let Some(tool) = execution.tool_registry.get(&tool_name) {
@@ -898,6 +985,9 @@ impl ToolExecutionController {
                     false,
                     Some(ToolRuntimeTiming::instant()),
                 );
+                exec_context
+                    .runtime_context
+                    .attach_action_decision(&tc, &mut result);
                 (result, None)
             };
 
@@ -963,8 +1053,11 @@ impl ToolExecutionController {
             resource_policy,
             exposed_tool_names,
             retained_context,
+            task_stage,
+            task_state,
             action_checkpoint_active,
             action_checkpoint_lookup_count,
+            no_progress_rounds,
             has_changes_before_tools,
             destructive_scope,
             lifecycle,
@@ -975,17 +1068,20 @@ impl ToolExecutionController {
         let mut scheduled_count = 0usize;
         let mut serial_boundary_seen = false;
         lifecycle.pending_batch(tool_calls);
-        let runtime_context = ToolRuntimeContext::new(
+        let runtime_context = ToolRuntimeContext::new(ToolRuntimeContextInput {
             route,
-            resource_policy,
+            policy: resource_policy,
+            task_stage,
             action_checkpoint_active,
+            no_progress_rounds,
             has_changes_before_tools,
-            exposed_tool_names.len(),
+            exposed_tools_count: exposed_tool_names.len(),
             retained_context,
-        );
+        });
         let gate = ToolExecutionGate {
             tool_registry: execution.tool_registry.as_ref(),
             active_goal: execution.active_goal.as_ref(),
+            task_state,
             allowed_tools: &execution.allowed_tools,
             resource_policy,
             exposed_tool_names,
@@ -1065,6 +1161,7 @@ impl ToolExecutionController {
                     attach_tool_contract_metadata(tool, tc, &mut pre_result);
                 }
                 runtime_context.attach(&mut pre_result, true, true, None);
+                runtime_context.attach_action_decision(tc, &mut pre_result);
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -1143,6 +1240,7 @@ impl ToolExecutionController {
                             trace: &trace,
                             runtime_context: &runtime_context,
                             retained_context,
+                            task_state,
                             parent_tool_calls: tool_calls,
                             parent_assistant_content,
                         },
@@ -1346,8 +1444,11 @@ mod tests {
                 resource_policy: &policy,
                 exposed_tool_names: &exposed_tool_names,
                 retained_context: &crate::tools::ToolContextRetainedContext::default(),
+                task_stage: AgentTaskStage::Understand,
+                task_state: None,
                 action_checkpoint_active: false,
                 action_checkpoint_lookup_count: 0,
+                no_progress_rounds: 0,
                 has_changes_before_tools: false,
                 destructive_scope: &destructive_scope,
                 lifecycle: &mut lifecycle,
@@ -1438,6 +1539,26 @@ mod tests {
         assert_eq!(results[0].1.content, "writes_seen=0");
         assert_eq!(results[1].1.content, "writes_before=0");
         assert_eq!(results[2].1.content, "writes_seen=1");
+    }
+
+    #[tokio::test]
+    async fn tool_results_include_action_decision_metadata() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let tool_calls = vec![tool_call("call_read", "probe_read")];
+
+        let batch = execute_probe_tools(&loop_instance, &tool_calls, HashMap::new()).await;
+        let metadata = batch.results()[0]
+            .1
+            .data
+            .as_ref()
+            .expect("tool metadata should be present");
+
+        assert_eq!(
+            metadata["action_decision"]["action"]["tool_name"],
+            "probe_read"
+        );
+        assert!(metadata["action_decision"]["scores"]["value"].is_u64());
     }
 
     #[tokio::test]

@@ -21,6 +21,18 @@ pub(super) struct NormalizedToolResult {
     pub(super) ui_content: String,
     pub(super) structured_metadata: serde_json::Value,
     pub(super) evidence_facts: Vec<NormalizedEvidenceFact>,
+    pub(super) context_policy: ToolResultContextPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ToolResultContextPolicy {
+    pub(super) provider_visible_chars: usize,
+    pub(super) desktop_visible_chars: usize,
+    pub(super) trace_payload_available: bool,
+    pub(super) durable_artifact_path: Option<String>,
+    pub(super) ledger_fact_eligible: bool,
+    pub(super) compaction_eligible: bool,
+    pub(super) protected_recent_tail: bool,
 }
 
 impl NormalizedToolResult {
@@ -45,11 +57,27 @@ pub(super) struct ToolResultNormalizer;
 impl ToolResultNormalizer {
     pub(super) fn normalize(tool_call: &ToolCall, result: &ToolResult) -> NormalizedToolResult {
         let model_content = provider_tool_result_content(tool_call, result);
+        let mut structured_metadata = structured_metadata(tool_call, result);
+        let evidence_facts = evidence_facts(tool_call, result);
+        let context_policy = ToolResultContextPolicy::from_normalized(
+            tool_call,
+            result,
+            &model_content,
+            &structured_metadata,
+            &evidence_facts,
+        );
+        if let Some(object) = structured_metadata.as_object_mut() {
+            object.insert(
+                "tool_result_context_policy".to_string(),
+                context_policy.as_metadata(),
+            );
+        }
         NormalizedToolResult {
             ui_content: model_content.clone(),
             model_content,
-            structured_metadata: structured_metadata(tool_call, result),
-            evidence_facts: evidence_facts(tool_call, result),
+            structured_metadata,
+            evidence_facts,
+            context_policy,
         }
     }
 
@@ -59,6 +87,57 @@ impl ToolResultNormalizer {
     ) -> NormalizedToolResult {
         truncate_tool_result(result, &tool_call.name, &tool_call.id).await;
         Self::normalize(tool_call, result)
+    }
+}
+
+impl ToolResultContextPolicy {
+    fn from_normalized(
+        tool_call: &ToolCall,
+        result: &ToolResult,
+        model_content: &str,
+        structured_metadata: &serde_json::Value,
+        evidence_facts: &[NormalizedEvidenceFact],
+    ) -> Self {
+        let durable_artifact_path = structured_metadata
+            .get("tool_result_data")
+            .and_then(|data| data.get("output_truncation"))
+            .and_then(|truncation| truncation.get("stored_path"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let is_high_value = matches!(
+            tool_call.name.as_str(),
+            "file_edit" | "file_write" | "file_patch" | "permission_request"
+        ) || !result.success;
+        let ledger_fact_eligible = evidence_facts.iter().any(|fact| {
+            matches!(
+                fact,
+                NormalizedEvidenceFact::Command
+                    | NormalizedEvidenceFact::Validation
+                    | NormalizedEvidenceFact::File
+                    | NormalizedEvidenceFact::ChangedFile
+            )
+        });
+        Self {
+            provider_visible_chars: model_content.chars().count(),
+            desktop_visible_chars: model_content.chars().count(),
+            trace_payload_available: structured_metadata.get("tool_result_data").is_some(),
+            durable_artifact_path,
+            ledger_fact_eligible,
+            compaction_eligible: !is_high_value || model_content.chars().count() > 8_000,
+            protected_recent_tail: is_high_value,
+        }
+    }
+
+    fn as_metadata(&self) -> serde_json::Value {
+        serde_json::json!({
+            "provider_visible_chars": self.provider_visible_chars,
+            "desktop_visible_chars": self.desktop_visible_chars,
+            "trace_payload_available": self.trace_payload_available,
+            "durable_artifact_path": self.durable_artifact_path,
+            "ledger_fact_eligible": self.ledger_fact_eligible,
+            "compaction_eligible": self.compaction_eligible,
+            "protected_recent_tail": self.protected_recent_tail,
+        })
     }
 }
 
@@ -232,6 +311,17 @@ mod tests {
                 .unwrap_or_default()
                 .contains("tool-results")
         );
+        assert!(normalized.context_policy.compaction_eligible);
+        assert!(normalized
+            .context_policy
+            .durable_artifact_path
+            .as_deref()
+            .unwrap_or_default()
+            .contains("tool-results"));
+        assert_eq!(
+            normalized.structured_metadata["tool_result_context_policy"]["compaction_eligible"],
+            true
+        );
     }
 
     #[test]
@@ -253,6 +343,32 @@ mod tests {
         assert_eq!(normalized.structured_metadata["success"], true);
         assert_eq!(normalized.structured_metadata["error_code"], "success");
         assert!(normalized.structured_metadata.get("tool_summary").is_some());
+        assert!(normalized.context_policy.ledger_fact_eligible);
+        assert!(!normalized.context_policy.protected_recent_tail);
+    }
+
+    #[test]
+    fn context_policy_protects_failed_and_mutating_tool_results() {
+        let failed = ToolResultNormalizer::normalize(
+            &ToolCall {
+                id: "call_fail".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({"command": "cargo test -q"}),
+            },
+            &ToolResult::error("tests failed"),
+        );
+        assert!(failed.context_policy.protected_recent_tail);
+
+        let edit = ToolResultNormalizer::normalize(
+            &ToolCall {
+                id: "call_edit".to_string(),
+                name: "file_edit".to_string(),
+                arguments: serde_json::json!({"path": "src/lib.rs"}),
+            },
+            &ToolResult::success("edited src/lib.rs"),
+        );
+        assert!(edit.context_policy.protected_recent_tail);
+        assert!(edit.context_policy.ledger_fact_eligible);
     }
 
     #[test]

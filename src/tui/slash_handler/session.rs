@@ -1912,19 +1912,17 @@ pub async fn handle_compact(app: &mut TuiApp) -> String {
     if history_before.is_empty() {
         return "No history to compact.".to_string();
     }
-    let before_msgs = history_before.len();
-    let before_tokens =
-        crate::engine::context_compressor::estimate_messages_tokens(&history_before);
-    let Some(comp) = engine.compressor() else {
-        return "Context compressor unavailable.".to_string();
+    let Some(attempt) = engine.compact_context_manually().await else {
+        return "No history to compact.".to_string();
     };
-    let compacted = {
-        let mut guard = comp.lock().await;
-        guard.micro_compress(&history_before)
-    };
+    if attempt.circuit_open
+        && attempt.decision == crate::engine::context_compressor::CompactionDecision::CircuitOpen
+    {
+        return format!("Context compact skipped: {}.", attempt.reason);
+    }
+    let compacted = engine.get_history().await;
     let after_msgs = compacted.len();
     let after_tokens = crate::engine::context_compressor::estimate_messages_tokens(&compacted);
-    engine.set_history(compacted.clone()).await;
 
     app.messages = compacted
         .into_iter()
@@ -1960,7 +1958,7 @@ pub async fn handle_compact(app: &mut TuiApp) -> String {
     }
     format!(
         "Context compacted: messages {} -> {}, tokens {} -> {}.",
-        before_msgs, after_msgs, before_tokens, after_tokens
+        attempt.messages_before, after_msgs, attempt.before_tokens, after_tokens
     )
 }
 

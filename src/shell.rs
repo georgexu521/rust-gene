@@ -716,6 +716,7 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                 status_visible = true;
             }
             StreamEvent::Usage { .. } => {}
+            StreamEvent::RuntimeDiagnostic { .. } => {}
             StreamEvent::OutputTruncated => {
                 clear_status_if_visible(&mut status_visible)?;
                 assistant_printer.finish_line_if_needed()?;

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   Check,
@@ -107,6 +107,14 @@ export function Composer({
     onAddFileContext();
   }
 
+  function submitOnEnter(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }
+
   useEffect(() => {
     if (!openMenu) {
       return;
@@ -144,6 +152,7 @@ export function Composer({
         aria-label="Message"
         value={composer}
         onChange={(event) => onComposerChange(event.target.value)}
+        onKeyDown={submitOnEnter}
         placeholder={
           isEmptyState ? "Ask anything" : "Ask Liz to inspect, edit, or verify this project..."
         }

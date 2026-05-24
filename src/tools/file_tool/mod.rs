@@ -2,6 +2,7 @@
 //!
 //! 提供文件读取、写入、编辑功能
 
+use crate::engine::context_ledger::{record_file_read, FileReadLedgerInput};
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -987,7 +988,9 @@ impl Tool for FileReadTool {
         // 文件缓存优化：如果文件在本会话中已读过且未变更，返回短信提示。
         // 但 offset/limit 读取是新的局部证据，不能被上一次全文读取短路掉。
         if let Some(ref cache) = context.file_cache {
-            if !targeted_read && cache.is_unchanged_since_last_read(&path) {
+            if !targeted_read
+                && cache.is_unchanged_since_last_read_for_session(&context.session_id, &path)
+            {
                 let lines_count = content.lines().count();
                 return ToolResult::success_with_data(
                     format!(
@@ -1020,7 +1023,7 @@ impl Tool for FileReadTool {
                     }),
                 );
             }
-            cache.mark_read(&path);
+            cache.mark_read_for_session(&context.session_id, &path);
         }
 
         let mtime = std::fs::metadata(&path)
@@ -1092,6 +1095,27 @@ impl Tool for FileReadTool {
         } else {
             String::new()
         };
+        let content_hash = content_hash_hex(content);
+        let selected_content_hash = content_hash_hex(&result);
+        if let Some(store) = context.session_store.as_ref() {
+            record_file_read(
+                store,
+                &FileReadLedgerInput {
+                    session_id: &context.session_id,
+                    path: path_str,
+                    resolved_path: &identity.resolved_path,
+                    content_hash: &content_hash,
+                    size_bytes: snapshot.byte_len as u64,
+                    total_lines: lines.len(),
+                    displayed_lines: selected_lines.len(),
+                    line_start: (line_start_display > 0).then_some(line_start_display),
+                    line_end: (line_end_display > 0).then_some(line_end_display),
+                    targeted_read,
+                    truncated,
+                    mtime: Some(mtime),
+                },
+            );
+        }
 
         ToolResult::success_with_data(
             format!("{}{}", formatted, truncated_info),
@@ -1108,8 +1132,8 @@ impl Tool for FileReadTool {
                 "targeted_read": targeted_read,
                 "read_coverage": if targeted_read { "partial" } else { "full" },
                 "size_bytes": snapshot.byte_len,
-                "content_hash": content_hash_hex(content),
-                "selected_content_hash": content_hash_hex(&result),
+                "content_hash": content_hash,
+                "selected_content_hash": selected_content_hash,
                 "text_format": text_format_json(&snapshot),
                 "display_format": if lines.len() > 1 { "line_numbered_content" } else { "raw_content" },
                 "content_format": {
@@ -3622,6 +3646,73 @@ mod tests {
         assert!(broad_repeat
             .content
             .contains("File unchanged since last read"));
+    }
+
+    #[tokio::test]
+    async fn file_read_unchanged_cache_is_scoped_to_session() {
+        let read_tool = FileReadTool;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("README.md");
+        tokio::fs::write(&path, "# Project\n\nfull content")
+            .await
+            .unwrap();
+
+        let cache = std::sync::Arc::new(crate::tools::file_cache::FileStateCache::new());
+        let session_a = ToolContext::new(".", "session-a").with_file_cache(cache.clone());
+        let session_b = ToolContext::new(".", "session-b").with_file_cache(cache);
+        let params = json!({ "path": path.to_string_lossy().to_string() });
+
+        let first = read_tool.execute(params.clone(), session_a.clone()).await;
+        assert!(first.success, "first read failed: {:?}", first.error);
+        assert!(first.content.contains("full content"));
+
+        let same_session = read_tool.execute(params.clone(), session_a).await;
+        assert!(same_session.success);
+        assert!(same_session
+            .content
+            .contains("File unchanged since last read"));
+
+        let other_session = read_tool.execute(params, session_b).await;
+        assert!(other_session.success);
+        assert!(other_session.content.contains("full content"));
+        assert!(!other_session
+            .content
+            .contains("File unchanged since last read"));
+    }
+
+    #[tokio::test]
+    async fn file_read_persists_context_ledger_fact() {
+        let read_tool = FileReadTool;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("README.md");
+        tokio::fs::write(&path, "# Project\n\nfull content")
+            .await
+            .unwrap();
+
+        let store = std::sync::Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store
+            .create_session("session-ledger", "Ledger", "model")
+            .unwrap();
+        let context = ToolContext::new(".", "session-ledger").with_session_store(store.clone());
+
+        let result = read_tool
+            .execute(
+                json!({ "path": path.to_string_lossy().to_string() }),
+                context,
+            )
+            .await;
+        assert!(result.success, "read failed: {:?}", result.error);
+
+        let event = store
+            .latest_file_read_context_event("session-ledger", &path.to_string_lossy())
+            .unwrap()
+            .expect("file read ledger event");
+        assert_eq!(
+            event.kind,
+            crate::engine::context_ledger::CONTEXT_LEDGER_FILE_READ_KIND
+        );
+        assert_eq!(event.payload["total_lines"], 3);
+        assert_eq!(event.payload["targeted_read"], false);
     }
 
     #[tokio::test]

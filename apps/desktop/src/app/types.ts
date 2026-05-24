@@ -1,4 +1,8 @@
-import { DesktopRunContext, DesktopRunEvent } from "../runtime/desktopApi";
+import {
+  DesktopRunContext,
+  DesktopRunEvent,
+  DesktopRuntimeDiagnostic,
+} from "../runtime/desktopApi";
 
 export type TranscriptItem =
   | { id: string; role: "user"; text: string }
@@ -16,7 +20,7 @@ export type TranscriptItem =
       traceId?: string;
     };
 
-export type TimelineKind = "run" | "tool" | "permission" | "usage" | "error";
+export type TimelineKind = "run" | "tool" | "permission" | "usage" | "error" | "compact";
 
 export type TimelineSummary =
   | {
@@ -80,10 +84,11 @@ export type TimelineStatus =
 
 export type TraceItem = {
   id: string;
-  kind: "run" | "tool" | "permission" | "usage" | "error";
+  kind: "run" | "tool" | "permission" | "usage" | "runtime" | "error";
   title: string;
   detail?: string;
   contexts?: DesktopRunContext[];
+  runtime?: DesktopRuntimeDiagnostic;
 };
 
 export type PermissionRequest = Extract<DesktopRunEvent, { type: "permission_request" }>;

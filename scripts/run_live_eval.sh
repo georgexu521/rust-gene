@@ -1310,6 +1310,10 @@ PY
 import json
 import pathlib
 import sys
+from scripts.live_eval_report_parser import (
+    normalized_runtime_spine_assertions,
+    runtime_spine_metrics_from_events,
+)
 
 output_path = pathlib.Path(sys.argv[1])
 events_path = pathlib.Path(sys.argv[2])
@@ -1515,6 +1519,11 @@ if behavior_assertions:
         behavior_assertion_status = "missing"
 else:
     behavior_assertion_status = "none"
+runtime_spine_assertions = normalized_runtime_spine_assertions(sample)
+runtime_spine = runtime_spine_metrics_from_events(
+    events,
+    assertions=runtime_spine_assertions,
+)
 code_change_types = {"bug_fix", "feature", "refactor", "ux"}
 current_head_without_fixture = (
     task_type in code_change_types
@@ -1527,6 +1536,16 @@ stale_or_already_satisfied = eval_intent == "stale_or_already_satisfied"
 print(f"eval_intent: {eval_intent}")
 print(f"behavior_assertions: {','.join(behavior_assertions) if behavior_assertions else 'none'}")
 print(f"behavior_assertion_status: {behavior_assertion_status}")
+print(f"runtime_spine: {runtime_spine['runtime_spine']}")
+print(f"runtime_spine_detail: {runtime_spine['runtime_spine_detail']}")
+print(f"runtime_spine_trace_present: {runtime_spine['runtime_spine_trace_present']}")
+print(f"runtime_spine_phase_coverage: {runtime_spine['runtime_spine_phase_coverage']}")
+print(f"runtime_spine_observed_phases: {runtime_spine['runtime_spine_observed_phases']}")
+print(f"runtime_spine_assertions: {runtime_spine['runtime_spine_assertions']}")
+print(f"runtime_spine_status: {runtime_spine['runtime_spine_status']}")
+print(f"runtime_spine_missing: {runtime_spine['runtime_spine_missing']}")
+print(f"verification_proof_status: {runtime_spine['verification_proof_status']}")
+print(f"verification_proof_summary: {runtime_spine['verification_proof_summary']}")
 if not output.strip():
     print("warning: empty_agent_output")
     failures.append("empty_agent_output")
@@ -1587,6 +1606,9 @@ if behavior_assertion_status == "failed":
 elif behavior_assertion_status == "missing":
     print("warning: behavior_assertions_missing_checks")
     failures.append("behavior_assertions_missing_checks")
+if runtime_spine["runtime_spine_status"] in {"failed", "missing"}:
+    print("warning: runtime_spine_assertions_not_passing")
+    failures.append("runtime_spine_assertions_not_passing")
 if closeout_status in {"failed", "not_verified", "blocked", "missing"}:
     print("warning: closeout_not_successful")
     failures.append("closeout_not_successful")
@@ -1650,6 +1672,8 @@ def infer_failure_owner():
         return "eval_harness"
     if "empty_agent_output" in failures or "missing_trace_summary" in failures:
         return "agent_flow"
+    if "runtime_spine_assertions_not_passing" in failures:
+        return "agent_flow"
     if "tool_run_without_closeout" in failures:
         return "agent_flow"
     if (
@@ -1706,6 +1730,10 @@ PY
 import json
 import pathlib
 import sys
+from scripts.live_eval_report_parser import (
+    normalized_runtime_spine_assertions,
+    runtime_spine_metrics_from_events,
+)
 
 events_path = pathlib.Path(sys.argv[1])
 sample_json_path = pathlib.Path(sys.argv[2])
@@ -1730,6 +1758,11 @@ acceptance_config = sample.get("acceptance") or {}
 required_commands = acceptance_config.get("required_commands") or []
 harness_commands = acceptance_config.get("harness_commands") or []
 validation_commands = list(required_commands) + list(harness_commands)
+runtime_spine_assertions = normalized_runtime_spine_assertions(sample)
+runtime_spine = runtime_spine_metrics_from_events(
+    events,
+    assertions=runtime_spine_assertions,
+)
 
 def trace_count(label):
     return sum(1 for item in trace_types if item == label)
@@ -1831,6 +1864,14 @@ for key, value in signals.items():
 print(f"active_specialty_signals: {active_count}/{len(signals)}")
 print(f"workflow_contract_activation: entry={entry_label} repair={repair_label}")
 print(f"workflow_contract_events: {len(workflow_contract_events)}")
+print(f"runtime_spine: {runtime_spine['runtime_spine']}")
+print(f"runtime_spine_detail: {runtime_spine['runtime_spine_detail']}")
+print(f"runtime_spine_phase_coverage: {runtime_spine['runtime_spine_phase_coverage']}")
+print(f"runtime_spine_observed_phases: {runtime_spine['runtime_spine_observed_phases']}")
+print(f"runtime_spine_assertions: {runtime_spine['runtime_spine_assertions']}")
+print(f"runtime_spine_status: {runtime_spine['runtime_spine_status']}")
+print(f"runtime_spine_missing: {runtime_spine['runtime_spine_missing']}")
+print(f"verification_proof_status: {runtime_spine['verification_proof_status']}")
 risk_entry = entry_risk_signal.get("level", "missing") if entry_risk_signal else "missing"
 risk_runtime = runtime_risk_signal.get("level", "none") if runtime_risk_signal else "none"
 print(f"risk_signal: entry={risk_entry} runtime={risk_runtime}")
@@ -1992,6 +2033,11 @@ memory_behavior_assertion_tasks = sum(
 skill_behavior_assertion_tasks = sum(
     1 for row in rows if "skill" in row["behavior_assertions"].lower()
 )
+runtime_spine_assertion_tasks = sum(1 for row in rows if row["runtime_spine_assertions"] != "none")
+runtime_spine_assertions_passed = sum(1 for row in rows if row["runtime_spine_status"] == "passed")
+runtime_spine_assertions_failed = sum(1 for row in rows if row["runtime_spine_status"] in {"failed", "missing"})
+runtime_spine_full_coverage = sum(1 for row in rows if row["runtime_spine_phase_coverage"] == "7/7")
+runtime_spine_trace_present = sum(1 for row in rows if row["runtime_spine_trace_present"] == "true")
 coding_rows = [row for row in rows if row["boundary"] == "agent-run"]
 coding_task_count = len(coding_rows)
 coding_passed = sum(1 for row in coding_rows if row["coding_gauntlet_status"] == "passed")
@@ -2031,6 +2077,11 @@ lines = [
     f"- Skill promotion-evidence tasks: `{skill_promotion_tasks}`",
     f"- Behavior assertion tasks: `{behavior_assertion_tasks}`",
     f"- Behavior assertions passed: `{behavior_assertion_passed}`",
+    f"- Runtime-spine assertion tasks: `{runtime_spine_assertion_tasks}`",
+    f"- Runtime-spine assertions passed: `{runtime_spine_assertions_passed}`",
+    f"- Runtime-spine assertions failed: `{runtime_spine_assertions_failed}`",
+    f"- Runtime-spine full coverage tasks: `{runtime_spine_full_coverage}`",
+    f"- Runtime-spine trace-present tasks: `{runtime_spine_trace_present}`",
     f"- Coding gauntlet agent-run tasks: `{coding_task_count}`",
     f"- Coding gauntlet passes: `{coding_passed}`",
     f"- Coding gauntlet failures: `{coding_failed}`",
@@ -2098,6 +2149,16 @@ lines.extend([
     f"| memory_behavior_assertion_tasks | {memory_behavior_assertion_tasks} | Behavior assertions covering memory semantics rather than only memory activity signals. |",
     f"| skill_behavior_assertion_tasks | {skill_behavior_assertion_tasks} | Behavior assertions covering skill semantics rather than only skill activity signals. |",
     "",
+    "## Runtime Spine Evidence",
+    "",
+    "| dimension | count | meaning |",
+    "|-----------|-------|---------|",
+    f"| runtime_spine_assertion_tasks | {runtime_spine_assertion_tasks} | Tasks with explicit runtime-spine assertions in the live-eval sample or report. |",
+    f"| runtime_spine_assertions_passed | {runtime_spine_assertions_passed} | Runtime-spine assertion tasks whose required trace/control-loop signals were present. |",
+    f"| runtime_spine_assertions_failed | {runtime_spine_assertions_failed} | Runtime-spine assertion tasks missing required trace/control-loop signals. |",
+    f"| runtime_spine_full_coverage_tasks | {runtime_spine_full_coverage} | Tasks whose trace touched all runtime-spine phases. |",
+    f"| runtime_spine_trace_present_tasks | {runtime_spine_trace_present} | Tasks with a trace summary available to the report parser. |",
+    "",
     "## Outcome Classes",
     "",
     "| class | count | meaning |",
@@ -2108,37 +2169,37 @@ lines.extend([
     "",
     "## Coding Gauntlet Evidence",
     "",
-    "| task | gauntlet_status | first_pass_signal | failure_class | coding | required | closeout | contract | risk | first_write | diff | warnings |",
-    "|------|-----------------|-------------------|---------------|--------|----------|----------|----------|------|-------------|------|----------|",
+    "| task | gauntlet_status | first_pass_signal | failure_class | coding | required | closeout | spine | contract | risk | first_write | diff | warnings |",
+    "|------|-----------------|-------------------|---------------|--------|----------|----------|-------|----------|------|-------------|------|----------|",
 ])
 
 if coding_rows:
     for row in coding_rows:
         lines.append(
-            "| {task} | {coding_gauntlet_status} | {first_pass_signal} | {failure_class} | {coding} | {required} | {closeout} | {workflow_contract_activation} | {risk_signal} | {first_write} | {diff} | {warnings} |".format(
+            "| {task} | {coding_gauntlet_status} | {first_pass_signal} | {failure_class} | {coding} | {required} | {closeout} | {runtime_spine} | {workflow_contract_activation} | {risk_signal} | {first_write} | {diff} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | not_applicable | unknown | none | tools=0, tool_records=0, validations=0, repair=0, files=0 | missing | missing | missing | missing | missing | no | none |")
+    lines.append("| none | not_applicable | unknown | none | tools=0, tool_records=0, validations=0, repair=0, files=0 | missing | missing | coverage=0/7, status=none, missing=none | missing | missing | missing | no | none |")
 
 lines.extend([
     "",
     "## Task Matrix",
     "",
-    "| task | status | intent | owner | failure_class | required | plan_quality | tool_boundary | verification_status | closeout | runtime_diet | contract | risk | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |",
-    "|------|--------|--------|-------|---------------|----------|--------------|---------------|---------------------|----------|--------------|----------|------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|",
+    "| task | status | intent | owner | failure_class | required | plan_quality | tool_boundary | verification_status | closeout | runtime_spine | runtime_diet | contract | risk | behavior_assertions | behavior_status | triggers | first_write | diff | memory | skill | warnings |",
+    "|------|--------|--------|-------|---------------|----------|--------------|---------------|---------------------|----------|---------------|--------------|----------|------|---------------------|-----------------|----------|-------------|------|--------|-------|----------|",
 ])
 
 if rows:
     for row in rows:
         lines.append(
-            "| {task} | {status} | {intent} | {owner} | {failure_class} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_diet} | {workflow_contract_activation} | {risk_signal} | {behavior_assertions} | {behavior_assertion_status} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
+            "| {task} | {status} | {intent} | {owner} | {failure_class} | {required} | {plan} | {boundary} | {verification} | {closeout} | {runtime_spine} | {runtime_diet} | {workflow_contract_activation} | {risk_signal} | {behavior_assertions} | {behavior_assertion_status} | {triggers} | {first_write} | {diff} | {memory} | {skill} | {warnings} |".format(
                 **{key: md_cell(value) for key, value in row.items()}
             )
         )
 else:
-    lines.append("| none | missing | missing | missing | none | missing | none | none | unknown | missing | missing | none | missing | none | none | missing | none | no | none | none | none |")
+    lines.append("| none | missing | missing | missing | none | missing | none | none | unknown | missing | coverage=0/7, status=none, missing=none | missing | none | missing | none | none | missing | none | no | none | none | none |")
 
 lines.extend([
     "",
@@ -2151,6 +2212,7 @@ lines.extend([
     "- `real_code_change_passed` requires an agent-run report with a non-empty diff; plan-only success is tracked separately.",
     "- `memory` and `skill` summarize evidence signals; they do not by themselves mean the task succeeded.",
     "- `behavior_assertions` are explicit sample-level checks; memory/skill behavior assertions are stronger evidence than activity signals alone.",
+    "- `runtime_spine` summarizes trace/control-loop coverage and explicit runtime-spine assertions.",
 ])
 
 summary_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

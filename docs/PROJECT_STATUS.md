@@ -1,12 +1,15 @@
 # Project Status
 
-Last updated: 2026-05-21
+Last updated: 2026-05-24
 
 ## Summary
 
 Priority Agent is now an interactive coding CLI with a stateful runtime spine:
 intent routing, turn traces, session goals, memory, permissions, recovery plans,
 MCP health, CLI observability panels, and required validation closeout.
+The active runtime work is reducing prompt-driven over-control by moving agent
+design rules into typed context zones, task state, tool/permission gates,
+evidence-backed verification, and trace diagnostics.
 
 Product direction: Priority Agent should stay narrow, deep, personal, and
 verifiable rather than chasing broad generic-agent parity. The durable goal is
@@ -19,6 +22,26 @@ Current stage:
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.
+- `docs/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md` is the current
+  implementation record for the agent-design notes review. The active slice has
+  landed five-zone context assembly, `AgentTaskState`, phase-aware tool
+  exposure, action scoring, verification proof semantics, stop checks, expanded
+  context-ledger evidence, state-backed goal drift, direct-task regressions,
+  edit/repair snapshots, a control-loop diagnostic in `/trace`, and a
+  cross-module runtime-spine behavior regression covering context-zone order,
+  phase transition, action scoring, stop check, and proof semantics together.
+  The live-eval/reporting harness now consumes those runtime-spine signals:
+  reports expose phase coverage, required trace-event assertions, proof status,
+  missing runtime-spine assertions, and aggregate pass/fail coverage, with
+  representative core live tasks carrying explicit `runtime_spine_assertions`.
+  The desktop app now receives the same runtime spine through a stable
+  `runtime_diagnostic` run event and renders task state, verification proof,
+  and control-loop coverage in the run summary and trace drawer without making
+  the UI part of the core algorithm. The light/full routing gap now has a
+  runtime-owned scoring surface as well: `TaskModeScore` records complexity,
+  risk, uncertainty, tool need, and user impact, and `LightweightPlan` gives
+  tool-assisted light turns bounded scope/observe/respond steps without
+  invoking the heavy workflow contract.
 - `docs/NEXT_AGENT_CORE_CODING_QUALITY_PLAN_2026-05-11.md` is complete for its
   current Phase 1-4 scope: main-loop splitting reached the first line-count
   target, terminal and file-quality contracts are in place, and the real
@@ -179,7 +202,8 @@ durable tool-record evidence, including persisted current-session recent-trace
 replay merged with in-memory traces, plus workflow-contract auto targeting and
 activation trace/report surfacing, plus
 risk-signal controller targeting for high-risk runtime/provider/memory/tool/
-permission/config/schema/validation surfaces:
+permission/config/schema/validation surfaces, plus runtime-spine
+live-eval/report assertion surfacing:
 
 ```text
 1468 passed; 0 failed
@@ -242,6 +266,23 @@ Latest risk-signal controller checkpoint:
   surfaces before editing
 - live-eval reports now include `risk_signal: entry=<level> runtime=<level>`
   and a `risk` summary column
+
+Latest agent-runtime alignment checkpoint:
+
+```text
+2026-05-24 combined runtime-spine cleanup validation:
+cargo test -q -- --test-threads=1
+cargo clippy --all-features -- -D warnings
+cargo check -q
+cargo check --features experimental-api-server -q
+cargo fmt --check
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+corepack pnpm --dir apps/desktop exec tsc --noEmit
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+git diff --check
+status=passed
+```
 targeted closeout-evidence rerun:
 - terminal-closeout-20260517-191432: status=ok, failure_owner=none,
   required_command_status=ok, closeout_status=passed,
@@ -633,6 +674,15 @@ current passing run with a real code diff.
 - Bash command failures now add a concrete compatibility hint for macOS bash
   3.x associative-array errors (`declare -A`), steering repair toward portable
   shell, awk/temp-file, or existing Python helper paths.
+- The current agent-runtime alignment slice adds a typed five-zone context
+  assembly plan, a compact `AgentTaskState` recordbook, phase-aware programming
+  tool exposure, runtime-owned action scoring, proof-backed closeout semantics,
+  state-backed stop checks, edit/diff/validation/user-confirmation ledger
+  evidence, task-state goal/scope drift checks, direct-task over-control
+  regressions, bounded edit/repair snapshots, and a `/trace` control-loop
+  diagnostic map. It also adds a cross-module runtime-spine behavior regression
+  so context-zone order, phase transitions, action scoring, no-progress stop
+  checks, and verification proof semantics are covered together.
 
 ## Product Surface
 
@@ -661,6 +711,7 @@ Canonical current docs:
 - `docs/CLAUDE_CODE_ALIGNMENT_PLAN.md`
 - `docs/REMAINING_CLOSURE_PLAN.md`
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`
+- `docs/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md`
 - `docs/NEXT_DEVELOPMENT_PLAN_2026-05-09.md`
 - `docs/AGENT_TESTING_MATRIX_2026-05-08.md`
 - `AGENTS.md`
@@ -689,7 +740,8 @@ implementation batch is now landed. The current plan is
 `docs/NEXT_DEVELOPMENT_PLAN_2026-05-09.md`: treat Priority Agent as a reliable
 LLM execution environment, move hard constraints into runtime/tool contracts,
 and measure progress with current live-eval evidence instead of prompt length.
-The remaining work is now product maturity, not missing foundations:
+The remaining work is now product maturity and behavior coverage, not missing
+foundations:
 
 1. Continue measuring broad code-change first-pass success and repair count
    against the replay matrix and live eval tasks.
@@ -718,6 +770,10 @@ The remaining work is now product maturity, not missing foundations:
 7. Harden ecosystem integrations: MCP server mode, plugins, remote workflows,
    Discord/Slack adapters if they become product priorities.
 8. Keep docs synchronized with tests and current behavior.
+9. Run real desktop dogfood cases against the new runtime spine and compare
+   task state, proof state, trace coverage, and visible desktop evidence.
+10. Tune `TaskModeScore`, `LightweightPlan`, and runtime-spine assertions from
+    those real runs instead of adding more broad skeleton code.
 
 Latest maintenance note:
 

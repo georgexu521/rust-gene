@@ -4,7 +4,10 @@ use crate::engine::human_review::PermissionReviewDecision;
 use crate::services::api::ToolCall;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+
+const DEFAULT_APPROVAL_TIMEOUT_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct ToolApprovalRequest {
@@ -103,28 +106,44 @@ type PendingApproval = Option<(
 /// 工具授权通道（类似 PlanApprovalChannel）
 pub struct ToolApprovalChannel {
     pending: Arc<Mutex<PendingApproval>>,
+    timeout: Duration,
 }
 
 impl ToolApprovalChannel {
     pub fn new() -> Self {
         Self {
             pending: Arc::new(Mutex::new(None)),
+            timeout: approval_timeout(),
         }
     }
 
-    /// 提交授权请求并等待响应（60 秒超时）
+    /// 提交授权请求并等待响应。
     pub async fn submit(
         &self,
         request: ToolApprovalRequest,
     ) -> anyhow::Result<ToolApprovalResponse> {
+        let request_id = request.tool_call.id.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
             *pending = Some((request, tx));
         }
-        match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+        match tokio::time::timeout(self.timeout, rx).await {
             Ok(result) => result.map_err(|_| anyhow::anyhow!("Approval channel closed")),
-            Err(_) => Err(anyhow::anyhow!("Tool approval timed out after 60 seconds")),
+            Err(_) => {
+                let mut pending = self.pending.lock().await;
+                if pending
+                    .as_ref()
+                    .map(|(pending_request, _)| pending_request.tool_call.id == request_id)
+                    .unwrap_or(false)
+                {
+                    pending.take();
+                }
+                Err(anyhow::anyhow!(
+                    "Tool approval timed out after {} seconds",
+                    self.timeout.as_secs()
+                ))
+            }
         }
     }
 
@@ -149,4 +168,13 @@ impl Default for ToolApprovalChannel {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn approval_timeout() -> Duration {
+    let secs = std::env::var("PRIORITY_AGENT_APPROVAL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|value| value.clamp(30, 1800))
+        .unwrap_or(DEFAULT_APPROVAL_TIMEOUT_SECS);
+    Duration::from_secs(secs)
 }

@@ -38,6 +38,18 @@ expected_behavior:
   - The answer does not invent file size, creation time, or content counts.
   - No code or fixture files are changed.
 
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+  verification_proof: true
+
 core_quality:
   group: core-coding-quality
   failure_owner_hints:

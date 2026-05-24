@@ -4,6 +4,9 @@
 //! data. User-facing summaries and workflow closeout can then cite evidence
 //! without mixing raw tool metadata into model-visible text.
 
+use crate::engine::verification_proof::{
+    VerificationProof, VerificationProofRequest, VerificationProofStatus,
+};
 use crate::services::api::ToolCall;
 use crate::tools::ToolResult;
 use serde::{Deserialize, Serialize};
@@ -308,6 +311,18 @@ struct ValidationRollup {
     recovered_failed: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequiredValidationRollup {
+    total: usize,
+    passed: usize,
+    failed: usize,
+    missing: usize,
+    recovered_failed: usize,
+    passed_commands: Vec<String>,
+    failed_commands: Vec<String>,
+    missing_commands: Vec<String>,
+}
+
 pub async fn changed_files_diff_evidence(
     working_dir: &Path,
     changed_files: &[PathBuf],
@@ -451,6 +466,153 @@ impl EvidenceLedger {
         &self,
         required_commands: &[String],
     ) -> Option<String> {
+        let rollup = self.required_validation_rollup(required_commands)?;
+        if rollup.missing > 0 {
+            return None;
+        }
+
+        if rollup.failed > 0 {
+            return Some(format!("failed:{}/{}", rollup.failed, rollup.total));
+        }
+        let mut label = format!("passed:{}/{}", rollup.passed, rollup.total);
+        if rollup.recovered_failed > 0 {
+            label.push_str(&format!(" recovered_failed:{}", rollup.recovered_failed));
+        }
+        Some(label)
+    }
+
+    pub fn verification_proof(&self, request: VerificationProofRequest<'_>) -> VerificationProof {
+        use crate::engine::task_context::VerificationStatus;
+
+        let required_rollup = self.required_validation_rollup(request.required_commands);
+        let validation_rollup = self.current_validation_rollup();
+        let mut proof = if request.task_verification_status == VerificationStatus::Blocked {
+            VerificationProof::new(VerificationProofStatus::Blocked, "verification is blocked")
+        } else if request.task_verification_status == VerificationStatus::UserDeferred {
+            VerificationProof::new(
+                VerificationProofStatus::UserDeferred,
+                "user deferred verification",
+            )
+        } else if request.task_verification_status == VerificationStatus::Unavailable {
+            VerificationProof::new(
+                VerificationProofStatus::Unavailable,
+                "verification evidence is unavailable",
+            )
+        } else if let Some(rollup) = required_rollup.as_ref() {
+            if rollup.missing > 0 {
+                VerificationProof::new(
+                    VerificationProofStatus::NotRun,
+                    format!(
+                        "required validation missing {}/{} commands",
+                        rollup.missing, rollup.total
+                    ),
+                )
+            } else if rollup.failed > 0 {
+                VerificationProof::new(
+                    VerificationProofStatus::Failed,
+                    format!(
+                        "required validation failed {}/{} commands",
+                        rollup.failed, rollup.total
+                    ),
+                )
+            } else {
+                VerificationProof::new(
+                    VerificationProofStatus::Verified,
+                    format!(
+                        "required validation passed {}/{} commands",
+                        rollup.passed, rollup.total
+                    ),
+                )
+            }
+        } else if !request.required_commands.is_empty() {
+            VerificationProof::new(
+                VerificationProofStatus::NotRun,
+                "required validation commands were not recognized",
+            )
+        } else if let Some(rollup) = validation_rollup {
+            if rollup.current_failed > 0 {
+                VerificationProof::new(
+                    VerificationProofStatus::Failed,
+                    format!(
+                        "validation failed {}/{} current checks",
+                        rollup.current_failed, rollup.current_total
+                    ),
+                )
+            } else if rollup.current_passed > 0 {
+                let mut proof = VerificationProof::new(
+                    VerificationProofStatus::Verified,
+                    format!(
+                        "validation passed {}/{} current checks",
+                        rollup.current_passed, rollup.current_total
+                    ),
+                );
+                proof.recovered_failed = rollup.recovered_failed;
+                proof
+            } else if request.requires_validation {
+                VerificationProof::new(
+                    VerificationProofStatus::NotRun,
+                    "validation required but no passing evidence was recorded",
+                )
+            } else {
+                VerificationProof::new(
+                    VerificationProofStatus::NotApplicable,
+                    "validation not applicable to this task",
+                )
+            }
+        } else {
+            match request.task_verification_status {
+                VerificationStatus::Verified => VerificationProof::new(
+                    VerificationProofStatus::Unavailable,
+                    "task state says verified, but ledger has no verification evidence",
+                ),
+                VerificationStatus::Failed => VerificationProof::new(
+                    VerificationProofStatus::Failed,
+                    "task state reports failed verification without ledger evidence",
+                ),
+                VerificationStatus::NotRequired => VerificationProof::new(
+                    VerificationProofStatus::NotApplicable,
+                    "validation not required for this task",
+                ),
+                VerificationStatus::Pending if request.requires_validation => {
+                    VerificationProof::new(
+                        VerificationProofStatus::NotRun,
+                        "validation required but no evidence was recorded",
+                    )
+                }
+                VerificationStatus::Pending => VerificationProof::new(
+                    VerificationProofStatus::NotApplicable,
+                    "no validation requirement was recorded",
+                ),
+                VerificationStatus::Blocked
+                | VerificationStatus::UserDeferred
+                | VerificationStatus::Unavailable => unreachable!("handled above"),
+            }
+        };
+
+        if let Some(rollup) = required_rollup {
+            proof.required_total = rollup.total;
+            proof.required_passed = rollup.passed;
+            proof.required_failed = rollup.failed;
+            proof.required_missing = rollup.missing;
+            proof.recovered_failed = rollup.recovered_failed;
+            proof.passed_commands = rollup.passed_commands;
+            proof.failed_commands = rollup.failed_commands;
+            proof.missing_required_commands = rollup.missing_commands;
+        }
+        if let Some(rollup) = validation_rollup {
+            proof.validation_total = rollup.current_total;
+            proof.validation_passed = rollup.current_passed;
+            proof.validation_failed = rollup.current_failed;
+            proof.recovered_failed = proof.recovered_failed.max(rollup.recovered_failed);
+        }
+        proof.evidence_items = self.validation_facts.len();
+        proof
+    }
+
+    fn required_validation_rollup(
+        &self,
+        required_commands: &[String],
+    ) -> Option<RequiredValidationRollup> {
         let required = required_commands
             .iter()
             .map(|command| normalize_command_identity(command))
@@ -487,21 +649,15 @@ impl EvidenceLedger {
             }
         }
 
-        if required
-            .iter()
-            .any(|command| !current.contains_key(command))
-        {
-            return None;
-        }
-
-        let current_total = required.len();
-        let current_passed = required
-            .iter()
-            .filter(|command| current.get(*command).copied().unwrap_or(false))
-            .count();
-        let current_failed = current_total.saturating_sub(current_passed);
-        if current_failed > 0 {
-            return Some(format!("failed:{current_failed}/{current_total}"));
+        let mut passed_commands = Vec::new();
+        let mut failed_commands = Vec::new();
+        let mut missing_commands = Vec::new();
+        for command in &required {
+            match current.get(command).copied() {
+                Some(true) => passed_commands.push(command.clone()),
+                Some(false) => failed_commands.push(command.clone()),
+                None => missing_commands.push(command.clone()),
+            }
         }
         let recovered_failed = required
             .iter()
@@ -510,11 +666,17 @@ impl EvidenceLedger {
                     && current.get(*command).copied().unwrap_or(false)
             })
             .count();
-        let mut label = format!("passed:{current_passed}/{current_total}");
-        if recovered_failed > 0 {
-            label.push_str(&format!(" recovered_failed:{recovered_failed}"));
-        }
-        Some(label)
+
+        Some(RequiredValidationRollup {
+            total: required.len(),
+            passed: passed_commands.len(),
+            failed: failed_commands.len(),
+            missing: missing_commands.len(),
+            recovered_failed,
+            passed_commands,
+            failed_commands,
+            missing_commands,
+        })
     }
 
     fn current_validation_rollup(&self) -> Option<ValidationRollup> {
@@ -2410,6 +2572,50 @@ mod tests {
                 .as_deref(),
             Some("passed:2/2")
         );
+    }
+
+    #[test]
+    fn verification_proof_reports_missing_required_commands_as_not_run() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call("bash", serde_json::json!({"command": "cargo test -q"})),
+            &ToolResult::success("test result: ok"),
+        );
+        let required = vec!["cargo test -q".to_string(), "cargo fmt --check".to_string()];
+
+        let proof = ledger.verification_proof(VerificationProofRequest {
+            required_commands: &required,
+            requires_validation: true,
+            task_verification_status: crate::engine::task_context::VerificationStatus::Pending,
+        });
+
+        assert_eq!(proof.status, VerificationProofStatus::NotRun);
+        assert_eq!(proof.required_total, 2);
+        assert_eq!(proof.required_passed, 1);
+        assert_eq!(proof.required_missing, 1);
+        assert_eq!(
+            proof.missing_required_commands,
+            vec!["cargo fmt --check".to_string()]
+        );
+        assert!(proof
+            .validation_line()
+            .contains("verification proof: not_run"));
+    }
+
+    #[test]
+    fn verification_proof_does_not_trust_verified_task_state_without_ledger_evidence() {
+        let ledger = EvidenceLedger::new();
+
+        let proof = ledger.verification_proof(VerificationProofRequest {
+            required_commands: &[],
+            requires_validation: true,
+            task_verification_status: crate::engine::task_context::VerificationStatus::Verified,
+        });
+
+        assert_eq!(proof.status, VerificationProofStatus::Unavailable);
+        assert!(proof
+            .summary
+            .contains("ledger has no verification evidence"));
     }
 
     #[test]

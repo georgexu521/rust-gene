@@ -2,10 +2,13 @@
 //!
 //! 提供与 Claude Code 类似的流式响应体验
 
+use crate::engine::context_collapse::{CompactionDecision, ContextCompactionStrategy};
+use crate::engine::context_compressor::CompactionAttemptInput;
 use crate::services::api::{LlmProvider, Message};
 use crate::tools::ToolRegistry;
 use anyhow::Result;
 use futures::Stream;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -56,6 +59,8 @@ pub enum StreamEvent {
         reasoning_tokens: Option<u32>,
         cached_tokens: Option<u32>,
     },
+    /// Runtime diagnostic snapshot for clients that render run state.
+    RuntimeDiagnostic { diagnostic: serde_json::Value },
     /// 完成
     Complete,
     /// 输出被截断（达到 max_tokens 限制）
@@ -72,6 +77,46 @@ pub enum StreamEvent {
         #[allow(dead_code)]
         review: Option<Box<crate::engine::human_review::HumanReviewAuditRecord>>,
     },
+}
+
+pub async fn emit_text_progressively(tx: &mpsc::Sender<StreamEvent>, text: String) {
+    let chunks = progressive_text_chunks(&text);
+    let chunk_count = chunks.len();
+    for chunk in chunks {
+        if tx.send(StreamEvent::TextChunk(chunk)).await.is_err() {
+            break;
+        }
+        if chunk_count > 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+}
+
+fn progressive_text_chunks(text: &str) -> Vec<String> {
+    if text.chars().count() <= 96 {
+        return vec![text.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    for ch in text.chars() {
+        current.push(ch);
+        current_chars += 1;
+        let natural_boundary = ch.is_whitespace()
+            || matches!(
+                ch,
+                '.' | ',' | ';' | ':' | '!' | '?' | '。' | '，' | '；' | '：' | '！' | '？'
+            );
+        if current_chars >= 96 || (current_chars >= 32 && natural_boundary) {
+            chunks.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +155,8 @@ pub struct StreamingQueryEngine {
     lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     /// Worktree 管理器（可选，用于 worktree_tool 等）
     worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
+    /// Optional working directory override for desktop/worktree runs.
+    working_dir_override: Option<PathBuf>,
     /// 记忆管理器（可选，用于预取和同步）
     memory_manager: Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>,
     /// 对话历史（多轮对话支持）
@@ -146,10 +193,13 @@ impl StreamingQueryEngine {
         model: impl Into<String>,
     ) -> Self {
         let provider_clone = provider.clone();
+        let model = model.into();
+        let profile =
+            crate::engine::model_context::ModelContextProfile::detect(provider.base_url(), &model);
         Self {
             provider: Arc::new(RwLock::new(provider)),
             tool_registry,
-            model: Arc::new(RwLock::new(model.into())),
+            model: Arc::new(RwLock::new(model.clone())),
             system_prompt: super::default_system_prompt(),
             max_iterations: 10,
             agent_manager: None,
@@ -157,11 +207,14 @@ impl StreamingQueryEngine {
             mcp_manager: None,
             lsp_manager: None,
             worktree_manager: None,
+            working_dir_override: None,
             memory_manager: None,
             conversation_history: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             compressor: Arc::new(tokio::sync::Mutex::new(
-                crate::engine::context_compressor::ContextCompressor::new(128_000)
-                    .with_llm_provider(provider_clone, ""),
+                crate::engine::context_compressor::ContextCompressor::from_model_context_profile(
+                    &profile,
+                )
+                .with_llm_provider(provider_clone, &model),
             )),
             session_store: None,
             trace_store: Arc::new(crate::engine::trace::TraceStore::default()),
@@ -275,6 +328,104 @@ impl StreamingQueryEngine {
         *history = messages;
     }
 
+    pub async fn compact_context_manually(
+        &self,
+    ) -> Option<crate::engine::context_compressor::CompactionAttemptRecord> {
+        let history_before = self.get_history().await;
+        if history_before.is_empty() {
+            return None;
+        }
+
+        self.flush_memory_for_current_history(crate::memory::MemoryFlushReason::Manual)
+            .await;
+
+        let before_tokens =
+            crate::engine::context_compressor::estimate_messages_tokens(&history_before);
+        let before_messages = history_before.len();
+        let compressed = {
+            let mut compressor = self.compressor.lock().await;
+            if compressor.compaction_circuit_open() {
+                return Some(
+                    compressor.record_compaction_decision(CompactionAttemptInput::new(
+                        "manual compact",
+                        ContextCompactionStrategy::SessionMemoryCompact,
+                        CompactionDecision::CircuitOpen,
+                        before_tokens,
+                        before_messages,
+                        "compaction circuit open before manual compact",
+                    )),
+                );
+            }
+            compressor.record_compaction_decision(CompactionAttemptInput::new(
+                "manual compact",
+                ContextCompactionStrategy::SessionMemoryCompact,
+                CompactionDecision::Considered,
+                before_tokens,
+                before_messages,
+                "manual compact requested",
+            ));
+            compressor
+                .compress_async_with_strategy(
+                    &history_before,
+                    ContextCompactionStrategy::SessionMemoryCompact,
+                )
+                .await
+        };
+
+        let after_tokens = crate::engine::context_compressor::estimate_messages_tokens(&compressed);
+        let (compaction_record, runtime_record) = {
+            let mut compressor = self.compressor.lock().await;
+            let decision = if after_tokens < before_tokens {
+                CompactionDecision::Compacted
+            } else {
+                CompactionDecision::NoGain
+            };
+            let runtime_record = compressor.latest_compaction_record().cloned();
+            let boundary_id = compressor
+                .latest_compaction_record()
+                .and_then(|record| record.boundary_id.clone());
+            let attempt = compressor.record_compaction_decision(
+                CompactionAttemptInput::new(
+                    "manual compact",
+                    ContextCompactionStrategy::SessionMemoryCompact,
+                    decision,
+                    before_tokens,
+                    before_messages,
+                    if decision == CompactionDecision::Compacted {
+                        "manual compact reduced estimated tokens"
+                    } else {
+                        "manual compact did not reduce estimated tokens"
+                    },
+                )
+                .with_after(Some(after_tokens), Some(compressed.len()))
+                .with_boundary_id(boundary_id),
+            );
+            (attempt, runtime_record)
+        };
+
+        self.set_history(compressed).await;
+        if compaction_record.decision == CompactionDecision::Compacted {
+            if let (Some(store), Some(session_id), Some(record)) = (
+                self.session_store.as_ref(),
+                self.current_session_id(),
+                runtime_record.as_ref(),
+            ) {
+                let _ = store.add_compact_boundary_from_runtime_record(
+                    &session_id,
+                    record,
+                    Some("manual compact"),
+                    "manual compact requested",
+                );
+            }
+        }
+        self.clear_post_compact_transient_state();
+        Some(compaction_record)
+    }
+
+    fn clear_post_compact_transient_state(&self) {
+        crate::tools::file_cache::GLOBAL_FILE_CACHE.clear();
+    }
+
     /// Flush memory extraction for the current conversation history with an explicit lifecycle reason.
     pub async fn flush_memory_for_current_history(&self, reason: crate::memory::MemoryFlushReason) {
         let Some(mem_mutex) = &self.memory_manager else {
@@ -311,8 +462,13 @@ impl StreamingQueryEngine {
         }
         self.set_model(model);
         let model = self.model_name();
+        let profile =
+            crate::engine::model_context::ModelContextProfile::detect(provider.base_url(), &model);
         if let Ok(mut compressor) = self.compressor.try_lock() {
-            *compressor = crate::engine::context_compressor::ContextCompressor::new(128_000)
+            *compressor =
+                crate::engine::context_compressor::ContextCompressor::from_model_context_profile(
+                    &profile,
+                )
                 .with_llm_provider(provider, &model);
         }
     }
@@ -365,6 +521,11 @@ impl StreamingQueryEngine {
         manager: Arc<crate::engine::worktree::WorktreeManager>,
     ) -> Self {
         self.worktree_manager = Some(manager);
+        self
+    }
+
+    pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
+        self.working_dir_override = Some(working_dir.into());
         self
     }
 
@@ -518,10 +679,17 @@ impl StreamingQueryEngine {
                 _ => None,
             })
             .unwrap_or("");
-        let prompt = crate::engine::prompt_context::PromptContextAssembler::from_current_dir(
-            &self.system_prompt,
-        )
-        .report_for_turn(last_user, &history);
+        let assembler = if let Some(ref working_dir) = self.working_dir_override {
+            crate::engine::prompt_context::PromptContextAssembler::new(
+                &self.system_prompt,
+                working_dir,
+            )
+        } else {
+            crate::engine::prompt_context::PromptContextAssembler::from_current_dir(
+                &self.system_prompt,
+            )
+        };
+        let prompt = assembler.report_for_turn(last_user, &history);
         let history_tokens = crate::engine::context_compressor::estimate_messages_tokens(&history);
         let (tool_count, tool_schema_tokens, tool_schema_fingerprint) =
             estimate_registry_tool_schema_tokens(&self.tool_registry);
@@ -545,7 +713,7 @@ impl StreamingQueryEngine {
         ContextUsageReport {
             stable_prefix_fingerprint: crate::engine::prompt_context::stable_fingerprint(&format!(
                 "{}:{}",
-                prompt.fingerprint, tool_schema_fingerprint
+                prompt.stable_prefix_fingerprint, tool_schema_fingerprint
             )),
             prompt,
             history_messages: history.len(),
@@ -610,6 +778,7 @@ impl StreamingQueryEngine {
             mcp_manager: self.mcp_manager.clone(),
             lsp_manager: self.lsp_manager.clone(),
             worktree_manager: self.worktree_manager.clone(),
+            working_dir_override: self.working_dir_override.clone(),
             memory_manager: self.memory_manager.clone(),
             compressor: self.compressor.clone(),
             session_store: self.session_store.clone(),
@@ -654,27 +823,107 @@ impl StreamingQueryEngine {
                 let mut hist = history.lock().await;
                 let mut comp = compressor.lock().await;
                 if comp.needs_compression(&hist) {
-                    if let (Some(mem_mutex), Some(ref sid)) =
-                        (&engine.memory_manager, &engine.session_id)
-                    {
-                        let pre_compress_history = hist.clone();
-                        let mut mem = mem_mutex.lock().await;
-                        mem.flush_session_with_reason_async(
-                            sid.clone(),
-                            crate::memory::MemoryFlushReason::PreCompress,
-                            &pre_compress_history,
-                        )
-                        .await;
+                    let before_tokens =
+                        crate::engine::context_compressor::estimate_messages_tokens(&hist);
+                    if comp.compaction_circuit_open() {
+                        comp.record_compaction_decision(CompactionAttemptInput::new(
+                            "streaming_history_preflight",
+                            ContextCompactionStrategy::AutoCompact,
+                            CompactionDecision::CircuitOpen,
+                            before_tokens,
+                            hist.len(),
+                            "compaction circuit open before streaming pre-query compression",
+                        ));
+                    } else {
+                        comp.record_compaction_decision(CompactionAttemptInput::new(
+                            "streaming_history_preflight",
+                            ContextCompactionStrategy::AutoCompact,
+                            CompactionDecision::Considered,
+                            before_tokens,
+                            hist.len(),
+                            "streaming history exceeded compression threshold",
+                        ));
+                        drop(comp);
+                        if let (Some(mem_mutex), Some(ref sid)) =
+                            (&engine.memory_manager, &engine.session_id)
+                        {
+                            let pre_compress_history = hist.clone();
+                            let mut mem = mem_mutex.lock().await;
+                            mem.flush_session_with_reason_async(
+                                sid.clone(),
+                                crate::memory::MemoryFlushReason::PreCompress,
+                                &pre_compress_history,
+                            )
+                            .await;
+                        }
+                        let mut comp = compressor.lock().await;
+                        let compressed = comp.compress_async(&hist).await;
+                        let compaction_record = comp.latest_compaction_record().cloned();
+                        let after_tokens =
+                            crate::engine::context_compressor::estimate_messages_tokens(
+                                &compressed,
+                            );
+                        let decision = if after_tokens < before_tokens {
+                            CompactionDecision::Compacted
+                        } else {
+                            CompactionDecision::NoGain
+                        };
+                        comp.record_compaction_decision(
+                            CompactionAttemptInput::new(
+                                "streaming_history_preflight",
+                                ContextCompactionStrategy::AutoCompact,
+                                decision,
+                                before_tokens,
+                                hist.len(),
+                                if decision == CompactionDecision::Compacted {
+                                    "streaming pre-query compression reduced estimated tokens"
+                                } else {
+                                    "streaming pre-query compression did not reduce estimated tokens"
+                                },
+                            )
+                            .with_after(Some(after_tokens), Some(compressed.len()))
+                            .with_boundary_id(
+                                compaction_record
+                                    .as_ref()
+                                    .and_then(|record| record.boundary_id.clone()),
+                            ),
+                        );
+                        *hist = compressed;
+                        if let (Some(store), Some(sid), Some(record)) = (
+                            &engine.session_store,
+                            &engine.session_id,
+                            compaction_record.as_ref(),
+                        ) {
+                            let _ = store.add_compact_boundary_from_runtime_record(
+                                sid,
+                                record,
+                                Some("streaming_history_preflight"),
+                                "streaming history compacted before request",
+                            );
+                        }
                     }
-                    let compressed = comp.compress_async(&hist).await;
-                    *hist = compressed;
+                } else {
+                    comp.record_compaction_decision(CompactionAttemptInput::new(
+                        "streaming_history_preflight",
+                        ContextCompactionStrategy::AutoCompact,
+                        CompactionDecision::Skipped,
+                        crate::engine::context_compressor::estimate_messages_tokens(&hist),
+                        hist.len(),
+                        "streaming history below compression threshold",
+                    ));
                 }
             }
 
             // 3. 获取当前历史用于查询
             let messages_for_query = {
                 let hist = history.lock().await;
-                build_messages_for_turn(&engine.system_prompt, &user_msg, &hist, agent_mode)
+                build_messages_for_turn(
+                    &engine.system_prompt,
+                    &user_msg,
+                    &hist,
+                    agent_mode,
+                    engine.working_dir_override.as_deref(),
+                )
             };
 
             // 4. 执行查询（带 fallback 支持）
@@ -713,6 +962,7 @@ impl StreamingQueryEngine {
                             &engine.system_prompt,
                             &user_msg,
                             agent_mode,
+                            engine.working_dir_override.as_deref(),
                         )
                         .await
                         {
@@ -810,6 +1060,7 @@ impl StreamingQueryEngine {
                                 mcp_manager: engine.mcp_manager.clone(),
                                 lsp_manager: engine.lsp_manager.clone(),
                                 worktree_manager: engine.worktree_manager.clone(),
+                                working_dir_override: engine.working_dir_override.clone(),
                                 memory_manager: engine.memory_manager.clone(),
                                 compressor: engine.compressor.clone(),
                                 session_store: engine.session_store.clone(),
@@ -937,10 +1188,14 @@ fn build_messages_for_turn(
     user_msg: &str,
     history: &[Message],
     agent_mode: crate::engine::agent_mode::AgentMode,
+    working_dir: Option<&Path>,
 ) -> Vec<Message> {
-    let mut prompt_context =
+    let assembler = if let Some(working_dir) = working_dir {
+        crate::engine::prompt_context::PromptContextAssembler::new(system_prompt, working_dir)
+    } else {
         crate::engine::prompt_context::PromptContextAssembler::from_current_dir(system_prompt)
-            .build_for_turn(user_msg, history);
+    };
+    let mut prompt_context = assembler.build_for_turn(user_msg, history);
     if let Some(mode_context) = agent_mode.runtime_context() {
         prompt_context.system_prompt.push_str("\n\n");
         prompt_context.system_prompt.push_str(mode_context);
@@ -956,6 +1211,7 @@ async fn reactive_context_retry_messages(
     system_prompt: &str,
     user_msg: &str,
     agent_mode: crate::engine::agent_mode::AgentMode,
+    working_dir: Option<&Path>,
 ) -> Option<Vec<Message>> {
     let compressed = {
         let hist = history.lock().await;
@@ -984,6 +1240,7 @@ async fn reactive_context_retry_messages(
             user_msg,
             &hist,
             agent_mode,
+            working_dir,
         ))
     }
 }
@@ -1024,6 +1281,7 @@ struct StreamingEngineInner {
     mcp_manager: Option<Arc<crate::engine::mcp::McpManager>>,
     lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
+    working_dir_override: Option<PathBuf>,
     memory_manager: Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>,
     compressor: Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
     session_store: Option<Arc<crate::session_store::SessionStore>>,
@@ -1179,6 +1437,9 @@ impl StreamingEngineInner {
         if let Some(ref wt) = self.worktree_manager {
             builder = builder.with_worktree_manager(wt.clone());
         }
+        if let Some(ref working_dir) = self.working_dir_override {
+            builder = builder.with_working_dir(working_dir.clone());
+        }
         if let Some(ref mem) = self.memory_manager {
             builder = builder.with_memory_manager(mem.clone());
         }
@@ -1271,6 +1532,55 @@ mod tests {
                 .unwrap()
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("no mock response left"))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: crate::services::api::ChatRequest,
+        ) -> anyhow::Result<async_openai::types::ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!(
+                "stream not used for MiniMax-compatible tool turns"
+            ))
+        }
+
+        fn base_url(&self) -> &str {
+            "https://api.minimaxi.com/v1"
+        }
+
+        fn default_model(&self) -> &str {
+            "MiniMax-M2.7"
+        }
+    }
+
+    struct RecordingToolProvider {
+        requests: StdMutex<Vec<crate::services::api::ChatRequest>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for RecordingToolProvider {
+        async fn chat(
+            &self,
+            request: crate::services::api::ChatRequest,
+        ) -> anyhow::Result<crate::services::api::ChatResponse> {
+            let mut requests = self.requests.lock().unwrap();
+            requests.push(request);
+            if requests.len() == 1 {
+                Ok(crate::services::api::ChatResponse {
+                    content: String::new(),
+                    tool_calls: Some(vec![crate::services::api::ToolCall {
+                        id: "call_read".to_string(),
+                        name: "file_read".to_string(),
+                        arguments: serde_json::json!({ "path": "marker.txt" }),
+                    }]),
+                    usage: None,
+                })
+            } else {
+                Ok(crate::services::api::ChatResponse {
+                    content: "Done.".to_string(),
+                    tool_calls: None,
+                    usage: None,
+                })
+            }
         }
 
         async fn chat_stream(
@@ -1413,6 +1723,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_engine_uses_working_dir_for_relative_tool_paths() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS", "0");
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("marker.txt"), "marker-content\n")
+            .await
+            .unwrap();
+        let provider = Arc::new(RecordingToolProvider {
+            requests: StdMutex::new(Vec::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(crate::tools::file_tool::FileReadTool);
+        let engine =
+            StreamingQueryEngine::new(provider.clone(), Arc::new(registry), "MiniMax-M2.7")
+                .with_working_dir(dir.path())
+                .with_max_iterations(3);
+
+        let mut stream = engine.query_stream("read marker").await;
+        while let Some(event) = stream.next().await {
+            match event {
+                StreamEvent::Complete => break,
+                StreamEvent::Error(error) => panic!("stream failed: {error}"),
+                _ => {}
+            }
+        }
+
+        let requests = provider.requests.lock().unwrap();
+        assert!(
+            requests.iter().any(|request| request.messages.iter().any(
+                |message| matches!(message, Message::System { content } if content.contains(&dir.path().display().to_string()))
+            )),
+            "system prompt should be assembled for selected working dir"
+        );
+        let tool_messages = requests
+            .iter()
+            .flat_map(|request| request.messages.iter())
+            .filter_map(|message| match message {
+                Message::Tool { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            tool_messages
+                .iter()
+                .any(|content| content.contains("marker-content")),
+            "relative file_read should resolve inside selected working dir; tool messages: {tool_messages:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn reactive_context_retry_compacts_history_before_rebuild() {
         let history = Arc::new(tokio::sync::Mutex::new(vec![
             Message::user("please inspect the large output"),
@@ -1433,6 +1793,7 @@ mod tests {
             "System prompt.",
             "continue",
             crate::engine::agent_mode::AgentMode::Build,
+            None,
         )
         .await
         .expect("reactive context retry should rebuild messages after compaction");
@@ -1450,5 +1811,122 @@ mod tests {
         assert!(runtime_records
             .iter()
             .any(|record| record.strategy.label() == "reactive_compact"));
+    }
+
+    #[tokio::test]
+    async fn manual_compact_records_attempt_and_updates_history() {
+        let provider = Arc::new(ToolTurnProvider {
+            responses: StdMutex::new(VecDeque::from([crate::services::api::ChatResponse {
+                content: "Large tool output was inspected.".to_string(),
+                tool_calls: None,
+                usage: None,
+            }])),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let engine = StreamingQueryEngine::new(provider, registry, "mock-a").with_max_context(120);
+        engine
+            .set_history(vec![
+                Message::user("please inspect the large output"),
+                Message::assistant(&"tool output ".repeat(500)),
+                Message::user("continue"),
+            ])
+            .await;
+        let before_tokens = crate::engine::context_compressor::estimate_messages_tokens(
+            &engine.get_history().await,
+        );
+
+        let attempt = engine
+            .compact_context_manually()
+            .await
+            .expect("manual compact should record an attempt");
+        let after_history = engine.get_history().await;
+        let after_tokens =
+            crate::engine::context_compressor::estimate_messages_tokens(&after_history);
+
+        assert_eq!(
+            attempt.strategy,
+            crate::engine::context_collapse::ContextCompactionStrategy::SessionMemoryCompact
+        );
+        assert_eq!(
+            attempt.decision,
+            crate::engine::context_collapse::CompactionDecision::Compacted
+        );
+        assert!(after_tokens < before_tokens);
+        let attempts = engine
+            .compressor()
+            .expect("compressor")
+            .lock()
+            .await
+            .compaction_attempt_records()
+            .to_vec();
+        assert!(attempts
+            .iter()
+            .any(|record| record.decision.label() == "considered"));
+        assert!(attempts
+            .iter()
+            .any(|record| record.decision.label() == "compacted"));
+    }
+
+    #[tokio::test]
+    async fn context_long_session_manual_compact_persists_boundary_for_restore() {
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store
+            .create_session("long-session", "Long Session", "MiniMax-M2.7")
+            .unwrap();
+        let provider = Arc::new(ToolTurnProvider {
+            responses: StdMutex::new(VecDeque::from([crate::services::api::ChatResponse {
+                content: "README and validation facts were summarized.".to_string(),
+                tool_calls: None,
+                usage: None,
+            }])),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let engine = StreamingQueryEngine::new(provider, registry, "MiniMax-M2.7")
+            .with_session_store(store.clone(), "long-session".to_string())
+            .with_max_context(120);
+        engine
+            .set_history(vec![
+                Message::user("read README, inspect src/lib.rs, and run cargo test"),
+                Message::assistant(&"README contents and src/lib.rs details. ".repeat(220)),
+                Message::user("edit config and continue"),
+                Message::assistant("Edited config. cargo test passed."),
+                Message::user("what did the README say earlier?"),
+            ])
+            .await;
+
+        let attempt = engine
+            .compact_context_manually()
+            .await
+            .expect("manual compaction attempt");
+
+        assert_eq!(
+            attempt.decision,
+            crate::engine::context_collapse::CompactionDecision::Compacted
+        );
+        let boundary = store
+            .latest_compact_boundary("long-session")
+            .unwrap()
+            .expect("compact boundary persisted");
+        assert_eq!(boundary.strategy, "session_memory_compact");
+        assert!(boundary.before_tokens > boundary.after_tokens);
+        assert!(engine.get_history().await.iter().any(
+            |message| matches!(message, Message::User { content } if content.contains("README"))
+        ));
+    }
+
+    #[test]
+    fn progressive_text_chunks_keep_short_text_single() {
+        assert_eq!(progressive_text_chunks("hello"), vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn progressive_text_chunks_split_long_text_on_boundaries() {
+        let text = "这是一段比较长的回答，用来模拟 non-streaming provider 返回完整文本后，桌面 UI 仍然需要渐进显示的体验。"
+            .repeat(3);
+        let chunks = progressive_text_chunks(&text);
+
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.concat(), text);
+        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 96));
     }
 }

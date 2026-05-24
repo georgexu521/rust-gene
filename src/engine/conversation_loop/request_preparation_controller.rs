@@ -1,10 +1,17 @@
 use super::context_budget_controller::ContextBudgetController;
 use super::runtime_diet::RuntimeDietSnapshot;
+use crate::engine::context_ledger::{
+    diff_entry_from_event, file_edit_entry_from_event, file_read_entry_from_event,
+    user_confirmation_entry_from_event, validation_entry_from_event, CONTEXT_LEDGER_BASH_READ_KIND,
+};
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::{RetrievalContext, RetrievalSource};
+use crate::engine::task_context::AgentTaskState;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::memory::MemoryManager;
 use crate::services::api::{ChatRequest, LlmProvider, Message, Tool};
+use crate::session_store::SessionStore;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::debug;
@@ -12,10 +19,13 @@ use tracing::debug;
 pub(super) struct RequestPreparationContext<'a> {
     pub(super) messages: &'a [Message],
     pub(super) focused_repair_prompt: Option<Message>,
+    pub(super) agent_task_state: Option<&'a AgentTaskState>,
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
     pub(super) retrieval_policy: RetrievalPolicy,
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
     pub(super) provider: Option<&'a dyn LlmProvider>,
+    pub(super) session_store: Option<&'a Arc<SessionStore>>,
+    pub(super) session_id: &'a str,
     pub(super) model: &'a str,
     pub(super) tools: &'a [Tool],
     pub(super) trace: &'a TraceCollector,
@@ -43,10 +53,13 @@ impl RequestPreparationController {
         let RequestPreparationContext {
             messages,
             focused_repair_prompt,
+            agent_task_state,
             turn_retrieval_context,
             retrieval_policy,
             memory_manager,
             provider,
+            session_store,
+            session_id,
             model,
             tools,
             trace,
@@ -54,9 +67,11 @@ impl RequestPreparationController {
         } = context;
 
         let mut request_messages = messages.to_vec();
+        Self::inject_task_state_zone(&mut request_messages, agent_task_state);
         if let Some(prompt) = focused_repair_prompt {
             request_messages.push(prompt);
         }
+        Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
 
         let mut memory_context = MemoryPrefetchContext {
             turn_retrieval_context,
@@ -78,6 +93,189 @@ impl RequestPreparationController {
                 .with_tools(tools.to_vec())
                 .with_temperature(0.2),
         }
+    }
+
+    fn inject_task_state_zone(
+        request_messages: &mut Vec<Message>,
+        agent_task_state: Option<&AgentTaskState>,
+    ) {
+        let Some(agent_task_state) = agent_task_state else {
+            return;
+        };
+        if request_messages
+            .iter()
+            .any(|message| matches!(message, Message::System { content } if content.contains("<task-state>")))
+        {
+            return;
+        }
+
+        let state = agent_task_state.format_for_context_zone();
+        if state.trim().is_empty() {
+            return;
+        }
+        let block = format!("<task-state>\n{}\n</task-state>", state.trim());
+        let insert_pos = match request_messages.first() {
+            Some(Message::System { .. }) => 1,
+            _ => 0,
+        };
+        request_messages.insert(insert_pos, Message::system(block));
+    }
+
+    fn inject_context_ledger_hint(
+        request_messages: &mut Vec<Message>,
+        session_store: Option<&Arc<SessionStore>>,
+        session_id: &str,
+    ) {
+        let Some(store) = session_store else {
+            return;
+        };
+        let events = match store.recent_context_ledger_events(session_id, 12) {
+            Ok(events) => events,
+            Err(_) => return,
+        };
+        if events.is_empty() {
+            return;
+        }
+
+        let mut seen = HashSet::new();
+        let mut lines = Vec::new();
+        for event in events {
+            if let Some(entry) = file_read_entry_from_event(&event) {
+                if !seen.insert(format!("file:{}", entry.resolved_path)) {
+                    continue;
+                }
+                let scope = if entry.targeted_read {
+                    format!(
+                        "lines {}-{}",
+                        entry.line_start.unwrap_or(0),
+                        entry.line_end.unwrap_or(0)
+                    )
+                } else {
+                    "full read".to_string()
+                };
+                lines.push(format!(
+                    "- file {}: {}, {} displayed / {} total lines, hash {}",
+                    compact_path(&entry.path, &entry.resolved_path),
+                    scope,
+                    entry.displayed_lines,
+                    entry.total_lines,
+                    entry.content_hash
+                ));
+            } else if event.kind == CONTEXT_LEDGER_BASH_READ_KIND {
+                let command = event
+                    .payload
+                    .get("command")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if command.is_empty() || !seen.insert(format!("bash:{command}")) {
+                    continue;
+                }
+                let category = event
+                    .payload
+                    .get("category")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("read");
+                let exit_code = event
+                    .payload
+                    .get("exit_code")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                lines.push(format!(
+                    "- bash {}: {} exited {}",
+                    category, command, exit_code
+                ));
+            } else if let Some(entry) = file_edit_entry_from_event(&event) {
+                let key = format!(
+                    "edit:{}:{}:{:?}",
+                    entry.tool,
+                    entry.paths.join(","),
+                    entry.diff_hash
+                );
+                if !seen.insert(key) {
+                    continue;
+                }
+                let path = entry
+                    .paths
+                    .first()
+                    .or_else(|| entry.resolved_paths.first())
+                    .map(String::as_str)
+                    .unwrap_or("unknown path");
+                let range = match (entry.changed_line_start, entry.changed_line_end) {
+                    (Some(start), Some(end)) => format!(" lines {start}-{end}"),
+                    _ => String::new(),
+                };
+                lines.push(format!(
+                    "- edit {}: {} file(s), first {}, success={}, bytes={}{}",
+                    entry.tool, entry.file_count, path, entry.success, entry.bytes_written, range
+                ));
+            } else if let Some(entry) = diff_entry_from_event(&event) {
+                let key = format!(
+                    "diff:{}:{:?}:{:?}:{}",
+                    entry.tool, entry.action, entry.path, entry.output_hash
+                );
+                if !seen.insert(key) {
+                    continue;
+                }
+                let target = entry
+                    .command
+                    .as_deref()
+                    .or(entry.path.as_deref())
+                    .or(entry.action.as_deref())
+                    .unwrap_or("diff");
+                lines.push(format!(
+                    "- diff {}: {} changed={} success={}",
+                    entry.tool, target, entry.changed, entry.success
+                ));
+            } else if let Some(entry) = validation_entry_from_event(&event) {
+                if !seen.insert(format!("validation:{}", entry.command)) {
+                    continue;
+                }
+                let exit = entry
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                lines.push(format!(
+                    "- validation {}: {} success={} exit={} family={}",
+                    entry.tool,
+                    entry.command,
+                    entry.success,
+                    exit,
+                    entry.validation_family.as_deref().unwrap_or("unknown")
+                ));
+            } else if let Some(entry) = user_confirmation_entry_from_event(&event) {
+                let key = format!(
+                    "confirmation:{}:{:?}:{}",
+                    entry.tool, entry.request_id, entry.approved
+                );
+                if !seen.insert(key) {
+                    continue;
+                }
+                lines.push(format!(
+                    "- confirmation {}: approved={} kind={}",
+                    entry.tool,
+                    entry.approved,
+                    entry.kind.as_deref().unwrap_or("unknown")
+                ));
+            } else {
+                continue;
+            }
+            if lines.len() >= 6 {
+                break;
+            }
+        }
+        if lines.is_empty() {
+            return;
+        }
+
+        let hint = format!(
+            "Context ledger for this session:\n{}\nUse these recorded reads, edits, diffs, validations, and confirmations before repeating tool calls. If exact file text is no longer visible or a specific range is needed, prefer a targeted file_read range instead of rereading the same whole file repeatedly.",
+            lines.join("\n")
+        );
+        let insert_pos = request_messages
+            .iter()
+            .rposition(|message| matches!(message, Message::User { .. }))
+            .unwrap_or(request_messages.len());
+        request_messages.insert(insert_pos, Message::system(hint));
     }
 
     async fn inject_memory_prefetch(
@@ -152,6 +350,13 @@ impl RequestPreparationController {
     }
 }
 
+fn compact_path(path: &str, resolved_path: &str) -> String {
+    if !path.trim().is_empty() {
+        return path.to_string();
+    }
+    resolved_path.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,10 +381,13 @@ mod tests {
         let prepared = RequestPreparationController::prepare(RequestPreparationContext {
             messages: &[Message::user("change src/lib.rs")],
             focused_repair_prompt: Some(focused_prompt),
+            agent_task_state: None,
             turn_retrieval_context: None,
             retrieval_policy: RetrievalPolicy::None,
             memory_manager: None,
             provider: None,
+            session_store: None,
+            session_id: "session-test",
             model: "test-model",
             tools: &tools,
             trace: &trace,
@@ -210,10 +418,13 @@ mod tests {
         let prepared = RequestPreparationController::prepare(RequestPreparationContext {
             messages: &[Message::user("remembered context should not be injected")],
             focused_repair_prompt: None,
+            agent_task_state: None,
             turn_retrieval_context: None,
             retrieval_policy: RetrievalPolicy::Memory,
             memory_manager: None,
             provider: None,
+            session_store: None,
+            session_id: "session-test",
             model: "test-model",
             tools: &tools,
             trace: &trace,
@@ -223,5 +434,211 @@ mod tests {
 
         assert_eq!(prepared.request.messages.len(), 1);
         assert_eq!(runtime_diet.retrieval_items, 0);
+    }
+
+    #[tokio::test]
+    async fn prepare_injects_context_ledger_hint_before_user_message() {
+        let trace = TraceCollector::new(TurnTrace::new(
+            "session-ledger".to_string(),
+            1,
+            "summarize README",
+        ));
+        let store = Arc::new(SessionStore::in_memory().unwrap());
+        store
+            .create_session("session-ledger", "Ledger", "model")
+            .unwrap();
+        store
+            .add_learning_event(
+                "session-ledger",
+                crate::engine::context_ledger::CONTEXT_LEDGER_FILE_READ_KIND,
+                "file_read",
+                "Read README.md",
+                1.0,
+                &serde_json::json!({
+                    "path": "README.md",
+                    "resolved_path": "/tmp/project/README.md",
+                    "content_hash": "abc123",
+                    "size_bytes": 12,
+                    "total_lines": 3,
+                    "displayed_lines": 3,
+                    "line_start": 1,
+                    "line_end": 3,
+                    "targeted_read": false,
+                    "truncated": false
+                }),
+            )
+            .unwrap();
+
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[Message::user("summarize README")],
+            focused_repair_prompt: None,
+            agent_task_state: None,
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::None,
+            memory_manager: None,
+            provider: None,
+            session_store: Some(&store),
+            session_id: "session-ledger",
+            model: "test-model",
+            tools: &[],
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+        })
+        .await;
+
+        assert_eq!(prepared.request.messages.len(), 2);
+        assert!(matches!(
+            &prepared.request.messages[0],
+            Message::System { content }
+                if content.contains("Context ledger")
+                    && content.contains("README.md")
+                    && content.contains("abc123")
+        ));
+        assert!(matches!(
+            &prepared.request.messages[1],
+            Message::User { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn prepare_injects_structured_tool_evidence_from_context_ledger() {
+        let trace = TraceCollector::new(TurnTrace::new(
+            "session-ledger-evidence".to_string(),
+            1,
+            "continue changes",
+        ));
+        let store = Arc::new(SessionStore::in_memory().unwrap());
+        store
+            .create_session("session-ledger-evidence", "Ledger", "model")
+            .unwrap();
+        store
+            .add_learning_event(
+                "session-ledger-evidence",
+                crate::engine::context_ledger::CONTEXT_LEDGER_FILE_EDIT_KIND,
+                "file_edit",
+                "file_edit changed src/lib.rs",
+                1.0,
+                &serde_json::json!({
+                    "tool": "file_edit",
+                    "paths": ["src/lib.rs"],
+                    "resolved_paths": ["/tmp/project/src/lib.rs"],
+                    "success": true,
+                    "file_count": 1,
+                    "bytes_written": 42,
+                    "replacements": 1,
+                    "additions": 2,
+                    "deletions": 1,
+                    "changed_line_start": 10,
+                    "changed_line_end": 12,
+                    "diff_hash": "abc123",
+                    "summary": "file_edit changed src/lib.rs"
+                }),
+            )
+            .unwrap();
+        store
+            .add_learning_event(
+                "session-ledger-evidence",
+                crate::engine::context_ledger::CONTEXT_LEDGER_VALIDATION_KIND,
+                "bash",
+                "Validation cargo test -q passed",
+                1.0,
+                &serde_json::json!({
+                    "tool": "bash",
+                    "command": "cargo test -q",
+                    "cwd": "/tmp/project",
+                    "success": true,
+                    "exit_code": 0,
+                    "command_kind": "validation",
+                    "category": "test_run",
+                    "validation_family": "cargo_test",
+                    "safe_for_closeout": true,
+                    "output_hash": "def456",
+                    "output_chars": 12,
+                    "timed_out": false,
+                    "summary": "Validation cargo test -q passed"
+                }),
+            )
+            .unwrap();
+
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[Message::user("continue changes")],
+            focused_repair_prompt: None,
+            agent_task_state: None,
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::None,
+            memory_manager: None,
+            provider: None,
+            session_store: Some(&store),
+            session_id: "session-ledger-evidence",
+            model: "test-model",
+            tools: &[],
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+        })
+        .await;
+
+        assert!(matches!(
+            &prepared.request.messages[0],
+            Message::System { content }
+                if content.contains("edit file_edit")
+                    && content.contains("src/lib.rs")
+                    && content.contains("validation bash")
+                    && content.contains("cargo test -q")
+        ));
+    }
+
+    #[tokio::test]
+    async fn prepare_injects_task_state_after_stable_system_prompt() {
+        let trace =
+            TraceCollector::new(TurnTrace::new("session-test".to_string(), 1, "update code"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let route = crate::engine::intent_router::IntentRouter::new().route("修改 src/lib.rs");
+        let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
+            "修改 src/lib.rs",
+            ".",
+            route,
+            None,
+        );
+        task_bundle.add_file("src/lib.rs");
+        task_bundle.add_acceptance_check("cargo test -q");
+
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[
+                Message::system("base system prompt"),
+                Message::user("change"),
+            ],
+            focused_repair_prompt: None,
+            agent_task_state: Some(&task_bundle.agent_state),
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::None,
+            memory_manager: None,
+            provider: None,
+            session_store: None,
+            session_id: "session-test",
+            model: "test-model",
+            tools: &[],
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+        })
+        .await;
+
+        assert!(matches!(
+            &prepared.request.messages[0],
+            Message::System { content } if content == "base system prompt"
+        ));
+        assert!(matches!(
+            &prepared.request.messages[1],
+            Message::System { content }
+                if content.contains("<task-state>")
+                    && content.contains("Goal: 修改 src/lib.rs")
+                    && content.contains("Active files: src/lib.rs")
+                    && content.contains("cargo test -q")
+        ));
+        assert!(matches!(
+            &prepared.request.messages[2],
+            Message::User { content } if content == "change"
+        ));
     }
 }

@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useState, type ReactNode } from "react";
-import { Activity, Folder, GitBranch, Globe, Info, MoreHorizontal, PanelRight, Settings } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, Folder, Gauge, GitBranch, Globe, Info, MoreHorizontal, PanelRight, Settings } from "lucide-react";
 import {
   DesktopDiagnostic,
+  DesktopContextSnapshot,
   DiagnosticStatus,
   DetailLevelId,
   DesktopHealth,
@@ -15,7 +16,9 @@ import {
   RecentSession,
   answerPermission,
   archiveSession,
+  compactContext,
   deleteSession,
+  desktopContextSnapshot,
   desktopDiagnostics,
   desktopHealth,
   desktopRunContextDetail,
@@ -69,6 +72,7 @@ export function App() {
   const [selectedSessionSummary, setSelectedSessionSummary] = useState<RecentSession | null>(null);
   const [sessionSearch, setSessionSearch] = useState("");
   const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
+  const [contextSnapshot, setContextSnapshot] = useState<DesktopContextSnapshot | null>(null);
   const [composer, setComposer] = useState("");
   const [runContexts, setRunContexts] = useState<DesktopRunContext[]>([]);
   const [activeContextDetail, setActiveContextDetail] = useState<DesktopRunContext | null>(null);
@@ -79,6 +83,7 @@ export function App() {
   const [lastArchivedSession, setLastArchivedSession] = useState<RecentSession | null>(null);
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
+  const permissionRecoveryRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void initialize();
@@ -91,6 +96,16 @@ export function App() {
     return () => cleanup();
   }, []);
 
+  useEffect(() => {
+    if (!runState.pendingPermission) {
+      return;
+    }
+    permissionRecoveryRef.current?.scrollIntoView({
+      block: "nearest",
+      behavior: "smooth",
+    });
+  }, [runState.pendingPermission]);
+
   async function initialize() {
     try {
       const [
@@ -101,6 +116,7 @@ export function App() {
         nextProviderSetup,
         nextPermissionOptions,
         nextProviderStatus,
+        nextContextSnapshot,
       ] =
         await Promise.all([
           desktopHealth(),
@@ -110,12 +126,14 @@ export function App() {
           providerSetupInfo(),
           permissionModeOptions(),
           providerModelStatus(),
+          desktopContextSnapshot(),
         ]);
       setHealth(nextHealth);
       setSettings(nextSettings);
       setPermissionOptions(nextPermissionOptions);
       setProviderSetup(nextProviderSetup);
       setProviderStatus(nextProviderStatus);
+      setContextSnapshot(nextContextSnapshot);
       setProjectPath(nextSettings.selected_project || nextHealth.cwd);
       setSessions(nextSessions);
       setSelectedSessionSummary(
@@ -125,8 +143,14 @@ export function App() {
       if (nextSettings.active_session_id) {
         const resumed = await resumeSession(nextSettings.active_session_id);
         setRunState((current) =>
-          loadSessionTranscript(current, resumed.session_id, resumed.messages),
+          loadSessionTranscript(
+            current,
+            resumed.session_id,
+            resumed.messages,
+            resumed.compact_boundaries,
+          ),
         );
+        setContextSnapshot(await desktopContextSnapshot());
       }
     } catch (err) {
       setRunState((current) => withError(current, err));
@@ -163,6 +187,23 @@ export function App() {
       setDiagnostics(nextDiagnostics.items);
       setProviderSetup(nextProviderSetup);
       setProviderStatus(nextProviderStatus);
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function refreshContextSnapshot() {
+    try {
+      setContextSnapshot(await desktopContextSnapshot());
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleCompactContext() {
+    try {
+      await compactContext();
+      await refreshContextSnapshot();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -252,8 +293,14 @@ export function App() {
         current ? { ...current, active_session_id: resumed.session_id } : current,
       );
       setRunState((current) =>
-        loadSessionTranscript(current, resumed.session_id, resumed.messages),
+        loadSessionTranscript(
+          current,
+          resumed.session_id,
+          resumed.messages,
+          resumed.compact_boundaries,
+        ),
       );
+      await refreshContextSnapshot();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -292,6 +339,8 @@ export function App() {
       if (runState.selectedSessionId === session.id) {
         setSelectedSessionSummary(null);
         resetConversationView();
+      } else {
+        setRunState((current) => ({ ...current, error: null }));
       }
       await refreshSessions();
     } catch (err) {
@@ -403,6 +452,7 @@ export function App() {
 
     if (event.type === "run_completed" || event.type === "run_error") {
       void refreshSessions();
+      void refreshContextSnapshot();
     }
     if (event.type === "run_started" && event.session_id) {
       setSelectedSessionSummary((current) =>
@@ -467,6 +517,7 @@ export function App() {
             <div className="eyebrow">Priority Agent</div>
           </div>
           <div className="health">
+            <ContextMeter snapshot={contextSnapshot} onCompact={() => void handleCompactContext()} />
             <span className="health-status">
               <Activity aria-hidden="true" size={14} />
               {health ? `${health.status} · ${health.version}` : "Starting..."}
@@ -484,6 +535,7 @@ export function App() {
               <EnvironmentPopover
                 diagnostics={diagnostics}
                 health={health}
+                contextSnapshot={contextSnapshot}
                 projectPath={projectPath}
                 providerStatus={providerStatus}
                 settings={settings}
@@ -505,7 +557,7 @@ export function App() {
           onRefresh={() => void refreshDiagnostics()}
         />
 
-        {settings ? (
+        {settings && settings.startup_state.status !== "new_conversation" ? (
           <div className={`startup-state-card ${settings.startup_state.status}`} role="status">
             <span>{startupStateLabel(settings.startup_state.status)}</span>
             <strong>{startupStateDetail(settings, selectedSessionSummary, projectPath)}</strong>
@@ -523,6 +575,7 @@ export function App() {
 
         <Transcript
           diagnostics={diagnostics}
+          isRunning={runState.isRunning}
           items={runState.items}
           onOpenContext={setActiveContextDetail}
           onOpenTrace={(traceId) => {
@@ -536,6 +589,7 @@ export function App() {
 
         <TraceDrawer
           activeItemId={activeTraceId}
+          contextSnapshot={contextSnapshot}
           isOpen={isTraceOpen}
           items={runState.traceItems}
           onOpenContext={setActiveContextDetail}
@@ -567,10 +621,12 @@ export function App() {
           onOpenShellProfile={() => void openShellProfile()}
         />
 
-        <PermissionCard
-          request={runState.pendingPermission}
-          onAnswer={(approved) => void handlePermission(approved)}
-        />
+        <div className="permission-recovery-slot" ref={permissionRecoveryRef}>
+          <PermissionCard
+            request={runState.pendingPermission}
+            onAnswer={(approved) => void handlePermission(approved)}
+          />
+        </div>
 
         <Composer
           composer={composer}
@@ -666,13 +722,51 @@ function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 }
 
+function formatTokenCount(tokens: number) {
+  if (tokens >= 1000) {
+    return `${Math.round(tokens / 100) / 10}k`;
+  }
+  return `${tokens}`;
+}
+
+function ContextMeter({
+  snapshot,
+  onCompact,
+}: {
+  snapshot: DesktopContextSnapshot | null;
+  onCompact: () => void;
+}) {
+  const percent = Math.min(100, Math.max(0, snapshot?.usage_percent || 0));
+  const decision = snapshot?.compact.latest_attempt_decision;
+  const label = snapshot ? `Context ${percent}%` : "Context";
+  const detail = snapshot
+    ? `${formatTokenCount(snapshot.total_estimated_tokens)} / ${formatTokenCount(snapshot.max_context_tokens)}`
+    : "Checking";
+
+  return (
+    <button
+      aria-label="Compact conversation context"
+      className={`context-meter${snapshot?.compact.circuit_open ? " warning" : ""}`}
+      title={decision ? `Last compact: ${decision}` : "Compact conversation context"}
+      type="button"
+      onClick={onCompact}
+    >
+      <Gauge aria-hidden="true" size={14} />
+      <span>{label}</span>
+      <small>{detail}</small>
+    </button>
+  );
+}
+
 function EnvironmentPopover({
+  contextSnapshot,
   diagnostics,
   health,
   projectPath,
   providerStatus,
   settings,
 }: {
+  contextSnapshot: DesktopContextSnapshot | null;
   diagnostics: DesktopDiagnostic[];
   health: DesktopHealth | null;
   projectPath: string;
@@ -705,6 +799,15 @@ function EnvironmentPopover({
           detail={health ? `${health.status} ${health.version}` : "Starting"}
           icon={<Activity aria-hidden="true" size={15} />}
           label="Runtime"
+        />
+        <EnvironmentRow
+          detail={
+            contextSnapshot
+              ? `${contextSnapshot.usage_percent}% · ${contextSnapshot.history_messages} messages`
+              : "Checking"
+          }
+          icon={<Gauge aria-hidden="true" size={15} />}
+          label="Context"
         />
       </div>
 

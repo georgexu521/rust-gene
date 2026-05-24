@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use priority_agent::desktop_runtime::{DesktopRunEvent, DesktopRuntime};
+use priority_agent::desktop_runtime::{DesktopContextSnapshot, DesktopRunEvent, DesktopRuntime};
 use priority_agent::permissions::PermissionMode;
 use priority_agent::session_store::SessionStore;
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,20 @@ struct DesktopMessage {
 struct ResumedSession {
     session_id: String,
     messages: Vec<DesktopMessage>,
+    compact_boundaries: Vec<DesktopCompactBoundary>,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopCompactBoundary {
+    boundary_id: String,
+    strategy: String,
+    trigger: String,
+    before_tokens: i64,
+    after_tokens: i64,
+    messages_before: i64,
+    messages_after: i64,
+    summary: String,
+    created_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -537,6 +551,7 @@ async fn resume_session(
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("session not found: {session_id}"))?;
     let messages = load_messages_from_store(&store, &session_id)?;
+    let compact_boundaries = load_compact_boundaries_from_store(&store, &session_id)?;
     let selected_project = state.selected_project.lock().await.clone();
     let runtime = DesktopRuntime::initialize_for_session(&selected_project, &session_id)
         .await
@@ -563,6 +578,7 @@ async fn resume_session(
     Ok(ResumedSession {
         session_id,
         messages,
+        compact_boundaries,
     })
 }
 
@@ -766,6 +782,22 @@ async fn desktop_run_context_detail(
         "file" => resolve_file_context(&context, &selected_project),
         other => Err(format!("Unsupported desktop run context: {}", other)),
     }
+}
+
+#[tauri::command]
+async fn compact_context(
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<priority_agent::engine::context_compressor::CompactionAttemptRecord>, String> {
+    let runtime = runtime_for_state(&state).await?;
+    Ok(runtime.compact_context().await)
+}
+
+#[tauri::command]
+async fn desktop_context_snapshot(
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopContextSnapshot, String> {
+    let runtime = runtime_for_state(&state).await?;
+    Ok(runtime.context_snapshot().await)
 }
 
 fn enrich_message_with_desktop_contexts(
@@ -1089,7 +1121,10 @@ async fn answer_permission(
         } else {
             priority_agent::engine::conversation_loop::ToolApprovalResponse::rejected_once()
         };
-        let _ = tx.send(response);
+        if tx.send(response).is_err() {
+            let _ = append_desktop_log(&diagnostic_logs_path, "permission_answer stale=true");
+            return Ok(false);
+        }
         let _ = append_desktop_log(
             &diagnostic_logs_path,
             if approved {
@@ -1251,6 +1286,61 @@ async fn emit_native_smoke_permission_resolution(
             },
             DesktopRunEvent::AssistantDelta {
                 text: "Native smoke fixture completed. Timeline cards, permission approval, and final answer rendering are visible.".to_string(),
+            },
+            DesktopRunEvent::RuntimeDiagnostic {
+                diagnostic: serde_json::json!({
+                    "schema": "desktop_runtime_diagnostic.v1",
+                    "task_state": {
+                        "goal": "native smoke fixture",
+                        "mode": "full",
+                        "stage": "closeout",
+                        "mode_score": {
+                            "confidence": 82,
+                            "complexity": 7,
+                            "risk": 5,
+                            "uncertainty": 3,
+                            "tool_need": 8,
+                            "user_impact": 7
+                        },
+                        "lightweight_plan": null,
+                        "verification": {
+                            "status": "verified",
+                            "required_checks": ["scripts/desktop-native-smoke.sh --fixture-run"]
+                        },
+                        "done": {
+                            "satisfied": true,
+                            "summary": "native smoke fixture completed"
+                        },
+                        "active_files": ["apps/desktop/src/app/Composer.tsx"],
+                        "stop_check": {
+                            "status": "stop",
+                            "reason": "verification_ready",
+                            "summary": "ready for closeout"
+                        }
+                    },
+                    "verification_proof": {
+                        "status": "verified",
+                        "summary": "native smoke validation passed",
+                        "closeout_status": "passed",
+                        "changed_files": 1,
+                        "validation_items": 1,
+                        "acceptance_items": 1,
+                        "residual_risks": 0
+                    },
+                    "control_loop": {
+                        "coverage": "7/7",
+                        "summary": "native smoke runtime diagnostic",
+                        "phases": [
+                            { "phase": "context", "events": 1, "latest_label": "task.context" },
+                            { "phase": "decision", "events": 1, "latest_label": "action.decision" },
+                            { "phase": "permission", "events": 1, "latest_label": "permission.resolve" },
+                            { "phase": "tool_execution", "events": 3, "latest_label": "tool.done" },
+                            { "phase": "state_update", "events": 1, "latest_label": "stop.check" },
+                            { "phase": "verification", "events": 1, "latest_label": "verify.done" },
+                            { "phase": "closeout", "events": 2, "latest_label": "assistant" }
+                        ]
+                    }
+                }),
             },
             DesktopRunEvent::Usage {
                 prompt_tokens: 32,
@@ -1939,6 +2029,30 @@ fn load_messages_from_store(
         .collect())
 }
 
+fn load_compact_boundaries_from_store(
+    store: &SessionStore,
+    session_id: &str,
+) -> Result<Vec<DesktopCompactBoundary>, String> {
+    let boundaries = store
+        .list_compact_boundaries(session_id, 8)
+        .map_err(|err| err.to_string())?;
+
+    Ok(boundaries
+        .into_iter()
+        .map(|boundary| DesktopCompactBoundary {
+            boundary_id: boundary.boundary_id,
+            strategy: boundary.strategy,
+            trigger: boundary.trigger.unwrap_or_default(),
+            before_tokens: boundary.before_tokens,
+            after_tokens: boundary.after_tokens,
+            messages_before: boundary.messages_before,
+            messages_after: boundary.messages_after,
+            summary: boundary.summary,
+            created_at: boundary.created_at,
+        })
+        .collect())
+}
+
 pub fn run() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     tauri::Builder::default()
@@ -2009,6 +2123,8 @@ pub fn run() {
             load_session_messages,
             resume_session,
             send_message,
+            compact_context,
+            desktop_context_snapshot,
             desktop_run_context_detail,
             answer_permission,
         ])

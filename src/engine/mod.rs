@@ -3,15 +3,19 @@
 //! 核心 AI 交互循环，管理消息历史、工具调用、流式响应
 //! 对应 Claude Code 中的 QueryEngine.ts
 
+pub mod action_decision;
 pub mod agent_mode;
 pub mod auto_verify;
 pub mod batch_refactor;
 pub mod checkpoint;
 pub mod code_change_workflow;
 pub mod code_review;
+pub mod context_assembly;
 pub mod context_collapse;
 pub mod context_compressor;
+pub mod context_ledger;
 pub mod context_manager;
+pub mod context_usage;
 pub mod conversation_loop;
 pub mod cron;
 pub mod destructive_scope;
@@ -31,9 +35,11 @@ pub mod human_review;
 pub mod improvement;
 pub mod intent_router;
 pub mod learning_planning;
+pub mod lightweight_planner;
 pub mod lsp;
 pub mod mcp;
 pub mod mcp_server;
+pub mod model_context;
 pub mod plan_mode;
 pub mod prompt_builder;
 pub mod prompt_context;
@@ -44,19 +50,24 @@ pub mod reflection_pass;
 pub mod repair_spec;
 pub mod resource_policy;
 pub mod retrieval_context;
+#[cfg(test)]
+mod runtime_spine_behavior_tests;
 pub mod scenario_matrix;
 pub mod session_goal;
 pub mod skill_evolution;
 pub mod socratic;
 pub mod socratic_executor;
+pub mod stop_checker;
 pub mod streaming;
 pub mod swarm;
 pub mod symbol_index;
 pub mod task_context;
+pub mod task_mode_score;
 pub mod tool_exposure;
 pub mod tool_orchestration;
 pub mod trace;
 pub mod turn_state;
+pub mod verification_proof;
 pub mod workflow;
 pub mod workflow_contract;
 pub mod worktree;
@@ -309,6 +320,18 @@ impl ConversationLoopBuilder {
         self.compressor = Some(std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::engine::context_compressor::ContextCompressor::new(max_context_tokens)
                 .with_llm_provider(self.provider.clone(), &self.model),
+        )));
+        self
+    }
+
+    pub fn with_model_context_profile(mut self) -> Self {
+        let profile =
+            self::model_context::ModelContextProfile::detect(self.provider.base_url(), &self.model);
+        self.compressor = Some(std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::engine::context_compressor::ContextCompressor::from_model_context_profile(
+                &profile,
+            )
+            .with_llm_provider(self.provider.clone(), &self.model),
         )));
         self
     }

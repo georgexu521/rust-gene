@@ -1,9 +1,12 @@
 use super::ConversationLoop;
+use crate::engine::task_context::AgentTaskStage;
 use crate::services::api::{Message, Tool};
 use std::collections::HashSet;
 
 pub(super) struct ToolExposureRequest<'a> {
     pub(super) base_tools: &'a [Tool],
+    pub(super) programming_workflow: bool,
+    pub(super) task_stage: Option<AgentTaskStage>,
     pub(super) has_changes_before_request: bool,
     pub(super) action_checkpoint_active: bool,
     pub(super) action_checkpoint_lookup_count: usize,
@@ -36,6 +39,14 @@ impl ToolExposurePlan {
         } else {
             request.base_tools.to_vec()
         };
+        let tools = if request.programming_workflow && !request.action_checkpoint_active {
+            phase_scoped_tools(
+                &tools,
+                request.task_stage.unwrap_or(AgentTaskStage::Understand),
+            )
+        } else {
+            tools
+        };
 
         let exposed_tool_names = tools
             .iter()
@@ -58,6 +69,85 @@ impl ToolExposurePlan {
             tools,
             exposed_tool_names,
             focused_repair_prompt,
+        }
+    }
+}
+
+fn phase_scoped_tools(tools: &[Tool], stage: AgentTaskStage) -> Vec<Tool> {
+    let scoped = tools
+        .iter()
+        .filter(|tool| phase_allows_tool(stage, &tool.name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if scoped.is_empty() {
+        tools.to_vec()
+    } else {
+        scoped
+    }
+}
+
+fn phase_allows_tool(stage: AgentTaskStage, name: &str) -> bool {
+    match stage {
+        AgentTaskStage::Understand => matches!(
+            name,
+            "project_list" | "glob" | "grep" | "file_read" | "lsp" | "symbol_query" | "ask_user"
+        ),
+        AgentTaskStage::Plan => matches!(
+            name,
+            "project_list"
+                | "glob"
+                | "grep"
+                | "file_read"
+                | "plan"
+                | "enter_plan_mode"
+                | "exit_plan_mode"
+                | "todo_write"
+                | "ask_user"
+        ),
+        AgentTaskStage::Edit => matches!(
+            name,
+            "project_list"
+                | "glob"
+                | "grep"
+                | "file_read"
+                | "file_write"
+                | "file_edit"
+                | "file_patch"
+                | "todo_write"
+                | "ask_user"
+        ),
+        AgentTaskStage::Validate => matches!(
+            name,
+            "file_read"
+                | "grep"
+                | "bash"
+                | "bash_output"
+                | "bash_cancel"
+                | "diff"
+                | "git"
+                | "format"
+                | "ask_user"
+        ),
+        AgentTaskStage::Repair => matches!(
+            name,
+            "project_list"
+                | "glob"
+                | "grep"
+                | "file_read"
+                | "file_write"
+                | "file_edit"
+                | "file_patch"
+                | "bash"
+                | "bash_output"
+                | "bash_cancel"
+                | "diff"
+                | "format"
+                | "lsp"
+                | "symbol_query"
+                | "ask_user"
+        ),
+        AgentTaskStage::Closeout | AgentTaskStage::Done => {
+            matches!(name, "file_read" | "diff" | "git" | "ask_user")
         }
     }
 }
@@ -90,6 +180,8 @@ mod tests {
         let base_tools = base_tools();
         let plan = ToolExposurePlan::build(ToolExposureRequest {
             base_tools: &base_tools,
+            programming_workflow: false,
+            task_stage: None,
             has_changes_before_request: false,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
@@ -106,6 +198,8 @@ mod tests {
         let base_tools = base_tools();
         let plan = ToolExposurePlan::build(ToolExposureRequest {
             base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: false,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
@@ -129,6 +223,8 @@ mod tests {
         let base_tools = base_tools();
         let after_change = ToolExposurePlan::build(ToolExposureRequest {
             base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: true,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
@@ -138,11 +234,72 @@ mod tests {
 
         let patch_required = ToolExposurePlan::build(ToolExposureRequest {
             base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: true,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: true,
         });
         assert!(!patch_required.exposed_tool_names.contains("bash"));
+    }
+
+    #[test]
+    fn programming_understand_stage_exposes_only_inspection_tools() {
+        let mut base_tools = base_tools();
+        base_tools.push(tool("ask_user"));
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Understand),
+            has_changes_before_request: false,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("file_read"));
+        assert!(plan.exposed_tool_names.contains("grep"));
+        assert!(plan.exposed_tool_names.contains("ask_user"));
+        assert!(!plan.exposed_tool_names.contains("file_edit"));
+        assert!(!plan.exposed_tool_names.contains("file_patch"));
+        assert!(!plan.exposed_tool_names.contains("bash"));
+    }
+
+    #[test]
+    fn programming_edit_stage_allows_write_but_not_validation_shell() {
+        let base_tools = base_tools();
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Edit),
+            has_changes_before_request: false,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("file_edit"));
+        assert!(plan.exposed_tool_names.contains("file_patch"));
+        assert!(plan.exposed_tool_names.contains("file_read"));
+        assert!(!plan.exposed_tool_names.contains("bash"));
+    }
+
+    #[test]
+    fn programming_validate_stage_allows_validation_but_not_write() {
+        let base_tools = base_tools();
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Validate),
+            has_changes_before_request: true,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("bash"));
+        assert!(!plan.exposed_tool_names.contains("file_edit"));
+        assert!(!plan.exposed_tool_names.contains("file_patch"));
     }
 }

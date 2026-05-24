@@ -12,6 +12,9 @@ export function DiagnosticsPanel({ diagnostics, onRefresh }: DiagnosticsPanelPro
   }
 
   const summary = summarizeDiagnostics(diagnostics);
+  if (summary.status === "ok") {
+    return null;
+  }
 
   return (
     <section className={`diagnostics-panel ${summary.status}`}>

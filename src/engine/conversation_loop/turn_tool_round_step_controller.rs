@@ -6,6 +6,7 @@ use super::turn_tool_round_outcome_controller::{
     TurnToolRoundOutcomeController, TurnToolRoundState,
 };
 use super::ConversationLoop;
+use crate::engine::task_context::TaskContextBundle;
 use crate::services::api::{Message, ToolCall};
 use crate::tools::ToolResult;
 use std::collections::HashMap;
@@ -17,6 +18,7 @@ pub(super) struct TurnToolRoundStepContext<'a> {
     pub(super) pre_executed: HashMap<usize, ToolResult>,
     pub(super) runtime: TurnRuntimeContext<'a>,
     pub(super) turn_state: &'a mut TurnRuntimeState,
+    pub(super) task_bundle: &'a mut TaskContextBundle,
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) is_programming_workflow: bool,
     pub(super) loop_state: &'a mut TurnLoopState,
@@ -33,6 +35,7 @@ impl TurnToolRoundStepController {
             pre_executed: context.pre_executed,
             runtime: context.runtime,
             turn_state: context.turn_state,
+            task_bundle: context.task_bundle,
             messages: context.messages,
             is_programming_workflow: context.is_programming_workflow,
             companion_context_keys: &mut context.loop_state.companion_context_keys,
@@ -105,6 +108,7 @@ mod tests {
             DestructiveScopeContract::from_user_request("hello", Path::new("."));
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "hello"));
         let mut turn_state = TurnRuntimeState::new(true);
+        let mut task_bundle = TaskContextBundle::new("hello", Path::new("."), route.clone(), None);
         let mut loop_state = TurnLoopState::default();
         let mut messages = vec![Message::user("hello")];
         let exposed_tool_names = HashSet::new();
@@ -121,6 +125,7 @@ mod tests {
                 trace: &trace,
                 route: &route,
                 resource_policy: &resource_policy,
+                task_stage: crate::engine::task_context::AgentTaskStage::Understand,
                 exposed_tool_names: &exposed_tool_names,
                 working_dir: Path::new("."),
                 last_user_preview: "hello",
@@ -130,6 +135,7 @@ mod tests {
                 retained_context: &retained_context,
             },
             turn_state: &mut turn_state,
+            task_bundle: &mut task_bundle,
             messages: &mut messages,
             is_programming_workflow: false,
             loop_state: &mut loop_state,

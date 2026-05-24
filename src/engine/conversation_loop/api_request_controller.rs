@@ -1,8 +1,8 @@
 use super::session_processor::SessionStepResult;
 use super::turn_recording::record_recovery_plan;
 use super::ConversationLoop;
-use crate::engine::context_collapse::ContextCompactionStrategy;
-use crate::engine::context_compressor::estimate_messages_tokens;
+use crate::engine::context_collapse::{CompactionDecision, ContextCompactionStrategy};
+use crate::engine::context_compressor::{estimate_messages_tokens, CompactionAttemptInput};
 use crate::engine::error_classifier::{ClassifiedError, ErrorCategory};
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
@@ -112,14 +112,37 @@ impl ApiRequestController {
                             compress_retry + 1,
                             error
                         );
-                        if let Some(ref compressor) = context.conversation.compressor {
+                        if let Some(ref compressor_mutex) = context.conversation.compressor {
+                            let mut compressor = compressor_mutex.lock().await;
+                            let before_tokens = estimate_messages_tokens(context.messages);
+                            if compressor.compaction_circuit_open() {
+                                compressor.record_compaction_decision(CompactionAttemptInput::new(
+                                    "api_context_error",
+                                    ContextCompactionStrategy::ReactiveCompact,
+                                    CompactionDecision::CircuitOpen,
+                                    before_tokens,
+                                    context.messages.len(),
+                                    "reactive compaction circuit open after repeated no-gain/failure attempts",
+                                ));
+                                drop(compressor);
+                                break;
+                            }
+                            compressor.record_compaction_decision(CompactionAttemptInput::new(
+                                "api_context_error",
+                                ContextCompactionStrategy::ReactiveCompact,
+                                CompactionDecision::Retrying,
+                                before_tokens,
+                                context.messages.len(),
+                                "provider reported context limit; compacting and retrying",
+                            ));
+                            drop(compressor);
                             let messages_for_compression = if compress_retry == 0 {
                                 context.messages.to_vec()
                             } else {
-                                let mut compressor = compressor.lock().await;
+                                let mut compressor = compressor_mutex.lock().await;
                                 compressor.micro_compress(context.messages)
                             };
-                            let mut compressor = compressor.lock().await;
+                            let mut compressor = compressor_mutex.lock().await;
                             let compaction_record_len = compressor.compaction_records().len();
                             let compressed = compressor
                                 .compress_async_with_strategy(
@@ -135,7 +158,46 @@ impl ApiRequestController {
                                 .compaction_records()
                                 .get(compaction_record_len)
                                 .cloned();
+                            let after_tokens = estimate_messages_tokens(&compressed);
+                            let decision = if after_tokens
+                                < estimate_messages_tokens(&messages_for_compression)
+                            {
+                                CompactionDecision::Recovered
+                            } else {
+                                CompactionDecision::NoGain
+                            };
+                            compressor.record_compaction_decision(
+                                CompactionAttemptInput::new(
+                                    "api_context_error",
+                                    ContextCompactionStrategy::ReactiveCompact,
+                                    decision,
+                                    estimate_messages_tokens(&messages_for_compression),
+                                    messages_for_compression.len(),
+                                    if decision == CompactionDecision::Recovered {
+                                        "reactive compaction produced a smaller retry request"
+                                    } else {
+                                        "reactive compaction did not reduce retry request size"
+                                    },
+                                )
+                                .with_after(Some(after_tokens), Some(compressed.len()))
+                                .with_boundary_id(
+                                    compaction_record
+                                        .as_ref()
+                                        .and_then(|record| record.boundary_id.clone()),
+                                ),
+                            );
                             drop(compressor);
+                            if let (Some(store), Some(record)) = (
+                                context.conversation.session_store.as_ref(),
+                                compaction_record.as_ref(),
+                            ) {
+                                let _ = store.add_compact_boundary_from_runtime_record(
+                                    &context.conversation.session_id,
+                                    record,
+                                    Some("api_context_error"),
+                                    "reactive context compacted after provider limit error",
+                                );
+                            }
                             let mut provenance = compaction_record
                                 .as_ref()
                                 .map(|record| record.provenance.clone())
@@ -144,7 +206,7 @@ impl ApiRequestController {
                             context.trace.record(TraceEvent::ContextCompacted {
                                 before_tokens: estimate_messages_tokens(&messages_for_compression)
                                     as usize,
-                                after_tokens: estimate_messages_tokens(&compressed) as usize,
+                                after_tokens: after_tokens as usize,
                                 strategy: compaction_record
                                     .as_ref()
                                     .map(|record| record.strategy.label().to_string())

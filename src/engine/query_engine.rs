@@ -246,7 +246,7 @@ impl QueryEngine {
             &self.model,
         )
         .with_max_iterations(self.max_iterations)
-        .with_compression(128_000);
+        .with_model_context_profile();
 
         if let Some(ref manager) = self.agent_manager {
             builder = builder.with_agent_manager(manager.clone());

@@ -9,14 +9,61 @@
 //! - 工具调用对完整性校验（孤立项清理 + stub 插入）
 
 pub use crate::engine::context_collapse::{
-    extract_compact_boundaries, CompactMetadata, CompactionRuntimeRecord,
-    ContextCompactionStrategy, ContextTokenPressure,
+    extract_compact_boundaries, CompactMetadata, CompactionAttemptRecord, CompactionDecision,
+    CompactionRuntimeRecord, ContextCompactionStrategy, ContextTokenPressure,
 };
 use crate::services::api::Message;
 #[cfg(test)]
 use crate::services::api::ToolCall;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub struct CompactionAttemptInput {
+    pub trigger: String,
+    pub strategy: ContextCompactionStrategy,
+    pub decision: CompactionDecision,
+    pub before_tokens: u64,
+    pub after_tokens: Option<u64>,
+    pub messages_before: usize,
+    pub messages_after: Option<usize>,
+    pub reason: String,
+    pub boundary_id: Option<String>,
+}
+
+impl CompactionAttemptInput {
+    pub fn new(
+        trigger: impl Into<String>,
+        strategy: ContextCompactionStrategy,
+        decision: CompactionDecision,
+        before_tokens: u64,
+        messages_before: usize,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            trigger: trigger.into(),
+            strategy,
+            decision,
+            before_tokens,
+            after_tokens: None,
+            messages_before,
+            messages_after: None,
+            reason: reason.into(),
+            boundary_id: None,
+        }
+    }
+
+    pub fn with_after(mut self, after_tokens: Option<u64>, messages_after: Option<usize>) -> Self {
+        self.after_tokens = after_tokens;
+        self.messages_after = messages_after;
+        self
+    }
+
+    pub fn with_boundary_id(mut self, boundary_id: Option<String>) -> Self {
+        self.boundary_id = boundary_id;
+        self
+    }
+}
 
 // ── 摘要模板 ──────────────────────────────────────────────
 
@@ -648,6 +695,17 @@ impl TokenBudget {
         }
     }
 
+    pub fn from_model_context_profile(
+        profile: &crate::engine::model_context::ModelContextProfile,
+    ) -> Self {
+        Self {
+            max_context_tokens: profile.context_window_tokens,
+            reserved_output_tokens: profile.reserved_output_tokens,
+            system_prompt_tokens: 2000,
+            tool_schemas_tokens: 1000,
+        }
+    }
+
     /// 可用于对话历史的 token 数
     pub fn available_for_history(&self) -> u64 {
         self.max_context_tokens
@@ -1133,6 +1191,12 @@ pub struct ContextCompressor {
     compact_metadata_history: Vec<CompactMetadata>,
     /// Runtime compaction records for trace/UI provenance.
     compaction_records: Vec<CompactionRuntimeRecord>,
+    /// State-machine records for every compaction decision, including skips.
+    compaction_attempt_records: Vec<CompactionAttemptRecord>,
+    consecutive_compaction_failures: u32,
+    consecutive_no_gain_compactions: u32,
+    max_consecutive_compaction_failures: u32,
+    max_consecutive_no_gain_compactions: u32,
 }
 
 impl ContextCompressor {
@@ -1156,6 +1220,20 @@ impl ContextCompressor {
             compact_sequence: 0,
             compact_metadata_history: Vec::new(),
             compaction_records: Vec::new(),
+            compaction_attempt_records: Vec::new(),
+            consecutive_compaction_failures: 0,
+            consecutive_no_gain_compactions: 0,
+            max_consecutive_compaction_failures: 2,
+            max_consecutive_no_gain_compactions: 2,
+        }
+    }
+
+    pub fn from_model_context_profile(
+        profile: &crate::engine::model_context::ModelContextProfile,
+    ) -> Self {
+        Self {
+            budget: TokenBudget::from_model_context_profile(profile),
+            ..Self::new(profile.context_window_tokens)
         }
     }
 
@@ -2229,6 +2307,58 @@ impl ContextCompressor {
         &self.compaction_records
     }
 
+    pub fn compaction_attempt_records(&self) -> &[CompactionAttemptRecord] {
+        &self.compaction_attempt_records
+    }
+
+    pub fn compaction_circuit_open(&self) -> bool {
+        self.consecutive_compaction_failures >= self.max_consecutive_compaction_failures
+            || self.consecutive_no_gain_compactions >= self.max_consecutive_no_gain_compactions
+    }
+
+    pub fn record_compaction_decision(
+        &mut self,
+        input: CompactionAttemptInput,
+    ) -> CompactionAttemptRecord {
+        match input.decision {
+            CompactionDecision::Compacted | CompactionDecision::Recovered => {
+                self.consecutive_compaction_failures = 0;
+                self.consecutive_no_gain_compactions = 0;
+            }
+            CompactionDecision::NoGain => {
+                self.consecutive_no_gain_compactions =
+                    self.consecutive_no_gain_compactions.saturating_add(1);
+            }
+            CompactionDecision::Failed => {
+                self.consecutive_compaction_failures =
+                    self.consecutive_compaction_failures.saturating_add(1);
+            }
+            _ => {}
+        }
+        let record = CompactionAttemptRecord {
+            trigger: input.trigger,
+            strategy: input.strategy,
+            decision: input.decision,
+            before_tokens: input.before_tokens,
+            after_tokens: input.after_tokens,
+            messages_before: input.messages_before,
+            messages_after: input.messages_after,
+            reason: input.reason,
+            attempt_index: self
+                .compaction_attempt_records
+                .len()
+                .saturating_add(1)
+                .try_into()
+                .unwrap_or(u32::MAX),
+            consecutive_no_gain: self.consecutive_no_gain_compactions,
+            consecutive_failures: self.consecutive_compaction_failures,
+            circuit_open: self.compaction_circuit_open(),
+            boundary_id: input.boundary_id,
+        };
+        self.compaction_attempt_records.push(record.clone());
+        record
+    }
+
     pub fn annotate_compaction_record_trigger(&mut self, index: usize, trigger: impl Into<String>) {
         if let Some(record) = self.compaction_records.get_mut(index) {
             record.trigger = Some(trigger.into());
@@ -2516,6 +2646,74 @@ mod tests {
 
         // 超阈值
         assert!(compressor.preflight_check(&messages, 5000, 5000));
+    }
+
+    #[test]
+    fn compaction_attempt_records_open_circuit_after_repeated_no_gain() {
+        let mut compressor = ContextCompressor::new(10_000);
+
+        let first = compressor.record_compaction_decision(
+            CompactionAttemptInput::new(
+                "test",
+                ContextCompactionStrategy::AutoCompact,
+                CompactionDecision::NoGain,
+                1_000,
+                4,
+                "no reduction",
+            )
+            .with_after(Some(1_000), Some(4)),
+        );
+        assert!(!first.circuit_open);
+
+        let second = compressor.record_compaction_decision(
+            CompactionAttemptInput::new(
+                "test",
+                ContextCompactionStrategy::AutoCompact,
+                CompactionDecision::NoGain,
+                1_000,
+                4,
+                "no reduction",
+            )
+            .with_after(Some(1_000), Some(4)),
+        );
+        assert!(second.circuit_open);
+        assert!(compressor.compaction_circuit_open());
+        assert_eq!(compressor.compaction_attempt_records().len(), 2);
+        assert_eq!(
+            compressor.compaction_attempt_records()[1].decision,
+            CompactionDecision::NoGain
+        );
+    }
+
+    #[test]
+    fn successful_compaction_attempt_resets_circuit_counters() {
+        let mut compressor = ContextCompressor::new(10_000);
+        compressor.record_compaction_decision(
+            CompactionAttemptInput::new(
+                "test",
+                ContextCompactionStrategy::AutoCompact,
+                CompactionDecision::NoGain,
+                1_000,
+                4,
+                "no reduction",
+            )
+            .with_after(Some(1_000), Some(4)),
+        );
+        let compacted = compressor.record_compaction_decision(
+            CompactionAttemptInput::new(
+                "test",
+                ContextCompactionStrategy::AutoCompact,
+                CompactionDecision::Compacted,
+                1_000,
+                4,
+                "reduced",
+            )
+            .with_after(Some(500), Some(2))
+            .with_boundary_id(Some("boundary-1".to_string())),
+        );
+        assert_eq!(compacted.consecutive_no_gain, 0);
+        assert_eq!(compacted.consecutive_failures, 0);
+        assert!(!compacted.circuit_open);
     }
 
     #[test]

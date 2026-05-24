@@ -149,6 +149,52 @@ impl ContextCompactionStrategy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionDecision {
+    Considered,
+    Skipped,
+    Compacted,
+    NoGain,
+    Failed,
+    CircuitOpen,
+    Retrying,
+    Recovered,
+}
+
+impl CompactionDecision {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Considered => "considered",
+            Self::Skipped => "skipped",
+            Self::Compacted => "compacted",
+            Self::NoGain => "no_gain",
+            Self::Failed => "failed",
+            Self::CircuitOpen => "circuit_open",
+            Self::Retrying => "retrying",
+            Self::Recovered => "recovered",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct CompactionAttemptRecord {
+    pub trigger: String,
+    pub strategy: ContextCompactionStrategy,
+    pub decision: CompactionDecision,
+    pub before_tokens: u64,
+    pub after_tokens: Option<u64>,
+    pub messages_before: usize,
+    pub messages_after: Option<usize>,
+    pub reason: String,
+    pub attempt_index: u32,
+    pub consecutive_no_gain: u32,
+    pub consecutive_failures: u32,
+    pub circuit_open: bool,
+    #[serde(default)]
+    pub boundary_id: Option<String>,
+}
+
 /// Runtime-visible token pressure at the time compaction was considered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

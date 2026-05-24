@@ -56,6 +56,18 @@ expected_behavior:
   - The edit is minimal and preserves surrounding code.
   - The required test passes after the edit.
 
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+  verification_proof: true
+
 core_quality:
   group: core-coding-quality
   failure_owner_hints:

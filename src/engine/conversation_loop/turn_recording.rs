@@ -78,15 +78,24 @@ pub(super) fn record_recovery_plan(
 pub(super) fn record_goal_drift_if_needed(
     trace: &Option<TraceCollector>,
     goal: Option<&crate::engine::session_goal::SessionGoal>,
+    task_state: Option<&crate::engine::task_context::AgentTaskState>,
     tool_call: &ToolCall,
 ) {
-    let (Some(trace), Some(goal)) = (trace, goal) else {
+    let Some(trace) = trace else {
         return;
     };
-    let check = crate::engine::goal_drift::GoalDriftDetector::new().check(goal, tool_call);
+    if goal.is_none() && task_state.is_none() {
+        return;
+    };
+    let check = crate::engine::goal_drift::GoalDriftDetector::new().check_with_context(
+        crate::engine::goal_drift::GoalDriftContext { goal, task_state },
+        tool_call,
+    );
     if check.should_trace() {
         trace.record(TraceEvent::GoalDriftDetected {
-            goal_id: goal.id.clone(),
+            goal_id: goal
+                .map(|goal| goal.id.clone())
+                .unwrap_or_else(|| "task_state".to_string()),
             tool: tool_call.name.clone(),
             call_id: tool_call.id.clone(),
             level: format!("{:?}", check.level),

@@ -5,6 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::engine::context_assembly::{
+    ContextAssemblyInput, ContextAssemblyPlan, ContextAssemblyReport,
+};
 use crate::services::api::Message;
 
 #[derive(Debug, Clone)]
@@ -28,9 +31,12 @@ pub struct PromptLayerReport {
 #[derive(Debug, Clone)]
 pub struct PromptContextReport {
     pub layers: Vec<PromptLayerReport>,
+    pub assembly: ContextAssemblyReport,
     pub total_chars: usize,
     pub total_tokens: u64,
     pub fingerprint: String,
+    pub stable_prefix_fingerprint: String,
+    pub dynamic_tail_tokens: u64,
 }
 
 impl PromptContextAssembler {
@@ -51,6 +57,24 @@ impl PromptContextAssembler {
     }
 
     pub fn build_for_turn(&self, user_message: &str, history: &[Message]) -> PromptContext {
+        let plan = self.assembly_plan_for_turn(user_message, history);
+        PromptContext {
+            system_prompt: plan.render_legacy_system_prompt(),
+        }
+    }
+
+    pub fn build_for_single_user_message(&self, user_message: &str) -> PromptContext {
+        let plan = self.assembly_plan_for_single_user_message(user_message);
+        PromptContext {
+            system_prompt: plan.render_legacy_system_prompt(),
+        }
+    }
+
+    pub fn assembly_plan_for_turn(
+        &self,
+        user_message: &str,
+        history: &[Message],
+    ) -> ContextAssemblyPlan {
         let layered =
             crate::instructions::compose_system_prompt(&self.base_prompt, &self.working_dir);
         let system_prompt =
@@ -59,21 +83,21 @@ impl PromptContextAssembler {
                 user_message,
                 history,
             );
-        PromptContext { system_prompt }
+        context_assembly_plan_from_prompt_parts(layered, system_prompt, user_message)
     }
 
-    pub fn build_for_single_user_message(&self, user_message: &str) -> PromptContext {
+    pub fn assembly_plan_for_single_user_message(&self, user_message: &str) -> ContextAssemblyPlan {
         let layered =
             crate::instructions::compose_system_prompt(&self.base_prompt, &self.working_dir);
         let system_prompt =
             crate::engine::prompt_builder::compose_task_aware_system_prompt(&layered, user_message);
-        PromptContext { system_prompt }
+        context_assembly_plan_from_prompt_parts(layered, system_prompt, user_message)
     }
 
     pub fn report_for_turn(&self, user_message: &str, history: &[Message]) -> PromptContextReport {
-        let final_prompt = self.build_for_turn(user_message, history).system_prompt;
-        let stable_prompt =
-            crate::instructions::compose_system_prompt(&self.base_prompt, &self.working_dir);
+        let assembly_plan = self.assembly_plan_for_turn(user_message, history);
+        let final_prompt = assembly_plan.render_legacy_system_prompt();
+        let stable_prompt = &assembly_plan.stable_prefix.content;
         let instruction_layers = crate::instructions::load_instruction_layers(&self.working_dir);
 
         let mut layers = Vec::new();
@@ -92,7 +116,7 @@ impl PromptContextAssembler {
             ));
         }
 
-        if final_prompt != stable_prompt {
+        if final_prompt != *stable_prompt {
             let task_focus_chars = final_prompt
                 .chars()
                 .count()
@@ -110,9 +134,30 @@ impl PromptContextAssembler {
             total_chars: final_prompt.chars().count(),
             total_tokens: crate::engine::context_compressor::estimate_tokens(&final_prompt),
             fingerprint: stable_fingerprint(&final_prompt),
+            stable_prefix_fingerprint: assembly_plan.cache_report.stable_prefix_fingerprint.clone(),
+            dynamic_tail_tokens: assembly_plan.cache_report.dynamic_tail_tokens,
+            assembly: assembly_plan.report(),
             layers,
         }
     }
+}
+
+fn context_assembly_plan_from_prompt_parts(
+    stable_prompt: String,
+    final_prompt: String,
+    user_message: &str,
+) -> ContextAssemblyPlan {
+    let task_state_tail = final_prompt
+        .strip_prefix(&stable_prompt)
+        .unwrap_or("")
+        .to_string();
+    ContextAssemblyPlan::new(ContextAssemblyInput {
+        stable_prefix: stable_prompt,
+        task_state: task_state_tail,
+        relevant_material: String::new(),
+        recent_observation: String::new(),
+        current_decision_request: user_message.to_string(),
+    })
 }
 
 fn layer_report(name: impl Into<String>, content: &str) -> PromptLayerReport {
@@ -170,8 +215,60 @@ mod tests {
 
         assert!(report.layers.iter().any(|l| l.name == "base system prompt"));
         assert!(report.layers.iter().any(|l| l.name == "task focus"));
+        assert!(report
+            .assembly
+            .zones
+            .iter()
+            .any(|zone| zone.name == "task_state" && !zone.empty));
         assert!(report.total_tokens > 0);
         assert_eq!(report.fingerprint.len(), 12);
+        assert_eq!(report.stable_prefix_fingerprint.len(), 12);
+        assert!(report.dynamic_tail_tokens > 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn assembly_plan_reports_five_zones_in_stable_order() {
+        let dir = std::env::temp_dir().join(format!("prompt-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let assembler = PromptContextAssembler::new("base prompt", &dir);
+
+        let plan = assembler.assembly_plan_for_turn("请实现功能", &[]);
+        let zone_names = plan
+            .zone_reports()
+            .into_iter()
+            .map(|zone| zone.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            zone_names,
+            vec![
+                "stable_prefix",
+                "task_state",
+                "relevant_material",
+                "recent_observation",
+                "current_decision_request"
+            ]
+        );
+        assert!(!plan.stable_prefix.is_empty());
+        assert!(!plan.current_decision_request.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stable_prefix_fingerprint_stays_fixed_when_task_focus_changes() {
+        let dir = std::env::temp_dir().join(format!("prompt-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let assembler = PromptContextAssembler::new("base prompt", &dir);
+
+        let coding = assembler.report_for_turn("请实现功能", &[]);
+        let review = assembler.report_for_turn("请做 code review", &[]);
+
+        assert_eq!(
+            coding.stable_prefix_fingerprint,
+            review.stable_prefix_fingerprint
+        );
+        assert_ne!(coding.fingerprint, review.fingerprint);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

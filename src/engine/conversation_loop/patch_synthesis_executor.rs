@@ -82,12 +82,15 @@ impl PatchSynthesisExecutor {
             resource_policy: context.resource_policy,
             exposed_tool_names: &exposed_synth_tools,
             retained_context: &crate::tools::ToolContextRetainedContext::default(),
+            task_stage: crate::engine::task_context::AgentTaskStage::Repair,
+            task_state: None,
             // Synthesized edits have already passed patch-synthesis
             // validation. Avoid applying the direct action-checkpoint guard
             // again, or safe recovered patches can be rejected without giving
             // the model a way to inspect and repair the arguments.
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
+            no_progress_rounds: context.turn_state.focused_repair.no_code_progress_rounds,
             has_changes_before_tools: false,
             destructive_scope: context.destructive_scope,
             lifecycle: &mut context.turn_state.tool_lifecycle,

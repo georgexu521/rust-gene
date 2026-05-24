@@ -257,6 +257,7 @@ pub async fn init_components(
     let mut streaming_engine_builder =
         StreamingQueryEngine::new(provider.clone(), tool_registry.clone(), &model)
             .with_max_iterations(engine_config.max_iterations)
+            .with_working_dir(working_dir)
             .with_task_manager(task_manager.clone())
             .with_lsp_manager(lsp_manager.clone())
             .with_worktree_manager(worktree_manager.clone())

@@ -1,4 +1,10 @@
-import { DesktopMessage, DesktopRunContext, DesktopRunEvent } from "../runtime/desktopApi";
+import {
+  DesktopCompactBoundary,
+  DesktopMessage,
+  DesktopRunContext,
+  DesktopRunEvent,
+  DesktopRuntimeDiagnostic,
+} from "../runtime/desktopApi";
 import {
   PermissionRequest,
   TimelineStatus,
@@ -220,6 +226,23 @@ export function applyRunEvent(
         shouldRefreshSessions: false,
       };
     }
+    case "runtime_diagnostic": {
+      const detail = runtimeDiagnosticDetail(event.diagnostic);
+      const runtimeFacts = runtimeDiagnosticFacts(event.diagnostic);
+      const updatedRunState = updateLatestOpenRunSummary(state, {
+        stage: runtimeDiagnosticRunStage(event.diagnostic),
+        headline: "Runtime diagnostic",
+        detail,
+        stats: compactFacts([...runStats(state.items), ...runtimeFacts]),
+      });
+      return appendTraceOnly(updatedRunState, {
+        id: createId(),
+        kind: "runtime",
+        title: "Runtime diagnostic",
+        detail,
+        runtime: event.diagnostic,
+      });
+    }
     case "usage":
       const usageDetail = [
         `prompt ${event.prompt_tokens}`,
@@ -358,12 +381,13 @@ export function loadSessionTranscript(
   state: RunViewState,
   sessionId: string,
   messages: DesktopMessage[],
+  compactBoundaries: DesktopCompactBoundary[] = [],
 ): RunViewState {
   return {
     ...state,
     selectedSessionId: sessionId,
     pendingRunContexts: [],
-    items: messages.map(messageToTranscriptItem),
+    items: [...compactBoundaries.map(compactBoundaryToTranscriptItem), ...messages.map(messageToTranscriptItem)],
     traceItems: [
       {
         id: `loaded-${sessionId}`,
@@ -374,6 +398,28 @@ export function loadSessionTranscript(
     ],
     pendingPermission: null,
     error: null,
+  };
+}
+
+function compactBoundaryToTranscriptItem(boundary: DesktopCompactBoundary): TranscriptItem {
+  const savedTokens = Math.max(0, boundary.before_tokens - boundary.after_tokens);
+  const stats = [
+    boundary.strategy,
+    savedTokens > 0 ? `saved ${formatTokenCount(savedTokens)} tokens` : undefined,
+    boundary.messages_before > 0
+      ? `${boundary.messages_before} -> ${boundary.messages_after} messages`
+      : undefined,
+  ].filter(Boolean) as string[];
+
+  return {
+    id: `compact-${boundary.boundary_id}`,
+    role: "timeline",
+    kind: "compact",
+    title: "Context compacted",
+    detail: boundary.summary || boundary.trigger || boundary.created_at,
+    facts: stats,
+    status: "completed",
+    traceId: `compact-${boundary.boundary_id}`,
   };
 }
 
@@ -554,6 +600,9 @@ function updateLatestRunSummaryMatching(
       summary: {
         ...previousSummary,
         ...patch,
+        stats: patch.stats
+          ? uniqueToolValues([...patch.stats, ...runtimeStatsFromRunSummary(previousSummary)])
+          : previousSummary.stats,
       },
     };
   }
@@ -634,8 +683,9 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
     }
   }
   if (index < 0) {
+    const completedItems = appendLedgerReuseCard(markLatestAssistantAsFinal(items));
     return [
-      ...markLatestAssistantAsFinal(items),
+      ...completedItems,
       timelineEvent({
         id: `run-completed-${Date.now()}`,
         kind: "run",
@@ -652,7 +702,7 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
     ];
   }
 
-  const nextItems = [...markLatestAssistantAsFinal(items)];
+  const nextItems = [...appendLedgerReuseCard(markLatestAssistantAsFinal(items))];
   const item = nextItems[index];
   if (item.role === "timeline") {
     nextItems[index] = {
@@ -664,13 +714,54 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
         headline: "Run completed",
         detail: runCompletionDetail(nextItems),
         sessionId: item.summary?.kind === "run" ? item.summary.sessionId : undefined,
-        stats: runStats(nextItems),
+        stats: compactFacts([
+          ...runStats(nextItems),
+          ...runtimeStatsFromRunSummary(item.summary),
+        ]),
         contexts: item.summary?.kind === "run" ? item.summary.contexts : undefined,
       },
       status: "completed",
     };
   }
   return nextItems;
+}
+
+function appendLedgerReuseCard(items: TranscriptItem[]): TranscriptItem[] {
+  const lastAssistant = [...items]
+    .reverse()
+    .find((item): item is Extract<TranscriptItem, { role: "assistant" }> => item.role === "assistant");
+  if (!lastAssistant) {
+    return items;
+  }
+  const reuseBasis = extractLedgerReuseBasis(lastAssistant.text);
+  if (!reuseBasis) {
+    return items;
+  }
+  if (items.some((item) => item.role === "timeline" && item.id === `ledger-reuse-${lastAssistant.id}`)) {
+    return items;
+  }
+  return [
+    ...items,
+    timelineEvent({
+      id: `ledger-reuse-${lastAssistant.id}`,
+      kind: "compact",
+      title: "Reused session context",
+      detail: reuseBasis,
+      facts: ["ledger", "no repeated read"],
+      status: "completed",
+    }),
+  ];
+}
+
+function extractLedgerReuseBasis(text: string): string | null {
+  const match = text.match(/(?:复用依据：|Reuse basis:\s*)(.+)$/s);
+  if (match?.[1]) {
+    return match[1].trim().split("\n")[0];
+  }
+  if (text.includes("重复读取被已有会话上下文接住") || text.includes("repeated read was handled from session context")) {
+    return "Answered from existing session ledger.";
+  }
+  return null;
 }
 
 function markLatestAssistantAsFinal(items: TranscriptItem[]): TranscriptItem[] {
@@ -754,6 +845,56 @@ function runStats(items: TranscriptItem[]): string[] {
     fileChanges > 0 ? `${fileChanges} file${fileChanges === 1 ? "" : "s"} changed` : null,
     validations > 0 ? `${validations} validation${validations === 1 ? "" : "s"}` : null,
   ]);
+}
+
+function runtimeStatsFromRunSummary(summary: TimelineSummary | undefined): string[] {
+  if (summary?.kind !== "run") {
+    return [];
+  }
+  return (summary.stats || []).filter(
+    (stat) =>
+      stat.startsWith("stage ") ||
+      stat.startsWith("verification ") ||
+      stat.startsWith("proof ") ||
+      stat.startsWith("spine "),
+  );
+}
+
+function runtimeDiagnosticFacts(diagnostic: DesktopRuntimeDiagnostic): string[] {
+  const taskState = recordField(diagnostic, "task_state");
+  const verification = recordField(taskState, "verification");
+  const proof = recordField(diagnostic, "verification_proof");
+  const controlLoop = recordField(diagnostic, "control_loop");
+  const activeFiles = arrayField(taskState, "active_files");
+
+  return compactFacts([
+    stringField(taskState, "stage") ? `stage ${stringField(taskState, "stage")}` : null,
+    stringField(verification, "status")
+      ? `verification ${stringField(verification, "status")}`
+      : null,
+    stringField(proof, "status") ? `proof ${stringField(proof, "status")}` : null,
+    stringField(controlLoop, "coverage") ? `spine ${stringField(controlLoop, "coverage")}` : null,
+    activeFiles.length > 0 ? `files ${activeFiles.length}` : null,
+  ]).slice(0, 5);
+}
+
+function runtimeDiagnosticDetail(diagnostic: DesktopRuntimeDiagnostic): string {
+  return (
+    runtimeDiagnosticFacts(diagnostic).join(" · ") ||
+    stringField(diagnostic, "schema") ||
+    "runtime diagnostic"
+  );
+}
+
+function runtimeDiagnosticRunStage(
+  diagnostic: DesktopRuntimeDiagnostic,
+): Extract<TimelineSummary, { kind: "run" }>["stage"] {
+  const proof = recordField(diagnostic, "verification_proof");
+  const proofStatus = stringField(proof, "status");
+  if (proofStatus === "failed" || proofStatus === "blocked") {
+    return "failed";
+  }
+  return "running";
 }
 
 function timelineTools(items: TranscriptItem[]): Array<Extract<TranscriptItem, { role: "timeline" }>> {
@@ -1141,6 +1282,23 @@ function validationLabel(value: string) {
 
 function compactFacts(values: Array<string | null | undefined>) {
   return values.filter((value): value is string => Boolean(value && value.trim()));
+}
+
+function formatTokenCount(tokens: number) {
+  if (tokens >= 1000) {
+    return `${Math.round(tokens / 100) / 10}k`;
+  }
+  return `${tokens}`;
+}
+
+function recordField(value: Record<string, unknown> | null, key: string): Record<string, unknown> | null {
+  const field = value?.[key];
+  return isRecord(field) ? field : null;
+}
+
+function arrayField(value: Record<string, unknown> | null, key: string): unknown[] {
+  const field = value?.[key];
+  return Array.isArray(field) ? field : [];
 }
 
 function stringField(value: Record<string, unknown> | null, key: string) {

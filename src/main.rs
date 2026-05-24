@@ -228,6 +228,13 @@ async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
                     "cached_tokens": cached_tokens,
                 }),
             )?,
+            StreamEvent::RuntimeDiagnostic { diagnostic } => write_eval_event(
+                &mut event_writer,
+                json!({
+                    "event": "runtime_diagnostic",
+                    "diagnostic": diagnostic,
+                }),
+            )?,
             StreamEvent::Complete => {
                 write_eval_event(&mut event_writer, json!({"event": "complete"}))?;
                 break;

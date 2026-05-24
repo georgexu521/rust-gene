@@ -300,17 +300,21 @@ fn latest_closeout_label(trace: &crate::engine::trace::TurnTrace) -> Option<Stri
             validation_items,
             tool_records,
             tool_evidence,
+            verification_proof_status,
+            verification_proof_summary,
             acceptance_items,
             residual_risks,
         } = event
         {
             Some(format!(
-                "{} files={} validation={} tool_records={} tool_evidence={} acceptance={} risks={}",
+                "{} files={} validation={} tool_records={} tool_evidence={} proof={} proof_summary={} acceptance={} risks={}",
                 status,
                 changed_files,
                 validation_items,
                 tool_records,
                 tool_evidence.as_deref().unwrap_or("none"),
+                verification_proof_status.as_deref().unwrap_or("none"),
+                verification_proof_summary.as_deref().unwrap_or("none"),
                 acceptance_items,
                 residual_risks
             ))

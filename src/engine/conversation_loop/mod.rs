@@ -14,6 +14,8 @@ mod assistant_response_retry_controller;
 mod closeout_controller;
 mod companion_context;
 mod context_budget_controller;
+#[cfg(test)]
+mod direct_task_behavior_tests;
 mod first_code_change_controller;
 mod focused_repair_recovery;
 mod focused_repair_state_controller;
@@ -2865,8 +2867,11 @@ mod tests {
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
                     retained_context: &crate::tools::ToolContextRetainedContext::default(),
+                    task_stage: crate::engine::task_context::AgentTaskStage::Repair,
+                    task_state: None,
                     action_checkpoint_active: false,
                     action_checkpoint_lookup_count: 0,
+                    no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
                     lifecycle: &mut lifecycle,
@@ -2944,8 +2949,11 @@ mod tests {
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
                     retained_context: &retained_context,
+                    task_stage: crate::engine::task_context::AgentTaskStage::Understand,
+                    task_state: None,
                     action_checkpoint_active: false,
                     action_checkpoint_lookup_count: 0,
+                    no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
                     lifecycle: &mut lifecycle,
@@ -3034,8 +3042,11 @@ mod tests {
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
                     retained_context: &crate::tools::ToolContextRetainedContext::default(),
+                    task_stage: crate::engine::task_context::AgentTaskStage::Understand,
+                    task_state: None,
                     action_checkpoint_active: false,
                     action_checkpoint_lookup_count: 0,
+                    no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
                     lifecycle: &mut lifecycle,
@@ -3101,8 +3112,11 @@ mod tests {
                     resource_policy: &policy,
                     exposed_tool_names: &exposed_tool_names,
                     retained_context: &crate::tools::ToolContextRetainedContext::default(),
+                    task_stage: crate::engine::task_context::AgentTaskStage::Repair,
+                    task_state: None,
                     action_checkpoint_active: false,
                     action_checkpoint_lookup_count: 0,
+                    no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
                     lifecycle: &mut lifecycle,

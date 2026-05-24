@@ -9,6 +9,7 @@ use super::turn_runtime_context::TurnRuntimeContext;
 use super::turn_runtime_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
+use crate::engine::task_context::TaskContextBundle;
 use crate::services::api::{Message, ToolCall};
 use crate::tools::ToolResult;
 use std::collections::{HashMap, HashSet};
@@ -21,6 +22,7 @@ pub(super) struct ToolRoundContext<'a> {
     pub(super) pre_executed: HashMap<usize, ToolResult>,
     pub(super) runtime: TurnRuntimeContext<'a>,
     pub(super) turn_state: &'a mut TurnRuntimeState,
+    pub(super) task_bundle: &'a mut TaskContextBundle,
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) is_programming_workflow: bool,
     pub(super) companion_context_keys: &'a mut HashSet<String>,
@@ -40,6 +42,7 @@ impl ToolRoundController {
             pre_executed,
             runtime,
             turn_state,
+            task_bundle,
             messages,
             is_programming_workflow,
             companion_context_keys,
@@ -68,8 +71,11 @@ impl ToolRoundController {
                     resource_policy: runtime.resource_policy,
                     exposed_tool_names: runtime.exposed_tool_names,
                     retained_context: runtime.retained_context,
+                    task_stage: runtime.task_stage,
+                    task_state: Some(&task_bundle.agent_state),
                     action_checkpoint_active,
                     action_checkpoint_lookup_count,
+                    no_progress_rounds: turn_state.focused_repair.no_code_progress_rounds,
                     has_changes_before_tools,
                     destructive_scope: runtime.destructive_scope,
                     lifecycle: &mut turn_state.tool_lifecycle,
@@ -85,6 +91,7 @@ impl ToolRoundController {
             tool_calls,
             tool_batch: &mut tool_batch,
             turn_state,
+            task_bundle,
             messages,
             trace: runtime.trace,
             is_programming_workflow,

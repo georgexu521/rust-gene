@@ -1,6 +1,7 @@
 use super::runtime_diet::RuntimeDietSnapshot;
 use super::tool_call_lifecycle::ToolCallLifecycle;
 use crate::engine::evidence_ledger::EvidenceLedger;
+use std::collections::HashMap;
 
 pub(super) struct TurnRuntimeState {
     pub(super) evidence_ledger: EvidenceLedger,
@@ -11,6 +12,8 @@ pub(super) struct TurnRuntimeState {
     pub(super) effective_iterations: usize,
     pub(super) acceptance_repair_attempts: usize,
     pub(super) reserved_repair_rounds: usize,
+    pub(super) successful_read_only_tool_fingerprints: HashMap<String, usize>,
+    pub(super) successful_read_only_tool_results: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -38,6 +41,8 @@ impl TurnRuntimeState {
             effective_iterations: 0,
             acceptance_repair_attempts: 0,
             reserved_repair_rounds: 0,
+            successful_read_only_tool_fingerprints: HashMap::new(),
+            successful_read_only_tool_results: HashMap::new(),
         }
     }
 }

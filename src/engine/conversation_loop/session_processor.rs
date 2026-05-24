@@ -6,7 +6,7 @@ use super::turn_recording::{
 };
 use super::ConversationLoop;
 use crate::engine::hooks::HookDecision;
-use crate::engine::streaming::StreamEvent;
+use crate::engine::streaming::{emit_text_progressively, StreamEvent};
 use crate::engine::trace::{TraceCollector, TurnStatus};
 use crate::services::api::{ChatRequest, ChatResponse, ToolCall, Usage};
 use crate::tools::ToolResult;
@@ -498,7 +498,7 @@ impl ConversationLoop {
 
                     let content = strip_think_blocks(&response.content);
                     if !content.is_empty() {
-                        let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
+                        emit_text_progressively(tx, content.clone()).await;
                     }
                     let tool_calls = response.tool_calls.unwrap_or_default();
                     return Ok(SessionStepResult::new(
@@ -563,7 +563,7 @@ impl ConversationLoop {
 
                 let content = strip_think_blocks(&response.content);
                 if !content.is_empty() {
-                    let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
+                    emit_text_progressively(tx, content.clone()).await;
                 }
                 let tool_calls = response.tool_calls.unwrap_or_default();
                 Ok(SessionStepResult::new(
@@ -622,7 +622,7 @@ impl ConversationLoop {
 
                 let content = strip_think_blocks(&response.content);
                 if !content.is_empty() {
-                    let _ = tx.send(StreamEvent::TextChunk(content.clone())).await;
+                    emit_text_progressively(tx, content.clone()).await;
                 }
                 let tool_calls = response.tool_calls.unwrap_or_default();
                 Ok(SessionStepResult::new(

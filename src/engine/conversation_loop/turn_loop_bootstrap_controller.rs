@@ -48,6 +48,8 @@ impl TurnLoopBootstrapController {
             retrieval_policy: context.route.retrieval,
             memory_manager: context.conversation.memory_manager.as_ref(),
             compressor: context.conversation.compressor.as_ref(),
+            session_store: context.conversation.session_store.as_ref(),
+            session_id: &context.conversation.session_id,
             messages: context.messages,
             tools: &base_tools,
             retrieval_context: context.retrieval_context,

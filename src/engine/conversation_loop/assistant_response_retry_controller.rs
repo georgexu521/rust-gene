@@ -2,7 +2,7 @@ use super::tool_execution::safe_prefix_by_bytes;
 use super::{pseudo_tool_text, should_use_nonstreaming_tools};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};
-use crate::engine::streaming::StreamEvent;
+use crate::engine::streaming::{emit_text_progressively, StreamEvent};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{LlmProvider, Message, Tool};
 use std::collections::HashSet;
@@ -173,9 +173,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             if should_use_nonstreaming_tools(context.provider, context.tools)
                 && !context.content.is_empty()
             {
-                let _ = tx
-                    .send(StreamEvent::TextChunk(context.content.to_string()))
-                    .await;
+                emit_text_progressively(tx, context.content.to_string()).await;
             }
         }
 

@@ -144,6 +144,81 @@ test.describe("run event state", () => {
     );
   });
 
+  test("surfaces runtime diagnostics in run summary and trace", () => {
+    const started = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+      session_id: "session-1",
+    }).state;
+    const diagnosed = applyRunEvent(
+      started,
+      {
+        type: "runtime_diagnostic",
+        diagnostic: {
+          schema: "desktop_runtime_diagnostic.v1",
+          task_state: {
+            goal: "Wire diagnostics",
+            stage: "closeout",
+            verification: { status: "verified" },
+            active_files: ["apps/desktop/src/app/runEventState.ts"],
+          },
+          verification_proof: {
+            status: "verified",
+            summary: "validation passed 1/1 current checks",
+          },
+          control_loop: {
+            coverage: "7/7",
+            phases: [{ phase: "closeout", events: 2, latest_label: "assistant" }],
+          },
+        },
+      },
+      ids("runtime-1"),
+    ).state;
+    const completed = applyRunEvent(diagnosed, { type: "run_completed" }).state;
+
+    expect(diagnosed.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "running",
+          headline: "Runtime diagnostic",
+          stats: [
+            "stage closeout",
+            "verification verified",
+            "proof verified",
+            "spine 7/7",
+            "files 1",
+          ],
+        }),
+      }),
+    );
+    expect(diagnosed.traceItems).toContainEqual(
+      expect.objectContaining({
+        id: "runtime-1",
+        kind: "runtime",
+        runtime: expect.objectContaining({
+          schema: "desktop_runtime_diagnostic.v1",
+        }),
+      }),
+    );
+    expect(completed.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          kind: "run",
+          stage: "completed",
+          stats: [
+            "stage closeout",
+            "verification verified",
+            "proof verified",
+            "spine 7/7",
+          ],
+        }),
+      }),
+    );
+  });
+
   test("summarizes multi-tool runs with failures and recovery guidance", () => {
     const started = applyRunEvent(initialRunViewState, {
       type: "run_started",
@@ -644,5 +719,62 @@ test.describe("run event state", () => {
         detail: "3 messages",
       },
     ]);
+  });
+
+  test("loads compact boundaries as transcript cards", () => {
+    const loaded = loadSessionTranscript(
+      initialRunViewState,
+      "session-compact",
+      [{ id: 1, role: "assistant", content: "summary", created_at: "preview" }],
+      [
+        {
+          boundary_id: "boundary-1",
+          strategy: "session_memory_compact",
+          trigger: "manual compact",
+          before_tokens: 10000,
+          after_tokens: 4200,
+          messages_before: 24,
+          messages_after: 8,
+          summary: "Previous coding work summarized.",
+          created_at: "preview",
+        },
+      ],
+    );
+
+    expect(loaded.items[0]).toMatchObject({
+      id: "compact-boundary-1",
+      role: "timeline",
+      kind: "compact",
+      title: "Context compacted",
+      detail: "Previous coding work summarized.",
+      status: "completed",
+    });
+  });
+
+  test("surfaces ledger reuse when final answer avoided a repeated read", () => {
+    let state = submitUserMessage(initialRunViewState, "再看一下 README", [], () => "user-1");
+    state = applyRunEvent(
+      state,
+      { type: "run_started", run_id: "run-1", session_id: "session-1" },
+      () => "id-1",
+    ).state;
+    state = applyRunEvent(
+      state,
+      {
+        type: "assistant_delta",
+        text: "这次重复读取被已有会话上下文接住了。\n\n复用依据：ledger: file `README.md` was read previously",
+      },
+      () => "assistant-1",
+    ).state;
+    state = applyRunEvent(state, { type: "run_completed" }, () => "done-1").state;
+
+    expect(state.items).toContainEqual(
+      expect.objectContaining({
+        role: "timeline",
+        kind: "compact",
+        title: "Reused session context",
+        detail: "ledger: file `README.md` was read previously",
+      }),
+    );
   });
 });

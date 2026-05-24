@@ -31,9 +31,11 @@ run_glob = sys.argv[3]
 
 def table_rows(text):
     rows = []
+    headers = []
     in_matrix = False
     for line in text.splitlines():
         if line.startswith("| task | status |"):
+            headers = [re.sub(r"[^a-z0-9]+", "_", cell.strip().lower()).strip("_") for cell in line.strip("|").split("|")]
             in_matrix = True
             continue
         if in_matrix and line.startswith("|------"):
@@ -42,24 +44,31 @@ def table_rows(text):
             if not line.startswith("|"):
                 break
             cells = [cell.strip() for cell in line.strip("|").split("|")]
-            if len(cells) >= 18:
-                rows.append(cells[:18])
-            elif len(cells) >= 16:
-                rows.append(cells[:10] + ["none", "none"] + cells[10:16])
-            elif len(cells) >= 14:
-                legacy = cells[:13] + [
-                    "active=false, recalled=0, conflicts=0, changed_plan=false",
-                    "active=false, tool_calls=0, usage_events=0, promotion=false",
-                    cells[13],
-                ]
-                rows.append(legacy[:10] + ["none", "none"] + legacy[10:16])
-            elif len(cells) >= 12:
-                legacy = cells[:9] + ["none"] + cells[9:12] + [
-                    "active=false, recalled=0, conflicts=0, changed_plan=false",
-                    "active=false, tool_calls=0, usage_events=0, promotion=false",
-                    cells[12] if len(cells) > 12 else "none",
-                ]
-                rows.append(legacy[:10] + ["none", "none"] + legacy[10:16])
+            if not headers or len(cells) < 10:
+                continue
+            record = dict(zip(headers, cells))
+            rows.append({
+                "task": record.get("task", "missing"),
+                "status": record.get("status", "missing"),
+                "intent": record.get("intent", "missing"),
+                "owner": record.get("owner", "missing"),
+                "required": record.get("required", "missing"),
+                "plan": record.get("plan_quality", record.get("plan", "none")),
+                "boundary": record.get("tool_boundary", record.get("boundary", "none")),
+                "verification": record.get("verification_status", record.get("verification", "unknown")),
+                "closeout": record.get("closeout", "missing"),
+                "runtime_spine": record.get("runtime_spine", "coverage=0/7, status=none, missing=none"),
+                "runtime_diet": record.get("runtime_diet", "missing"),
+                "behavior_assertions": record.get("behavior_assertions", "none"),
+                "behavior_assertion_status": record.get("behavior_status", record.get("behavior_assertion_status", "none")),
+                "triggers": record.get("triggers", "none"),
+                "first_write": record.get("first_write", "none"),
+                "diff": record.get("diff", "no"),
+                "memory": record.get("memory", "active=false, recalled=0, conflicts=0, changed_plan=false"),
+                "skill": record.get("skill", "active=false, tool_calls=0, usage_events=0, promotion=false"),
+                "warnings": record.get("warnings", "none"),
+                "failures": [],
+            })
     return rows
 
 def specialty_flag(summary, key):
@@ -69,6 +78,10 @@ def specialty_flag(summary, key):
 def specialty_int(summary, key):
     match = re.search(rf"{re.escape(key)}=(\d+)", summary)
     return int(match.group(1)) if match else 0
+
+def summary_field(summary, key, default="missing"):
+    match = re.search(rf"{re.escape(key)}=([^, ]+)", summary)
+    return match.group(1) if match else default
 
 def infer_owner(record):
     if record["owner"] != "missing":
@@ -120,31 +133,7 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
     if not rows:
         summary = run_dir / "summary.md"
         text = read(summary)
-        rows = [
-            {
-                "task": task,
-                "status": status,
-                "intent": intent,
-                "owner": owner,
-                "required": required,
-                "plan": plan,
-                "boundary": boundary,
-                "verification": verification,
-                "closeout": closeout,
-                "runtime_diet": runtime_diet,
-                "behavior_assertions": behavior_assertions,
-                "behavior_assertion_status": behavior_assertion_status,
-                "triggers": triggers,
-                "first_write": first_write,
-                "diff": diff,
-                "memory": memory,
-                "skill": skill,
-                "warnings": warnings,
-                "failures": [],
-            }
-            for task, status, intent, owner, required, plan, boundary, verification, closeout, runtime_diet, behavior_assertions, behavior_assertion_status, triggers, first_write, diff, memory, skill, warnings
-            in table_rows(text)
-        ]
+        rows = table_rows(text)
     if not rows:
         continue
     passed = sum(1 for row in rows if row["status"] == "passed")
@@ -202,6 +191,21 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
             "boundary": row["boundary"],
             "verification": row["verification"],
             "closeout": row["closeout"],
+            "runtime_spine": row.get("runtime_spine", "coverage=0/7, status=none, missing=none"),
+            "runtime_spine_assertions": row.get("runtime_spine_assertions", "none"),
+            "runtime_spine_status": row.get(
+                "runtime_spine_status",
+                summary_field(row.get("runtime_spine", ""), "status", "none"),
+            ),
+            "runtime_spine_phase_coverage": row.get(
+                "runtime_spine_phase_coverage",
+                summary_field(row.get("runtime_spine", ""), "coverage", "0/7"),
+            ),
+            "runtime_spine_missing": row.get(
+                "runtime_spine_missing",
+                summary_field(row.get("runtime_spine", ""), "missing", "none"),
+            ),
+            "runtime_spine_trace_present": row.get("runtime_spine_trace_present", "false"),
             "behavior_assertions": row.get("behavior_assertions", "none"),
             "behavior_assertion_status": row.get("behavior_assertion_status", "none"),
             "triggers": row["triggers"],
@@ -256,6 +260,17 @@ memory_behavior_assertion_tasks = sum(
 )
 skill_behavior_assertion_tasks = sum(
     1 for record in task_records if "skill" in record["behavior_assertions"].lower()
+)
+runtime_spine_assertion_tasks = sum(1 for record in task_records if record["runtime_spine_assertions"] != "none")
+runtime_spine_assertions_passed = sum(1 for record in task_records if record["runtime_spine_status"] == "passed")
+runtime_spine_assertions_failed = sum(
+    1 for record in task_records if record["runtime_spine_status"] in {"failed", "missing"}
+)
+runtime_spine_full_coverage = sum(
+    1 for record in task_records if record["runtime_spine_phase_coverage"] == "7/7"
+)
+runtime_spine_trace_present = sum(
+    1 for record in task_records if record["runtime_spine_trace_present"] == "true"
 )
 closeout_not_successful = failure_modes["closeout_not_successful"]
 owner_metadata_missing = owners["missing"]
@@ -401,6 +416,11 @@ lines.extend(md_table(
             behavior_assertion_tasks,
             pct(behavior_assertion_tasks, total_tasks),
         ],
+        [
+            "runtime_spine_assertion_metadata",
+            runtime_spine_assertion_tasks,
+            pct(runtime_spine_assertion_tasks, total_tasks),
+        ],
     ],
 ))
 
@@ -420,6 +440,18 @@ lines.extend(md_table(
         ["behavior_assertions_passed", behavior_assertion_passed, pct(behavior_assertion_passed, behavior_assertion_tasks)],
         ["memory_behavior_assertion_tasks", memory_behavior_assertion_tasks, pct(memory_behavior_assertion_tasks, total_tasks)],
         ["skill_behavior_assertion_tasks", skill_behavior_assertion_tasks, pct(skill_behavior_assertion_tasks, total_tasks)],
+    ],
+))
+
+lines.extend(["", "## Runtime Spine Evidence", ""])
+lines.extend(md_table(
+    ["dimension", "count", "share"],
+    [
+        ["runtime_spine_assertion_tasks", runtime_spine_assertion_tasks, pct(runtime_spine_assertion_tasks, total_tasks)],
+        ["runtime_spine_assertions_passed", runtime_spine_assertions_passed, pct(runtime_spine_assertions_passed, runtime_spine_assertion_tasks)],
+        ["runtime_spine_assertions_failed", runtime_spine_assertions_failed, pct(runtime_spine_assertions_failed, runtime_spine_assertion_tasks)],
+        ["runtime_spine_full_coverage_tasks", runtime_spine_full_coverage, pct(runtime_spine_full_coverage, total_tasks)],
+        ["runtime_spine_trace_present_tasks", runtime_spine_trace_present, pct(runtime_spine_trace_present, total_tasks)],
     ],
 ))
 
@@ -506,7 +538,7 @@ lines.extend(md_table(
 
 lines.extend(["", "## Recent Failed Tasks", ""])
 lines.extend(md_table(
-    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "behavior", "behavior_status", "memory", "skill", "triggers", "warnings"],
+    ["run", "task", "intent", "owner", "inferred_owner", "required", "verification", "diff", "spine", "behavior", "behavior_status", "memory", "skill", "triggers", "warnings"],
     [
         [
             record["run"],
@@ -517,6 +549,7 @@ lines.extend(md_table(
             record["required"],
             record["verification"],
             record["diff"],
+            record["runtime_spine"],
             record["behavior_assertions"],
             record["behavior_assertion_status"],
             record["memory"],
@@ -525,12 +558,12 @@ lines.extend(md_table(
             record["warnings"],
         ]
         for record in recent_failures
-    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
 lines.extend(["", "## Recent Passed Tasks", ""])
 lines.extend(md_table(
-    ["run", "task", "intent", "owner", "required", "verification", "diff", "behavior", "behavior_status", "memory", "skill", "triggers", "warnings"],
+    ["run", "task", "intent", "owner", "required", "verification", "diff", "spine", "behavior", "behavior_status", "memory", "skill", "triggers", "warnings"],
     [
         [
             record["run"],
@@ -540,6 +573,7 @@ lines.extend(md_table(
             record["required"],
             record["verification"],
             record["diff"],
+            record["runtime_spine"],
             record["behavior_assertions"],
             record["behavior_assertion_status"],
             record["memory"],
@@ -548,7 +582,7 @@ lines.extend(md_table(
             record["warnings"],
         ]
         for record in recent_passes
-    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
+    ] or [["none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none", "none"]],
 ))
 
 lines.extend([
@@ -564,6 +598,7 @@ lines.extend([
     "- `instrumented_task_reports` is the cleaner current slice because it excludes reports with no structured owner, intent, or trigger metadata.",
     "- `memory` and `skill` columns show evidence signals only; they are not success labels.",
     "- `behavior_assertions` are sample-level checks that turn memory/skill semantics into explicit pass/fail evidence.",
+    "- `runtime_spine` tracks trace/control-loop coverage and sample-level runtime assertions.",
 ])
 
 output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

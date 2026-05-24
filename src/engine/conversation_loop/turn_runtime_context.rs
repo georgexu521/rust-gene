@@ -2,6 +2,7 @@ use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
+use crate::engine::task_context::AgentTaskStage;
 use crate::engine::trace::TraceCollector;
 use crate::tools::ToolContextRetainedContext;
 use std::collections::{HashMap, HashSet};
@@ -14,6 +15,7 @@ pub(super) struct TurnRuntimeContext<'a> {
     pub(super) trace: &'a TraceCollector,
     pub(super) route: &'a IntentRoute,
     pub(super) resource_policy: &'a ResourcePolicy,
+    pub(super) task_stage: AgentTaskStage,
     pub(super) exposed_tool_names: &'a HashSet<String>,
     pub(super) working_dir: &'a Path,
     pub(super) last_user_preview: &'a str,
@@ -73,6 +75,7 @@ mod tests {
             trace: &trace,
             route: &route,
             resource_policy: &policy,
+            task_stage: AgentTaskStage::Understand,
             exposed_tool_names: &exposed,
             working_dir: Path::new("."),
             last_user_preview: "inspect files",

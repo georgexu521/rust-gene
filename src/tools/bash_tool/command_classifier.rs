@@ -787,7 +787,9 @@ fn is_legacy_mutation_command(command: &str) -> bool {
         Some("touch" | "mkdir" | "cp" | "mv" | "rm" | "chmod" | "chown" | "ln")
     ) || lower.contains(" > ")
         || lower.contains(" >> ")
-        || contains_shell_redirection(command)
+        || shell_redirection_facts(command)
+            .iter()
+            .any(|fact| fact.writes)
         || lower.contains("tee ")
         || lower.starts_with("patch ")
         || lower.starts_with("apply_patch")
@@ -1014,6 +1016,11 @@ fn shell_redirection_facts(command: &str) -> Vec<ShellRedirectionFact> {
                 .map(str::to_string)
                 .or_else(|| tokens.get(index + 1).cloned())
                 .filter(|target| !target.starts_with('&'));
+            let writes = writes
+                && target
+                    .as_deref()
+                    .map(|target| target != "/dev/null")
+                    .unwrap_or(true);
             facts.push(ShellRedirectionFact {
                 operator: operator.to_string(),
                 target,
@@ -1870,6 +1877,21 @@ mod tests {
         );
         assert!(class.command_plan.fail_closed);
         assert!(class
+            .command_plan
+            .fail_closed_reasons
+            .contains(&"write_redirection".to_string()));
+    }
+
+    #[test]
+    fn stderr_null_redirection_does_not_make_readonly_search_mutating() {
+        let class = classify_command(
+            "grep -r \"TIMEOUT\\|timeout\" fixtures/core_quality/simple_edit/ 2>/dev/null | head -30",
+        );
+
+        assert_eq!(class.category, ShellCommandCategory::Search);
+        assert_eq!(class.command_kind, CommandKind::Inspection);
+        assert!(!class.command_plan.has_write_redirection);
+        assert!(!class
             .command_plan
             .fail_closed_reasons
             .contains(&"write_redirection".to_string()));

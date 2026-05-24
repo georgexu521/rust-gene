@@ -68,6 +68,18 @@ expected_behavior:
   - The multi-file change shares read-state, diff, and rollback semantics.
   - Validation proves the implementation and documentation are consistent.
 
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+  verification_proof: true
+
 core_quality:
   group: core-coding-quality
   failure_owner_hints:

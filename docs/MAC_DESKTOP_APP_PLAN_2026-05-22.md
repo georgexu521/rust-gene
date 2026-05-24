@@ -164,6 +164,7 @@ type DesktopRunEvent =
   | { type: "tool_completed"; id: string; resultPreview: string; metadata?: unknown }
   | { type: "permission_request"; id: string; toolName: string; arguments: unknown; prompt: string }
   | { type: "usage"; promptTokens: number; completionTokens: number; reasoningTokens?: number }
+  | { type: "runtime_diagnostic"; diagnostic: DesktopRuntimeDiagnostic }
   | { type: "run_completed" }
   | { type: "run_error"; message: string };
 ```
@@ -613,6 +614,19 @@ Remaining non-goals for the current desktop release:
 - Generic multi-user/team product surfaces.
 - Mac App Store distribution.
 
+### Next Test Phase
+
+The next validation phase should run dogfood tasks through the desktop app
+instead of treating CLI live evals as the only product proof. Use:
+
+```text
+docs/DESKTOP_APP_DOGFOOD_TEST_PLAN_2026-05-23.md
+```
+
+That plan consolidates the 2026-05-22 external baseline scenarios, the current
+release dogfood gate, and desktop-specific UX evidence checks for timeline,
+permissions, trace, composer context, session restore, and settings/diagnostics.
+
 ### Next Desktop UI And Frontend Maturity Stage
 
 Goal: move the desktop app from "functional Codex-like MVP" to "credible
@@ -681,7 +695,10 @@ permissions stay expanded as high-value cards. Consecutive timeline items now
 carry run boundary and run-step classes so long runs scan as one coherent
 section before the final answer. The transcript now adds explicit Process and
 Conclusion section labels around each run group, making long runs easier to scan
-without reading them as raw logs.
+without reading them as raw logs. Runtime-spine diagnostics now arrive through a
+stable `runtime_diagnostic` event and surface task stage, verification proof,
+control-loop coverage, active files, and proof summary in the run summary and
+trace drawer while keeping the main transcript focused.
 
 #### Track C - Session And Project Ergonomics
 
@@ -778,9 +795,10 @@ cargo check -q
 Status: started. `apps/desktop/tests/run-event-state.spec.ts` now covers the
 core pure state transitions for user submit, run completion, assistant delta
 coalescing, shell/file timeline summaries, permission answers, and session
-message loading. `apps/desktop/tests/desktop-api-state.spec.ts` now covers the
-web-preview API state flow for session search, rename, archive, delete, project
-selection, and new-conversation startup recovery.
+message loading, including runtime diagnostic summary/trace propagation.
+`apps/desktop/tests/desktop-api-state.spec.ts` now covers the web-preview API
+state flow for session search, rename, archive, delete, project selection, and
+new-conversation startup recovery.
 
 Native launch and interaction smoke is now scripted through
 `scripts/desktop-native-smoke.sh`. It builds or reuses the `.app` bundle,
@@ -799,6 +817,8 @@ permission request, verifies final-answer rendering and token usage, and
 records the step list in `native-app-desktop.log`.
 `scripts/desktop-smoke.sh --native` includes this native path, and
 `apps/desktop/package.json` exposes it as `test:native-smoke`.
+The web-preview and native smoke fixtures now include runtime diagnostic events
+so the UI path is covered before real provider-backed runs.
 
 The app now also writes a lightweight startup diagnostic log under its app data
 directory and surfaces the diagnostic log path in Settings. Settings can open

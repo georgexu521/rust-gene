@@ -9,12 +9,13 @@ import {
   KeyRound,
   TerminalSquare,
 } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { DesktopDiagnostic, DesktopRunContext, ProviderModelStatus } from "../../runtime/desktopApi";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
 
 type TranscriptProps = {
   items: TranscriptItem[];
+  isRunning: boolean;
   diagnostics: DesktopDiagnostic[];
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenContext?: (context: DesktopRunContext) => void;
@@ -25,6 +26,7 @@ type TranscriptProps = {
 
 export function Transcript({
   items,
+  isRunning,
   diagnostics,
   onPermissionAnswer,
   onOpenContext,
@@ -32,10 +34,37 @@ export function Transcript({
   projectPath,
   providerStatus,
 }: TranscriptProps) {
+  const transcriptRef = useRef<HTMLElement | null>(null);
+  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const pinnedToBottomRef = useRef(true);
+  const previousItemCountRef = useRef(items.length);
   const renderedItems = annotateTranscriptItems(items);
+  const latestItem = items.at(-1);
+  const scrollSignature = `${items.length}:${latestItem?.id || ""}:${
+    latestItem?.role === "assistant" ? latestItem.text.length : ""
+  }:${isRunning}`;
+
+  useEffect(() => {
+    const itemCountIncreased = items.length > previousItemCountRef.current;
+    previousItemCountRef.current = items.length;
+    const shouldForceScroll = latestItem?.role === "user" || itemCountIncreased;
+    if (!pinnedToBottomRef.current && !shouldForceScroll) {
+      return;
+    }
+    scrollAnchorRef.current?.scrollIntoView({ block: "end" });
+  }, [items.length, latestItem?.role, scrollSignature]);
+
+  function handleScroll() {
+    const element = transcriptRef.current;
+    if (!element) {
+      return;
+    }
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    pinnedToBottomRef.current = distanceFromBottom < 140;
+  }
 
   return (
-    <section className="transcript" aria-live="polite">
+    <section className="transcript" aria-live="polite" ref={transcriptRef} onScroll={handleScroll}>
       {items.length === 0 ? (
         <EmptyState
           diagnostics={diagnostics}
@@ -46,7 +75,7 @@ export function Transcript({
         renderedItems.map(({ className, item }) =>
           item.role === "timeline" ? (
             <Fragment key={item.id}>
-              {className?.includes("run-group-start") ? (
+              {className?.includes("run-group-start") && item.kind !== "run" ? (
                 <div className="timeline-section-label">Process</div>
               ) : null}
               <TimelineEvent
@@ -71,11 +100,23 @@ export function Transcript({
                   <span className="message-badge">Final answer</span>
                 ) : null}
               </div>
-              <div className="message-body">{item.text}</div>
+              <div className="message-body">
+                {item.text}
+                {isStreamingAssistant(item, isRunning, renderedItems) ? (
+                  <span className="streaming-caret" aria-hidden="true" />
+                ) : null}
+              </div>
             </article>
           ),
         )
       )}
+      {isRunning && !hasAssistantAfterLastUser(items) ? (
+        <div className="assistant-typing" role="status">
+          Liz is thinking
+          <span aria-hidden="true">...</span>
+        </div>
+      ) : null}
+      <div className="transcript-scroll-anchor" ref={scrollAnchorRef} />
     </section>
   );
 }
@@ -156,6 +197,34 @@ function formatRole(role: TranscriptItem["role"]) {
   return role === "user" ? "You" : "Liz";
 }
 
+function hasAssistantAfterLastUser(items: TranscriptItem[]) {
+  let lastUserIndex = -1;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  return items.slice(lastUserIndex + 1).some((item) => item.role === "assistant");
+}
+
+function isStreamingAssistant(
+  item: TranscriptItem,
+  isRunning: boolean,
+  renderedItems: AnnotatedTranscriptItem[],
+) {
+  if (!isRunning || item.role !== "assistant") {
+    return false;
+  }
+  for (let index = renderedItems.length - 1; index >= 0; index -= 1) {
+    const rendered = renderedItems[index]?.item;
+    if (rendered?.role === "assistant") {
+      return rendered.id === item.id && item.variant !== "final";
+    }
+  }
+  return false;
+}
+
 type TimelineEventItem = Extract<TranscriptItem, { role: "timeline" }>;
 
 function TimelineEvent({
@@ -172,6 +241,47 @@ function TimelineEvent({
   onOpenTrace?: (traceId: string) => void;
 }) {
   const isCompact = isCompactToolEvent(item);
+
+  if (item.kind === "run") {
+    return (
+      <article className={`timeline-run-row ${item.status || "info"}${className ? ` ${className}` : ""}`}>
+        <span>{runStatusText(item)}</span>
+        {item.summary?.kind === "run" && item.summary.stats && item.summary.stats.length > 0 ? (
+          <div className="timeline-run-stats compact">
+            {item.summary.stats.map((stat) => (
+              <span key={stat}>{stat}</span>
+            ))}
+          </div>
+        ) : null}
+        {item.summary?.kind === "run" && item.summary.contexts && item.summary.contexts.length > 0 ? (
+          <div className="timeline-run-contexts" aria-label="Run attached context">
+            {item.summary.contexts.map((context) => (
+              <button
+                aria-label={`Open run context ${context.label}`}
+                disabled={!onOpenContext}
+                key={context.type}
+                type="button"
+                onClick={() => onOpenContext?.(context)}
+              >
+                {context.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {item.traceId && onOpenTrace ? (
+          <button
+            aria-label="Open trace for current run"
+            className="timeline-run-trace"
+            title="Open trace"
+            type="button"
+            onClick={() => onOpenTrace(item.traceId!)}
+          >
+            Trace
+          </button>
+        ) : null}
+      </article>
+    );
+  }
 
   if (item.kind === "usage") {
     return (
@@ -250,6 +360,19 @@ function TimelineEvent({
       </div>
     </article>
   );
+}
+
+function runStatusText(item: TimelineEventItem) {
+  if (item.status === "completed") {
+    return "Done";
+  }
+  if (item.status === "failed") {
+    return "Needs attention";
+  }
+  if (item.status === "waiting") {
+    return "Waiting for approval";
+  }
+  return "Working";
 }
 
 function TimelineSummaryView({

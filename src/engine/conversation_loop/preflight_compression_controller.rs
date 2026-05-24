@@ -1,7 +1,9 @@
 use super::context_budget_controller::ContextBudgetController;
 use super::runtime_diet::RuntimeDietSnapshot;
-use crate::engine::context_collapse::ContextCompactionStrategy;
-use crate::engine::context_compressor::{estimate_messages_tokens, ContextCompressor};
+use crate::engine::context_collapse::{CompactionDecision, ContextCompactionStrategy};
+use crate::engine::context_compressor::{
+    estimate_messages_tokens, CompactionAttemptInput, ContextCompressor,
+};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool};
 use std::sync::Arc;
@@ -10,6 +12,8 @@ use tracing::{debug, warn};
 
 pub(super) struct PreflightCompressionContext<'a> {
     pub(super) compressor: Option<&'a Arc<Mutex<ContextCompressor>>>,
+    pub(super) session_store: Option<&'a Arc<crate::session_store::SessionStore>>,
+    pub(super) session_id: &'a str,
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) tools: &'a [Tool],
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
@@ -24,9 +28,8 @@ impl PreflightCompressionController {
             return;
         };
 
-        let mut no_gain_passes = 0u8;
         for pass in 0..3 {
-            let compressor = compressor_mutex.lock().await;
+            let mut compressor = compressor_mutex.lock().await;
             let preflight = ContextBudgetController::observe_preflight(
                 &compressor,
                 context.messages,
@@ -37,6 +40,25 @@ impl PreflightCompressionController {
                 &preflight.observation,
             );
             if !preflight.should_compact {
+                compressor.record_compaction_decision(CompactionAttemptInput::new(
+                    "preflight",
+                    ContextCompactionStrategy::AutoCompact,
+                    CompactionDecision::Skipped,
+                    preflight.observation.message_tokens,
+                    context.messages.len(),
+                    "preflight threshold not reached",
+                ));
+                break;
+            }
+            if compressor.compaction_circuit_open() {
+                compressor.record_compaction_decision(CompactionAttemptInput::new(
+                    "preflight",
+                    ContextCompactionStrategy::AutoCompact,
+                    CompactionDecision::CircuitOpen,
+                    preflight.observation.message_tokens,
+                    context.messages.len(),
+                    "compaction circuit open after repeated no-gain/failure attempts",
+                ));
                 break;
             }
             debug!(
@@ -45,6 +67,14 @@ impl PreflightCompressionController {
                 preflight.observation.message_tokens,
                 preflight.observation.tool_schema_tokens
             );
+            compressor.record_compaction_decision(CompactionAttemptInput::new(
+                "preflight",
+                ContextCompactionStrategy::AutoCompact,
+                CompactionDecision::Considered,
+                preflight.observation.message_tokens,
+                context.messages.len(),
+                "preflight threshold reached",
+            ));
             drop(compressor);
             let before_tokens = preflight.observation.message_tokens;
             let mut compressor = compressor_mutex.lock().await;
@@ -61,6 +91,15 @@ impl PreflightCompressionController {
                 .get(compaction_record_len)
                 .cloned();
             drop(compressor);
+            if let (Some(store), Some(record)) = (context.session_store, compaction_record.as_ref())
+            {
+                let _ = store.add_compact_boundary_from_runtime_record(
+                    context.session_id,
+                    record,
+                    Some("preflight"),
+                    "preflight context compacted",
+                );
+            }
             let after_tokens = estimate_messages_tokens(context.messages);
             let mut provenance = compaction_record
                 .as_ref()
@@ -102,16 +141,54 @@ impl PreflightCompressionController {
                 provenance,
             });
             if after_tokens >= before_tokens {
-                no_gain_passes += 1;
-                if no_gain_passes >= 2 {
+                let mut compressor = compressor_mutex.lock().await;
+                let attempt = compressor.record_compaction_decision(
+                    CompactionAttemptInput::new(
+                        "preflight",
+                        ContextCompactionStrategy::AutoCompact,
+                        CompactionDecision::NoGain,
+                        before_tokens,
+                        compaction_record
+                            .as_ref()
+                            .map(|record| record.messages_before)
+                            .unwrap_or_else(|| context.messages.len()),
+                        "compression did not reduce estimated tokens",
+                    )
+                    .with_after(Some(after_tokens), Some(context.messages.len()))
+                    .with_boundary_id(
+                        compaction_record
+                            .as_ref()
+                            .and_then(|record| record.boundary_id.clone()),
+                    ),
+                );
+                if attempt.circuit_open {
                     warn!(
-                        "Preflight compression made no progress for 2 consecutive passes ({} -> {}). Stop retrying this turn.",
+                        "Preflight compression circuit opened after no-gain attempt ({} -> {}). Stop retrying this turn.",
                         before_tokens, after_tokens
                     );
                     break;
                 }
             } else {
-                no_gain_passes = 0;
+                let mut compressor = compressor_mutex.lock().await;
+                compressor.record_compaction_decision(
+                    CompactionAttemptInput::new(
+                        "preflight",
+                        ContextCompactionStrategy::AutoCompact,
+                        CompactionDecision::Compacted,
+                        before_tokens,
+                        compaction_record
+                            .as_ref()
+                            .map(|record| record.messages_before)
+                            .unwrap_or_else(|| context.messages.len()),
+                        "compression reduced estimated tokens",
+                    )
+                    .with_after(Some(after_tokens), Some(context.messages.len()))
+                    .with_boundary_id(
+                        compaction_record
+                            .as_ref()
+                            .and_then(|record| record.boundary_id.clone()),
+                    ),
+                );
             }
         }
     }
@@ -141,6 +218,8 @@ mod tests {
 
         PreflightCompressionController::run(PreflightCompressionContext {
             compressor: Some(&compressor),
+            session_store: None,
+            session_id: "session",
             messages: &mut messages,
             tools: &tools,
             runtime_diet: &mut runtime_diet,
@@ -166,6 +245,8 @@ mod tests {
 
         PreflightCompressionController::run(PreflightCompressionContext {
             compressor: None,
+            session_store: None,
+            session_id: "session",
             messages: &mut messages,
             tools: &[],
             runtime_diet: &mut runtime_diet,

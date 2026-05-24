@@ -3,6 +3,7 @@ use super::tool_result_controller::NormalizedToolResult;
 use crate::engine::context_compressor::{
     estimate_messages_tokens, estimate_tokens, estimate_tool_schemas_tokens, ContextCompressor,
 };
+use crate::engine::context_usage::ContextUsageSnapshot;
 use crate::services::api::{Message, Tool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,6 +11,8 @@ pub(super) struct RequestBudgetObservation {
     pub(super) message_tokens: u64,
     pub(super) tool_schema_tokens: u64,
     pub(super) total_request_tokens: u64,
+    pub(super) reserved_output_tokens: u64,
+    pub(super) pressure_tokens: u64,
     pub(super) exposed_tools: usize,
     pub(super) max_context_tokens: Option<u64>,
     pub(super) remaining_context_tokens: Option<u64>,
@@ -97,14 +100,9 @@ impl ContextBudgetController {
             .structured_metadata
             .get("tool_result_data")
             .and_then(|data| data.get("output_truncation"));
-        let artifact_count = output_truncation
-            .and_then(|truncation| truncation.get("stored_path"))
-            .and_then(|path| path.as_str())
-            .filter(|path| !path.trim().is_empty())
-            .map(|_| 1)
-            .unwrap_or(0);
+        let artifact_count = usize::from(result.context_policy.durable_artifact_path.is_some());
         ToolResultBudgetObservation {
-            model_content_chars: result.model_content.chars().count(),
+            model_content_chars: result.context_policy.provider_visible_chars,
             model_content_tokens: estimate_tokens(&result.model_content),
             truncated: output_truncation.is_some(),
             artifact_count,
@@ -136,13 +134,26 @@ impl ContextBudgetController {
     ) -> RequestBudgetObservation {
         let message_tokens = estimate_messages_tokens(messages);
         let tool_schema_tokens = estimate_tool_schemas_tokens(tools);
+        let max = max_context_tokens.unwrap_or(128_000);
+        let reserved_output_tokens = max_context_tokens.map(|_| 4_096).unwrap_or(0);
+        let snapshot = ContextUsageSnapshot::estimate_with_limits(
+            messages,
+            tools,
+            "",
+            "",
+            max,
+            reserved_output_tokens,
+            None,
+        );
         let total_request_tokens = message_tokens.saturating_add(tool_schema_tokens);
         let remaining_context_tokens =
-            max_context_tokens.map(|max| max.saturating_sub(total_request_tokens));
+            max_context_tokens.map(|_| snapshot.remaining_context_tokens);
         RequestBudgetObservation {
             message_tokens,
             tool_schema_tokens,
             total_request_tokens,
+            reserved_output_tokens,
+            pressure_tokens: snapshot.pressure_tokens,
             exposed_tools: tools.len(),
             max_context_tokens,
             remaining_context_tokens,
@@ -208,6 +219,8 @@ mod tests {
                 message_tokens: 100,
                 tool_schema_tokens: 20,
                 total_request_tokens: 120,
+                reserved_output_tokens: 4096,
+                pressure_tokens: 4216,
                 exposed_tools: 2,
                 max_context_tokens: Some(1_000),
                 remaining_context_tokens: Some(880),
@@ -219,6 +232,8 @@ mod tests {
                 message_tokens: 90,
                 tool_schema_tokens: 40,
                 total_request_tokens: 130,
+                reserved_output_tokens: 4096,
+                pressure_tokens: 4226,
                 exposed_tools: 1,
                 max_context_tokens: Some(1_000),
                 remaining_context_tokens: Some(870),
@@ -246,6 +261,16 @@ mod tests {
                 }
             }),
             evidence_facts: Vec::new(),
+            context_policy:
+                crate::engine::conversation_loop::tool_result_controller::ToolResultContextPolicy {
+                    provider_visible_chars: "Result: OK\npreview".chars().count(),
+                    desktop_visible_chars: "Result: OK\npreview".chars().count(),
+                    trace_payload_available: true,
+                    durable_artifact_path: Some("/tmp/tool-results/bash_call.txt".to_string()),
+                    ledger_fact_eligible: false,
+                    compaction_eligible: true,
+                    protected_recent_tail: false,
+                },
         };
         let observation = ContextBudgetController::observe_tool_result(&normalized);
 

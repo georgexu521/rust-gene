@@ -14,6 +14,46 @@ export type DesktopHealth = {
   cwd: string;
 };
 
+export type DesktopContextSnapshot = {
+  history_messages: number;
+  history_tokens: number;
+  tool_schema_tokens: number;
+  memory_snapshot_tokens: number;
+  total_estimated_tokens: number;
+  max_context_tokens: number;
+  usage_percent: number;
+  stable_prefix_fingerprint: string;
+  compact: DesktopCompactState;
+};
+
+export type DesktopCompactState = {
+  compression_count: number;
+  circuit_open: boolean;
+  latest_strategy?: string | null;
+  latest_boundary_id?: string | null;
+  latest_attempt_decision?: string | null;
+  latest_attempt_reason?: string | null;
+  latest_attempt_trigger?: string | null;
+  latest_attempt_tokens_before?: number | null;
+  latest_attempt_tokens_after?: number | null;
+};
+
+export type DesktopCompactionAttempt = {
+  trigger: string;
+  strategy: string;
+  decision: string;
+  before_tokens: number;
+  after_tokens?: number | null;
+  messages_before: number;
+  messages_after?: number | null;
+  reason: string;
+  attempt_index: number;
+  consecutive_no_gain: number;
+  consecutive_failures: number;
+  circuit_open: boolean;
+  boundary_id?: string | null;
+};
+
 export type SelectedProject = {
   path: string;
 };
@@ -33,9 +73,22 @@ export type DesktopMessage = {
   created_at: string;
 };
 
+export type DesktopCompactBoundary = {
+  boundary_id: string;
+  strategy: string;
+  trigger: string;
+  before_tokens: number;
+  after_tokens: number;
+  messages_before: number;
+  messages_after: number;
+  summary: string;
+  created_at: string;
+};
+
 export type ResumedSession = {
   session_id: string;
   messages: DesktopMessage[];
+  compact_boundaries: DesktopCompactBoundary[];
 };
 
 export type DesktopSettings = {
@@ -151,6 +204,14 @@ export type DesktopModelOption = {
   note: string;
 };
 
+export type DesktopRuntimeDiagnostic = {
+  schema?: string;
+  task_state?: Record<string, unknown>;
+  verification_proof?: Record<string, unknown>;
+  control_loop?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 export type DesktopRunEvent =
   | { type: "run_started"; run_id: string; session_id?: string | null }
   | { type: "assistant_delta"; text: string }
@@ -178,6 +239,7 @@ export type DesktopRunEvent =
       reasoning_tokens?: number | null;
       cached_tokens?: number | null;
     }
+  | { type: "runtime_diagnostic"; diagnostic: DesktopRuntimeDiagnostic }
   | { type: "run_completed" }
   | { type: "output_truncated" }
   | { type: "run_error"; message: string };
@@ -227,6 +289,27 @@ export function desktopHealth(): Promise<DesktopHealth> {
   }
 
   return invoke("desktop_health");
+}
+
+export function desktopContextSnapshot(): Promise<DesktopContextSnapshot> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      history_messages: webPreviewSessions.find((session) => session.id === webPreviewSettings.active_session_id)?.message_count || 0,
+      history_tokens: 1200,
+      tool_schema_tokens: 2200,
+      memory_snapshot_tokens: 0,
+      total_estimated_tokens: 3400,
+      max_context_tokens: 128000,
+      usage_percent: 3,
+      stable_prefix_fingerprint: "web-preview",
+      compact: {
+        compression_count: 0,
+        circuit_open: false,
+      },
+    });
+  }
+
+  return invoke("desktop_context_snapshot");
 }
 
 export function selectProject(path: string): Promise<SelectedProject> {
@@ -612,6 +695,7 @@ export function resumeSession(sessionId: string): Promise<ResumedSession> {
     return loadSessionMessages(sessionId).then((messages) => ({
       session_id: sessionId,
       messages,
+      compact_boundaries: [],
     }));
   }
 
@@ -737,6 +821,70 @@ export function sendMessage(message: string, contexts: DesktopRunContext[] = [])
       }Run this inside Tauri to stream the Rust agent runtime.`,
     });
     emitWebPreview({
+      type: "runtime_diagnostic",
+      diagnostic: {
+        schema: "desktop_runtime_diagnostic.v1",
+        task_state: {
+          goal: message,
+          mode: "full",
+          stage: "closeout",
+          mode_score: {
+            confidence: 82,
+            complexity: 7,
+            risk: 5,
+            uncertainty: 3,
+            tool_need: 8,
+            user_impact: 7,
+          },
+          lightweight_plan: null,
+          verification: {
+            status: "verified",
+            required_checks: ["corepack pnpm --dir apps/desktop test:ui-smoke"],
+          },
+          done: {
+            satisfied: true,
+            summary: "preview run completed",
+          },
+          active_files: [
+            "apps/desktop/src/app/runEventState.ts",
+            "apps/desktop/src/app/components/TraceDrawer.tsx",
+          ],
+          recent_steps: [
+            { stage: "validate", summary: "desktop smoke passed" },
+            { stage: "edit", summary: "runtime diagnostic event rendered" },
+          ],
+          stop_check: {
+            status: "stop",
+            reason: "verification_ready",
+            summary: "ready for closeout",
+          },
+        },
+        verification_proof: {
+          status: "verified",
+          summary: "validation passed 1/1 current checks",
+          closeout_status: "passed",
+          changed_files: 2,
+          validation_items: 1,
+          acceptance_items: 1,
+          residual_risks: 0,
+        },
+        control_loop: {
+          coverage: "7/7",
+          summary:
+            "context=2 latest=runtime.diet -> decision=1 latest=action.decision -> verification=1 latest=verify.done -> closeout=2 latest=assistant",
+          phases: [
+            { phase: "context", events: 2, latest_label: "runtime.diet" },
+            { phase: "decision", events: 1, latest_label: "action.decision" },
+            { phase: "permission", events: 1, latest_label: "permission.resolve" },
+            { phase: "tool_execution", events: 3, latest_label: "tool.done" },
+            { phase: "state_update", events: 1, latest_label: "stop.check" },
+            { phase: "verification", events: 1, latest_label: "verify.done" },
+            { phase: "closeout", events: 2, latest_label: "assistant" },
+          ],
+        },
+      },
+    });
+    emitWebPreview({
       type: "usage",
       prompt_tokens: 128,
       completion_tokens: 42,
@@ -775,6 +923,28 @@ export function sendMessage(message: string, contexts: DesktopRunContext[] = [])
   }
 
   return invoke("send_message", { contexts, message });
+}
+
+export function compactContext(): Promise<DesktopCompactionAttempt | null> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      trigger: "manual compact",
+      strategy: "session_memory_compact",
+      decision: "compacted",
+      before_tokens: 3400,
+      after_tokens: 2100,
+      messages_before: 5,
+      messages_after: 4,
+      reason: "web preview manual compact",
+      attempt_index: 1,
+      consecutive_no_gain: 0,
+      consecutive_failures: 0,
+      circuit_open: false,
+      boundary_id: "web-preview-boundary",
+    });
+  }
+
+  return invoke("compact_context");
 }
 
 export function answerPermission(approved: boolean): Promise<boolean> {

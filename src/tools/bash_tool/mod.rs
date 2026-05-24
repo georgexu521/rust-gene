@@ -6,6 +6,7 @@ mod background;
 pub mod command_classifier;
 mod pty;
 
+use crate::engine::context_ledger::{record_bash_read, BashReadLedgerInput};
 use crate::tools::{
     Tool, ToolContext, ToolErrorCode, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics,
 };
@@ -785,6 +786,30 @@ fn terminal_task_id(command: &str, terminal_kind: &str, started_at_ms: u64) -> S
     )
 }
 
+fn shell_output_hash(stdout: &str, stderr: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    stdout.hash(&mut hasher);
+    stderr.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn shell_category_name(category: ShellCommandCategory) -> &'static str {
+    match category {
+        ShellCommandCategory::Read => "read",
+        ShellCommandCategory::List => "list",
+        ShellCommandCategory::Search => "search",
+        ShellCommandCategory::Validation => "validation",
+        ShellCommandCategory::PackageInstall => "package_install",
+        ShellCommandCategory::DevServer => "dev_server",
+        ShellCommandCategory::Interactive => "interactive",
+        ShellCommandCategory::TestRun => "test_run",
+        ShellCommandCategory::FileMutation => "file_mutation",
+        ShellCommandCategory::GitMutation => "git_mutation",
+        ShellCommandCategory::Destructive => "destructive",
+        ShellCommandCategory::Unknown => "unknown",
+    }
+}
+
 fn system_time_millis(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
@@ -1450,6 +1475,28 @@ impl Tool for BashTool {
             ended_at_ms: timing.ended_at_ms(),
             duration_ms: timing.duration_ms(),
         });
+        if matches!(
+            classification.category,
+            ShellCommandCategory::Read | ShellCommandCategory::List | ShellCommandCategory::Search
+        ) {
+            if let Some(store) = context.session_store.as_ref() {
+                let output_hash = shell_output_hash(&stdout, &stderr);
+                record_bash_read(
+                    store,
+                    &BashReadLedgerInput {
+                        session_id: &context.session_id,
+                        command,
+                        cwd: &working_dir.display().to_string(),
+                        category: shell_category_name(classification.category),
+                        exit_code,
+                        stdout_bytes: stdout.len(),
+                        stderr_bytes: stderr.len(),
+                        output_hash: &output_hash,
+                        timed_out,
+                    },
+                );
+            }
+        }
 
         if output.status.success() {
             ToolResult::success_with_data(result_preview, result_data)
@@ -1530,6 +1577,38 @@ mod tests {
                 .unwrap_or("")
                 .contains("not user-facing communication")
         );
+    }
+
+    #[tokio::test]
+    async fn bash_read_persists_context_ledger_fact() {
+        let tool = BashTool;
+        let dir = tempdir().unwrap();
+        let store = std::sync::Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store
+            .create_session("session-bash-ledger", "Ledger", "model")
+            .unwrap();
+        let context =
+            ToolContext::new(dir.path(), "session-bash-ledger").with_session_store(store.clone());
+
+        let result = tool
+            .execute(
+                json!({
+                    "command": "pwd",
+                    "timeout": 5
+                }),
+                context,
+            )
+            .await;
+        assert!(result.success, "bash failed: {:?}", result.error);
+
+        let events = store
+            .recent_context_ledger_events("session-bash-ledger", 10)
+            .unwrap();
+        assert!(events.iter().any(|event| {
+            event.kind == crate::engine::context_ledger::CONTEXT_LEDGER_BASH_READ_KIND
+                && event.payload["command"] == "pwd"
+                && event.payload["exit_code"] == 0
+        }));
     }
 
     #[test]

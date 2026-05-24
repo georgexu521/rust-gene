@@ -1,8 +1,13 @@
 use super::runtime_diet::RuntimeDietSnapshot;
-use crate::engine::code_change_workflow::{CodeChangeWorkflowRunner, WorkflowCloseout};
+use crate::engine::code_change_workflow::{
+    CodeChangeWorkflowRunner, StageValidationStatus, WorkflowCloseout,
+};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::engine::verification_proof::{
+    VerificationProof, VerificationProofRequest, VerificationProofStatus,
+};
 use crate::services::api::ToolCall;
 use tokio::sync::mpsc;
 
@@ -24,6 +29,7 @@ pub(super) struct CloseoutEvaluation {
     pub(super) closeout: Option<WorkflowCloseout>,
     pub(super) runtime_validation_label: Option<String>,
     pub(super) tool_evidence_summary: Option<String>,
+    pub(super) verification_proof: VerificationProof,
 }
 
 pub(super) struct CloseoutEvaluator;
@@ -35,6 +41,13 @@ impl CloseoutEvaluator {
         evidence_ledger: &EvidenceLedger,
         required_validation_commands: &[String],
     ) -> CloseoutEvaluation {
+        let validation_required =
+            closeout_validation_required(code_workflow, task_bundle, required_validation_commands);
+        let verification_proof = evidence_ledger.verification_proof(VerificationProofRequest {
+            required_commands: required_validation_commands,
+            requires_validation: validation_required,
+            task_verification_status: task_bundle.agent_state.verification_plan.status,
+        });
         let runtime_validation_label = evidence_ledger
             .runtime_required_validation_label(required_validation_commands)
             .or_else(|| evidence_ledger.runtime_validation_label());
@@ -42,6 +55,13 @@ impl CloseoutEvaluator {
             task_bundle,
             runtime_validation_label.as_deref(),
         );
+        if let Some(closeout) = &mut closeout {
+            apply_verification_proof_to_closeout(
+                closeout,
+                &verification_proof,
+                validation_required,
+            );
+        }
         let tool_evidence_summary = evidence_ledger.closeout_tool_evidence_summary();
         if let (Some(closeout), Some(summary)) = (&mut closeout, tool_evidence_summary.as_ref()) {
             if !closeout.validation.iter().any(|item| item == summary) {
@@ -52,7 +72,74 @@ impl CloseoutEvaluator {
             closeout,
             runtime_validation_label,
             tool_evidence_summary,
+            verification_proof,
         }
+    }
+}
+
+fn closeout_validation_required(
+    code_workflow: &CodeChangeWorkflowRunner,
+    task_bundle: &TaskContextBundle,
+    required_validation_commands: &[String],
+) -> bool {
+    use crate::engine::task_context::VerificationStatus;
+
+    code_workflow.policy.require_stage_validation
+        || !required_validation_commands.is_empty()
+        || !task_bundle
+            .agent_state
+            .verification_plan
+            .required_checks
+            .is_empty()
+        || matches!(
+            task_bundle.agent_state.verification_plan.status,
+            VerificationStatus::Pending
+                | VerificationStatus::Verified
+                | VerificationStatus::Failed
+                | VerificationStatus::Blocked
+                | VerificationStatus::UserDeferred
+                | VerificationStatus::Unavailable
+        )
+}
+
+fn apply_verification_proof_to_closeout(
+    closeout: &mut WorkflowCloseout,
+    proof: &VerificationProof,
+    validation_required: bool,
+) {
+    if validation_required || proof.status != VerificationProofStatus::NotApplicable {
+        let line = proof.validation_line();
+        if !closeout.validation.iter().any(|item| item == &line) {
+            closeout.validation.push(line);
+        }
+    }
+
+    if !proof.status.blocks_verified_closeout() {
+        return;
+    }
+
+    match proof.status {
+        VerificationProofStatus::Failed => closeout.status = StageValidationStatus::Failed,
+        VerificationProofStatus::NotRun
+            if !validation_required && closeout.status != StageValidationStatus::Passed => {}
+        VerificationProofStatus::NotRun
+        | VerificationProofStatus::Blocked
+        | VerificationProofStatus::UserDeferred
+        | VerificationProofStatus::Unavailable => {
+            if closeout.status == StageValidationStatus::Passed {
+                closeout.status = StageValidationStatus::NotVerified;
+            }
+        }
+        VerificationProofStatus::Verified | VerificationProofStatus::NotApplicable => {}
+    }
+
+    let residual = format!(
+        "Verification proof is {}: {}",
+        proof.status.label(),
+        proof.summary
+    );
+    if !closeout.residual_risks.iter().any(|item| item == &residual) {
+        closeout.residual_risks.push(residual);
     }
 }
 
@@ -95,6 +182,10 @@ impl FinalCloseoutController {
                 validation_items: closeout.validation.len(),
                 tool_records: evidence_snapshot.tool_execution_records,
                 tool_evidence: evaluation.tool_evidence_summary.clone(),
+                verification_proof_status: Some(
+                    evaluation.verification_proof.status_label().to_string(),
+                ),
+                verification_proof_summary: Some(evaluation.verification_proof.summary.clone()),
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
             });
@@ -103,7 +194,7 @@ impl FinalCloseoutController {
             context.runtime_diet.validation_evidence = evaluation
                 .runtime_validation_label
                 .clone()
-                .unwrap_or_else(|| closeout.status.label().to_string());
+                .unwrap_or_else(|| evaluation.verification_proof.status_label().to_string());
             let closeout_text = closeout.format_for_user_response();
             if !closeout_text.is_empty() && !context.final_content.contains("Closeout:") {
                 context.final_content.push_str(&closeout_text);
@@ -263,6 +354,43 @@ mod tests {
         assert!(closeout.acceptance.iter().any(|item| {
             item.contains("accepted=true") && item.contains("required validation passed")
         }));
+        assert_eq!(
+            evaluation.verification_proof.status,
+            VerificationProofStatus::Verified
+        );
+        assert!(closeout.validation.iter().any(|item| item
+            .contains("verification proof: verified (required validation passed 2/2 commands)")));
+    }
+
+    #[test]
+    fn evaluator_records_not_run_proof_when_required_validation_is_missing() {
+        let mut bundle = TaskContextBundle::new("审查已有实现", ".", audit_route(), None);
+        bundle.add_acceptance_check("required regression checks pass");
+        let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+        let evidence_ledger = EvidenceLedger::new();
+        let required_commands = vec!["cargo test -q memory".to_string()];
+
+        let evaluation = CloseoutEvaluator::evaluate(
+            &code_workflow,
+            &bundle,
+            &evidence_ledger,
+            &required_commands,
+        );
+        let closeout = evaluation.closeout.expect("closeout");
+
+        assert_eq!(
+            evaluation.verification_proof.status,
+            VerificationProofStatus::NotRun
+        );
+        assert_eq!(closeout.status, StageValidationStatus::NotVerified);
+        assert!(closeout
+            .validation
+            .iter()
+            .any(|item| item.contains("verification proof: not_run")));
+        assert!(closeout
+            .residual_risks
+            .iter()
+            .any(|item| item.contains("Verification proof is not_run")));
     }
 
     #[test]

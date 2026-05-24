@@ -14,6 +14,7 @@ use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::streaming::StreamEvent;
+use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::TraceCollector;
 use crate::services::api::{Message, Tool, ToolCall};
 use crate::tools::ToolResult;
@@ -26,6 +27,7 @@ pub(super) struct TurnModelStepContext<'a> {
     pub(super) iteration: usize,
     pub(super) route: &'a IntentRoute,
     pub(super) code_workflow: &'a CodeChangeWorkflowRunner,
+    pub(super) task_bundle: &'a TaskContextBundle,
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
     pub(super) focused_repair_prompt: Option<Message>,
     pub(super) tools: &'a [Tool],
@@ -56,10 +58,13 @@ impl TurnModelStepController {
         let prepared_request = RequestPreparationController::prepare(RequestPreparationContext {
             messages: context.messages,
             focused_repair_prompt: context.focused_repair_prompt,
+            agent_task_state: Some(&context.task_bundle.agent_state),
             turn_retrieval_context: context.turn_retrieval_context,
             retrieval_policy: context.route.retrieval,
             memory_manager: context.conversation.memory_manager.as_ref(),
             provider: Some(context.conversation.provider.as_ref()),
+            session_store: context.conversation.session_store.as_ref(),
+            session_id: &context.conversation.session_id,
             model: &context.conversation.model,
             tools: context.tools,
             trace: context.trace,
@@ -205,6 +210,7 @@ mod tests {
             iteration: 1,
             route,
             code_workflow: &code_workflow,
+            task_bundle: &task_bundle,
             turn_retrieval_context: None,
             focused_repair_prompt: None,
             tools: &[],

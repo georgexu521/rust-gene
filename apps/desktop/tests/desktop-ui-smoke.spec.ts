@@ -98,7 +98,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Loaded preview session: web-preview")).not.toBeVisible();
     await expect(page.getByLabel("Current session")).toContainText("New conversation");
     await expect(page.getByLabel("Current session")).toContainText("No active session");
-    await expect(page.locator(".startup-state-card")).toContainText("New conversation");
+    await expect(page.locator(".startup-state-card")).not.toBeVisible();
     await expect(
       page.locator(".empty-state").getByRole("heading", { name: "What should we build in rust-agent?" }),
     ).toBeVisible();
@@ -123,18 +123,17 @@ test.describe("desktop UI smoke", () => {
     await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.locator(".composer-context-chips")).not.toBeVisible();
     await expect(page.locator(".composer")).not.toHaveClass(/empty-composer/);
-    await expect(page.locator(".timeline-summary.run.completed", { hasText: "Run completed" })).toBeVisible();
-    await expect(page.locator(".timeline-section-label", { hasText: "Process" })).toBeVisible();
-    await expect(page.locator(".timeline-event.run-group-start", { hasText: "Agent run" })).toBeVisible();
-    await expect(page.locator(".timeline-event.run-group-start")).toContainText("Attached context");
-    await expect(page.locator(".timeline-event.run-group-start")).toContainText("Current diff");
-    await expect(page.locator(".timeline-event.run-group-start")).toContainText("App.tsx");
-    await page.locator(".timeline-event.run-group-start").getByRole("button", { name: "Open run context Current diff" }).click();
+    await expect(page.locator(".timeline-run-row.completed", { hasText: "Done" })).toBeVisible();
+    await expect(page.locator(".timeline-event", { hasText: "Agent run" })).not.toBeVisible();
+    await expect(page.locator(".timeline-run-row")).toContainText("Current diff");
+    await expect(page.locator(".timeline-run-row")).toContainText("App.tsx");
+    await page.locator(".timeline-run-row").getByRole("button", { name: "Open run context Current diff" }).click();
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Changed files");
     await page.getByRole("button", { name: "Close context details" }).click();
     await expect(page.locator(".timeline-run-stats span", { hasText: "3 tools" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();
+    await expect(page.locator(".timeline-run-stats span", { hasText: "spine 7/7" })).toBeVisible();
     await expect(page.locator(".message.assistant.final", { hasText: "Final answer" })).toBeVisible();
     await expect(page.locator(".message.assistant.final .message-section-label", { hasText: "Conclusion" })).toBeVisible();
     await expect(page.locator(".message.assistant.final")).toHaveClass(/run-group-final/);
@@ -174,11 +173,13 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-event.permission", { hasText: "Allow git push" })).toBeVisible();
     await page.locator(".timeline-event.permission .timeline-actions button", { hasText: "Approve" }).click();
     await expect(page.locator(".timeline-event.permission", { hasText: "Permission approved" })).toBeVisible();
-    await page.locator(".timeline-event.run-group-start", { hasText: "Agent run" }).getByRole("button", { name: "Open trace for Agent run" }).click();
+    await page.locator(".timeline-run-row").getByRole("button", { name: "Open trace for current run" }).click();
     await expect(page.getByRole("complementary", { name: "Run trace" })).toBeVisible();
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Attached context");
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Current diff");
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("App.tsx");
+    await expect(page.locator(".trace-item.runtime", { hasText: "Runtime diagnostic" })).toContainText("Proof summary");
+    await expect(page.locator(".trace-item.runtime", { hasText: "Runtime diagnostic" })).toContainText("validation passed");
     await page.locator(".trace-item.active", { hasText: "Run started" }).getByRole("button", { name: "Open trace context Current diff" }).click();
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Patch preview");
     await page.getByRole("button", { name: "Close context details" }).click();
@@ -191,7 +192,6 @@ test.describe("desktop UI smoke", () => {
     await assertNoHorizontalOverflow(page);
     await assertStableVerticalStack(page, [
       ".topbar",
-      ".diagnostics-panel",
       ".transcript",
       ".composer",
     ]);

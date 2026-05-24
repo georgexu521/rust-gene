@@ -10,11 +10,16 @@ export function PermissionCard({ request, onAnswer }: PermissionCardProps) {
     return null;
   }
   const summary = permissionSummary(request);
+  const command = commandFromArguments(request.arguments);
+  const mutation = isMutationRequest(request);
 
   return (
     <section className="permission-card">
       <div>
-        <div className="permission-title">Permission needed: {request.tool_name}</div>
+        <div className="permission-title">
+          {mutation ? "Workspace change needs approval" : "Permission needed"}: {request.tool_name}
+        </div>
+        {command ? <code className="permission-command">{command}</code> : null}
         <div className="permission-prompt">{request.prompt}</div>
         {summary.length > 0 ? (
           <div className="permission-evidence">
@@ -47,6 +52,24 @@ function permissionSummary(request: PermissionRequest) {
     stringTag("family", stringField(evidence, "permission_family")),
     firstReason(evidence?.reasons) || stringField(review, "reason"),
   ].filter((item): item is string => Boolean(item));
+}
+
+function commandFromArguments(value: unknown) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const command = value.command;
+  return typeof command === "string" && command.trim() ? command : undefined;
+}
+
+function isMutationRequest(request: PermissionRequest) {
+  const evidence = isRecord(request.metadata) && isRecord(request.metadata.permission_evidence)
+    ? request.metadata.permission_evidence
+    : null;
+  const classification = isRecord(evidence?.command_classification)
+    ? evidence.command_classification
+    : null;
+  return classification?.mutation === true;
 }
 
 function stringTag(label: string, value: string | undefined) {

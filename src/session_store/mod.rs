@@ -25,6 +25,14 @@ pub struct MessageRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageInsert {
+    pub role: String,
+    pub content: String,
+    pub tool_calls: Option<serde_json::Value>,
+    pub tool_call_id: Option<String>,
+}
+
 /// 会话记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -49,6 +57,45 @@ pub struct LearningEventRecord {
     pub confidence: f64,
     pub payload: serde_json::Value,
     pub created_at: String,
+}
+
+/// Durable compact boundary produced when earlier context is summarized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactBoundaryRecord {
+    pub id: i64,
+    pub session_id: String,
+    pub boundary_id: String,
+    pub sequence: Option<i64>,
+    pub strategy: String,
+    pub trigger: Option<String>,
+    pub before_tokens: i64,
+    pub after_tokens: i64,
+    pub messages_before: i64,
+    pub messages_after: i64,
+    pub preserved_tail_count: Option<i64>,
+    pub retained_items: serde_json::Value,
+    pub provenance: serde_json::Value,
+    pub summary: String,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactBoundaryInsert {
+    pub session_id: String,
+    pub boundary_id: String,
+    pub sequence: Option<i64>,
+    pub strategy: String,
+    pub trigger: Option<String>,
+    pub before_tokens: i64,
+    pub after_tokens: i64,
+    pub messages_before: i64,
+    pub messages_after: i64,
+    pub preserved_tail_count: Option<i64>,
+    pub retained_items: serde_json::Value,
+    pub provenance: serde_json::Value,
+    pub summary: String,
+    pub payload: serde_json::Value,
 }
 
 /// Durable subagent result artifact.
@@ -162,6 +209,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v6_add_agent_task_states::V6AddAgentTaskStates,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v7_add_compact_boundaries::V7AddCompactBoundaries,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -196,6 +246,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v6_add_agent_task_states::V6AddAgentTaskStates,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v7_add_compact_boundaries::V7AddCompactBoundaries,
         ));
         runner.run(&conn)?;
 
@@ -308,9 +361,38 @@ impl SessionStore {
 
     /// 删除会话及其消息
     pub fn delete_session(&self, id: &str) -> SqlResult<()> {
-        let conn = self.conn();
-        conn.execute("DELETE FROM messages WHERE session_id = ?1", params![id])?;
-        conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM trace_events WHERE trace_id IN (
+                SELECT trace_id FROM turn_traces WHERE session_id = ?1
+            )",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM turn_traces WHERE session_id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM learning_events WHERE session_id = ?1",
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM agent_task_states WHERE session_id = ?1",
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM agent_artifacts WHERE session_id = ?1",
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM compact_boundaries WHERE session_id = ?1",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM messages WHERE session_id = ?1", params![id])?;
+        tx.execute(
+            "UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ?1",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+        tx.commit()?;
         debug!("Deleted session: {}", id);
         Ok(())
     }
@@ -410,6 +492,51 @@ impl SessionStore {
             );
         }
         Ok(count)
+    }
+
+    /// Rewrite the model-visible message set after context compaction.
+    ///
+    /// Raw transcript details should stay available through trace/artifact
+    /// records; this table is the runtime continuation surface.
+    pub fn rewrite_session_messages_after_compact(
+        &self,
+        session_id: &str,
+        messages: &[MessageInsert],
+    ) -> SqlResult<usize> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM messages WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        for message in messages {
+            let tool_calls = message
+                .tool_calls
+                .as_ref()
+                .map(serde_json::Value::to_string);
+            tx.execute(
+                "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    session_id,
+                    message.role,
+                    message.content,
+                    tool_calls,
+                    message.tool_call_id
+                ],
+            )?;
+        }
+        tx.execute(
+            "UPDATE sessions SET updated_at = datetime('now') WHERE id = ?1",
+            params![session_id],
+        )?;
+        tx.commit()?;
+        Ok(messages.len())
+    }
+
+    /// Restore the compacted runtime continuation surface for a session.
+    pub fn restore_compacted_messages(&self, session_id: &str) -> SqlResult<Vec<MessageRecord>> {
+        self.get_messages(session_id)
     }
 
     // ==================== 搜索 ====================
@@ -748,6 +875,53 @@ impl SessionStore {
         rows.collect()
     }
 
+    /// Load recent context ledger events for a session.
+    pub fn recent_context_ledger_events(
+        &self,
+        session_id: &str,
+        limit: i64,
+    ) -> SqlResult<Vec<LearningEventRecord>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, kind, source, summary, confidence, payload, created_at
+             FROM learning_events
+             WHERE session_id = ?1 AND kind LIKE 'context_ledger.%'
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit], learning_event_from_row)?;
+        rows.collect()
+    }
+
+    /// Load the most recent file-read context ledger fact for a path in a session.
+    pub fn latest_file_read_context_event(
+        &self,
+        session_id: &str,
+        resolved_path: &str,
+    ) -> SqlResult<Option<LearningEventRecord>> {
+        let conn = self.conn();
+        let result = conn.query_row(
+            "SELECT id, session_id, kind, source, summary, confidence, payload, created_at
+             FROM learning_events
+             WHERE session_id = ?1
+               AND kind = ?2
+               AND json_extract(payload, '$.resolved_path') = ?3
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+            params![
+                session_id,
+                crate::engine::context_ledger::CONTEXT_LEDGER_FILE_READ_KIND,
+                resolved_path
+            ],
+            learning_event_from_row,
+        );
+        match result {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Load one learning event by id within a session.
     pub fn learning_event(
         &self,
@@ -760,26 +934,131 @@ impl SessionStore {
              FROM learning_events
              WHERE session_id = ?1 AND id = ?2",
             params![session_id, id],
-            |row| {
-                let payload_text: String = row.get(6)?;
-                Ok(LearningEventRecord {
-                    id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    kind: row.get(2)?,
-                    source: row.get(3)?,
-                    summary: row.get(4)?,
-                    confidence: row.get(5)?,
-                    payload: serde_json::from_str(&payload_text)
-                        .unwrap_or_else(|_| serde_json::json!({})),
-                    created_at: row.get(7)?,
-                })
-            },
+            learning_event_from_row,
         );
         match result {
             Ok(record) => Ok(Some(record)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    // ==================== Compact Boundary 操作 ====================
+
+    pub fn add_compact_boundary(&self, boundary: &CompactBoundaryInsert) -> SqlResult<i64> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO compact_boundaries
+             (session_id, boundary_id, sequence, strategy, trigger, before_tokens, after_tokens,
+              messages_before, messages_after, preserved_tail_count, retained_items, provenance,
+              summary, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(session_id, boundary_id) DO UPDATE SET
+               sequence = excluded.sequence,
+               strategy = excluded.strategy,
+               trigger = excluded.trigger,
+               before_tokens = excluded.before_tokens,
+               after_tokens = excluded.after_tokens,
+               messages_before = excluded.messages_before,
+               messages_after = excluded.messages_after,
+               preserved_tail_count = excluded.preserved_tail_count,
+               retained_items = excluded.retained_items,
+               provenance = excluded.provenance,
+               summary = excluded.summary,
+               payload = excluded.payload",
+            params![
+                &boundary.session_id,
+                &boundary.boundary_id,
+                boundary.sequence,
+                &boundary.strategy,
+                &boundary.trigger,
+                boundary.before_tokens,
+                boundary.after_tokens,
+                boundary.messages_before,
+                boundary.messages_after,
+                boundary.preserved_tail_count,
+                boundary.retained_items.to_string(),
+                boundary.provenance.to_string(),
+                boundary.summary,
+                boundary.payload.to_string(),
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_compact_boundaries(
+        &self,
+        session_id: &str,
+        limit: i64,
+    ) -> SqlResult<Vec<CompactBoundaryRecord>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, boundary_id, sequence, strategy, trigger,
+                    before_tokens, after_tokens, messages_before, messages_after,
+                    preserved_tail_count, retained_items, provenance, summary, payload, created_at
+             FROM compact_boundaries
+             WHERE session_id = ?1
+             ORDER BY id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit], compact_boundary_from_row)?;
+        rows.collect()
+    }
+
+    pub fn latest_compact_boundary(
+        &self,
+        session_id: &str,
+    ) -> SqlResult<Option<CompactBoundaryRecord>> {
+        let conn = self.conn();
+        let result = conn.query_row(
+            "SELECT id, session_id, boundary_id, sequence, strategy, trigger,
+                    before_tokens, after_tokens, messages_before, messages_after,
+                    preserved_tail_count, retained_items, provenance, summary, payload, created_at
+             FROM compact_boundaries
+             WHERE session_id = ?1
+             ORDER BY id DESC
+             LIMIT 1",
+            params![session_id],
+            compact_boundary_from_row,
+        );
+        match result {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn add_compact_boundary_from_runtime_record(
+        &self,
+        session_id: &str,
+        record: &crate::engine::context_collapse::CompactionRuntimeRecord,
+        trigger: Option<&str>,
+        summary: &str,
+    ) -> SqlResult<i64> {
+        let boundary_id = record
+            .boundary_id
+            .clone()
+            .unwrap_or_else(|| format!("compact-{}", uuid::Uuid::new_v4()));
+        self.add_compact_boundary(&CompactBoundaryInsert {
+            session_id: session_id.to_string(),
+            boundary_id,
+            sequence: record.sequence.map(i64::from),
+            strategy: record.strategy.label().to_string(),
+            trigger: trigger
+                .map(str::to_string)
+                .or_else(|| record.trigger.clone()),
+            before_tokens: i64::try_from(record.tokens_before).unwrap_or(i64::MAX),
+            after_tokens: i64::try_from(record.tokens_after).unwrap_or(i64::MAX),
+            messages_before: i64::try_from(record.messages_before).unwrap_or(i64::MAX),
+            messages_after: i64::try_from(record.messages_after).unwrap_or(i64::MAX),
+            preserved_tail_count: record
+                .preserved_tail_count
+                .and_then(|count| i64::try_from(count).ok()),
+            retained_items: serde_json::json!(record.retained_items),
+            provenance: serde_json::json!(record.provenance),
+            summary: summary.to_string(),
+            payload: serde_json::to_value(record).unwrap_or_else(|_| serde_json::json!({})),
+        })
     }
 
     // ==================== Agent Artifact 操作 ====================
@@ -1040,6 +1319,46 @@ fn session_from_row(row: &Row<'_>) -> SqlResult<SessionRecord> {
     })
 }
 
+fn learning_event_from_row(row: &Row<'_>) -> SqlResult<LearningEventRecord> {
+    let payload_text: String = row.get(6)?;
+    Ok(LearningEventRecord {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        kind: row.get(2)?,
+        source: row.get(3)?,
+        summary: row.get(4)?,
+        confidence: row.get(5)?,
+        payload: serde_json::from_str(&payload_text).unwrap_or_else(|_| serde_json::json!({})),
+        created_at: row.get(7)?,
+    })
+}
+
+fn compact_boundary_from_row(row: &Row<'_>) -> SqlResult<CompactBoundaryRecord> {
+    let retained_items_text: String = row.get(11)?;
+    let provenance_text: String = row.get(12)?;
+    let payload_text: String = row.get(14)?;
+    Ok(CompactBoundaryRecord {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        boundary_id: row.get(2)?,
+        sequence: row.get(3)?,
+        strategy: row.get(4)?,
+        trigger: row.get(5)?,
+        before_tokens: row.get(6)?,
+        after_tokens: row.get(7)?,
+        messages_before: row.get(8)?,
+        messages_after: row.get(9)?,
+        preserved_tail_count: row.get(10)?,
+        retained_items: serde_json::from_str(&retained_items_text)
+            .unwrap_or_else(|_| serde_json::json!([])),
+        provenance: serde_json::from_str(&provenance_text)
+            .unwrap_or_else(|_| serde_json::json!([])),
+        summary: row.get(13)?,
+        payload: serde_json::from_str(&payload_text).unwrap_or_else(|_| serde_json::json!({})),
+        created_at: row.get(15)?,
+    })
+}
+
 fn fts_phrase_terms(query: &str) -> String {
     let terms = query
         .split_whitespace()
@@ -1173,6 +1492,8 @@ mod tests {
                     validation_items: 1,
                     tool_records: turn_index as usize,
                     tool_evidence: Some(format!("tool evidence: records={}", turn_index)),
+                    verification_proof_status: Some("verified".to_string()),
+                    verification_proof_summary: Some("validation passed".to_string()),
                     acceptance_items: 1,
                     residual_risks: 0,
                 });
@@ -1217,6 +1538,56 @@ mod tests {
         assert_eq!(events[0].kind, "turn_outcome");
         assert_eq!(events[0].confidence, 1.0);
         assert_eq!(events[0].payload["intent"], "CodeChange");
+    }
+
+    #[test]
+    fn test_context_ledger_event_queries() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s2", "Other", "model").unwrap();
+
+        store
+            .add_learning_event(
+                "s1",
+                crate::engine::context_ledger::CONTEXT_LEDGER_FILE_READ_KIND,
+                "file_read",
+                "Read README.md",
+                1.0,
+                &serde_json::json!({
+                    "path": "README.md",
+                    "resolved_path": "/tmp/project/README.md",
+                    "content_hash": "a",
+                    "size_bytes": 12,
+                    "total_lines": 2,
+                    "displayed_lines": 2,
+                    "line_start": 1,
+                    "line_end": 2,
+                    "targeted_read": false,
+                    "truncated": false
+                }),
+            )
+            .unwrap();
+        store
+            .add_learning_event(
+                "s2",
+                crate::engine::context_ledger::CONTEXT_LEDGER_FILE_READ_KIND,
+                "file_read",
+                "Read README.md elsewhere",
+                1.0,
+                &serde_json::json!({"resolved_path": "/tmp/project/README.md"}),
+            )
+            .unwrap();
+
+        let ledger = store.recent_context_ledger_events("s1", 10).unwrap();
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].summary, "Read README.md");
+
+        let latest = store
+            .latest_file_read_context_event("s1", "/tmp/project/README.md")
+            .unwrap()
+            .expect("latest file read");
+        assert_eq!(latest.session_id, "s1");
+        assert_eq!(latest.payload["content_hash"], "a");
     }
 
     #[test]
@@ -1324,6 +1695,115 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_session_removes_related_runtime_records() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+        store
+            .create_child_session("child", "Child", "model", "s1")
+            .unwrap();
+        store
+            .add_message("s1", "user", "hello", None, None)
+            .unwrap();
+
+        let mut trace = crate::engine::trace::TurnTrace::new("s1", 1, "delete me");
+        trace.finish(crate::engine::trace::TurnStatus::Completed);
+        store.add_turn_trace(&trace).unwrap();
+        store
+            .add_learning_event(
+                "s1",
+                "turn_outcome",
+                "test",
+                "summary",
+                1.0,
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        let artifact_id = store
+            .add_agent_artifact(
+                "s1",
+                "agent_123",
+                None,
+                "worker",
+                "completed",
+                "desc",
+                "output",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        store
+            .upsert_agent_task_state(&AgentTaskStateUpsert {
+                session_id: "s1".to_string(),
+                task_id: "task_123".to_string(),
+                agent_id: "agent_123".to_string(),
+                profile: None,
+                role: "worker".to_string(),
+                status: "completed".to_string(),
+                description: "desc".to_string(),
+                transcript_path: None,
+                tool_ids_in_progress: Vec::new(),
+                permission_requests: Vec::new(),
+                result_artifact_id: Some(artifact_id),
+                cleanup_hooks: Vec::new(),
+                payload: serde_json::json!({}),
+            })
+            .unwrap();
+
+        store.delete_session("s1").unwrap();
+
+        assert!(store.get_session("s1").unwrap().is_none());
+        assert_eq!(store.get_messages("s1").unwrap().len(), 0);
+        assert!(store.latest_turn_trace("s1").unwrap().is_none());
+        assert_eq!(store.recent_learning_events("s1", 10).unwrap().len(), 0);
+        assert_eq!(store.recent_agent_artifacts("s1", 10).unwrap().len(), 0);
+        assert_eq!(store.recent_agent_task_states("s1", 10).unwrap().len(), 0);
+        assert_eq!(store.list_compact_boundaries("s1", 10).unwrap().len(), 0);
+        assert!(store
+            .get_session("child")
+            .unwrap()
+            .unwrap()
+            .parent_session_id
+            .is_none());
+    }
+
+    #[test]
+    fn test_compact_boundary_persistence() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+
+        let id = store
+            .add_compact_boundary(&CompactBoundaryInsert {
+                session_id: "s1".to_string(),
+                boundary_id: "boundary-1".to_string(),
+                sequence: Some(1),
+                strategy: "auto_compact".to_string(),
+                trigger: Some("preflight".to_string()),
+                before_tokens: 90_000,
+                after_tokens: 20_000,
+                messages_before: 30,
+                messages_after: 5,
+                preserved_tail_count: Some(4),
+                retained_items: serde_json::json!(["changed_files:1"]),
+                provenance: serde_json::json!(["trigger:preflight"]),
+                summary: "Compacted previous work".to_string(),
+                payload: serde_json::json!({"pressure": "high"}),
+            })
+            .unwrap();
+        assert!(id >= 0);
+
+        let latest = store.latest_compact_boundary("s1").unwrap().unwrap();
+        assert_eq!(latest.boundary_id, "boundary-1");
+        assert_eq!(latest.strategy, "auto_compact");
+        assert_eq!(latest.before_tokens, 90_000);
+        assert_eq!(
+            latest.retained_items,
+            serde_json::json!(["changed_files:1"])
+        );
+
+        let listed = store.list_compact_boundaries("s1", 10).unwrap();
+        assert_eq!(listed.len(), 1);
+    }
+
+    #[test]
     fn test_delete_messages_before() {
         let store = SessionStore::in_memory().unwrap();
         store.create_session("s1", "Test", "model").unwrap();
@@ -1342,6 +1822,64 @@ mod tests {
 
         let messages = store.get_messages("s1").unwrap();
         assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn test_rewrite_and_restore_compacted_messages() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+        store.add_message("s1", "user", "old", None, None).unwrap();
+        store
+            .add_compact_boundary(&CompactBoundaryInsert {
+                session_id: "s1".to_string(),
+                boundary_id: "boundary-restore".to_string(),
+                sequence: Some(1),
+                strategy: "auto_compact".to_string(),
+                trigger: Some("test".to_string()),
+                before_tokens: 1_000,
+                after_tokens: 100,
+                messages_before: 4,
+                messages_after: 2,
+                preserved_tail_count: Some(1),
+                retained_items: serde_json::json!(["README.md"]),
+                provenance: serde_json::json!({}),
+                summary: "summary".to_string(),
+                payload: serde_json::json!({}),
+            })
+            .unwrap();
+
+        let count = store
+            .rewrite_session_messages_after_compact(
+                "s1",
+                &[
+                    MessageInsert {
+                        role: "system".to_string(),
+                        content: "compact boundary summary".to_string(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    MessageInsert {
+                        role: "user".to_string(),
+                        content: "continue".to_string(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let restored = store.restore_compacted_messages("s1").unwrap();
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].content, "compact boundary summary");
+        assert_eq!(
+            store
+                .latest_compact_boundary("s1")
+                .unwrap()
+                .unwrap()
+                .boundary_id,
+            "boundary-restore"
+        );
     }
 
     #[test]

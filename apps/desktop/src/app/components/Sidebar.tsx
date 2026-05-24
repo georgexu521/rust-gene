@@ -54,9 +54,10 @@ export function Sidebar({
   const [draftTitle, setDraftTitle] = useState("");
   const projectLabel = basename(projectPath) || "Select project";
   const trimmedSearch = sessionSearch.trim();
+  const visibleSessions = visibleRecentSessions(sessions, selectedSessionId, trimmedSearch);
   const recentStatus = trimmedSearch
-    ? `${sessions.length} result${sessions.length === 1 ? "" : "s"}`
-    : String(sessions.length);
+    ? `${visibleSessions.length} result${visibleSessions.length === 1 ? "" : "s"}`
+    : `${visibleSessions.length}${visibleSessions.length === sessions.length ? "" : ` of ${sessions.length}`}`;
 
   function beginRename(session: RecentSession) {
     setEditingSessionId(session.id);
@@ -145,12 +146,12 @@ export function Sidebar({
         </strong>
       </div>
       <div className="recent-list">
-        {sessions.length === 0 ? (
+        {visibleSessions.length === 0 ? (
           <div className="recent-empty">
-            {sessionSearch.trim() ? "No matching sessions" : "No saved sessions"}
+            {sessionSearch.trim() ? "No matching sessions" : "No saved conversations yet"}
           </div>
         ) : (
-          sessions.map((session) => (
+          visibleSessions.map((session) => (
             <div
               className={`recent-item ${session.id === selectedSessionId ? "active" : ""}`}
               key={session.id}
@@ -194,9 +195,11 @@ export function Sidebar({
                         <Clock3 aria-hidden="true" size={12} />
                         {session.message_count} msgs
                       </span>
-                      <span>
-                        <HighlightedText query={trimmedSearch} text={session.model} />
-                      </span>
+                      {session.model && session.model !== "unknown" ? (
+                        <span>
+                          <HighlightedText query={trimmedSearch} text={session.model} />
+                        </span>
+                      ) : null}
                     </small>
                   </button>
                   <button
@@ -235,6 +238,27 @@ export function Sidebar({
       </button>
     </aside>
   );
+}
+
+function visibleRecentSessions(
+  sessions: RecentSession[],
+  selectedSessionId: string | null,
+  query: string,
+) {
+  if (query) {
+    return sessions;
+  }
+  const meaningful = sessions.filter(
+    (session) =>
+      session.id === selectedSessionId ||
+      session.message_count > 0 ||
+      !isPlaceholderTitle(session.title),
+  );
+  return meaningful.slice(0, 8);
+}
+
+function isPlaceholderTitle(title: string) {
+  return title.trim().toLowerCase() === "new session";
 }
 
 function basename(path: string) {

@@ -3,6 +3,7 @@ use super::tool_exposure_plan::{ToolExposurePlan, ToolExposureRequest};
 use super::turn_runtime_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use crate::engine::intent_router::WorkflowKind;
+use crate::engine::task_context::AgentTaskStage;
 use crate::engine::trace::TraceCollector;
 use crate::memory::MemoryManager;
 use crate::services::api::Tool;
@@ -19,6 +20,7 @@ pub(super) struct TurnIterationSetupContext<'a> {
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
     pub(super) trace: &'a TraceCollector,
     pub(super) route_workflow: WorkflowKind,
+    pub(super) task_stage: AgentTaskStage,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
     pub(super) base_tools: &'a [Tool],
 }
@@ -72,6 +74,10 @@ impl TurnIterationSetupController {
                 && WorkflowChangeTracker::has_changes_since(context.baseline_git_status_files);
         ToolExposurePlan::build(ToolExposureRequest {
             base_tools: context.base_tools,
+            programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(
+                context.route_workflow,
+            ),
+            task_stage: Some(context.task_stage),
             has_changes_before_request,
             action_checkpoint_active: context.turn_state.focused_repair.action_checkpoint_active,
             action_checkpoint_lookup_count: context
@@ -117,6 +123,7 @@ mod tests {
             memory_manager: None,
             trace: &trace,
             route_workflow: WorkflowKind::Direct,
+            task_stage: AgentTaskStage::Understand,
             baseline_git_status_files: &HashSet::new(),
             base_tools: &[tool("file_read")],
         })
@@ -140,6 +147,7 @@ mod tests {
             memory_manager: None,
             trace: &trace,
             route_workflow: WorkflowKind::Direct,
+            task_stage: AgentTaskStage::Understand,
             baseline_git_status_files: &HashSet::new(),
             base_tools: &[tool("file_read"), tool("bash")],
         })

@@ -64,6 +64,19 @@ expected_behavior:
   - repair loop has bounded attempts and visible trace.
   - final response cannot claim tests passed if tests failed.
 
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - verification
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+  verification_proof: true
+
 acceptance:
   required_commands:
     - cargo test -q reflection_pass -- --test-threads=1

@@ -784,6 +784,9 @@ pub(super) fn persist_tool_outcome_learning_event(
     ) {
         warn!("Failed to persist tool outcome learning event: {}", e);
     }
+    crate::engine::context_ledger::record_tool_context_evidence(
+        store, session_id, tool_call, result,
+    );
 }
 
 #[cfg(test)]
@@ -796,6 +799,37 @@ mod tests {
             name: name.to_string(),
             arguments: serde_json::json!({"command": "cargo test -q"}),
         }
+    }
+
+    #[test]
+    fn persist_tool_outcome_also_records_context_ledger_evidence() {
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store.create_session("s1", "test", "model").unwrap();
+        let call = tool_call("bash");
+        let result = ToolResult::success_with_data(
+            "ok",
+            serde_json::json!({
+                "shell_result": {
+                    "command": "cargo test -q",
+                    "cwd": "/tmp/project",
+                    "exit_code": 0,
+                    "timed_out": false
+                }
+            }),
+        );
+
+        persist_tool_outcome_learning_event(Some(&store), "s1", &call, &result);
+
+        let learning_events = store.recent_learning_events("s1", 10).unwrap();
+        assert!(learning_events
+            .iter()
+            .any(|event| event.kind == "tool_outcome"));
+        let context_events = store.recent_context_ledger_events("s1", 10).unwrap();
+        assert!(context_events.iter().any(|event| {
+            crate::engine::context_ledger::validation_entry_from_event(event)
+                .map(|entry| entry.command == "cargo test -q")
+                .unwrap_or(false)
+        }));
     }
 
     #[test]

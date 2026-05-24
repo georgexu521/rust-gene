@@ -37,6 +37,13 @@ memory_conflicts: 1
 memory_changed_plan: true
 behavior_assertions: memory_quality_gate,memory_conflict_precision
 behavior_assertion_status: passed
+runtime_spine: coverage=7/7, status=passed, missing=none
+runtime_spine_trace_present: true
+runtime_spine_phase_coverage: 7/7
+runtime_spine_assertions: phase:context,event:action_decision_evaluated,special:verification_proof
+runtime_spine_status: passed
+runtime_spine_missing: none
+verification_proof_status: verified
 ```
 EOF
 cat >"$RUN_DIR/task-code-pass/agent-quality-status.txt" <<'EOF'
@@ -88,12 +95,21 @@ action_checkpoint_no_patch: true
 warning: action_checkpoint_no_patch
 behavior_assertions: memory_write_safety
 behavior_assertion_status: failed
+runtime_spine: coverage=3/7, status=failed, missing=event:action_decision_evaluated,special:verification_proof
+runtime_spine_trace_present: true
+runtime_spine_phase_coverage: 3/7
+runtime_spine_assertions: event:action_decision_evaluated,special:verification_proof
+runtime_spine_status: failed
+runtime_spine_missing: event:action_decision_evaluated,special:verification_proof
+verification_proof_status: missing
+warning: runtime_spine_assertions_not_passing
 ```
 EOF
 cat >"$RUN_DIR/task-seeded-fail/agent-quality-status.txt" <<'EOF'
 status=failed
 failure_owner=agent_flow
 failure=expected_code_diff_missing
+failure=runtime_spine_assertions_not_passing
 warning=no_code_diff
 EOF
 echo "failed" >"$RUN_DIR/task-seeded-fail/test-status.txt"
@@ -126,6 +142,11 @@ grep -q 'Skill active tasks: `1`' "$summary_path"
 grep -q 'Skill promotion-evidence tasks: `1`' "$summary_path"
 grep -q 'Behavior assertion tasks: `3`' "$summary_path"
 grep -q 'Behavior assertions passed: `2`' "$summary_path"
+grep -q 'Runtime-spine assertion tasks: `2`' "$summary_path"
+grep -q 'Runtime-spine assertions passed: `1`' "$summary_path"
+grep -q 'Runtime-spine assertions failed: `1`' "$summary_path"
+grep -q 'Runtime-spine full coverage tasks: `1`' "$summary_path"
+grep -q 'Runtime-spine trace-present tasks: `2`' "$summary_path"
 grep -q 'Coding gauntlet agent-run tasks: `2`' "$summary_path"
 grep -q 'Coding gauntlet passes: `1`' "$summary_path"
 grep -q 'Coding gauntlet failures: `1`' "$summary_path"
@@ -136,23 +157,29 @@ grep -q 'Coding gauntlet first-write observed: `1/2`' "$summary_path"
 grep -q 'Coding gauntlet repair signals: `0`' "$summary_path"
 grep -q 'Coding gauntlet changed files: `1`' "$summary_path"
 grep -q '`expected_code_diff_missing`: `1`' "$summary_path"
+grep -q '`runtime_spine_assertions_not_passing`: `1`' "$summary_path"
 grep -q '`warning:no_code_diff`: `1`' "$summary_path"
 grep -q '`warning:action_checkpoint_no_patch`: `1`' "$summary_path"
 grep -q '| real_code_change_passed | 1 |' "$summary_path"
 grep -q '| plan_only_passed | 1 |' "$summary_path"
 grep -q '| seeded_no_diff_failed | 1 |' "$summary_path"
-grep -q '| task-code-pass | passed | likely_clean | tools=5, tool_records=5, validations=2, repair=0, files=1 | ok | passed | missing | missing | 2 | yes | none |' "$summary_path"
-grep -q '| task-seeded-fail | failed | failed | tools=4, tool_records=4, validations=0, repair=0, files=0 | failed | not_verified | missing | missing | none | no | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
+grep -q '| task-code-pass | passed | likely_clean | none | tools=5, tool_records=5, validations=2, repair=0, files=1 | ok | passed | coverage=7/7, status=passed, missing=none | missing | missing | 2 | yes | none |' "$summary_path"
+grep -q '| task-seeded-fail | failed | failed | runtime_spine,file_state,llm_reasoning | tools=4, tool_records=4, validations=0, repair=0, files=0 | failed | not_verified | coverage=3/7, status=failed, missing=event:action_decision_evaluated,special:verification_proof | missing | missing | none | no | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
 grep -q '| memory_active_tasks | 1 | Tasks where retrieval, sync, or memory tools were active. |' "$summary_path"
 grep -q '| skill_promotion_evidence_tasks | 1 | Tasks with promotion-related skill evidence. |' "$summary_path"
 grep -q '| behavior_assertion_tasks | 3 | Tasks with explicit behavior assertions in the live-eval sample. |' "$summary_path"
 grep -q '| behavior_assertions_passed | 2 | Explicit behavior-assertion tasks whose required checks passed. |' "$summary_path"
 grep -q '| memory_behavior_assertion_tasks | 2 | Behavior assertions covering memory semantics rather than only memory activity signals. |' "$summary_path"
 grep -q '| skill_behavior_assertion_tasks | 1 | Behavior assertions covering skill semantics rather than only skill activity signals. |' "$summary_path"
-grep -q '| task-code-pass | passed | seeded_code_change | none | ok | none | agent-run | passed | passed | missing | missing | missing | memory_quality_gate,memory_conflict_precision | passed | required_validation,first_code_change | 2 | yes | active=true, recalled=2, conflicts=1, changed_plan=true | active=false, tool_calls=0, usage_events=0, promotion=false | none |' "$summary_path"
-grep -q '| task-plan-pass | passed | audit_or_regression_check | missing | skipped | ok | plan-only | unknown | missing | missing | missing | missing | skill_promotion_gate | passed | none | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=true, tool_calls=1, usage_events=2, promotion=true | none |' "$summary_path"
-grep -q '| task-seeded-fail | failed | seeded_code_change | agent_flow | failed | none | agent-run | failed | not_verified | missing | missing | missing | memory_write_safety | failed | repeated_no_code_progress | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
-grep -q '| task-collect-skipped | skipped | missing | missing | skipped | none | collect-only | unknown | missing | missing | missing | missing | none | none | none | missing | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | none |' "$summary_path"
+grep -q '| runtime_spine_assertion_tasks | 2 | Tasks with explicit runtime-spine assertions in the live-eval sample or report. |' "$summary_path"
+grep -q '| runtime_spine_assertions_passed | 1 | Runtime-spine assertion tasks whose required trace/control-loop signals were present. |' "$summary_path"
+grep -q '| runtime_spine_assertions_failed | 1 | Runtime-spine assertion tasks missing required trace/control-loop signals. |' "$summary_path"
+grep -q '| runtime_spine_full_coverage_tasks | 1 | Tasks whose trace touched all runtime-spine phases. |' "$summary_path"
+grep -q '| runtime_spine_trace_present_tasks | 2 | Tasks with a trace summary available to the report parser. |' "$summary_path"
+grep -q '| task-code-pass | passed | seeded_code_change | none | none | ok | none | agent-run | passed | passed | coverage=7/7, status=passed, missing=none | missing | missing | missing | memory_quality_gate,memory_conflict_precision | passed | required_validation,first_code_change | 2 | yes | active=true, recalled=2, conflicts=1, changed_plan=true | active=false, tool_calls=0, usage_events=0, promotion=false | none |' "$summary_path"
+grep -q '| task-plan-pass | passed | audit_or_regression_check | missing | none | skipped | ok | plan-only | unknown | missing | coverage=0/7, status=none, missing=none | missing | missing | missing | skill_promotion_gate | passed | none | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=true, tool_calls=1, usage_events=2, promotion=true | none |' "$summary_path"
+grep -q '| task-seeded-fail | failed | seeded_code_change | agent_flow | runtime_spine,file_state,llm_reasoning | failed | none | agent-run | failed | not_verified | coverage=3/7, status=failed, missing=event:action_decision_evaluated,special:verification_proof | missing | missing | missing | memory_write_safety | failed | repeated_no_code_progress | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
+grep -q '| task-collect-skipped | skipped | missing | missing | none | skipped | none | collect-only | unknown | missing | coverage=0/7, status=none, missing=none | missing | missing | missing | none | none | none | missing | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | none |' "$summary_path"
 
 aggregate_path="$RUN_DIR/aggregate-summary.md"
 LIVE_EVAL_AGGREGATE_REFRESH_SUMMARIES=0 \
@@ -178,6 +205,13 @@ grep -q '| behavior_assertion_tasks | 3 | 75.0% |' "$aggregate_path"
 grep -q '| behavior_assertions_passed | 2 | 66.7% |' "$aggregate_path"
 grep -q '| memory_behavior_assertion_tasks | 2 | 50.0% |' "$aggregate_path"
 grep -q '| skill_behavior_assertion_tasks | 1 | 25.0% |' "$aggregate_path"
-grep -q '| task-seeded-fail | seeded_code_change | agent_flow | agent_flow | failed | failed | no | memory_write_safety | failed | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | repeated_no_code_progress | no_code_diff,action_checkpoint_no_patch |' "$aggregate_path"
+grep -q '| runtime_spine_assertion_metadata | 2 | 50.0% |' "$aggregate_path"
+grep -q '| runtime_spine_assertion_tasks | 2 | 50.0% |' "$aggregate_path"
+grep -q '| runtime_spine_assertions_passed | 1 | 50.0% |' "$aggregate_path"
+grep -q '| runtime_spine_assertions_failed | 1 | 50.0% |' "$aggregate_path"
+grep -q '| runtime_spine_full_coverage_tasks | 1 | 25.0% |' "$aggregate_path"
+grep -q '| runtime_spine_trace_present_tasks | 2 | 50.0% |' "$aggregate_path"
+grep -q '| runtime_spine_assertions_not_passing | 1 |' "$aggregate_path"
+grep -q '| task-seeded-fail | seeded_code_change | agent_flow | agent_flow | failed | failed | no | coverage=3/7, status=failed, missing=event:action_decision_evaluated,special:verification_proof | memory_write_safety | failed | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | repeated_no_code_progress | no_code_diff,action_checkpoint_no_patch |' "$aggregate_path"
 
 echo "live eval summary smoke passed: $summary_path"

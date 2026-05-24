@@ -85,8 +85,8 @@ pub struct FileStateCache {
     metadata_cache: Arc<RwLock<HashMap<PathBuf, FileMetadata>>>,
     /// 文件内容缓存
     content_cache: Arc<RwLock<HashMap<PathBuf, FileContentEntry>>>,
-    /// 本会话中已读取过的文件记录（path -> 读取时的元数据）
-    session_reads: Arc<RwLock<HashMap<PathBuf, FileMetadata>>>,
+    /// 每个会话已读取过的文件记录（session id -> path -> 读取时的元数据）
+    session_reads: Arc<RwLock<HashMap<String, HashMap<PathBuf, FileMetadata>>>>,
     config: FileCacheConfig,
     stats: Arc<RwLock<FileCacheStats>>,
 }
@@ -333,20 +333,40 @@ impl FileStateCache {
 
     /// 记录文件已在本会话中被读取
     pub fn mark_read(&self, path: impl AsRef<Path>) {
+        self.mark_read_for_session("__global__", path);
+    }
+
+    /// 记录文件已在指定会话中被读取
+    pub fn mark_read_for_session(&self, session_id: &str, path: impl AsRef<Path>) {
         let path = path.as_ref().to_path_buf();
         let cache_key = path.canonicalize().unwrap_or(path);
         if let Some(meta) = self.metadata(&cache_key) {
             let mut reads = self.session_reads.write().expect("Lock poisoned");
-            reads.insert(cache_key, meta);
+            reads
+                .entry(session_id.to_string())
+                .or_default()
+                .insert(cache_key, meta);
         }
     }
 
     /// 检查文件自上次会话读取以来是否未变更
     pub fn is_unchanged_since_last_read(&self, path: impl AsRef<Path>) -> bool {
+        self.is_unchanged_since_last_read_for_session("__global__", path)
+    }
+
+    /// 检查文件自指定会话上次读取以来是否未变更
+    pub fn is_unchanged_since_last_read_for_session(
+        &self,
+        session_id: &str,
+        path: impl AsRef<Path>,
+    ) -> bool {
         let path = path.as_ref().to_path_buf();
         let cache_key = path.canonicalize().unwrap_or(path);
         let reads = self.session_reads.read().expect("Lock poisoned");
-        if let Some(meta) = reads.get(&cache_key) {
+        if let Some(meta) = reads
+            .get(session_id)
+            .and_then(|session_reads| session_reads.get(&cache_key))
+        {
             !meta.is_stale()
         } else {
             false
@@ -576,6 +596,28 @@ mod tests {
         assert!(stats.stale_hits >= 1);
 
         // 清理
+        let _ = std::fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn session_read_state_is_isolated_by_session_id() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join(format!(
+            "test_session_read_state_{}.txt",
+            std::process::id()
+        ));
+
+        {
+            let mut file = std::fs::File::create(&test_file).unwrap();
+            file.write_all(b"session scoped").unwrap();
+        }
+
+        let cache = FileStateCache::new();
+        cache.mark_read_for_session("session-a", &test_file);
+
+        assert!(cache.is_unchanged_since_last_read_for_session("session-a", &test_file));
+        assert!(!cache.is_unchanged_since_last_read_for_session("session-b", &test_file));
+
         let _ = std::fs::remove_file(&test_file);
     }
 }

@@ -105,6 +105,8 @@ mod tests {
             failed_tool_evidence: vec!["bash failed".to_string()],
             file_edit_failure_correction_added: false,
             successful_validation_commands: Vec::new(),
+            duplicate_successful_read_only_tools: Vec::new(),
+            duplicate_successful_read_only_results: Vec::new(),
             should_closeout_after_verified_change: false,
         }
     }

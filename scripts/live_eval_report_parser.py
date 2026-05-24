@@ -3,6 +3,112 @@ import re
 import json
 
 
+RUNTIME_SPINE_PHASES = [
+    "context",
+    "decision",
+    "permission",
+    "tool_execution",
+    "state_update",
+    "verification",
+    "closeout",
+]
+
+RUNTIME_SPINE_PHASE_EVENT_TYPES = {
+    "context": {
+        "user_prompt_submitted",
+        "intent_routed",
+        "resource_policy_selected",
+        "task_context_built",
+        "memory_snapshot_injected",
+        "memory_prefetch",
+        "retrieval_context_built",
+        "memory_synced",
+        "context_compacted",
+        "runtime_diet_report",
+        "api_request_started",
+    },
+    "decision": {
+        "implementation_intent_recorded",
+        "workflow_judgment_completed",
+        "workflow_plan_progress",
+        "workflow_learning_adjusted",
+        "workflow_contract_activation",
+        "risk_signal_assessed",
+        "adaptive_workflow_triggered",
+        "action_decision_evaluated",
+        "workflow_routed",
+    },
+    "permission": {
+        "goal_drift_detected",
+        "destructive_scope_checked",
+        "permission_requested",
+        "permission_resolved",
+    },
+    "tool_execution": {
+        "api_request_completed",
+        "tool_started",
+        "tool_completed",
+        "hook_completed",
+        "subagent_started",
+        "subagent_completed",
+        "mcp_resource_accessed",
+        "remote_bridge_action",
+    },
+    "state_update": {
+        "session_goal_updated",
+        "stop_check_evaluated",
+        "workflow_fallback",
+        "recovery_applied",
+        "recovery_plan",
+    },
+    "verification": {
+        "stage_validation_completed",
+        "reflection_pass_completed",
+        "verification_completed",
+        "acceptance_review_completed",
+        "guided_debugging_completed",
+    },
+    "closeout": {
+        "workflow_completed",
+        "assistant_responded",
+        "final_closeout_prepared",
+        "error",
+    },
+}
+
+RUNTIME_SPINE_ASSERTION_ALIASES = {
+    "context": "phase:context",
+    "context_phase": "phase:context",
+    "decision": "phase:decision",
+    "decision_phase": "phase:decision",
+    "permission": "phase:permission",
+    "permission_phase": "phase:permission",
+    "tool_execution": "phase:tool_execution",
+    "tool_execution_phase": "phase:tool_execution",
+    "state_update": "phase:state_update",
+    "state_update_phase": "phase:state_update",
+    "verification": "phase:verification",
+    "verification_phase": "phase:verification",
+    "closeout": "phase:closeout",
+    "closeout_phase": "phase:closeout",
+    "runtime_diet": "event:runtime_diet_report",
+    "runtime_diet_report": "event:runtime_diet_report",
+    "task_context": "event:task_context_built",
+    "task_context_built": "event:task_context_built",
+    "implementation_intent": "event:implementation_intent_recorded",
+    "implementation_intent_recorded": "event:implementation_intent_recorded",
+    "action_decision": "event:action_decision_evaluated",
+    "action_decision_evaluated": "event:action_decision_evaluated",
+    "stop_check": "event:stop_check_evaluated",
+    "stop_check_evaluated": "event:stop_check_evaluated",
+    "closeout_prepared": "event:final_closeout_prepared",
+    "final_closeout_prepared": "event:final_closeout_prepared",
+    "verification_proof": "special:verification_proof",
+    "verification_proof_present": "special:verification_proof",
+    "verification_proof_verified": "special:verification_proof_verified",
+}
+
+
 def read(path):
     path = pathlib.Path(path)
     return path.read_text(encoding="utf-8") if path.exists() else ""
@@ -82,6 +188,10 @@ def parse_boolish(value):
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def token(value):
+    return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+
+
 def int_text(value, default=0):
     try:
         return str(int(value))
@@ -110,7 +220,185 @@ def report_run_status(tool_boundary, quality_status, test_status, plan_quality):
     return "skipped"
 
 
+def normalize_runtime_spine_assertion(value):
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if ":" in raw:
+        prefix, name = raw.split(":", 1)
+        prefix = token(prefix)
+        name = token(name)
+        if prefix == "phase" and name in RUNTIME_SPINE_PHASES:
+            return f"phase:{name}"
+        if prefix in {"event", "trace", "trace_event"}:
+            return f"event:{RUNTIME_SPINE_ASSERTION_ALIASES.get(name, 'event:' + name).split(':', 1)[1]}"
+        if prefix == "special" and name in {"verification_proof", "verification_proof_verified"}:
+            return f"special:{name}"
+    normalized = token(raw.removeprefix("runtime_spine_"))
+    return RUNTIME_SPINE_ASSERTION_ALIASES.get(normalized, f"unknown:{normalized}")
+
+
+def normalized_runtime_spine_assertions(sample):
+    raw = sample.get("runtime_spine_assertions")
+    if raw is None:
+        raw = (sample.get("quality_assertions") or {}).get("runtime_spine")
+    if raw is None:
+        return []
+
+    values = []
+    if isinstance(raw, dict):
+        for phase in raw.get("required_phases") or []:
+            values.append(f"phase:{phase}")
+        for event in raw.get("required_events") or []:
+            values.append(f"event:{event}")
+        for item in raw.get("required") or raw.get("assertions") or []:
+            values.append(item)
+        if raw.get("verification_proof") is True or raw.get("require_verification_proof") is True:
+            values.append("verification_proof")
+        if raw.get("verification_proof_verified") is True:
+            values.append("verification_proof_verified")
+        if raw.get("action_decision") is True:
+            values.append("action_decision")
+        if raw.get("stop_check") is True:
+            values.append("stop_check")
+    elif isinstance(raw, str):
+        values = [item.strip() for item in raw.split(",")]
+    elif isinstance(raw, list):
+        values = raw
+    else:
+        values = [raw]
+
+    result = []
+    for value in values:
+        assertion = normalize_runtime_spine_assertion(value)
+        if assertion and assertion not in result:
+            result.append(assertion)
+    return result
+
+
+def runtime_spine_phase_for_event(event_type):
+    event_type = token(event_type)
+    for phase, event_types in RUNTIME_SPINE_PHASE_EVENT_TYPES.items():
+        if event_type in event_types:
+            return phase
+    return None
+
+
+def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
+    assertions = list(assertions or [])
+    trace = latest_trace(events)
+    trace_items = trace_events(events)
+    phase_counts = {phase: 0 for phase in RUNTIME_SPINE_PHASES}
+    phase_latest = {phase: "none" for phase in RUNTIME_SPINE_PHASES}
+    event_counts = {}
+
+    for event in trace_items:
+        event_type = token(event.get("type", ""))
+        if not event_type:
+            continue
+        event_counts[event_type] = event_counts.get(event_type, 0) + 1
+        phase = runtime_spine_phase_for_event(event_type)
+        if not phase:
+            continue
+        phase_counts[phase] += 1
+        phase_latest[phase] = event_type
+
+    latest_closeout = next(
+        (
+            event
+            for event in reversed(trace_items)
+            if token(event.get("type", "")) == "final_closeout_prepared"
+        ),
+        {},
+    )
+    proof_status = report_value(report_text, "verification_proof_status", "")
+    proof_summary = report_value(report_text, "verification_proof_summary", "")
+    if not proof_status:
+        proof_status = str(latest_closeout.get("verification_proof_status", "missing"))
+    if not proof_summary:
+        proof_summary = str(latest_closeout.get("verification_proof_summary", "missing"))
+
+    missing = []
+    for assertion in assertions:
+        kind, _, name = assertion.partition(":")
+        if kind == "phase":
+            if phase_counts.get(name, 0) <= 0:
+                missing.append(assertion)
+        elif kind == "event":
+            if event_counts.get(token(name), 0) <= 0:
+                missing.append(assertion)
+        elif kind == "special" and name == "verification_proof":
+            if token(proof_status) in {"", "missing", "none", "null"}:
+                missing.append(assertion)
+        elif kind == "special" and name == "verification_proof_verified":
+            if token(proof_status) != "verified":
+                missing.append(assertion)
+        else:
+            missing.append(assertion)
+
+    observed_phases = [phase for phase in RUNTIME_SPINE_PHASES if phase_counts[phase] > 0]
+    phase_coverage = f"{len(observed_phases)}/{len(RUNTIME_SPINE_PHASES)}"
+    trace_present = bool(trace)
+    if assertions:
+        runtime_spine_status = "failed" if missing else "passed"
+    else:
+        runtime_spine_status = "none"
+    if assertions and not trace_present and not report_text:
+        runtime_spine_status = "missing"
+
+    detail = " ".join(
+        f"{phase}={phase_counts[phase]} latest={phase_latest[phase]}"
+        for phase in RUNTIME_SPINE_PHASES
+    )
+    missing_text = ",".join(missing) if missing else "none"
+    assertions_text = ",".join(assertions) if assertions else "none"
+    summary = (
+        f"coverage={phase_coverage}, status={runtime_spine_status}, missing={missing_text}"
+    )
+
+    return {
+        "runtime_spine": summary,
+        "runtime_spine_detail": detail,
+        "runtime_spine_trace_present": bool_text(trace_present),
+        "runtime_spine_phase_coverage": phase_coverage,
+        "runtime_spine_observed_phases": ",".join(observed_phases) if observed_phases else "none",
+        "runtime_spine_assertions": assertions_text,
+        "runtime_spine_status": runtime_spine_status,
+        "runtime_spine_missing": missing_text,
+        "verification_proof_status": proof_status,
+        "verification_proof_summary": proof_summary,
+    }
+
+
+def runtime_spine_metrics(task_dir, report_text):
+    events = jsonl_events(pathlib.Path(task_dir) / "agent-events.jsonl")
+    report_assertions = report_value(report_text, "runtime_spine_assertions", "none")
+    assertions = [] if report_assertions == "none" else [
+        assertion
+        for assertion in (normalize_runtime_spine_assertion(item) for item in report_assertions.split(","))
+        if assertion
+    ]
+    metrics = runtime_spine_metrics_from_events(events, report_text, assertions)
+    for key in [
+        "runtime_spine",
+        "runtime_spine_detail",
+        "runtime_spine_trace_present",
+        "runtime_spine_phase_coverage",
+        "runtime_spine_observed_phases",
+        "runtime_spine_assertions",
+        "runtime_spine_status",
+        "runtime_spine_missing",
+        "verification_proof_status",
+        "verification_proof_summary",
+    ]:
+        value = report_value(report_text, key, "")
+        if value:
+            metrics[key] = value
+    return metrics
+
+
 FAILURE_CLASS_ORDER = [
+    "runtime_spine",
     "tool_contract",
     "file_state",
     "bash_permission",
@@ -144,6 +432,17 @@ def classify_failure_classes(
     ).lower()
     classes = set()
 
+    if any(
+        marker in text
+        for marker in [
+            "runtime_spine_assertions_not_passing",
+            "runtime_spine_status: failed",
+            "runtime_spine_status=failed",
+            "runtime_spine_status: missing",
+            "runtime_spine_status=missing",
+        ]
+    ):
+        classes.add("runtime_spine")
     if any(
         marker in text
         for marker in [
@@ -382,6 +681,7 @@ def report_rows(run_dir):
         behavior_assertion_status = report_value(
             report_text, "behavior_assertion_status", "none"
         )
+        runtime_spine = runtime_spine_metrics(task_dir, report_text)
         adaptive_triggers = report_value(report_text, "adaptive_triggers", "none")
         first_write = report_value(report_text, "first_write_tool_index", "missing")
         required = report_value(report_text, "required_command_status", test_status)
@@ -510,6 +810,7 @@ def report_rows(run_dir):
                 "risk_signal": risk_signal,
                 "behavior_assertions": behavior_assertions,
                 "behavior_assertion_status": behavior_assertion_status,
+                **runtime_spine,
                 "triggers": adaptive_triggers,
                 "first_write": first_write,
                 "diff": "yes" if diff_stat else "no",

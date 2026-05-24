@@ -178,6 +178,14 @@ pub enum TraceEvent {
     WorkflowFallback {
         error: String,
     },
+    StopCheckEvaluated {
+        status: String,
+        reason: String,
+        stage: String,
+        no_code_progress_rounds: usize,
+        action_checkpoint_active: bool,
+        summary: String,
+    },
     WorkflowContractActivation {
         mode: String,
         phase: String,
@@ -290,6 +298,18 @@ pub enum TraceEvent {
         call_id: String,
         parallel: bool,
         pre_executed: bool,
+    },
+    ActionDecisionEvaluated {
+        tool: String,
+        call_id: String,
+        stage: String,
+        value: u8,
+        risk: u8,
+        uncertainty_reduction: u8,
+        cost: u8,
+        reversibility: u8,
+        requires_confirmation: bool,
+        reason: String,
     },
     PermissionRequested {
         tool: String,
@@ -416,6 +436,10 @@ pub enum TraceEvent {
         tool_records: usize,
         #[serde(default)]
         tool_evidence: Option<String>,
+        #[serde(default)]
+        verification_proof_status: Option<String>,
+        #[serde(default)]
+        verification_proof_summary: Option<String>,
         acceptance_items: usize,
         residual_risks: usize,
     },
@@ -443,6 +467,7 @@ impl TraceEvent {
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
+            TraceEvent::StopCheckEvaluated { .. } => "stop.check",
             TraceEvent::WorkflowContractActivation { .. } => "workflow.contract",
             TraceEvent::RiskSignalAssessed { .. } => "risk.signal",
             TraceEvent::AdaptiveWorkflowTriggered { .. } => "workflow.trigger",
@@ -455,6 +480,7 @@ impl TraceEvent {
             TraceEvent::ApiRequestStarted { .. } => "api.start",
             TraceEvent::ApiRequestCompleted { .. } => "api.done",
             TraceEvent::ToolStarted { .. } => "tool.start",
+            TraceEvent::ActionDecisionEvaluated { .. } => "action.decision",
             TraceEvent::PermissionRequested { .. } => "permission.request",
             TraceEvent::PermissionResolved { .. } => "permission.resolve",
             TraceEvent::ToolCompleted { .. } => "tool.done",
@@ -699,6 +725,22 @@ impl TraceEvent {
             TraceEvent::WorkflowFallback { error } => {
                 format!("workflow fallback: {}", preview(error))
             }
+            TraceEvent::StopCheckEvaluated {
+                status,
+                reason,
+                stage,
+                no_code_progress_rounds,
+                action_checkpoint_active,
+                summary,
+            } => format!(
+                "stop check status={} reason={} stage={} no_progress={} checkpoint={} ({})",
+                status,
+                reason,
+                stage,
+                no_code_progress_rounds,
+                action_checkpoint_active,
+                preview(summary)
+            ),
             TraceEvent::WorkflowContractActivation {
                 mode,
                 phase,
@@ -909,6 +951,30 @@ impl TraceEvent {
                 short_id(call_id),
                 if *parallel { " in parallel" } else { "" },
                 if *pre_executed { " (pre-executed)" } else { "" }
+            ),
+            TraceEvent::ActionDecisionEvaluated {
+                tool,
+                call_id,
+                stage,
+                value,
+                risk,
+                uncertainty_reduction,
+                cost,
+                reversibility,
+                requires_confirmation,
+                reason,
+            } => format!(
+                "{} {} action decision: stage={} value={} risk={} uncertainty={} cost={} reversible={} confirm={} ({})",
+                tool,
+                short_id(call_id),
+                stage,
+                value,
+                risk,
+                uncertainty_reduction,
+                cost,
+                reversibility,
+                requires_confirmation,
+                preview(reason)
             ),
             TraceEvent::PermissionRequested {
                 tool,
@@ -1146,15 +1212,19 @@ impl TraceEvent {
                 validation_items,
                 tool_records,
                 tool_evidence,
+                verification_proof_status,
+                verification_proof_summary,
                 acceptance_items,
                 residual_risks,
             } => format!(
-                "final closeout status={} files={} validation={} tool_records={} tool_evidence={} acceptance={} risks={}",
+                "final closeout status={} files={} validation={} tool_records={} tool_evidence={} proof={} proof_summary={} acceptance={} risks={}",
                 status,
                 changed_files,
                 validation_items,
                 tool_records,
                 tool_evidence.as_deref().unwrap_or("none"),
+                verification_proof_status.as_deref().unwrap_or("none"),
+                verification_proof_summary.as_deref().unwrap_or("none"),
                 acceptance_items,
                 residual_risks
             ),
@@ -1178,6 +1248,10 @@ impl TraceCollector {
     pub fn record(&self, event: TraceEvent) {
         let mut trace = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         trace.events.push(event);
+    }
+
+    pub fn snapshot(&self) -> TurnTrace {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn finish(&self, status: TurnStatus) -> TurnTrace {
@@ -1263,6 +1337,10 @@ pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
     if let Some(tool_record_evidence) = latest_tool_record_evidence_summary(trace) {
         lines.push(format!("\nTool Record Evidence: {}", tool_record_evidence));
     }
+    lines.push(format!(
+        "\nControl Loop: {}",
+        control_loop_diagnostic(trace).compact_summary()
+    ));
 
     lines.push("\nEvents:".to_string());
     for (idx, event) in trace.events.iter().take(max_events).enumerate() {
@@ -1295,6 +1373,123 @@ pub fn format_trace_recent_line(trace: &TurnTrace) -> String {
     )
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControlLoopDiagnostic {
+    pub phases: Vec<ControlLoopPhaseDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControlLoopPhaseDiagnostic {
+    pub phase: String,
+    pub events: usize,
+    pub latest_label: Option<String>,
+    pub latest_summary: Option<String>,
+}
+
+impl ControlLoopDiagnostic {
+    pub fn compact_summary(&self) -> String {
+        self.phases
+            .iter()
+            .map(|phase| {
+                let latest = phase
+                    .latest_label
+                    .as_deref()
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or("none");
+                format!("{}={} latest={}", phase.phase, phase.events, latest)
+            })
+            .collect::<Vec<_>>()
+            .join(" -> ")
+    }
+}
+
+pub fn control_loop_diagnostic(trace: &TurnTrace) -> ControlLoopDiagnostic {
+    let mut phases = CONTROL_LOOP_PHASES
+        .iter()
+        .map(|phase| ControlLoopPhaseDiagnostic {
+            phase: (*phase).to_string(),
+            events: 0,
+            latest_label: None,
+            latest_summary: None,
+        })
+        .collect::<Vec<_>>();
+
+    for event in &trace.events {
+        let Some(phase) = control_loop_phase_for_event(event) else {
+            continue;
+        };
+        let Some(slot) = phases.iter_mut().find(|item| item.phase == phase) else {
+            continue;
+        };
+        slot.events += 1;
+        slot.latest_label = Some(event.label().to_string());
+        slot.latest_summary = Some(event.summary());
+    }
+
+    ControlLoopDiagnostic { phases }
+}
+
+const CONTROL_LOOP_PHASES: [&str; 7] = [
+    "context",
+    "decision",
+    "permission",
+    "tool_execution",
+    "state_update",
+    "verification",
+    "closeout",
+];
+
+fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
+    match event {
+        TraceEvent::UserPromptSubmitted { .. }
+        | TraceEvent::IntentRouted { .. }
+        | TraceEvent::ResourcePolicySelected { .. }
+        | TraceEvent::TaskContextBuilt { .. }
+        | TraceEvent::MemorySnapshotInjected { .. }
+        | TraceEvent::MemoryPrefetch { .. }
+        | TraceEvent::RetrievalContextBuilt { .. }
+        | TraceEvent::MemorySynced { .. }
+        | TraceEvent::ContextCompacted { .. }
+        | TraceEvent::RuntimeDietReport { .. }
+        | TraceEvent::ApiRequestStarted { .. } => Some("context"),
+        TraceEvent::ImplementationIntentRecorded { .. }
+        | TraceEvent::WorkflowJudgmentCompleted { .. }
+        | TraceEvent::WorkflowPlanProgress { .. }
+        | TraceEvent::WorkflowLearningAdjusted { .. }
+        | TraceEvent::WorkflowContractActivation { .. }
+        | TraceEvent::RiskSignalAssessed { .. }
+        | TraceEvent::AdaptiveWorkflowTriggered { .. }
+        | TraceEvent::ActionDecisionEvaluated { .. }
+        | TraceEvent::WorkflowRouted { .. } => Some("decision"),
+        TraceEvent::GoalDriftDetected { .. }
+        | TraceEvent::DestructiveScopeChecked { .. }
+        | TraceEvent::PermissionRequested { .. }
+        | TraceEvent::PermissionResolved { .. } => Some("permission"),
+        TraceEvent::ApiRequestCompleted { .. }
+        | TraceEvent::ToolStarted { .. }
+        | TraceEvent::ToolCompleted { .. }
+        | TraceEvent::HookCompleted { .. }
+        | TraceEvent::SubagentStarted { .. }
+        | TraceEvent::SubagentCompleted { .. }
+        | TraceEvent::McpResourceAccessed { .. }
+        | TraceEvent::RemoteBridgeAction { .. } => Some("tool_execution"),
+        TraceEvent::SessionGoalUpdated { .. }
+        | TraceEvent::StopCheckEvaluated { .. }
+        | TraceEvent::WorkflowFallback { .. }
+        | TraceEvent::RecoveryApplied { .. }
+        | TraceEvent::RecoveryPlan { .. } => Some("state_update"),
+        TraceEvent::StageValidationCompleted { .. }
+        | TraceEvent::ReflectionPassCompleted { .. }
+        | TraceEvent::VerificationCompleted { .. }
+        | TraceEvent::AcceptanceReviewCompleted { .. }
+        | TraceEvent::GuidedDebuggingCompleted { .. } => Some("verification"),
+        TraceEvent::WorkflowCompleted { .. }
+        | TraceEvent::AssistantResponded { .. }
+        | TraceEvent::FinalCloseoutPrepared { .. }
+        | TraceEvent::Error { .. } => Some("closeout"),
+    }
+}
+
 pub fn latest_runtime_diet_summary(trace: &TurnTrace) -> Option<String> {
     trace.events.iter().rev().find_map(|event| {
         if matches!(event, TraceEvent::RuntimeDietReport { .. }) {
@@ -1320,17 +1515,21 @@ pub fn latest_tool_record_evidence_summary(trace: &TurnTrace) -> Option<String> 
             validation_items,
             tool_records,
             tool_evidence,
+            verification_proof_status,
+            verification_proof_summary,
             acceptance_items,
             residual_risks,
         } if *tool_records > 0 || tool_evidence.as_ref().is_some_and(|s| !s.trim().is_empty()) => {
             Some(format!(
-                "status={} records={} files={} validation={} acceptance={} risks={} evidence={}",
+                "status={} records={} files={} validation={} acceptance={} risks={} proof={} proof_summary={} evidence={}",
                 status,
                 tool_records,
                 changed_files,
                 validation_items,
                 acceptance_items,
                 residual_risks,
+                verification_proof_status.as_deref().unwrap_or("none"),
+                verification_proof_summary.as_deref().unwrap_or("none"),
                 tool_evidence.as_deref().unwrap_or("none")
             ))
         }
@@ -1389,6 +1588,107 @@ mod tests {
         let summary = format_trace_summary(&trace, 10);
         assert!(summary.contains("tool.start"));
         assert!(summary.contains("bash"));
+    }
+
+    #[test]
+    fn trace_summary_includes_control_loop_diagnostic() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "fix code"));
+        collector.record(TraceEvent::ActionDecisionEvaluated {
+            tool: "file_edit".to_string(),
+            call_id: "call_edit".to_string(),
+            stage: "Edit".to_string(),
+            value: 8,
+            risk: 4,
+            uncertainty_reduction: 2,
+            cost: 2,
+            reversibility: 7,
+            requires_confirmation: false,
+            reason: "scoped edit".to_string(),
+        });
+        collector.record(TraceEvent::PermissionResolved {
+            tool: "file_edit".to_string(),
+            call_id: "call_edit".to_string(),
+            approved: true,
+            decision: Some("allow_once".to_string()),
+            persistence_scope: None,
+            rule_pattern: None,
+            persisted_path: None,
+            review: None,
+        });
+        collector.record(TraceEvent::ToolCompleted {
+            tool: "file_edit".to_string(),
+            call_id: "call_edit".to_string(),
+            success: true,
+            duration_ms: Some(12),
+            output_chars: 24,
+        });
+        collector.record(TraceEvent::StopCheckEvaluated {
+            status: "continue".to_string(),
+            reason: "no_issue".to_string(),
+            stage: "Validate".to_string(),
+            no_code_progress_rounds: 0,
+            action_checkpoint_active: false,
+            summary: "continue after edit".to_string(),
+        });
+        collector.record(TraceEvent::VerificationCompleted {
+            changed_files: 1,
+            passed: true,
+            check_passed: true,
+            tests_passed: true,
+            review_passed: true,
+            failed_commands: Vec::new(),
+        });
+        collector.record(TraceEvent::FinalCloseoutPrepared {
+            status: "passed".to_string(),
+            changed_files: 1,
+            validation_items: 1,
+            tool_records: 1,
+            tool_evidence: None,
+            verification_proof_status: Some("verified".to_string()),
+            verification_proof_summary: Some("validation passed".to_string()),
+            acceptance_items: 1,
+            residual_risks: 0,
+        });
+
+        let trace = collector.finish(TurnStatus::Completed);
+        let diagnostic = control_loop_diagnostic(&trace);
+        let phase = |name: &str| {
+            diagnostic
+                .phases
+                .iter()
+                .find(|phase| phase.phase == name)
+                .expect("phase exists")
+        };
+
+        assert_eq!(phase("context").events, 1);
+        assert_eq!(
+            phase("decision").latest_label.as_deref(),
+            Some("action.decision")
+        );
+        assert_eq!(
+            phase("permission").latest_label.as_deref(),
+            Some("permission.resolve")
+        );
+        assert_eq!(
+            phase("tool_execution").latest_label.as_deref(),
+            Some("tool.done")
+        );
+        assert_eq!(
+            phase("state_update").latest_label.as_deref(),
+            Some("stop.check")
+        );
+        assert_eq!(
+            phase("verification").latest_label.as_deref(),
+            Some("verify.done")
+        );
+        assert_eq!(phase("closeout").latest_label.as_deref(), Some("closeout"));
+
+        let summary = format_trace_summary(&trace, 20);
+        assert!(summary.contains("Control Loop:"));
+        assert!(summary.contains("context=1 latest=prompt"));
+        assert!(summary.contains("decision=1 latest=action.decision"));
+        assert!(summary.contains("tool_execution=1 latest=tool.done"));
+        assert!(summary.contains("closeout=1 latest=closeout"));
     }
 
     #[test]
@@ -1459,6 +1759,8 @@ mod tests {
             validation_items: 2,
             tool_records: 3,
             tool_evidence: Some("tool evidence: records=3 completed=3".to_string()),
+            verification_proof_status: Some("verified".to_string()),
+            verification_proof_summary: Some("validation passed 1/1 current checks".to_string()),
             acceptance_items: 1,
             residual_risks: 0,
         });
@@ -1467,6 +1769,7 @@ mod tests {
         let summary = format_trace_summary(&trace, 10);
         assert!(summary.contains("tool_records=3"));
         assert!(summary.contains("tool_evidence=tool evidence: records=3"));
+        assert!(summary.contains("proof=verified"));
         assert!(summary.contains("Tool Record Evidence: status=passed records=3"));
         assert!(summary.contains("evidence=tool evidence: records=3"));
         assert_eq!(latest_tool_record_count(&trace), Some(3));
