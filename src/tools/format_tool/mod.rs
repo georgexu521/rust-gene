@@ -3,7 +3,7 @@
 //! 调用项目配置的格式化器来格式化代码。
 //! 支持：Rust (rustfmt)、JS/TS (prettier)、Python (black)、Go (gofmt)
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::Path;
@@ -44,8 +44,47 @@ impl Tool for FormatTool {
                     "description": "Formatter to use (default: auto-detect from file extension)"
                 }
             },
-            "required": ["action", "file_path"]
+            "required": ["action", "file_path"],
+            "additionalProperties": false
         })
+    }
+
+    fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
+        params["action"].as_str() == Some("format")
+    }
+
+    fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {
+        if !self.requires_confirmation(params) {
+            return None;
+        }
+        let file_path = params["file_path"].as_str().unwrap_or("the target file");
+        Some(format!("Format and rewrite {file_path}?"))
+    }
+
+    fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
+        match params["action"].as_str() {
+            Some("check") => ToolOperationKind::Read,
+            Some("format") => ToolOperationKind::Edit,
+            _ => ToolOperationKind::Other,
+        }
+    }
+
+    fn permission_level(&self) -> ToolPermissionLevel {
+        ToolPermissionLevel::HighRisk
+    }
+
+    fn is_concurrency_safe(&self, params: &serde_json::Value) -> bool {
+        params["action"].as_str() == Some("check")
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let action = params["action"].as_str()?;
+        let file_path = params["file_path"].as_str()?;
+        Some(format!("{action} {file_path}"))
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
@@ -226,6 +265,7 @@ fn build_check_command(formatter: &str, path: &Path) -> (String, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_detect_formatter() {
@@ -252,5 +292,23 @@ mod tests {
     fn test_format_tool_name() {
         let tool = FormatTool;
         assert_eq!(tool.name(), "format");
+    }
+
+    #[test]
+    fn format_tool_contract_is_parameter_sensitive() {
+        let tool = FormatTool;
+        let check = json!({"action": "check", "file_path": "src/main.rs"});
+        let format = json!({"action": "format", "file_path": "src/main.rs"});
+
+        assert_eq!(tool.operation_kind(&check), ToolOperationKind::Read);
+        assert!(!tool.requires_confirmation(&check));
+        assert!(tool.is_concurrency_safe(&check));
+
+        assert_eq!(tool.operation_kind(&format), ToolOperationKind::Edit);
+        assert!(tool.requires_confirmation(&format));
+        assert!(tool.confirmation_prompt(&format).is_some());
+        assert!(!tool.is_concurrency_safe(&format));
+        assert_eq!(tool.permission_level(), ToolPermissionLevel::HighRisk);
+        assert!(tool.strict_schema());
     }
 }

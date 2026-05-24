@@ -144,6 +144,74 @@ test.describe("run event state", () => {
     );
   });
 
+  test("surfaces action review facts on permission requests", () => {
+    const permissionWaiting = applyRunEvent(initialRunViewState, {
+      type: "permission_request",
+      id: "permission-1",
+      tool_name: "bash",
+      arguments: { command: "git push" },
+      prompt: "Allow git push?",
+      metadata: {
+        permission_evidence: {
+          permission_family: "shell",
+          request_kind: "runtime_rule",
+          risk_level: "high",
+          decision: "Ask",
+          allowed_always_rules: ["bash:git push*"],
+        },
+        action_review: {
+          decision: "ask_user",
+          primary_reason: "network_requires_confirmation",
+          model_recovery: "Wait for approval before continuing.",
+          permission: {
+            decision: "Ask",
+            risk_level: "High",
+          },
+          side_effects: {
+            external_side_effect: "git_remote_publication",
+            network: {
+              class: "remote_service",
+            },
+          },
+          checkpoint: {
+            status: "unavailable",
+            requires_user_approval: true,
+          },
+          scope: {
+            allowed: true,
+          },
+          budget: {
+            allowed: true,
+          },
+        },
+      },
+    }).state;
+
+    expect(permissionWaiting.items).toContainEqual(
+      expect.objectContaining({
+        id: "permission-1",
+        role: "timeline",
+        summary: expect.objectContaining({
+          kind: "permission",
+          actionDecision: "ask_user",
+          actionReason: "network_requires_confirmation",
+          sideEffect: "git_remote_publication",
+          network: "remote_service",
+          checkpoint: "unavailable",
+          checkpointApproval: true,
+          allowedRule: "bash:git push*",
+          recovery: "Wait for approval before continuing.",
+        }),
+      }),
+    );
+    expect(permissionWaiting.traceItems).toContainEqual(
+      expect.objectContaining({
+        kind: "permission",
+        detail: expect.stringContaining("review ask_user"),
+      }),
+    );
+  });
+
   test("surfaces runtime diagnostics in run summary and trace", () => {
     const started = applyRunEvent(initialRunViewState, {
       type: "run_started",

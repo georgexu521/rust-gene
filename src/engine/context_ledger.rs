@@ -14,6 +14,7 @@ pub const CONTEXT_LEDGER_FILE_EDIT_KIND: &str = "context_ledger.file_edit";
 pub const CONTEXT_LEDGER_DIFF_KIND: &str = "context_ledger.diff";
 pub const CONTEXT_LEDGER_VALIDATION_KIND: &str = "context_ledger.validation";
 pub const CONTEXT_LEDGER_USER_CONFIRMATION_KIND: &str = "context_ledger.user_confirmation";
+pub const CONTEXT_LEDGER_TOOL_OBSERVATION_KIND: &str = "context_ledger.tool_observation";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileReadLedgerEntry {
@@ -90,12 +91,30 @@ pub struct UserConfirmationLedgerEntry {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolObservationLedgerEntry {
+    pub tool: String,
+    pub call_id: String,
+    pub status: String,
+    pub summary: String,
+    pub files_read: Vec<String>,
+    pub files_changed: Vec<String>,
+    pub command_run: Option<String>,
+    pub validation_result: Option<String>,
+    pub permission_decision: Option<String>,
+    pub checkpoint_id: Option<String>,
+    pub artifact_path: Option<String>,
+    pub state_updates: Vec<String>,
+    pub recommended_next_action: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextLedgerEntry {
     FileEdit(FileEditLedgerEntry),
     Diff(DiffLedgerEntry),
     Validation(ValidationLedgerEntry),
     UserConfirmation(UserConfirmationLedgerEntry),
+    ToolObservation(ToolObservationLedgerEntry),
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +287,9 @@ pub fn tool_context_evidence_entries(
     if let Some(entry) = user_confirmation_entry_from_tool_result(tool_call, result) {
         entries.push(ContextLedgerEntry::UserConfirmation(entry));
     }
+    if let Some(entry) = tool_observation_entry_from_tool_result(tool_call, result) {
+        entries.push(ContextLedgerEntry::ToolObservation(entry));
+    }
     entries
 }
 
@@ -278,6 +300,7 @@ impl ContextLedgerEntry {
             Self::Diff(_) => CONTEXT_LEDGER_DIFF_KIND,
             Self::Validation(_) => CONTEXT_LEDGER_VALIDATION_KIND,
             Self::UserConfirmation(_) => CONTEXT_LEDGER_USER_CONFIRMATION_KIND,
+            Self::ToolObservation(_) => CONTEXT_LEDGER_TOOL_OBSERVATION_KIND,
         }
     }
 
@@ -287,6 +310,7 @@ impl ContextLedgerEntry {
             Self::Diff(entry) => &entry.tool,
             Self::Validation(entry) => &entry.tool,
             Self::UserConfirmation(entry) => &entry.tool,
+            Self::ToolObservation(entry) => &entry.tool,
         }
     }
 
@@ -296,6 +320,7 @@ impl ContextLedgerEntry {
             Self::Diff(entry) => &entry.summary,
             Self::Validation(entry) => &entry.summary,
             Self::UserConfirmation(entry) => &entry.summary,
+            Self::ToolObservation(entry) => &entry.summary,
         }
     }
 
@@ -329,6 +354,12 @@ impl ContextLedgerEntry {
                     0.9
                 }
             }
+            Self::ToolObservation(entry) => match entry.status.as_str() {
+                "success" => 1.0,
+                "failed" => 0.8,
+                "denied" | "revised" => 0.9,
+                _ => 0.75,
+            },
         }
     }
 
@@ -338,6 +369,7 @@ impl ContextLedgerEntry {
             Self::Diff(_) => "diff",
             Self::Validation(_) => "validation",
             Self::UserConfirmation(_) => "user confirmation",
+            Self::ToolObservation(_) => "tool observation",
         }
     }
 
@@ -347,6 +379,7 @@ impl ContextLedgerEntry {
             Self::Diff(entry) => serde_json::to_value(entry),
             Self::Validation(entry) => serde_json::to_value(entry),
             Self::UserConfirmation(entry) => serde_json::to_value(entry),
+            Self::ToolObservation(entry) => serde_json::to_value(entry),
         }
         .unwrap_or_else(|_| json!({}))
     }
@@ -372,6 +405,12 @@ pub fn user_confirmation_entry_from_event(
     event: &LearningEventRecord,
 ) -> Option<UserConfirmationLedgerEntry> {
     ledger_entry_from_event(event, CONTEXT_LEDGER_USER_CONFIRMATION_KIND)
+}
+
+pub fn tool_observation_entry_from_event(
+    event: &LearningEventRecord,
+) -> Option<ToolObservationLedgerEntry> {
+    ledger_entry_from_event(event, CONTEXT_LEDGER_TOOL_OBSERVATION_KIND)
 }
 
 fn ledger_entry_from_event<T>(event: &LearningEventRecord, kind: &str) -> Option<T>
@@ -465,6 +504,11 @@ fn diff_entry_from_tool_result(
             None,
             json_string(&tool_call.arguments, "path"),
         ),
+        "git_diff" => (
+            Some("diff".to_string()),
+            None,
+            json_string(&tool_call.arguments, "path"),
+        ),
         "bash" => {
             let command = tool_call.arguments.get("command")?.as_str()?.to_string();
             if !looks_like_diff_command(&command) {
@@ -511,10 +555,22 @@ fn validation_entry_from_tool_result(
     tool_call: &ToolCall,
     result: &ToolResult,
 ) -> Option<ValidationLedgerEntry> {
-    if tool_call.name != "bash" {
+    if !matches!(tool_call.name.as_str(), "bash" | "run_tests") {
         return None;
     }
-    let command = tool_call.arguments.get("command")?.as_str()?.trim();
+    let command = tool_call
+        .arguments
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            result
+                .data
+                .as_ref()
+                .and_then(|data| data.get("shell_result"))
+                .and_then(|shell| shell.get("command"))
+                .and_then(serde_json::Value::as_str)
+        })?
+        .trim();
     if command.is_empty() {
         return None;
     }
@@ -603,6 +659,41 @@ fn user_confirmation_entry_from_tool_result(
         risk_level,
         decision,
         summary,
+    })
+}
+
+fn tool_observation_entry_from_tool_result(
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) -> Option<ToolObservationLedgerEntry> {
+    let observation = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_observation"))?;
+    let status = json_string(observation, "status").unwrap_or_else(|| {
+        if result.success {
+            "success".to_string()
+        } else {
+            "failed".to_string()
+        }
+    });
+    let summary = json_string(observation, "summary")
+        .unwrap_or_else(|| format!("{} result: {}", tool_call.name, status));
+
+    Some(ToolObservationLedgerEntry {
+        tool: json_string(observation, "tool").unwrap_or_else(|| tool_call.name.clone()),
+        call_id: json_string(observation, "call_id").unwrap_or_else(|| tool_call.id.clone()),
+        status,
+        summary,
+        files_read: json_string_array(observation, "files_read"),
+        files_changed: json_string_array(observation, "files_changed"),
+        command_run: json_string(observation, "command_run"),
+        validation_result: json_string(observation, "validation_result"),
+        permission_decision: json_string(observation, "permission_decision"),
+        checkpoint_id: json_string(observation, "checkpoint_id"),
+        artifact_path: json_string(observation, "artifact_path"),
+        state_updates: json_string_array(observation, "state_updates"),
+        recommended_next_action: json_string(observation, "recommended_next_action"),
     })
 }
 
@@ -1010,5 +1101,45 @@ mod tests {
         assert_eq!(diff.tool, "diff");
         assert_eq!(diff.action.as_deref(), Some("file"));
         assert!(diff.changed);
+    }
+
+    #[test]
+    fn records_tool_observation_from_result_metadata() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "test", "model").unwrap();
+        let call = tool_call("file_edit", json!({"path": "src/lib.rs"}));
+        let result = ToolResult::success_with_data(
+            "edited",
+            json!({
+                "tool_observation": {
+                    "schema": "tool_observation.v1",
+                    "tool": "file_edit",
+                    "call_id": "call_1",
+                    "status": "success",
+                    "summary": "file_edit succeeded: edited src/lib.rs",
+                    "files_read": [],
+                    "files_changed": ["src/lib.rs"],
+                    "command_run": null,
+                    "validation_result": null,
+                    "permission_decision": null,
+                    "checkpoint_id": "cp_1",
+                    "artifact_path": null,
+                    "state_updates": ["files_changed", "checkpoint"],
+                    "recommended_next_action": null
+                }
+            }),
+        );
+
+        let count = record_tool_context_evidence(&store, "s1", &call, &result);
+
+        assert_eq!(count, 2);
+        let events = store.recent_context_ledger_events("s1", 10).unwrap();
+        let observation = events
+            .iter()
+            .find_map(tool_observation_entry_from_event)
+            .expect("tool observation entry");
+        assert_eq!(observation.status, "success");
+        assert_eq!(observation.files_changed, vec!["src/lib.rs"]);
+        assert_eq!(observation.checkpoint_id.as_deref(), Some("cp_1"));
     }
 }

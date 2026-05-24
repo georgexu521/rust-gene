@@ -124,6 +124,8 @@ enum ToolActionKind {
     Edit,
     Validate,
     Format,
+    StartServer,
+    InstallDependencies,
     VersionControl,
     Delegate,
     Memory,
@@ -148,6 +150,13 @@ impl ToolActionProfile {
                 expected_observation: "workspace file mutation with diffable changes",
             },
             "bash" => bash_profile(tool_call),
+            "run_tests" => Self {
+                mutates_workspace: false,
+                broad_shell: false,
+                requires_confirmation: false,
+                kind: ToolActionKind::Validate,
+                expected_observation: "validation result with pass/fail evidence",
+            },
             "format" => Self {
                 mutates_workspace: true,
                 broad_shell: false,
@@ -161,6 +170,27 @@ impl ToolActionProfile {
                 requires_confirmation: false,
                 kind: ToolActionKind::Validate,
                 expected_observation: "current workspace diff evidence",
+            },
+            "git_status" | "git_diff" => Self {
+                mutates_workspace: false,
+                broad_shell: false,
+                requires_confirmation: false,
+                kind: ToolActionKind::Validate,
+                expected_observation: "read-only git working tree evidence",
+            },
+            "start_dev_server" => Self {
+                mutates_workspace: false,
+                broad_shell: false,
+                requires_confirmation: false,
+                kind: ToolActionKind::StartServer,
+                expected_observation: "background dev-server task handle and terminal state",
+            },
+            "install_dependencies" => Self {
+                mutates_workspace: false,
+                broad_shell: false,
+                requires_confirmation: true,
+                kind: ToolActionKind::InstallDependencies,
+                expected_observation: "dependency installation output and package-manager status",
             },
             "git" => Self {
                 mutates_workspace: true,
@@ -271,6 +301,20 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             cost: 3,
             reversibility: 7,
         },
+        ToolActionKind::StartServer => ActionScores {
+            value: 7,
+            risk: 4,
+            uncertainty_reduction: 5,
+            cost: 5,
+            reversibility: 6,
+        },
+        ToolActionKind::InstallDependencies => ActionScores {
+            value: 6,
+            risk: 7,
+            uncertainty_reduction: 4,
+            cost: 6,
+            reversibility: 4,
+        },
         ToolActionKind::VersionControl => ActionScores {
             value: 5,
             risk: 7,
@@ -327,7 +371,10 @@ fn phase_allows_action(stage: AgentTaskStage, profile: &ToolActionProfile) -> bo
         ),
         AgentTaskStage::Validate => matches!(
             profile.kind,
-            ToolActionKind::Inspect | ToolActionKind::Validate | ToolActionKind::VersionControl
+            ToolActionKind::Inspect
+                | ToolActionKind::Validate
+                | ToolActionKind::StartServer
+                | ToolActionKind::VersionControl
         ),
         AgentTaskStage::Repair => true,
         AgentTaskStage::Closeout | AgentTaskStage::Done => {
@@ -354,6 +401,8 @@ fn reason_summary(
         ToolActionKind::Edit => "mutation",
         ToolActionKind::Validate => "validation",
         ToolActionKind::Format => "formatting",
+        ToolActionKind::StartServer => "dev-server",
+        ToolActionKind::InstallDependencies => "dependency-install",
         ToolActionKind::VersionControl => "version-control",
         ToolActionKind::Delegate => "delegation",
         ToolActionKind::Memory => "memory",

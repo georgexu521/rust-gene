@@ -5,9 +5,7 @@
 use crate::engine::checkpoint::{
     FileChangeRecord, FileChangeRoundSummary, RestoreResult, ToolRoundRestoreResult,
 };
-use crate::tools::Tool;
-use crate::tools::ToolContext;
-use crate::tools::ToolResult;
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -45,8 +43,58 @@ impl Tool for RewindTool {
                     "description": "Legacy alias for restoring the Nth most recent file change; 1 restores the latest."
                 }
             },
-            "required": []
+            "required": [],
+            "additionalProperties": false
         })
+    }
+
+    fn requires_confirmation(&self, _params: &Value) -> bool {
+        true
+    }
+
+    fn confirmation_prompt(&self, params: &Value) -> Option<String> {
+        let target = rewind_target(params);
+        let id = params.get("id").and_then(Value::as_str).unwrap_or("");
+        let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+        let detail = if !id.is_empty() {
+            format!(" id={id}")
+        } else if !path.is_empty() {
+            format!(" path={path}")
+        } else {
+            String::new()
+        };
+        Some(format!(
+            "Rewind checkpoint-backed file changes for {target}{detail}?"
+        ))
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Edit
+    }
+
+    fn permission_level(&self) -> ToolPermissionLevel {
+        ToolPermissionLevel::HighRisk
+    }
+
+    fn is_concurrency_safe(&self, _params: &Value) -> bool {
+        false
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn tool_use_summary(&self, params: &Value) -> Option<String> {
+        let target = rewind_target(params);
+        let id = params.get("id").and_then(Value::as_str).unwrap_or("");
+        let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+        if !id.is_empty() {
+            Some(format!("{target} {id}"))
+        } else if !path.is_empty() {
+            Some(format!("{target} {path}"))
+        } else {
+            Some(target.to_string())
+        }
     }
 
     async fn execute(&self, params: Value, context: ToolContext) -> ToolResult {
@@ -55,10 +103,7 @@ impl Tool for RewindTool {
             None => crate::engine::checkpoint::get_checkpoint_manager(&context.session_id).await,
         };
         let checkpoint_guard = manager.lock().await;
-        let target = params
-            .get("target")
-            .and_then(|v| v.as_str())
-            .unwrap_or("latest_file_change");
+        let target = rewind_target(&params);
 
         if target == "latest_tool_round" {
             let summary = checkpoint_guard.latest_file_change_round();
@@ -129,6 +174,13 @@ impl Tool for RewindTool {
             Err(err) => ToolResult::error(format!("Failed to rewind file change: {}", err)),
         }
     }
+}
+
+fn rewind_target(params: &Value) -> &str {
+    params
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or("latest_file_change")
 }
 
 fn latest_file_change_for_path<'a>(
@@ -247,6 +299,19 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::Mutex;
+
+    #[test]
+    fn rewind_tool_contract_marks_restore_as_confirmed_edit() {
+        let tool = RewindTool;
+        let params = json!({"target": "path", "path": "src/main.rs"});
+
+        assert_eq!(tool.operation_kind(&params), ToolOperationKind::Edit);
+        assert!(tool.requires_confirmation(&params));
+        assert!(tool.confirmation_prompt(&params).is_some());
+        assert!(!tool.is_concurrency_safe(&params));
+        assert_eq!(tool.permission_level(), ToolPermissionLevel::HighRisk);
+        assert!(tool.strict_schema());
+    }
 
     #[tokio::test]
     async fn rewind_latest_file_change_restores_checkpoint() {

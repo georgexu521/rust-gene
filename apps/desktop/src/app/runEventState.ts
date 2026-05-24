@@ -975,6 +975,7 @@ type PermissionEvidenceSummary = {
   reason?: string;
   recovery?: unknown;
   command_classification?: unknown;
+  allowed_always_rules?: unknown;
 };
 
 type PermissionReviewSummary = {
@@ -984,6 +985,20 @@ type PermissionReviewSummary = {
   risk_facts?: unknown;
   matched_rules?: unknown;
   classifier_result?: unknown;
+};
+
+type ActionReviewDesktopSummary = {
+  decision?: string;
+  reason?: string;
+  permission?: string;
+  risk?: string;
+  recovery?: string;
+  sideEffect?: string;
+  network?: string;
+  checkpoint?: string;
+  checkpointApproval?: boolean;
+  scopeAllowed?: boolean;
+  budgetAllowed?: boolean;
 };
 
 type ToolSummary = {
@@ -1049,24 +1064,36 @@ function permissionTimelineSummary(
 ): Extract<TimelineSummary, { kind: "permission" }> | undefined {
   const evidence = permissionEvidence(event.metadata);
   const review = permissionReview(event.review);
+  const actionReview = actionReviewSummary(event.metadata);
   const command = commandClassification(evidence?.command_classification || review?.classifier_result);
-  if (!evidence && !review && !command) {
+  if (!evidence && !review && !actionReview && !command) {
     return undefined;
   }
   return {
     kind: "permission",
     family: evidence?.permission_family,
     requestKind: evidence?.request_kind,
-    risk: evidence?.risk_level || review?.risk,
+    risk: actionReview?.risk || evidence?.risk_level || review?.risk,
     decision: evidence?.decision,
-    reason: firstString(evidence?.reasons) || evidence?.reason || review?.reason,
+    reason:
+      actionReview?.reason || firstString(evidence?.reasons) || evidence?.reason || review?.reason,
     recovery:
+      actionReview?.recovery ||
       recoveryAction(evidence?.recovery) ||
       review?.recovery_hint ||
       "Approve only if the request matches the intended task.",
     commandCategory: stringField(command, "category"),
     parserStatus: stringField(command, "parser_status"),
     mutation: booleanField(command, "mutation"),
+    actionDecision: actionReview?.decision,
+    actionReason: actionReview?.reason,
+    sideEffect: actionReview?.sideEffect,
+    network: actionReview?.network,
+    checkpoint: actionReview?.checkpoint,
+    checkpointApproval: actionReview?.checkpointApproval,
+    allowedRule: firstString(evidence?.allowed_always_rules),
+    scopeAllowed: actionReview?.scopeAllowed,
+    budgetAllowed: actionReview?.budgetAllowed,
   };
 }
 
@@ -1076,8 +1103,13 @@ function permissionTraceDetail(
 ) {
   const parts = compactFacts([
     event.prompt,
+    summary?.actionDecision ? `review ${summary.actionDecision}` : null,
+    summary?.actionReason ? `reason ${summary.actionReason}` : null,
     summary?.risk ? `risk ${summary.risk}` : null,
     summary?.requestKind ? `kind ${summary.requestKind}` : null,
+    summary?.sideEffect ? `effect ${summary.sideEffect}` : null,
+    summary?.network ? `network ${summary.network}` : null,
+    summary?.checkpoint ? `checkpoint ${summary.checkpoint}` : null,
     summary?.commandCategory ? `command ${summary.commandCategory}` : null,
     summary?.recovery,
   ]);
@@ -1094,6 +1126,35 @@ function permissionEvidence(metadata: unknown): PermissionEvidenceSummary | null
 
 function permissionReview(review: unknown): PermissionReviewSummary | null {
   return isRecord(review) ? (review as PermissionReviewSummary) : null;
+}
+
+function actionReviewSummary(metadata: unknown): ActionReviewDesktopSummary | null {
+  if (!isRecord(metadata)) {
+    return null;
+  }
+  const review = recordField(metadata, "action_review");
+  if (!review) {
+    return null;
+  }
+  const permission = recordField(review, "permission");
+  const sideEffects = recordField(review, "side_effects");
+  const network = recordField(sideEffects, "network");
+  const checkpoint = recordField(review, "checkpoint");
+  const scope = recordField(review, "scope");
+  const budget = recordField(review, "budget");
+  return {
+    decision: stringField(review, "decision"),
+    reason: stringField(review, "primary_reason"),
+    permission: stringField(permission, "decision"),
+    risk: stringField(permission, "risk_level"),
+    recovery: stringField(review, "model_recovery") || stringField(review, "user_reason"),
+    sideEffect: stringField(sideEffects, "external_side_effect"),
+    network: stringField(network, "class"),
+    checkpoint: stringField(checkpoint, "status"),
+    checkpointApproval: booleanField(checkpoint, "requires_user_approval"),
+    scopeAllowed: booleanField(scope, "allowed"),
+    budgetAllowed: booleanField(budget, "allowed"),
+  };
 }
 
 function commandClassification(value: unknown): Record<string, unknown> | null {

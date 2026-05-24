@@ -52,8 +52,11 @@ fn runtime_diet_tool_universe() -> Vec<Tool> {
         "file_write",
         "format",
         "git",
+        "git_status",
+        "git_diff",
         "glob",
         "grep",
+        "install_dependencies",
         "json_query",
         "list_mcp_resources",
         "lsp",
@@ -67,6 +70,8 @@ fn runtime_diet_tool_universe() -> Vec<Tool> {
         "read_mcp_resource",
         "refactor",
         "repl",
+        "run_tests",
+        "start_dev_server",
         "skill_manage",
         "skills_list",
         "skill_view",
@@ -199,10 +204,15 @@ fn route_scoped_tools_for_python_creation_include_write_and_validation() {
         "file_edit",
         "file_patch",
         "bash",
+        "run_tests",
+        "start_dev_server",
+        "install_dependencies",
         "bash_output",
         "bash_cancel",
         "diff",
         "web_search",
+        "git_status",
+        "git_diff",
         "memory_save",
         "mcp",
     ]);
@@ -215,9 +225,14 @@ fn route_scoped_tools_for_python_creation_include_write_and_validation() {
     assert!(exposed.contains("file_edit"));
     assert!(exposed.contains("file_patch"));
     assert!(exposed.contains("bash"));
+    assert!(exposed.contains("run_tests"));
+    assert!(exposed.contains("start_dev_server"));
+    assert!(!exposed.contains("install_dependencies"));
     assert!(exposed.contains("bash_output"));
     assert!(exposed.contains("bash_cancel"));
     assert!(exposed.contains("diff"));
+    assert!(exposed.contains("git_status"));
+    assert!(exposed.contains("git_diff"));
     assert!(!exposed.contains("web_search"));
     assert!(!exposed.contains("memory_save"));
     assert!(!exposed.contains("mcp"));
@@ -239,8 +254,13 @@ fn route_scoped_tools_for_debugging_include_search_read_shell_and_edit() {
         "file_edit",
         "file_patch",
         "bash",
+        "run_tests",
+        "start_dev_server",
+        "install_dependencies",
         "lsp",
         "symbol_query",
+        "git_status",
+        "git_diff",
         "web_search",
         "memory_load",
     ]);
@@ -252,10 +272,111 @@ fn route_scoped_tools_for_debugging_include_search_read_shell_and_edit() {
     assert!(exposed.contains("file_edit"));
     assert!(exposed.contains("file_patch"));
     assert!(exposed.contains("bash"));
+    assert!(exposed.contains("run_tests"));
+    assert!(exposed.contains("start_dev_server"));
+    assert!(!exposed.contains("install_dependencies"));
     assert!(exposed.contains("lsp"));
     assert!(exposed.contains("symbol_query"));
+    assert!(exposed.contains("git_status"));
+    assert!(exposed.contains("git_diff"));
     assert!(!exposed.contains("web_search"));
     assert!(!exposed.contains("memory_load"));
+}
+
+#[test]
+fn route_scoped_tools_for_dependency_install_intent_include_install_facade() {
+    let mut env = EnvVarGuard::acquire_blocking();
+    env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+    env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+    env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+    let route = IntentRouter::new().route("帮我安装项目依赖，package.json 已经在项目里");
+    let tools = fake_tools(&[
+        "project_list",
+        "glob",
+        "file_read",
+        "bash",
+        "install_dependencies",
+        "run_tests",
+        "web_search",
+        "memory_save",
+    ]);
+
+    let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+    assert!(route.dependency_install_intent);
+    assert!(exposed.contains("bash"));
+    assert!(exposed.contains("install_dependencies"));
+    assert!(exposed.contains("file_read"));
+    assert!(exposed.contains("glob"));
+    assert!(!exposed.contains("run_tests"));
+    assert!(!exposed.contains("web_search"));
+    assert!(!exposed.contains("memory_save"));
+}
+
+#[test]
+fn route_scoped_tools_ignore_install_recommendation_without_install_intent() {
+    let mut env = EnvVarGuard::acquire_blocking();
+    env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+    env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+    env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+    let mut route = IntentRouter::new().route("帮我做一个贪吃蛇游戏吧，用 python 做吧");
+    route
+        .recommended_tools
+        .push("install_dependencies".to_string());
+    let tools = fake_tools(&["file_read", "bash", "install_dependencies"]);
+
+    let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+    assert!(!route.dependency_install_intent);
+    assert!(exposed.contains("bash"));
+    assert!(!exposed.contains("install_dependencies"));
+}
+
+#[test]
+fn route_scoped_tools_for_generic_mcp_config_hide_auth_tool() {
+    let mut env = EnvVarGuard::acquire_blocking();
+    env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+    env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+    env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+    let route = IntentRouter::new().route("帮我看看 mcp 配置");
+    let tools = fake_tools(&[
+        "config",
+        "mcp",
+        "mcp_tool",
+        "mcp_auth",
+        "list_mcp_resources",
+        "read_mcp_resource",
+        "file_read",
+        "bash",
+        "ask_user",
+    ]);
+
+    let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+    assert!(!route.mcp_auth_intent);
+    assert!(exposed.contains("config"));
+    assert!(exposed.contains("mcp"));
+    assert!(exposed.contains("mcp_tool"));
+    assert!(exposed.contains("list_mcp_resources"));
+    assert!(exposed.contains("read_mcp_resource"));
+    assert!(!exposed.contains("mcp_auth"));
+}
+
+#[test]
+fn route_scoped_tools_for_explicit_mcp_auth_include_auth_tool() {
+    let mut env = EnvVarGuard::acquire_blocking();
+    env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+    env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+    env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+    let route = IntentRouter::new().route("帮我给 mcp server 做 OAuth 授权登录");
+    let tools = fake_tools(&["config", "mcp", "mcp_auth", "file_read", "bash", "ask_user"]);
+
+    let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+    assert!(route.mcp_auth_intent);
+    assert!(exposed.contains("config"));
+    assert!(exposed.contains("mcp"));
+    assert!(exposed.contains("mcp_auth"));
 }
 
 #[test]
@@ -328,21 +449,21 @@ fn runtime_diet_sample_prompts_stay_within_route_tool_budgets() {
             prompt: "帮我看看默认 python 有没有安装 pygame，帮我安装一下吧",
             intent: IntentKind::DirectAnswer,
             workflow: WorkflowKind::Direct,
-            max_tools: 4,
+            max_tools: 5,
         },
         Sample {
             label: "python code creation",
             prompt: "帮我做一个贪吃蛇游戏吧，用 python 做吧",
             intent: IntentKind::CodeChange,
             workflow: WorkflowKind::CodeChange,
-            max_tools: 14,
+            max_tools: 19,
         },
         Sample {
             label: "running issue debug",
             prompt: "我在运行中发现了一个问题，你帮我看看是怎么回事吧",
             intent: IntentKind::Debugging,
             workflow: WorkflowKind::BugFix,
-            max_tools: 14,
+            max_tools: 19,
         },
         Sample {
             label: "reference comparison",

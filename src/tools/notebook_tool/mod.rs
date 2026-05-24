@@ -2,7 +2,7 @@
 //!
 //! 支持读取、编辑、插入、删除单元格。
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -86,12 +86,56 @@ impl Tool for NotebookTool {
                     "minimum": 0
                 }
             },
-            "required": ["action", "file_path"]
+            "required": ["action", "file_path"],
+            "additionalProperties": false
         })
     }
 
+    fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
+        notebook_action_mutates(notebook_action(params))
+    }
+
+    fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {
+        if !self.requires_confirmation(params) {
+            return None;
+        }
+        let action = notebook_action(params);
+        let file_path = params["file_path"].as_str().unwrap_or("the notebook");
+        Some(format!("Apply notebook {action} to {file_path}?"))
+    }
+
+    fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
+        match notebook_action(params) {
+            "read" | "read_cell" => ToolOperationKind::Read,
+            "edit_cell" | "insert_cell" | "delete_cell" => ToolOperationKind::Edit,
+            _ => ToolOperationKind::Other,
+        }
+    }
+
+    fn permission_level(&self) -> ToolPermissionLevel {
+        ToolPermissionLevel::HighRisk
+    }
+
+    fn is_concurrency_safe(&self, params: &serde_json::Value) -> bool {
+        !self.requires_confirmation(params)
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let action = notebook_action(params);
+        let file_path = params["file_path"].as_str()?;
+        let cell_index = params["cell_index"]
+            .as_u64()
+            .map(|index| format!(" cell={index}"))
+            .unwrap_or_default();
+        Some(format!("{action} {file_path}{cell_index}"))
+    }
+
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
-        let action = params["action"].as_str().unwrap_or("");
+        let action = notebook_action(&params);
         let file_path = params["file_path"].as_str().unwrap_or("");
 
         if file_path.is_empty() {
@@ -130,6 +174,14 @@ impl Tool for NotebookTool {
             _ => ToolResult::error(format!("Unknown notebook action: {}", action)),
         }
     }
+}
+
+fn notebook_action(params: &serde_json::Value) -> &str {
+    params["action"].as_str().unwrap_or("")
+}
+
+fn notebook_action_mutates(action: &str) -> bool {
+    matches!(action, "edit_cell" | "insert_cell" | "delete_cell")
 }
 
 impl NotebookTool {
@@ -366,5 +418,23 @@ mod tests {
         assert_eq!(notebook.cells.len(), 2);
         assert_eq!(notebook.cells[0].cell_type, "code");
         assert_eq!(notebook.cells[1].cell_type, "markdown");
+    }
+
+    #[test]
+    fn notebook_tool_contract_is_parameter_sensitive() {
+        let tool = NotebookTool;
+        let read = json!({"action": "read_cell", "file_path": "demo.ipynb", "cell_index": 0});
+        let edit = json!({"action": "edit_cell", "file_path": "demo.ipynb", "cell_index": 0, "content": "print(1)"});
+
+        assert_eq!(tool.operation_kind(&read), ToolOperationKind::Read);
+        assert!(!tool.requires_confirmation(&read));
+        assert!(tool.is_concurrency_safe(&read));
+
+        assert_eq!(tool.operation_kind(&edit), ToolOperationKind::Edit);
+        assert!(tool.requires_confirmation(&edit));
+        assert!(tool.confirmation_prompt(&edit).is_some());
+        assert!(!tool.is_concurrency_safe(&edit));
+        assert_eq!(tool.permission_level(), ToolPermissionLevel::HighRisk);
+        assert!(tool.strict_schema());
     }
 }

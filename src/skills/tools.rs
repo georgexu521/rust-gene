@@ -2,6 +2,7 @@
 //!
 //! SkillManageTool, SkillListTool, SkillViewTool
 
+use crate::tools::{ToolOperationKind, ToolPermissionLevel};
 use std::path::PathBuf;
 
 /// Skill 管理工具 - 让 agent 管理 skills
@@ -55,8 +56,54 @@ impl crate::tools::Tool for SkillManageTool {
                     "description": "Trigger keywords (for create, in frontmatter)"
                 }
             },
-            "required": ["action"]
+            "required": ["action"],
+            "additionalProperties": false
         })
+    }
+
+    fn requires_confirmation(&self, params: &serde_json::Value) -> bool {
+        skill_manage_action_mutates(skill_manage_action(params))
+    }
+
+    fn confirmation_prompt(&self, params: &serde_json::Value) -> Option<String> {
+        if !self.requires_confirmation(params) {
+            return None;
+        }
+        let action = skill_manage_action(params);
+        let name = params["name"].as_str().unwrap_or("the target skill");
+        Some(format!("Apply skill_manage {action} to {name}?"))
+    }
+
+    fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
+        match skill_manage_action(params) {
+            "list" => ToolOperationKind::List,
+            "view" | "reload" => ToolOperationKind::Read,
+            "create" => ToolOperationKind::Write,
+            "patch" | "delete" => ToolOperationKind::Edit,
+            _ => ToolOperationKind::Other,
+        }
+    }
+
+    fn permission_level(&self) -> ToolPermissionLevel {
+        ToolPermissionLevel::HighRisk
+    }
+
+    fn is_concurrency_safe(&self, params: &serde_json::Value) -> bool {
+        !self.requires_confirmation(params)
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn tool_use_summary(&self, params: &serde_json::Value) -> Option<String> {
+        let action = skill_manage_action(params);
+        let name = params["name"].as_str().unwrap_or("");
+        if name.is_empty() {
+            Some(action.to_string())
+        } else {
+            Some(format!("{action} {name}"))
+        }
     }
 
     async fn execute(
@@ -64,7 +111,7 @@ impl crate::tools::Tool for SkillManageTool {
         params: serde_json::Value,
         _context: crate::tools::ToolContext,
     ) -> crate::tools::ToolResult {
-        let action = params["action"].as_str().unwrap_or("list");
+        let action = skill_manage_action(&params);
         let name = params["name"].as_str().unwrap_or("");
 
         match action {
@@ -227,6 +274,14 @@ impl crate::tools::Tool for SkillManageTool {
             )),
         }
     }
+}
+
+fn skill_manage_action(params: &serde_json::Value) -> &str {
+    params["action"].as_str().unwrap_or("list")
+}
+
+fn skill_manage_action_mutates(action: &str) -> bool {
+    matches!(action, "create" | "patch" | "delete")
 }
 
 /// Skill 列表工具 - 让 agent 浏览可用的 skills
@@ -400,6 +455,24 @@ mod tests {
         assert!(tool.description().contains("compact skill discovery"));
         assert!(tool.description().contains("when to load"));
         assert!(tool.description().contains("current task"));
+    }
+
+    #[test]
+    fn skill_manage_contract_is_parameter_sensitive() {
+        let tool = SkillManageTool::new(PathBuf::from("/tmp/skills"));
+        let view = serde_json::json!({"action": "view", "name": "helper"});
+        let patch = serde_json::json!({"action": "patch", "name": "helper", "content": "new body"});
+
+        assert_eq!(tool.operation_kind(&view), ToolOperationKind::Read);
+        assert!(!tool.requires_confirmation(&view));
+        assert!(tool.is_concurrency_safe(&view));
+
+        assert_eq!(tool.operation_kind(&patch), ToolOperationKind::Edit);
+        assert!(tool.requires_confirmation(&patch));
+        assert!(tool.confirmation_prompt(&patch).is_some());
+        assert!(!tool.is_concurrency_safe(&patch));
+        assert_eq!(tool.permission_level(), ToolPermissionLevel::HighRisk);
+        assert!(tool.strict_schema());
     }
 
     #[tokio::test]

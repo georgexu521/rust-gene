@@ -78,6 +78,10 @@ pub struct IntentRoute {
     pub reasoning: ReasoningPolicy,
     pub risk: RiskLevel,
     pub recommended_tools: Vec<String>,
+    #[serde(default)]
+    pub dependency_install_intent: bool,
+    #[serde(default)]
+    pub mcp_auth_intent: bool,
     pub reason: String,
 }
 
@@ -117,6 +121,8 @@ impl IntentRouter {
         let has_local_inspection_signal = is_local_inspection_request(&lower, zh);
         let has_terminal_operation_signal = is_terminal_operation_request(&lower, zh);
         let has_error_explanation_signal = is_error_explanation_request(&lower, zh);
+        let has_dependency_install_intent = is_dependency_install_request(&lower, zh);
+        let has_mcp_auth_intent = is_mcp_auth_request(&lower, zh);
         let has_configuration_signal = contains_any(
             &lower,
             &[
@@ -153,6 +159,8 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::Medium,
                 risk: RiskLevel::Low,
                 recommended_tools: vec!["memory_load".into(), "memory_save".into()],
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
                 reason: "prompt explicitly references memory without code-change intent".into(),
             };
         }
@@ -165,7 +173,11 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Project,
                 reasoning: ReasoningPolicy::High,
                 risk: live_coding_risk(&lower),
-                recommended_tools: code_change_tool_recommendations(),
+                recommended_tools: code_change_tool_recommendations_for(
+                    has_dependency_install_intent,
+                ),
+                dependency_install_intent: has_dependency_install_intent,
+                mcp_auth_intent: false,
                 reason: "live coding eval explicitly requires a code diff".into(),
             };
         }
@@ -178,7 +190,11 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Project,
                 reasoning: ReasoningPolicy::High,
                 risk: live_coding_risk(&lower),
-                recommended_tools: code_change_tool_recommendations(),
+                recommended_tools: code_change_tool_recommendations_for(
+                    has_dependency_install_intent,
+                ),
+                dependency_install_intent: has_dependency_install_intent,
+                mcp_auth_intent: false,
                 reason: "live coding audit/regression eval requires project verification; code diff is optional".into(),
             };
         }
@@ -192,6 +208,8 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::Medium,
                 risk: RiskLevel::Low,
                 recommended_tools: Vec::new(),
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
                 reason: "prompt asks to explain an error without a code or environment action"
                     .into(),
             };
@@ -205,7 +223,9 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Light,
                 reasoning: ReasoningPolicy::Medium,
                 risk: RiskLevel::Medium,
-                recommended_tools: vec!["config".into(), "mcp".into()],
+                recommended_tools: configuration_tool_recommendations(has_mcp_auth_intent),
+                dependency_install_intent: false,
+                mcp_auth_intent: has_mcp_auth_intent,
                 reason: "prompt asks about runtime configuration or permissions".into(),
             };
         }
@@ -219,6 +239,8 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::Medium,
                 recommended_tools: vec!["agent".into(), "swarm".into(), "project_list".into()],
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
                 reason: "prompt asks for delegation or parallel agent work".into(),
             };
         }
@@ -232,6 +254,8 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::Low,
                 recommended_tools: vec!["web_search".into(), "web_fetch".into()],
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
                 reason: "prompt asks for external research or comparison".into(),
             };
         }
@@ -245,6 +269,8 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::Medium,
                 recommended_tools: vec!["project_list".into(), "grep".into(), "plan".into()],
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
                 reason: "prompt asks for planning or architecture work".into(),
             };
         }
@@ -257,13 +283,17 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Project,
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::Medium,
-                recommended_tools: code_change_tool_recommendations(),
+                recommended_tools: code_change_tool_recommendations_for(
+                    has_dependency_install_intent,
+                ),
+                dependency_install_intent: has_dependency_install_intent,
+                mcp_auth_intent: false,
                 reason: "prompt asks to create a code artifact".into(),
             };
         }
 
         if has_terminal_operation_signal {
-            let recommended_tools = if is_background_shell_followup(&lower, zh) {
+            let mut recommended_tools = if is_background_shell_followup(&lower, zh) {
                 vec![
                     "bash".into(),
                     "bash_output".into(),
@@ -273,6 +303,10 @@ impl IntentRouter {
             } else {
                 vec!["bash".into()]
             };
+            maybe_recommend_dependency_install_tool(
+                &mut recommended_tools,
+                has_dependency_install_intent,
+            );
             return IntentRoute {
                 intent: IntentKind::DirectAnswer,
                 confidence: 0.74,
@@ -281,6 +315,8 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::Medium,
                 risk: RiskLevel::Medium,
                 recommended_tools,
+                dependency_install_intent: has_dependency_install_intent,
+                mcp_auth_intent: false,
                 reason: "prompt asks to inspect or change local runtime state through the terminal"
                     .into(),
             };
@@ -295,6 +331,8 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::Medium,
                 risk: RiskLevel::Low,
                 recommended_tools: vec!["glob".into(), "file_read".into()],
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
                 reason: "prompt asks to inspect local filesystem or workspace state".into(),
             };
         }
@@ -307,7 +345,9 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Project,
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::Medium,
-                recommended_tools: vec!["grep".into(), "file_read".into(), "bash".into()],
+                recommended_tools: debug_tool_recommendations(has_dependency_install_intent),
+                dependency_install_intent: has_dependency_install_intent,
+                mcp_auth_intent: false,
                 reason: "prompt describes a failure or debugging task".into(),
             };
         }
@@ -321,6 +361,8 @@ impl IntentRouter {
                 reasoning: ReasoningPolicy::Medium,
                 risk: RiskLevel::Medium,
                 recommended_tools: vec!["file_read".into(), "bash".into()],
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
                 reason: "prompt asks for a scoped file mutation without code workflow intent"
                     .into(),
             };
@@ -334,7 +376,11 @@ impl IntentRouter {
                 retrieval: RetrievalPolicy::Project,
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::Medium,
-                recommended_tools: code_change_tool_recommendations(),
+                recommended_tools: code_change_tool_recommendations_for(
+                    has_dependency_install_intent,
+                ),
+                dependency_install_intent: has_dependency_install_intent,
+                mcp_auth_intent: false,
                 reason: "prompt asks for code or product changes".into(),
             };
         }
@@ -362,6 +408,8 @@ impl IntentRouter {
             reasoning: ReasoningPolicy::Low,
             risk: RiskLevel::Low,
             recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
             reason: reason.into(),
         }
     }
@@ -461,6 +509,12 @@ impl LearningFeedback {
             }
         }
         for tool in &self.preferred_tools {
+            if tool == "install_dependencies" && !route.dependency_install_intent {
+                continue;
+            }
+            if tool == "mcp_auth" && !route.mcp_auth_intent {
+                continue;
+            }
             if !route.recommended_tools.contains(tool) {
                 route.recommended_tools.push(tool.clone());
             }
@@ -549,6 +603,162 @@ fn code_change_tool_recommendations() -> Vec<String> {
         "file_edit".into(),
         "bash".into(),
     ]
+}
+
+fn code_change_tool_recommendations_for(dependency_install_intent: bool) -> Vec<String> {
+    let mut tools = code_change_tool_recommendations();
+    maybe_recommend_dependency_install_tool(&mut tools, dependency_install_intent);
+    tools
+}
+
+fn debug_tool_recommendations(dependency_install_intent: bool) -> Vec<String> {
+    let mut tools = vec!["grep".into(), "file_read".into(), "bash".into()];
+    maybe_recommend_dependency_install_tool(&mut tools, dependency_install_intent);
+    tools
+}
+
+fn configuration_tool_recommendations(mcp_auth_intent: bool) -> Vec<String> {
+    let mut tools = vec!["config".into(), "mcp".into()];
+    if mcp_auth_intent {
+        tools.push("mcp_auth".into());
+    }
+    tools
+}
+
+fn maybe_recommend_dependency_install_tool(
+    tools: &mut Vec<String>,
+    dependency_install_intent: bool,
+) {
+    if dependency_install_intent && !tools.iter().any(|tool| tool == "install_dependencies") {
+        tools.push("install_dependencies".into());
+    }
+}
+
+fn is_dependency_install_request(lower: &str, zh: &str) -> bool {
+    if contains_any(
+        lower,
+        &[
+            "do not install",
+            "don't install",
+            "dont install",
+            "without installing",
+            "only report",
+            "just report",
+        ],
+    ) || contains_any(zh, &["不要安装", "别安装", "不用安装", "只报告", "仅报告"])
+    {
+        return false;
+    }
+
+    if contains_any(
+        lower,
+        &[
+            "pip install",
+            "pip3 install",
+            "uv pip install",
+            "npm install",
+            "npm i ",
+            "pnpm install",
+            "pnpm i ",
+            "yarn install",
+            "yarn add",
+            "cargo add",
+            "go get",
+            "poetry add",
+            "poetry install",
+        ],
+    ) {
+        return true;
+    }
+
+    let explicit_dependency_phrase = contains_any(
+        lower,
+        &[
+            "install dependencies",
+            "install deps",
+            "install packages",
+            "install package",
+            "add dependency",
+            "add dependencies",
+            "add package",
+            "add packages",
+        ],
+    ) || contains_any(
+        zh,
+        &[
+            "安装依赖",
+            "装依赖",
+            "依赖安装",
+            "安装包",
+            "装包",
+            "安装模块",
+            "装模块",
+            "安装库",
+            "装库",
+            "补依赖",
+            "加依赖",
+            "添加依赖",
+        ],
+    );
+    if explicit_dependency_phrase {
+        return true;
+    }
+
+    let package_context = contains_any(
+        lower,
+        &[
+            "dependency",
+            "dependencies",
+            "package",
+            "module",
+            "library",
+            "requirements.txt",
+            "package.json",
+            "cargo.toml",
+            "go.mod",
+            "pip",
+            "pip3",
+            "npm",
+            "pnpm",
+            "yarn",
+            "poetry",
+            "python",
+            "python3",
+            "node",
+            "rust",
+            "go",
+        ],
+    ) || contains_any(zh, &["依赖", "包", "模块", "库"]);
+    let explicit_install_action =
+        contains_any(lower, &["install ", "add package", "add dependency"])
+            || contains_any(zh, &["帮我安装", "帮我装", "安装一下", "装一下"]);
+
+    package_context && explicit_install_action
+}
+
+fn is_mcp_auth_request(lower: &str, zh: &str) -> bool {
+    let has_mcp_subject = lower.contains("mcp") || zh.contains("MCP") || zh.contains("mcp");
+    if !has_mcp_subject {
+        return false;
+    }
+    contains_any(
+        lower,
+        &[
+            "auth",
+            "authenticate",
+            "authentication",
+            "authorize",
+            "authorization",
+            "oauth",
+            "login",
+            "log in",
+            "token",
+            "credential",
+        ],
+    ) || contains_any(
+        zh,
+        &["认证", "授权", "登录", "登陆", "令牌", "凭据", "token"],
+    )
 }
 
 fn is_error_explanation_request(lower: &str, zh: &str) -> bool {
@@ -888,6 +1098,24 @@ mod tests {
     }
 
     #[test]
+    fn routes_generic_mcp_configuration_without_auth_tool() {
+        let route = IntentRouter::new().route("帮我看看 mcp 配置");
+        assert_eq!(route.intent, IntentKind::Configuration);
+        assert!(route.recommended_tools.contains(&"mcp".to_string()));
+        assert!(!route.recommended_tools.contains(&"mcp_auth".to_string()));
+        assert!(!route.mcp_auth_intent);
+    }
+
+    #[test]
+    fn routes_explicit_mcp_auth_with_auth_tool() {
+        let route = IntentRouter::new().route("帮我给 mcp server 做 OAuth 授权登录");
+        assert_eq!(route.intent, IntentKind::Configuration);
+        assert!(route.recommended_tools.contains(&"mcp".to_string()));
+        assert!(route.recommended_tools.contains(&"mcp_auth".to_string()));
+        assert!(route.mcp_auth_intent);
+    }
+
+    #[test]
     fn routes_python_package_install_as_terminal_operation() {
         let route =
             IntentRouter::new().route("帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧");
@@ -895,6 +1123,10 @@ mod tests {
         assert_eq!(route.workflow, WorkflowKind::Direct);
         assert_eq!(route.risk, RiskLevel::Medium);
         assert!(route.recommended_tools.contains(&"bash".to_string()));
+        assert!(route
+            .recommended_tools
+            .contains(&"install_dependencies".to_string()));
+        assert!(route.dependency_install_intent);
     }
 
     #[test]
@@ -964,6 +1196,21 @@ mod tests {
         assert_eq!(route.intent, IntentKind::DirectAnswer);
         assert_eq!(route.workflow, WorkflowKind::Direct);
         assert!(route.recommended_tools.contains(&"bash".to_string()));
+        assert!(!route
+            .recommended_tools
+            .contains(&"install_dependencies".to_string()));
+        assert!(!route.dependency_install_intent);
+    }
+
+    #[test]
+    fn routes_explicit_dependency_install_with_structured_tool() {
+        let route = IntentRouter::new().route("帮我安装项目依赖，package.json 已经在项目里");
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert!(route.recommended_tools.contains(&"bash".to_string()));
+        assert!(route
+            .recommended_tools
+            .contains(&"install_dependencies".to_string()));
+        assert!(route.dependency_install_intent);
     }
 
     #[test]
@@ -1158,6 +1405,46 @@ mod tests {
         let route = IntentRouter::new().route_with_learning("帮我修复 cargo test 报错", &events);
         assert!(route.recommended_tools.contains(&"grep".to_string()));
         assert!(route.reason.contains("recent failure"));
+    }
+
+    #[test]
+    fn learning_feedback_does_not_add_dependency_install_without_intent() {
+        let events = vec![crate::session_store::LearningEventRecord {
+            id: 1,
+            session_id: "s1".to_string(),
+            kind: "tool_outcome".to_string(),
+            source: "test".to_string(),
+            summary: "install succeeded".to_string(),
+            confidence: 1.0,
+            payload: serde_json::json!({"tool": "install_dependencies", "success": true}),
+            created_at: "now".to_string(),
+        }];
+
+        let route = IntentRouter::new().route_with_learning("帮我做一个贪吃蛇游戏", &events);
+
+        assert!(!route.dependency_install_intent);
+        assert!(!route
+            .recommended_tools
+            .contains(&"install_dependencies".to_string()));
+    }
+
+    #[test]
+    fn learning_feedback_does_not_add_mcp_auth_without_auth_intent() {
+        let events = vec![crate::session_store::LearningEventRecord {
+            id: 1,
+            session_id: "s1".to_string(),
+            kind: "tool_outcome".to_string(),
+            source: "test".to_string(),
+            summary: "mcp auth succeeded".to_string(),
+            confidence: 1.0,
+            payload: serde_json::json!({"tool": "mcp_auth", "success": true}),
+            created_at: "now".to_string(),
+        }];
+
+        let route = IntentRouter::new().route_with_learning("帮我看看 mcp 配置", &events);
+
+        assert!(!route.mcp_auth_intent);
+        assert!(!route.recommended_tools.contains(&"mcp_auth".to_string()));
     }
 
     #[test]

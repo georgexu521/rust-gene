@@ -251,6 +251,8 @@ mod tests {
             reasoning: ReasoningPolicy::Medium,
             risk: RiskLevel::High,
             recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
             reason: "audit/regression eval requires project verification; code diff is optional"
                 .to_string(),
         }

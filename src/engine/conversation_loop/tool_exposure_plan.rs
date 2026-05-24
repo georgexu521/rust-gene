@@ -121,10 +121,14 @@ fn phase_allows_tool(stage: AgentTaskStage, name: &str) -> bool {
             "file_read"
                 | "grep"
                 | "bash"
+                | "run_tests"
+                | "start_dev_server"
                 | "bash_output"
                 | "bash_cancel"
                 | "diff"
                 | "git"
+                | "git_status"
+                | "git_diff"
                 | "format"
                 | "ask_user"
         ),
@@ -138,16 +142,24 @@ fn phase_allows_tool(stage: AgentTaskStage, name: &str) -> bool {
                 | "file_edit"
                 | "file_patch"
                 | "bash"
+                | "run_tests"
+                | "start_dev_server"
+                | "install_dependencies"
                 | "bash_output"
                 | "bash_cancel"
                 | "diff"
+                | "git_status"
+                | "git_diff"
                 | "format"
                 | "lsp"
                 | "symbol_query"
                 | "ask_user"
         ),
         AgentTaskStage::Closeout | AgentTaskStage::Done => {
-            matches!(name, "file_read" | "diff" | "git" | "ask_user")
+            matches!(
+                name,
+                "file_read" | "diff" | "git" | "git_status" | "git_diff" | "ask_user"
+            )
         }
     }
 }
@@ -172,6 +184,11 @@ mod tests {
             tool("file_read"),
             tool("grep"),
             tool("bash"),
+            tool("run_tests"),
+            tool("start_dev_server"),
+            tool("install_dependencies"),
+            tool("git_status"),
+            tool("git_diff"),
         ]
     }
 
@@ -211,6 +228,11 @@ mod tests {
         assert!(plan.exposed_tool_names.contains("file_read"));
         assert!(plan.exposed_tool_names.contains("grep"));
         assert!(!plan.exposed_tool_names.contains("bash"));
+        assert!(!plan.exposed_tool_names.contains("run_tests"));
+        assert!(!plan.exposed_tool_names.contains("start_dev_server"));
+        assert!(!plan.exposed_tool_names.contains("install_dependencies"));
+        assert!(!plan.exposed_tool_names.contains("git_status"));
+        assert!(!plan.exposed_tool_names.contains("git_diff"));
         let Some(Message::System { content }) = plan.focused_repair_prompt else {
             panic!("focused repair prompt should be injected");
         };
@@ -231,6 +253,13 @@ mod tests {
             action_checkpoint_requires_patch_before_validation: false,
         });
         assert!(after_change.exposed_tool_names.contains("bash"));
+        assert!(after_change.exposed_tool_names.contains("run_tests"));
+        assert!(after_change.exposed_tool_names.contains("start_dev_server"));
+        assert!(!after_change
+            .exposed_tool_names
+            .contains("install_dependencies"));
+        assert!(after_change.exposed_tool_names.contains("git_status"));
+        assert!(after_change.exposed_tool_names.contains("git_diff"));
 
         let patch_required = ToolExposurePlan::build(ToolExposureRequest {
             base_tools: &base_tools,
@@ -242,6 +271,15 @@ mod tests {
             action_checkpoint_requires_patch_before_validation: true,
         });
         assert!(!patch_required.exposed_tool_names.contains("bash"));
+        assert!(!patch_required.exposed_tool_names.contains("run_tests"));
+        assert!(!patch_required
+            .exposed_tool_names
+            .contains("start_dev_server"));
+        assert!(!patch_required
+            .exposed_tool_names
+            .contains("install_dependencies"));
+        assert!(!patch_required.exposed_tool_names.contains("git_status"));
+        assert!(!patch_required.exposed_tool_names.contains("git_diff"));
     }
 
     #[test]
@@ -264,6 +302,11 @@ mod tests {
         assert!(!plan.exposed_tool_names.contains("file_edit"));
         assert!(!plan.exposed_tool_names.contains("file_patch"));
         assert!(!plan.exposed_tool_names.contains("bash"));
+        assert!(!plan.exposed_tool_names.contains("run_tests"));
+        assert!(!plan.exposed_tool_names.contains("start_dev_server"));
+        assert!(!plan.exposed_tool_names.contains("install_dependencies"));
+        assert!(!plan.exposed_tool_names.contains("git_status"));
+        assert!(!plan.exposed_tool_names.contains("git_diff"));
     }
 
     #[test]
@@ -283,6 +326,11 @@ mod tests {
         assert!(plan.exposed_tool_names.contains("file_patch"));
         assert!(plan.exposed_tool_names.contains("file_read"));
         assert!(!plan.exposed_tool_names.contains("bash"));
+        assert!(!plan.exposed_tool_names.contains("run_tests"));
+        assert!(!plan.exposed_tool_names.contains("start_dev_server"));
+        assert!(!plan.exposed_tool_names.contains("install_dependencies"));
+        assert!(!plan.exposed_tool_names.contains("git_status"));
+        assert!(!plan.exposed_tool_names.contains("git_diff"));
     }
 
     #[test]
@@ -299,7 +347,30 @@ mod tests {
         });
 
         assert!(plan.exposed_tool_names.contains("bash"));
+        assert!(plan.exposed_tool_names.contains("run_tests"));
+        assert!(plan.exposed_tool_names.contains("start_dev_server"));
+        assert!(!plan.exposed_tool_names.contains("install_dependencies"));
+        assert!(plan.exposed_tool_names.contains("git_status"));
+        assert!(plan.exposed_tool_names.contains("git_diff"));
         assert!(!plan.exposed_tool_names.contains("file_edit"));
         assert!(!plan.exposed_tool_names.contains("file_patch"));
+    }
+
+    #[test]
+    fn programming_repair_stage_allows_dependency_install_facade() {
+        let base_tools = base_tools();
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Repair),
+            has_changes_before_request: false,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("install_dependencies"));
+        assert!(plan.exposed_tool_names.contains("file_edit"));
+        assert!(plan.exposed_tool_names.contains("file_patch"));
     }
 }

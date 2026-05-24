@@ -2,9 +2,7 @@
 //!
 //! View and modify agent configuration.
 
-use crate::tools::Tool;
-use crate::tools::ToolContext;
-use crate::tools::ToolResult;
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -38,15 +36,59 @@ impl Tool for ConfigTool {
                     "description": "Value to set (when action is 'set')"
                 }
             },
-            "required": []
+            "required": [],
+            "additionalProperties": false
         })
     }
 
+    fn requires_confirmation(&self, params: &Value) -> bool {
+        config_action(params) == "set"
+    }
+
+    fn confirmation_prompt(&self, params: &Value) -> Option<String> {
+        if !self.requires_confirmation(params) {
+            return None;
+        }
+        let key = params
+            .get("key")
+            .and_then(Value::as_str)
+            .unwrap_or("config key");
+        Some(format!("Update persistent agent configuration for {key}?"))
+    }
+
+    fn operation_kind(&self, params: &Value) -> ToolOperationKind {
+        match config_action(params) {
+            "set" => ToolOperationKind::Write,
+            "list" => ToolOperationKind::List,
+            "get" | "schema" | "export" | "doctor" => ToolOperationKind::Read,
+            _ => ToolOperationKind::Read,
+        }
+    }
+
+    fn permission_level(&self) -> ToolPermissionLevel {
+        ToolPermissionLevel::HighRisk
+    }
+
+    fn is_concurrency_safe(&self, params: &Value) -> bool {
+        !self.requires_confirmation(params)
+    }
+
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
+    fn tool_use_summary(&self, params: &Value) -> Option<String> {
+        let action = config_action(params);
+        let key = params.get("key").and_then(Value::as_str).unwrap_or("");
+        if key.is_empty() {
+            Some(action.to_string())
+        } else {
+            Some(format!("{action} {key}"))
+        }
+    }
+
     async fn execute(&self, params: Value, _context: ToolContext) -> ToolResult {
-        let action = params
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("list");
+        let action = config_action(&params);
         let key = params.get("key").and_then(|v| v.as_str()).unwrap_or("");
         let value = params.get("value").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -125,5 +167,35 @@ impl Tool for ConfigTool {
                 Err(e) => ToolResult::error(format!("Failed to load config: {}", e)),
             },
         }
+    }
+}
+
+fn config_action(params: &Value) -> &str {
+    params
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("list")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_tool_contract_is_parameter_sensitive() {
+        let tool = ConfigTool;
+        let read = json!({"action": "get", "key": "model"});
+        let set = json!({"action": "set", "key": "model", "value": "test-model"});
+
+        assert_eq!(tool.operation_kind(&read), ToolOperationKind::Read);
+        assert!(!tool.requires_confirmation(&read));
+        assert!(tool.is_concurrency_safe(&read));
+
+        assert_eq!(tool.operation_kind(&set), ToolOperationKind::Write);
+        assert!(tool.requires_confirmation(&set));
+        assert!(tool.confirmation_prompt(&set).is_some());
+        assert!(!tool.is_concurrency_safe(&set));
+        assert_eq!(tool.permission_level(), ToolPermissionLevel::HighRisk);
+        assert!(tool.strict_schema());
     }
 }

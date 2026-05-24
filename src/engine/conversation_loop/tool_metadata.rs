@@ -54,7 +54,7 @@ pub(super) fn build_tool_execution_summary(
     };
 
     match tool_call.name.as_str() {
-        "bash" => {
+        "bash" | "run_tests" | "start_dev_server" => {
             if let Some(command) = tool_call.arguments["command"].as_str() {
                 let classification =
                     crate::tools::bash_tool::command_classifier::classify_command(command);
@@ -217,6 +217,60 @@ pub(super) fn build_tool_execution_summary(
                 object.insert(
                     "action".to_string(),
                     serde_json::Value::String(action.to_string()),
+                );
+            }
+        }
+        "git_status" => {
+            object.insert(
+                "action".to_string(),
+                serde_json::Value::String("status".to_string()),
+            );
+            if let Some(path) = tool_call.arguments["path"].as_str() {
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(path.to_string()),
+                );
+            }
+        }
+        "git_diff" => {
+            object.insert(
+                "action".to_string(),
+                serde_json::Value::String("diff".to_string()),
+            );
+            if let Some(path) = tool_call.arguments["path"].as_str() {
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(path.to_string()),
+                );
+            }
+        }
+        "install_dependencies" => {
+            if let Some(dependency_install) = result
+                .data
+                .as_ref()
+                .and_then(|data| data.get("dependency_install"))
+            {
+                if let Some(command) = dependency_install
+                    .get("command")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    object.insert(
+                        "command".to_string(),
+                        serde_json::Value::String(safe_prefix_by_bytes(command, 240).to_string()),
+                    );
+                }
+                if let Some(manager) = dependency_install
+                    .get("manager")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    object.insert(
+                        "manager".to_string(),
+                        serde_json::Value::String(manager.to_string()),
+                    );
+                }
+                object.insert(
+                    "network_class".to_string(),
+                    serde_json::json!("package_install"),
                 );
             }
         }

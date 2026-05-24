@@ -1544,6 +1544,9 @@ print(f"runtime_spine_observed_phases: {runtime_spine['runtime_spine_observed_ph
 print(f"runtime_spine_assertions: {runtime_spine['runtime_spine_assertions']}")
 print(f"runtime_spine_status: {runtime_spine['runtime_spine_status']}")
 print(f"runtime_spine_missing: {runtime_spine['runtime_spine_missing']}")
+print(f"risky_tool_runs: {runtime_spine['risky_tool_runs']}")
+print(f"risky_tool_reviewed: {runtime_spine['risky_tool_reviewed']}")
+print(f"risky_tool_missing_action_review: {runtime_spine['risky_tool_missing_action_review']}")
 print(f"verification_proof_status: {runtime_spine['verification_proof_status']}")
 print(f"verification_proof_summary: {runtime_spine['verification_proof_summary']}")
 if not output.strip():
@@ -1871,6 +1874,9 @@ print(f"runtime_spine_observed_phases: {runtime_spine['runtime_spine_observed_ph
 print(f"runtime_spine_assertions: {runtime_spine['runtime_spine_assertions']}")
 print(f"runtime_spine_status: {runtime_spine['runtime_spine_status']}")
 print(f"runtime_spine_missing: {runtime_spine['runtime_spine_missing']}")
+print(f"risky_tool_runs: {runtime_spine['risky_tool_runs']}")
+print(f"risky_tool_reviewed: {runtime_spine['risky_tool_reviewed']}")
+print(f"risky_tool_missing_action_review: {runtime_spine['risky_tool_missing_action_review']}")
 print(f"verification_proof_status: {runtime_spine['verification_proof_status']}")
 risk_entry = entry_risk_signal.get("level", "missing") if entry_risk_signal else "missing"
 risk_runtime = runtime_risk_signal.get("level", "none") if runtime_risk_signal else "none"
@@ -2038,6 +2044,11 @@ runtime_spine_assertions_passed = sum(1 for row in rows if row["runtime_spine_st
 runtime_spine_assertions_failed = sum(1 for row in rows if row["runtime_spine_status"] in {"failed", "missing"})
 runtime_spine_full_coverage = sum(1 for row in rows if row["runtime_spine_phase_coverage"] == "7/7")
 runtime_spine_trace_present = sum(1 for row in rows if row["runtime_spine_trace_present"] == "true")
+runtime_spine_risky_tool_runs = sum(as_int(row["risky_tool_runs"]) for row in rows)
+runtime_spine_risky_tool_reviewed = sum(as_int(row["risky_tool_reviewed"]) for row in rows)
+runtime_spine_risky_missing_review_tasks = sum(
+    1 for row in rows if row["risky_tool_missing_action_review"] != "none"
+)
 coding_rows = [row for row in rows if row["boundary"] == "agent-run"]
 coding_task_count = len(coding_rows)
 coding_passed = sum(1 for row in coding_rows if row["coding_gauntlet_status"] == "passed")
@@ -2082,6 +2093,9 @@ lines = [
     f"- Runtime-spine assertions failed: `{runtime_spine_assertions_failed}`",
     f"- Runtime-spine full coverage tasks: `{runtime_spine_full_coverage}`",
     f"- Runtime-spine trace-present tasks: `{runtime_spine_trace_present}`",
+    f"- Runtime-spine risky tool runs: `{runtime_spine_risky_tool_runs}`",
+    f"- Runtime-spine risky tool reviewed: `{runtime_spine_risky_tool_reviewed}`",
+    f"- Runtime-spine risky missing-review tasks: `{runtime_spine_risky_missing_review_tasks}`",
     f"- Coding gauntlet agent-run tasks: `{coding_task_count}`",
     f"- Coding gauntlet passes: `{coding_passed}`",
     f"- Coding gauntlet failures: `{coding_failed}`",
@@ -2158,6 +2172,9 @@ lines.extend([
     f"| runtime_spine_assertions_failed | {runtime_spine_assertions_failed} | Runtime-spine assertion tasks missing required trace/control-loop signals. |",
     f"| runtime_spine_full_coverage_tasks | {runtime_spine_full_coverage} | Tasks whose trace touched all runtime-spine phases. |",
     f"| runtime_spine_trace_present_tasks | {runtime_spine_trace_present} | Tasks with a trace summary available to the report parser. |",
+    f"| runtime_spine_risky_tool_runs | {runtime_spine_risky_tool_runs} | Risky tool executions observed from trace or agent events. |",
+    f"| runtime_spine_risky_tool_reviewed | {runtime_spine_risky_tool_reviewed} | Risky tool executions with matching action.review trace evidence. |",
+    f"| runtime_spine_risky_missing_review_tasks | {runtime_spine_risky_missing_review_tasks} | Tasks with risky tool executions missing matching action.review evidence. |",
     "",
     "## Outcome Classes",
     "",

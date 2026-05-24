@@ -111,6 +111,18 @@ pub fn representative_tool_samples(tool_name: &str) -> Vec<ToolReliabilitySample
             ),
             ToolReliabilitySample::new("destructive", json!({ "command": "rm -rf /" })),
         ],
+        "run_tests" => vec![ToolReliabilitySample::new(
+            "validation",
+            json!({ "command": "cargo test -q" }),
+        )],
+        "start_dev_server" => vec![ToolReliabilitySample::new(
+            "dev_server",
+            json!({ "command": "npm run dev", "timeout_secs": 3600 }),
+        )],
+        "install_dependencies" => vec![ToolReliabilitySample::new(
+            "project_install",
+            json!({ "manager": "npm", "action": "install_project" }),
+        )],
         "file_read" => vec![ToolReliabilitySample::new(
             "file",
             json!({ "path": "src/main.rs", "limit": 80 }),
@@ -182,6 +194,11 @@ pub fn representative_tool_samples(tool_name: &str) -> Vec<ToolReliabilitySample
             ToolReliabilitySample::new("status", json!({ "action": "status" })),
             ToolReliabilitySample::new("push", json!({ "action": "push", "remote": "origin" })),
         ],
+        "git_status" => vec![ToolReliabilitySample::new("status", json!({}))],
+        "git_diff" => vec![ToolReliabilitySample::new(
+            "diff",
+            json!({ "path": "src/main.rs" }),
+        )],
         "worktree" => vec![ToolReliabilitySample::new(
             "list",
             json!({ "action": "list" }),
@@ -441,6 +458,9 @@ fn is_release_gate_tool(tool_name: &str) -> bool {
             | "bash_output"
             | "bash_cancel"
             | "bash_tasks"
+            | "run_tests"
+            | "start_dev_server"
+            | "install_dependencies"
             | "file_read"
             | "file_write"
             | "file_edit"
@@ -457,6 +477,8 @@ fn is_release_gate_tool(tool_name: &str) -> bool {
             | "web_fetch"
             | "web_search"
             | "git"
+            | "git_status"
+            | "git_diff"
             | "worktree"
             | "mcp_tool"
             | "mcp_auth"

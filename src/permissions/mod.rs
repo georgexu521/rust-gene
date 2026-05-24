@@ -555,10 +555,21 @@ impl PermissionContext {
     fn risk_level(&self, tool_name: &str, params: &serde_json::Value) -> RiskLevel {
         match tool_name {
             "file_read" | "glob" | "grep" | "bash_output" | "bash_tasks" | "project_list"
-            | "memory_load" => RiskLevel::Low,
-            "memory_clear" | "mcp" => RiskLevel::High,
+            | "memory_load" | "run_tests" | "git_status" | "git_diff" | "list_mcp_resources"
+            | "read_mcp_resource" => RiskLevel::Low,
+            "memory_clear" | "mcp" | "mcp_auth" | "install_dependencies" | "rewind" => {
+                RiskLevel::High
+            }
             "agent" => RiskLevel::Medium,
+            "start_dev_server" => RiskLevel::Medium,
             "bash_cancel" => RiskLevel::Medium,
+            "powershell" => {
+                if params["action"].as_str() == Some("execute") {
+                    RiskLevel::High
+                } else {
+                    RiskLevel::Low
+                }
+            }
             "bash" => {
                 let cmd = params["command"]
                     .as_str()
@@ -618,6 +629,36 @@ impl PermissionContext {
                 Some("prune" | "create" | "switch") => RiskLevel::Medium,
                 _ => RiskLevel::Low,
             },
+            "format" => match params["action"].as_str() {
+                Some("format") => RiskLevel::High,
+                _ => RiskLevel::Low,
+            },
+            "notebook" => match params["action"].as_str() {
+                Some("edit_cell" | "insert_cell" | "delete_cell") => RiskLevel::High,
+                _ => RiskLevel::Low,
+            },
+            "config" => match params["action"].as_str() {
+                Some("set") => RiskLevel::High,
+                _ => RiskLevel::Low,
+            },
+            "skill_manage" => match params["action"].as_str() {
+                Some("create" | "patch" | "delete") => RiskLevel::High,
+                _ => RiskLevel::Low,
+            },
+            "task_create" | "task_update" | "task_stop" | "todo_write" => RiskLevel::Medium,
+            "task_output" => match params["action"].as_str() {
+                Some("append") => RiskLevel::Medium,
+                _ => RiskLevel::Low,
+            },
+            "cron" => match params["action"].as_str() {
+                Some("create" | "remove" | "run") => RiskLevel::High,
+                Some("pause" | "resume") => RiskLevel::Medium,
+                _ => RiskLevel::Low,
+            },
+            "swarm" => match params["action"].as_str() {
+                Some("spawn" | "execute" | "clear") => RiskLevel::Medium,
+                _ => RiskLevel::Low,
+            },
             "github" => match params["action"].as_str() {
                 Some("pr_create") => RiskLevel::Medium,
                 _ => RiskLevel::Low,
@@ -631,9 +672,9 @@ impl PermissionContext {
                 }
             }
             "web_search" => RiskLevel::Medium,
-            "plugin" => match params["action"].as_str() {
+            "plugin" | "plugin_manage" | "plugin_runtime" => match params["action"].as_str() {
                 Some("run") => RiskLevel::High,
-                _ => RiskLevel::Low,
+                _ => RiskLevel::High,
             },
             "remote_trigger" => match params["action"].as_str() {
                 Some("run") => RiskLevel::High,
@@ -645,6 +686,8 @@ impl PermissionContext {
                 Some("create" | "remove") => RiskLevel::Medium,
                 _ => RiskLevel::Low,
             },
+            "desktop" | "browser" => RiskLevel::Medium,
+            "send_message" | "share" | "copy" => RiskLevel::Medium,
             "mcp_tool" => RiskLevel::High,
             _ => RiskLevel::Low,
         }
@@ -912,6 +955,68 @@ impl PermissionContext {
             if !self.url_is_trusted(url) {
                 warnings.push("UNTRUSTED_NETWORK: URL host is not in trusted domains".to_string());
             }
+        }
+        if tool_name == "install_dependencies" {
+            let manager = params["manager"].as_str().unwrap_or("unknown");
+            reasons.push(format!("Package manager install: {}", manager));
+            warnings.push(
+                "PACKAGE_INSTALL: dependency installation can download and execute external content"
+                    .to_string(),
+            );
+        }
+        if tool_name == "start_dev_server" {
+            let command = params["command"].as_str().unwrap_or_default();
+            reasons.push(format!("Local dev server command: {}", command));
+            warnings.push(
+                "LOCALHOST_SERVER: starts a long-running local process that may expose a port"
+                    .to_string(),
+            );
+        }
+        if tool_name == "mcp_auth" {
+            warnings.push(
+                "AUTH_FLOW: MCP authentication can grant external service access".to_string(),
+            );
+        }
+        if matches!(tool_name, "plugin" | "plugin_manage" | "plugin_runtime") {
+            warnings.push(
+                "PLUGIN_SIDE_EFFECT: plugin actions can mutate local or external runtime state"
+                    .to_string(),
+            );
+        }
+        if tool_name == "format" && params["action"].as_str() == Some("format") {
+            warnings.push(
+                "FORMAT_MUTATION: formatter can rewrite files and should have checkpoint context"
+                    .to_string(),
+            );
+        }
+        if tool_name == "config" && params["action"].as_str() == Some("set") {
+            warnings.push(
+                "CONFIG_MUTATION: config set changes persistent agent configuration".to_string(),
+            );
+        }
+        if tool_name == "skill_manage"
+            && matches!(
+                params["action"].as_str(),
+                Some("create" | "patch" | "delete")
+            )
+        {
+            warnings.push("SKILL_MUTATION: skill changes alter future agent behavior".to_string());
+        }
+        if tool_name == "notebook"
+            && matches!(
+                params["action"].as_str(),
+                Some("edit_cell" | "insert_cell" | "delete_cell")
+            )
+        {
+            warnings.push(
+                "NOTEBOOK_MUTATION: notebook cell changes can rewrite code or outputs".to_string(),
+            );
+        }
+        if tool_name == "rewind" {
+            warnings.push(
+                "REWIND_MUTATION: rewind restores previous file state and changes the workspace"
+                    .to_string(),
+            );
         }
         if tool_name == "remote_trigger" {
             let facts =
@@ -1415,8 +1520,130 @@ mod tests {
         assert!(!ctx.requires_confirmation("git", &serde_json::json!({"action": "commit"})));
         assert!(ctx.requires_confirmation("git", &serde_json::json!({"action": "push"})));
         assert!(ctx.requires_confirmation("memory_clear", &serde_json::Value::Null));
+        assert!(ctx.requires_confirmation(
+            "install_dependencies",
+            &serde_json::json!({"manager": "pnpm"})
+        ));
+        assert!(!ctx.auto_approves_tool_confirmation(
+            "install_dependencies",
+            &serde_json::json!({"manager": "pnpm"})
+        ));
+        assert!(ctx.requires_confirmation("plugin_runtime", &serde_json::json!({"action": "run"})));
+        assert!(
+            ctx.requires_confirmation("mcp_auth", &serde_json::json!({"server_name": "github"}))
+        );
+        assert!(!ctx.requires_confirmation(
+            "run_tests",
+            &serde_json::json!({"command": "cargo test -q"})
+        ));
+        assert!(
+            !ctx.requires_confirmation("git_status", &serde_json::json!({"path": "src/main.rs"}))
+        );
         assert!(ctx.auto_approves_tool_confirmation("file_edit", &safe_write));
         assert!(!ctx.auto_approves_tool_confirmation("bash", &dangerous_bash));
+    }
+
+    #[test]
+    fn package_install_permission_explanation_includes_install_facts() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoAll,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("."),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        let decision = ctx.explain_decision(
+            "install_dependencies",
+            &serde_json::json!({"manager": "pnpm"}),
+        );
+
+        assert_eq!(decision.risk_level, RiskLevel::High);
+        assert!(decision
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("PACKAGE_INSTALL")));
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("Package manager install: pnpm")));
+    }
+
+    #[test]
+    fn auto_all_permission_risk_baseline_for_side_effect_tools() {
+        let ctx = PermissionContext {
+            mode: PermissionMode::AutoAll,
+            rules: PermissionRules::new(),
+            working_dir: std::path::PathBuf::from("."),
+            is_bypass_available: false,
+            once_authorizations: std::collections::HashMap::new(),
+        };
+
+        let must_ask = [
+            (
+                "format",
+                serde_json::json!({"action": "format", "file_path": "src/main.rs"}),
+            ),
+            (
+                "notebook",
+                serde_json::json!({"action": "edit_cell", "file_path": "demo.ipynb", "cell_index": 0, "content": "x"}),
+            ),
+            (
+                "config",
+                serde_json::json!({"action": "set", "key": "model", "value": "x"}),
+            ),
+            (
+                "skill_manage",
+                serde_json::json!({"action": "patch", "name": "helper", "content": "x"}),
+            ),
+            (
+                "rewind",
+                serde_json::json!({"target": "latest_file_change"}),
+            ),
+            (
+                "powershell",
+                serde_json::json!({"action": "execute", "command": "Remove-Item file.txt"}),
+            ),
+            (
+                "cron",
+                serde_json::json!({"action": "create", "name": "later", "prompt": "check", "schedule": "30m"}),
+            ),
+        ];
+        for (tool, params) in must_ask {
+            assert!(
+                ctx.requires_confirmation(tool, &params),
+                "expected {tool} to require AutoAll confirmation"
+            );
+        }
+
+        let auto_allowed = [
+            (
+                "format",
+                serde_json::json!({"action": "check", "file_path": "src/main.rs"}),
+            ),
+            (
+                "notebook",
+                serde_json::json!({"action": "read", "file_path": "demo.ipynb"}),
+            ),
+            (
+                "config",
+                serde_json::json!({"action": "get", "key": "model"}),
+            ),
+            (
+                "skill_manage",
+                serde_json::json!({"action": "view", "name": "helper"}),
+            ),
+            (
+                "task_output",
+                serde_json::json!({"action": "get", "task_id": "task_1"}),
+            ),
+        ];
+        for (tool, params) in auto_allowed {
+            assert!(
+                !ctx.requires_confirmation(tool, &params),
+                "expected {tool} to stay AutoAll-allowed for read/check usage"
+            );
+        }
     }
 
     #[test]

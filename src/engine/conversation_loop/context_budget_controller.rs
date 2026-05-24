@@ -260,6 +260,23 @@ mod tests {
                     }
                 }
             }),
+            observation:
+                crate::engine::conversation_loop::tool_result_controller::ToolObservation {
+                    schema: "tool_observation.v1".to_string(),
+                    tool: "bash".to_string(),
+                    call_id: "call_1".to_string(),
+                    status: "success".to_string(),
+                    summary: "bash succeeded: preview".to_string(),
+                    files_read: Vec::new(),
+                    files_changed: Vec::new(),
+                    command_run: Some("cargo test -q".to_string()),
+                    validation_result: Some("passed".to_string()),
+                    permission_decision: None,
+                    checkpoint_id: None,
+                    artifact_path: Some("/tmp/tool-results/bash_call.txt".to_string()),
+                    state_updates: vec!["validation_result".to_string(), "artifact".to_string()],
+                    recommended_next_action: None,
+                },
             evidence_facts: Vec::new(),
             context_policy:
                 crate::engine::conversation_loop::tool_result_controller::ToolResultContextPolicy {

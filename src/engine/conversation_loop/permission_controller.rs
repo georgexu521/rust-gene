@@ -1,4 +1,5 @@
 use super::approval::{ToolApprovalChannel, ToolApprovalRequest};
+use crate::engine::action_review::ActionReview;
 use crate::engine::goal_drift::DriftCheck;
 use crate::engine::hooks::ToolHookManager;
 use crate::engine::human_review::{HumanReviewAuditRecord, PermissionReview};
@@ -27,6 +28,15 @@ pub(super) enum PermissionRequestKind {
     RuntimeRule,
     ToolConfirmation,
     GoalDrift,
+}
+
+pub(super) struct PermissionRequestRuntime<'a> {
+    pub approval_channel: Option<&'a Arc<ToolApprovalChannel>>,
+    pub tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub trace: &'a Option<TraceCollector>,
+    pub hook_manager: Option<&'a Arc<ToolHookManager>>,
+    pub context: &'a ToolContext,
+    pub action_review: Option<&'a ActionReview>,
 }
 
 impl PermissionRequestKind {
@@ -254,16 +264,12 @@ impl PermissionController {
     pub(super) async fn request_user_permission(
         tool_call: &ToolCall,
         evaluation: &ToolPermissionEvaluation,
-        approval_channel: Option<&Arc<ToolApprovalChannel>>,
-        tx: Option<&mpsc::Sender<StreamEvent>>,
-        trace: &Option<TraceCollector>,
-        hook_manager: Option<&Arc<ToolHookManager>>,
-        context: &ToolContext,
+        runtime: PermissionRequestRuntime<'_>,
     ) -> bool {
         let Some(prompt) = evaluation.prompt.as_ref() else {
             return true;
         };
-        if let Some(ref trace) = trace {
+        if let Some(ref trace) = runtime.trace {
             trace.record(TraceEvent::PermissionRequested {
                 tool: tool_call.name.clone(),
                 call_id: tool_call.id.clone(),
@@ -274,13 +280,15 @@ impl PermissionController {
                     .map(|record| record.review.clone()),
             });
         }
-        if let Some(hooks) = hook_manager {
+        if let Some(hooks) = runtime.hook_manager {
             let hook_start = hooks.current_record_sequence();
-            let decision = hooks.run_permission_request(tool_call, context).await;
+            let decision = hooks
+                .run_permission_request(tool_call, runtime.context)
+                .await;
             let hook_records = hooks.recent_records_after_for(hook_start, &tool_call.id);
-            super::turn_recording::record_hook_traces(trace, &hook_records);
+            super::turn_recording::record_hook_traces(runtime.trace, &hook_records);
             if !decision.allow {
-                if let Some(ref trace) = trace {
+                if let Some(ref trace) = runtime.trace {
                     trace.record(TraceEvent::PermissionResolved {
                         tool: tool_call.name.clone(),
                         call_id: tool_call.id.clone(),
@@ -304,17 +312,17 @@ impl PermissionController {
             }
         }
         let mut approved = false;
-        if let (Some(channel), Some(tx)) = (approval_channel, tx) {
+        if let (Some(channel), Some(tx)) = (runtime.approval_channel, runtime.tx) {
             let _ = tx
                 .send(StreamEvent::PermissionRequest {
                     id: tool_call.id.clone(),
                     tool_name: tool_call.name.clone(),
                     arguments: tool_call.arguments.clone(),
                     prompt: prompt.clone(),
-                    metadata: evaluation
-                        .record
-                        .as_ref()
-                        .map(|record| record.metadata.clone()),
+                    metadata: permission_request_metadata(
+                        evaluation.record.as_ref(),
+                        runtime.action_review,
+                    ),
                     review: evaluation
                         .record
                         .as_ref()
@@ -338,13 +346,13 @@ impl PermissionController {
                 }
                 Err(e) => warn!("Tool approval error: {}", e),
             }
-            if let Some(hooks) = hook_manager {
+            if let Some(hooks) = runtime.hook_manager {
                 let hook_start = hooks.current_record_sequence();
                 let decision = hooks
-                    .run_permission_resolved(tool_call, context, approved)
+                    .run_permission_resolved(tool_call, runtime.context, approved)
                     .await;
                 let hook_records = hooks.recent_records_after_for(hook_start, &tool_call.id);
-                super::turn_recording::record_hook_traces(trace, &hook_records);
+                super::turn_recording::record_hook_traces(runtime.trace, &hook_records);
                 if approved && !decision.allow {
                     approved = false;
                     if approval_response.is_none() {
@@ -353,7 +361,7 @@ impl PermissionController {
                     }
                 }
             }
-            if let Some(ref trace) = trace {
+            if let Some(ref trace) = runtime.trace {
                 trace.record(TraceEvent::PermissionResolved {
                     tool: tool_call.name.clone(),
                     call_id: tool_call.id.clone(),
@@ -442,6 +450,24 @@ impl PermissionController {
                 .unwrap_or("")
                 .contains("Permission denied")
     }
+}
+
+fn permission_request_metadata(
+    record: Option<&PermissionRequestRecord>,
+    action_review: Option<&ActionReview>,
+) -> Option<serde_json::Value> {
+    let mut metadata = record
+        .map(|record| record.metadata.clone())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(review) = action_review {
+        if let Some(object) = metadata.as_object_mut() {
+            object.insert("action_review".to_string(), review.metadata());
+        }
+    }
+    metadata
+        .as_object()
+        .is_some_and(|object| !object.is_empty())
+        .then_some(metadata)
 }
 
 fn permission_denied_message(record: &PermissionRequestRecord) -> String {

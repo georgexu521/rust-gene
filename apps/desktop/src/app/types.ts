@@ -73,6 +73,15 @@ export type TimelineSummary =
       commandCategory?: string;
       parserStatus?: string;
       mutation?: boolean;
+      actionDecision?: string;
+      actionReason?: string;
+      sideEffect?: string;
+      network?: string;
+      checkpoint?: string;
+      checkpointApproval?: boolean;
+      allowedRule?: string;
+      scopeAllowed?: boolean;
+      budgetAllowed?: boolean;
     };
 
 export type TimelineStatus =

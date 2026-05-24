@@ -175,6 +175,8 @@ mod tests {
             reasoning: ReasoningPolicy::Medium,
             risk,
             recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
             reason: "test".to_string(),
         }
     }

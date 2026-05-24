@@ -69,6 +69,11 @@ impl AgentMode {
 }
 
 fn apply_build_route(route: &mut IntentRoute) {
+    let keep_dependency_install = route.dependency_install_intent
+        && route
+            .recommended_tools
+            .iter()
+            .any(|tool| tool == "install_dependencies");
     if matches!(
         route.intent,
         IntentKind::DirectAnswer | IntentKind::Planning | IntentKind::Unknown
@@ -92,13 +97,22 @@ fn apply_build_route(route: &mut IntentRoute) {
             "file_write",
             "file_edit",
             "bash",
+            "run_tests",
+            "start_dev_server",
             "diff",
             "git",
+            "git_status",
+            "git_diff",
             "format",
             "todo_write",
             "ask_user",
         ],
     );
+    if keep_dependency_install {
+        route
+            .recommended_tools
+            .push("install_dependencies".to_string());
+    }
     push_reason(route, "agent mode: build");
 }
 
@@ -164,6 +178,9 @@ fn apply_review_route(route: &mut IntentRoute) {
             "grep",
             "file_read",
             "bash",
+            "start_dev_server",
+            "git_status",
+            "git_diff",
             "diff",
             "git",
             "ask_user",
@@ -219,6 +236,20 @@ mod tests {
         assert_eq!(route.workflow, WorkflowKind::CodeChange);
         assert!(route.recommended_tools.contains(&"file_edit".to_string()));
         assert!(route.recommended_tools.contains(&"bash".to_string()));
+        assert!(!route
+            .recommended_tools
+            .contains(&"install_dependencies".to_string()));
+    }
+
+    #[test]
+    fn build_mode_preserves_explicit_dependency_install_intent() {
+        let mut route = IntentRouter::new().route("帮我安装项目依赖，package.json 已经在项目里");
+        AgentMode::Build.apply_to_route(&mut route);
+
+        assert!(route.dependency_install_intent);
+        assert!(route
+            .recommended_tools
+            .contains(&"install_dependencies".to_string()));
     }
 
     #[test]

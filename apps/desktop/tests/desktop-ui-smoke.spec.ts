@@ -171,6 +171,10 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-output-preview", { hasText: "timeline_cards_show_diff_preview" })).toBeVisible();
     await expect(page.locator(".timeline-event.usage", { hasText: "Token usage" })).toBeVisible();
     await expect(page.locator(".timeline-event.permission", { hasText: "Allow git push" })).toBeVisible();
+    await expect(page.locator(".timeline-event.permission", { hasText: "review ask_user" })).toBeVisible();
+    await expect(
+      page.locator(".timeline-event.permission", { hasText: "checkpoint unavailable" }),
+    ).toBeVisible();
     await page.locator(".timeline-event.permission .timeline-actions button", { hasText: "Approve" }).click();
     await expect(page.locator(".timeline-event.permission", { hasText: "Permission approved" })).toBeVisible();
     await page.locator(".timeline-run-row").getByRole("button", { name: "Open trace for current run" }).click();

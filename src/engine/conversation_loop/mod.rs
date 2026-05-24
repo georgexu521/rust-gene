@@ -2969,6 +2969,14 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("was not exposed"));
+        assert_eq!(
+            results[0].1.data.as_ref().unwrap()["action_review"]["decision"],
+            "revise"
+        );
+        assert_eq!(
+            results[0].1.data.as_ref().unwrap()["action_review"]["primary_reason"],
+            "tool_not_exposed"
+        );
         let runtime = &results[0].1.data.as_ref().unwrap()["tool_runtime"];
         assert!(runtime["route"]["intent"]
             .as_str()

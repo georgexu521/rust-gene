@@ -87,6 +87,7 @@ impl ConversationLoop {
         let mut allowlist = route
             .recommended_tools
             .iter()
+            .filter(|tool| Self::route_allows_recommended_tool(route, tool))
             .cloned()
             .collect::<HashSet<_>>();
 
@@ -104,7 +105,6 @@ impl ConversationLoop {
                 "config",
                 "mcp",
                 "mcp_tool",
-                "mcp_auth",
                 "list_mcp_resources",
                 "read_mcp_resource",
                 "file_read",
@@ -136,10 +136,14 @@ impl ConversationLoop {
                     "file_edit",
                     "file_patch",
                     "bash",
+                    "run_tests",
+                    "start_dev_server",
                     "bash_output",
                     "bash_cancel",
                     "diff",
                     "git",
+                    "git_status",
+                    "git_diff",
                     "format",
                     "todo_write",
                     "ask_user",
@@ -153,10 +157,14 @@ impl ConversationLoop {
                     "file_edit",
                     "file_patch",
                     "bash",
+                    "run_tests",
+                    "start_dev_server",
                     "bash_output",
                     "bash_cancel",
                     "diff",
                     "git",
+                    "git_status",
+                    "git_diff",
                     "format",
                     "lsp",
                     "symbol_query",
@@ -203,6 +211,20 @@ impl ConversationLoop {
         allowlist
     }
 
+    fn route_allows_recommended_tool(route: &IntentRoute, tool: &str) -> bool {
+        match tool {
+            "install_dependencies" => {
+                route.dependency_install_intent
+                    && matches!(
+                        route.workflow,
+                        WorkflowKind::Direct | WorkflowKind::CodeChange | WorkflowKind::BugFix
+                    )
+            }
+            "mcp_auth" => route.mcp_auth_intent && route.intent == IntentKind::Configuration,
+            _ => true,
+        }
+    }
+
     pub(super) fn code_action_tools(
         tools: &[Tool],
         has_changes_before_request: bool,
@@ -213,7 +235,11 @@ impl ConversationLoop {
             .filter(|tool| {
                 Self::is_code_write_tool_name(&tool.name)
                     || (allow_targeted_lookup && matches!(tool.name.as_str(), "file_read" | "grep"))
-                    || (has_changes_before_request && tool.name == "bash")
+                    || (has_changes_before_request
+                        && matches!(
+                            tool.name.as_str(),
+                            "bash" | "run_tests" | "start_dev_server" | "git_status" | "git_diff"
+                        ))
             })
             .cloned()
             .collect()

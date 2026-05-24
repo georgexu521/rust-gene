@@ -263,6 +263,8 @@ mod tests {
             reasoning: crate::engine::intent_router::ReasoningPolicy::Low,
             risk: crate::engine::intent_router::RiskLevel::Low,
             recommended_tools: vec!["broken_schema".to_string()],
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
             reason: "test route".to_string(),
         };
 

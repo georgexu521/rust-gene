@@ -23,10 +23,12 @@ pub mod encode_tool;
 pub mod file_cache;
 pub mod file_tool;
 pub mod format_tool;
+pub mod git_read_tool;
 pub mod git_tool;
 pub mod github_tool;
 pub mod glob_tool;
 pub mod grep_tool;
+pub mod install_dependencies_tool;
 pub mod json_tool;
 pub mod lsp_tool;
 pub mod mcp_tool;
@@ -43,9 +45,11 @@ pub mod remote_trigger_tool;
 pub mod repl_tool;
 pub mod resume_tool;
 pub mod rewind_tool;
+pub mod run_tests_tool;
 pub mod send_message_tool;
 pub mod share_tool;
 pub mod sleep_tool;
+pub mod start_dev_server_tool;
 pub mod symbol_tool;
 pub mod task_tool;
 pub mod team_tool;
@@ -78,10 +82,12 @@ pub use diff_tool::DiffTool;
 pub use encode_tool::EncodeTool;
 pub use file_tool::{FileEditTool, FilePatchTool, FileReadTool, FileWriteTool};
 pub use format_tool::FormatTool;
+pub use git_read_tool::{GitDiffTool, GitStatusTool};
 pub use git_tool::GitTool;
 pub use github_tool::GitHubTool;
 pub use glob_tool::GlobTool;
 pub use grep_tool::GrepTool;
+pub use install_dependencies_tool::InstallDependenciesTool;
 pub use json_tool::JsonQueryTool;
 pub use lsp_tool::LSPTool;
 pub use mcp_tool::{ListMcpResourcesTool, MCPTool, McpAuthTool, ReadMcpResourceTool};
@@ -100,9 +106,11 @@ pub use remote_trigger_tool::RemoteTriggerTool;
 pub use repl_tool::REPLTool;
 pub use resume_tool::ResumeTool;
 pub use rewind_tool::RewindTool;
+pub use run_tests_tool::RunTestsTool;
 pub use send_message_tool::SendMessageTool;
 pub use share_tool::ShareTool;
 pub use sleep_tool::SleepTool;
+pub use start_dev_server_tool::StartDevServerTool;
 pub use symbol_tool::SymbolQueryTool;
 pub use task_tool::{
     TaskCreateTool, TaskGetTool, TaskListTool, TaskOutputTool, TaskStopTool, TaskUpdateTool,
@@ -612,55 +620,7 @@ pub trait Tool: Send + Sync {
 
     /// 验证参数是否符合 schema（返回 None 表示验证通过，Some(msg) 表示错误）
     fn validate_params(&self, params: &Value) -> Option<String> {
-        let schema = self.parameters();
-        if let Some(obj) = schema.get("properties")?.as_object() {
-            for (key, prop) in obj {
-                // 检查必需字段
-                if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-                    if required.iter().any(|r| r.as_str() == Some(key)) && params.get(key).is_none()
-                    {
-                        return Some(format!("Missing required parameter: {}", key));
-                    }
-                }
-                // 类型检查
-                if let Some(value) = params.get(key) {
-                    if let Some(type_str) = prop.get("type").and_then(|t| t.as_str()) {
-                        let type_matches = match (type_str, value) {
-                            ("any", _) => true,
-                            ("null", Value::Null) => true,
-                            ("boolean", Value::Bool(_)) => true,
-                            ("string", Value::String(_)) => true,
-                            ("array", Value::Array(_)) => true,
-                            ("object", Value::Object(_)) => true,
-                            ("number", Value::Number(_)) => true,
-                            ("integer", Value::Number(n)) => n.is_i64() || n.is_u64(),
-                            _ => false,
-                        };
-                        if !type_matches {
-                            let actual_type = match value {
-                                Value::Null => "null",
-                                Value::Bool(_) => "boolean",
-                                Value::Number(n) => {
-                                    if n.is_i64() || n.is_u64() {
-                                        "integer"
-                                    } else {
-                                        "number"
-                                    }
-                                }
-                                Value::String(_) => "string",
-                                Value::Array(_) => "array",
-                                Value::Object(_) => "object",
-                            };
-                            return Some(format!(
-                                "Parameter '{}' must be of type {}, got {}",
-                                key, type_str, actual_type
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        None
+        validate_json_schema_value(params, &self.parameters(), "")
     }
 
     /// 渲染工具结果（用于 TUI 展示）
@@ -721,6 +681,352 @@ pub trait Tool: Send + Sync {
         Self: Sized,
     {
         ToolSchema::from_tool(self)
+    }
+}
+
+fn validate_json_schema_value(value: &Value, schema: &Value, path: &str) -> Option<String> {
+    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
+        if branches
+            .iter()
+            .any(|branch| validate_json_schema_value(value, branch, path).is_none())
+        {
+            return None;
+        }
+        return Some(format!(
+            "{} does not match any allowed schema",
+            parameter_label(path)
+        ));
+    }
+
+    if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
+        let matches = branches
+            .iter()
+            .filter(|branch| validate_json_schema_value(value, branch, path).is_none())
+            .count();
+        if matches == 1 {
+            return None;
+        }
+        return Some(format!(
+            "{} must match exactly one allowed schema, matched {}",
+            parameter_label(path),
+            matches
+        ));
+    }
+
+    let allowed_types = schema_allowed_types(schema);
+    if !allowed_types.is_empty()
+        && !allowed_types
+            .iter()
+            .any(|type_name| type_name == "any" || schema_type_matches(type_name, value))
+    {
+        return Some(format!(
+            "{} must be of type {}, got {}",
+            parameter_label(path),
+            allowed_types.join("|"),
+            json_value_type(value)
+        ));
+    }
+
+    if let Some(enum_values) = schema.get("enum").and_then(Value::as_array) {
+        if !enum_values.iter().any(|allowed| allowed == value) {
+            return Some(format!(
+                "{} must be one of {}, got {}",
+                parameter_label(path),
+                enum_values
+                    .iter()
+                    .map(json_value_preview)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                json_value_preview(value)
+            ));
+        }
+    }
+
+    if let Some(const_value) = schema.get("const") {
+        if const_value != value {
+            return Some(format!(
+                "{} must be {}, got {}",
+                parameter_label(path),
+                json_value_preview(const_value),
+                json_value_preview(value)
+            ));
+        }
+    }
+
+    match value {
+        Value::Object(object) => validate_json_schema_object(object, schema, path),
+        Value::Array(items) => validate_json_schema_array(items, schema, path),
+        Value::String(text) => validate_json_schema_string(text, schema, path),
+        Value::Number(number) => validate_json_schema_number(number, schema, path),
+        Value::Null | Value::Bool(_) => None,
+    }
+}
+
+fn validate_json_schema_object(
+    object: &serde_json::Map<String, Value>,
+    schema: &Value,
+    path: &str,
+) -> Option<String> {
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        for key in required.iter().filter_map(Value::as_str) {
+            if !object.contains_key(key) {
+                return Some(format!(
+                    "Missing required parameter: {}",
+                    nested_path(path, key)
+                ));
+            }
+        }
+    }
+
+    let properties = schema.get("properties").and_then(Value::as_object);
+    if let Some(properties) = properties {
+        for (key, property_schema) in properties {
+            if let Some(property_value) = object.get(key) {
+                let property_path = nested_path(path, key);
+                if let Some(error) =
+                    validate_json_schema_value(property_value, property_schema, &property_path)
+                {
+                    return Some(error);
+                }
+            }
+        }
+    }
+
+    match schema.get("additionalProperties") {
+        Some(Value::Bool(false)) => {
+            if let Some(properties) = properties {
+                if let Some(unknown) = object.keys().find(|key| !properties.contains_key(*key)) {
+                    return Some(format!("Unknown parameter: {}", nested_path(path, unknown)));
+                }
+            }
+        }
+        Some(additional_schema) if additional_schema.is_object() => {
+            if let Some(properties) = properties {
+                for (key, item) in object
+                    .iter()
+                    .filter(|(key, _)| !properties.contains_key(*key))
+                {
+                    let property_path = nested_path(path, key);
+                    if let Some(error) =
+                        validate_json_schema_value(item, additional_schema, &property_path)
+                    {
+                        return Some(error);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    if let Some(min) = schema.get("minProperties").and_then(Value::as_u64) {
+        if (object.len() as u64) < min {
+            return Some(format!(
+                "{} must have at least {} properties, got {}",
+                parameter_label(path),
+                min,
+                object.len()
+            ));
+        }
+    }
+    if let Some(max) = schema.get("maxProperties").and_then(Value::as_u64) {
+        if (object.len() as u64) > max {
+            return Some(format!(
+                "{} must have at most {} properties, got {}",
+                parameter_label(path),
+                max,
+                object.len()
+            ));
+        }
+    }
+
+    None
+}
+
+fn validate_json_schema_array(items: &[Value], schema: &Value, path: &str) -> Option<String> {
+    if let Some(min) = schema.get("minItems").and_then(Value::as_u64) {
+        if (items.len() as u64) < min {
+            return Some(format!(
+                "{} must contain at least {} items, got {}",
+                parameter_label(path),
+                min,
+                items.len()
+            ));
+        }
+    }
+    if let Some(max) = schema.get("maxItems").and_then(Value::as_u64) {
+        if (items.len() as u64) > max {
+            return Some(format!(
+                "{} must contain at most {} items, got {}",
+                parameter_label(path),
+                max,
+                items.len()
+            ));
+        }
+    }
+
+    match schema.get("items") {
+        Some(item_schema) if item_schema.is_object() => {
+            for (index, item) in items.iter().enumerate() {
+                if let Some(error) =
+                    validate_json_schema_value(item, item_schema, &format!("{path}[{index}]"))
+                {
+                    return Some(error);
+                }
+            }
+        }
+        Some(Value::Array(tuple_schemas)) => {
+            for (index, item_schema) in tuple_schemas.iter().enumerate() {
+                if let Some(item) = items.get(index) {
+                    if let Some(error) =
+                        validate_json_schema_value(item, item_schema, &format!("{path}[{index}]"))
+                    {
+                        return Some(error);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    None
+}
+
+fn validate_json_schema_string(text: &str, schema: &Value, path: &str) -> Option<String> {
+    let char_count = text.chars().count() as u64;
+    if let Some(min) = schema.get("minLength").and_then(Value::as_u64) {
+        if char_count < min {
+            return Some(format!(
+                "{} must be at least {} characters, got {}",
+                parameter_label(path),
+                min,
+                char_count
+            ));
+        }
+    }
+    if let Some(max) = schema.get("maxLength").and_then(Value::as_u64) {
+        if char_count > max {
+            return Some(format!(
+                "{} must be at most {} characters, got {}",
+                parameter_label(path),
+                max,
+                char_count
+            ));
+        }
+    }
+    None
+}
+
+fn validate_json_schema_number(
+    number: &serde_json::Number,
+    schema: &Value,
+    path: &str,
+) -> Option<String> {
+    let value = number.as_f64()?;
+    if let Some(min) = schema.get("minimum").and_then(Value::as_f64) {
+        if value < min {
+            return Some(format!(
+                "{} must be >= {}, got {}",
+                parameter_label(path),
+                min,
+                number
+            ));
+        }
+    }
+    if let Some(max) = schema.get("maximum").and_then(Value::as_f64) {
+        if value > max {
+            return Some(format!(
+                "{} must be <= {}, got {}",
+                parameter_label(path),
+                max,
+                number
+            ));
+        }
+    }
+    if let Some(exclusive_min) = schema.get("exclusiveMinimum").and_then(Value::as_f64) {
+        if value <= exclusive_min {
+            return Some(format!(
+                "{} must be > {}, got {}",
+                parameter_label(path),
+                exclusive_min,
+                number
+            ));
+        }
+    }
+    if let Some(exclusive_max) = schema.get("exclusiveMaximum").and_then(Value::as_f64) {
+        if value >= exclusive_max {
+            return Some(format!(
+                "{} must be < {}, got {}",
+                parameter_label(path),
+                exclusive_max,
+                number
+            ));
+        }
+    }
+    None
+}
+
+fn schema_allowed_types(schema: &Value) -> Vec<String> {
+    match schema.get("type") {
+        Some(Value::String(type_name)) => vec![type_name.clone()],
+        Some(Value::Array(types)) => types
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn schema_type_matches(type_name: &str, value: &Value) -> bool {
+    match (type_name, value) {
+        ("null", Value::Null) => true,
+        ("boolean", Value::Bool(_)) => true,
+        ("string", Value::String(_)) => true,
+        ("array", Value::Array(_)) => true,
+        ("object", Value::Object(_)) => true,
+        ("number", Value::Number(_)) => true,
+        ("integer", Value::Number(number)) => number.is_i64() || number.is_u64(),
+        _ => false,
+    }
+}
+
+fn json_value_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) => {
+            if number.is_i64() || number.is_u64() {
+                "integer"
+            } else {
+                "number"
+            }
+        }
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn json_value_preview(value: &Value) -> String {
+    match value {
+        Value::String(text) => format!("\"{}\"", text.chars().take(40).collect::<String>()),
+        _ => value.to_string(),
+    }
+}
+
+fn parameter_label(path: &str) -> String {
+    if path.is_empty() {
+        "Parameters".to_string()
+    } else {
+        format!("Parameter '{path}'")
+    }
+}
+
+fn nested_path(parent: &str, key: &str) -> String {
+    if parent.is_empty() {
+        key.to_string()
+    } else {
+        format!("{parent}.{key}")
     }
 }
 
@@ -1318,6 +1624,9 @@ impl ToolRegistry {
         registry.register(BashOutputTool);
         registry.register(BashCancelTool);
         registry.register(BashTasksTool);
+        registry.register(RunTestsTool);
+        registry.register(StartDevServerTool);
+        registry.register(InstallDependenciesTool);
 
         // 注册高级工具
         let task_manager = crate::task_manager::GLOBAL_TASK_MANAGER.clone();
@@ -1355,6 +1664,8 @@ impl ToolRegistry {
         registry.register(FormatTool);
         registry.register(GitHubTool);
         registry.register(GitTool);
+        registry.register(GitStatusTool);
+        registry.register(GitDiffTool);
         registry.register(NotebookTool);
         registry.register(REPLTool);
         registry.register(PowerShellTool);
@@ -1549,6 +1860,55 @@ mod tests {
         }
     }
 
+    struct ComplexSchemaTool;
+
+    #[async_trait]
+    impl Tool for ComplexSchemaTool {
+        fn name(&self) -> &str {
+            "complex_schema_tool"
+        }
+
+        fn description(&self) -> &str {
+            "test structured schema validation"
+        }
+
+        fn parameters(&self) -> Value {
+            json!({
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["read", "write"]
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10
+                    },
+                    "items": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string", "minLength": 1 },
+                                "kind": { "type": ["string", "null"], "enum": ["file", "dir", null] }
+                            },
+                            "required": ["path"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["mode", "items"],
+                "additionalProperties": false
+            })
+        }
+
+        async fn execute(&self, _params: Value, _context: ToolContext) -> ToolResult {
+            ToolResult::success("ok")
+        }
+    }
+
     #[test]
     fn test_tool_result() {
         let success = ToolResult::success("Done");
@@ -1568,6 +1928,59 @@ mod tests {
             err.is_none(),
             "integer JSON number should pass schema validation"
         );
+    }
+
+    #[test]
+    fn test_validate_params_rejects_enum_mismatch() {
+        let tool = ComplexSchemaTool;
+        let err = tool
+            .validate_params(&json!({
+                "mode": "delete",
+                "items": [{ "path": "src/lib.rs" }]
+            }))
+            .expect("enum mismatch should fail");
+
+        assert!(err.contains("Parameter 'mode' must be one of"));
+    }
+
+    #[test]
+    fn test_validate_params_rejects_nested_missing_required() {
+        let tool = ComplexSchemaTool;
+        let err = tool
+            .validate_params(&json!({
+                "mode": "read",
+                "items": [{ "kind": "file" }]
+            }))
+            .expect("nested required field should fail");
+
+        assert_eq!(err, "Missing required parameter: items[0].path");
+    }
+
+    #[test]
+    fn test_validate_params_rejects_unknown_key_when_schema_closes_object() {
+        let tool = ComplexSchemaTool;
+        let err = tool
+            .validate_params(&json!({
+                "mode": "read",
+                "items": [{ "path": "src/lib.rs", "extra": true }]
+            }))
+            .expect("additionalProperties=false should reject unknown key");
+
+        assert_eq!(err, "Unknown parameter: items[0].extra");
+    }
+
+    #[test]
+    fn test_validate_params_rejects_numeric_bounds() {
+        let tool = ComplexSchemaTool;
+        let err = tool
+            .validate_params(&json!({
+                "mode": "read",
+                "limit": 11,
+                "items": [{ "path": "src/lib.rs" }]
+            }))
+            .expect("maximum should fail");
+
+        assert!(err.contains("Parameter 'limit' must be <= 10"));
     }
 
     #[test]

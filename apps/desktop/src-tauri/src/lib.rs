@@ -1232,6 +1232,56 @@ async fn emit_native_smoke_run_fixture(
                         "category": "git",
                         "mutation": false
                     }
+                },
+                "action_review": {
+                    "schema": "action_review.v1",
+                    "tool": "bash",
+                    "call_id": "native-smoke-permission",
+                    "decision": "ask_user",
+                    "primary_reason": "permission_required",
+                    "permission": {
+                        "allowed_by_context": true,
+                        "requires_confirmation": true,
+                        "decision": "Ask",
+                        "risk_level": "Low",
+                        "confidence": 0.82,
+                        "warnings": []
+                    },
+                    "scope": {
+                        "allowed": true,
+                        "reason": "native smoke request is inside the selected project"
+                    },
+                    "budget": {
+                        "allowed": true,
+                        "scheduled_count": 0,
+                        "max_tool_calls": 4,
+                        "reason": "tool-call budget still has room"
+                    },
+                    "checkpoint": {
+                        "required": false,
+                        "status": "not_needed",
+                        "enforcement": "none",
+                        "rollback_scope": "none",
+                        "requires_user_approval": false,
+                        "reason": "git status is observational"
+                    },
+                    "side_effects": {
+                        "schema": "action_side_effect_profile.v1",
+                        "external_side_effect": "none",
+                        "network": {
+                            "class": "none",
+                            "target": null,
+                            "trusted": true,
+                            "reason": "no network access detected"
+                        },
+                        "mutates_local_workspace": false,
+                        "mutates_local_machine": false,
+                        "remote_side_effect": false,
+                        "paths": [],
+                        "summary": "external_effect=None network=None paths=0"
+                    },
+                    "user_reason": "Action requires user confirmation before execution: permission_required.",
+                    "model_recovery": "Action needs user approval before execution: permission_required. Wait for the permission result and do not claim the tool ran until it succeeds."
                 }
             })),
             review: None,

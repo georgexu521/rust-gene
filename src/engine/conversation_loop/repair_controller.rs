@@ -538,6 +538,8 @@ mod tests {
                 reasoning: ReasoningPolicy::High,
                 risk: RiskLevel::High,
                 recommended_tools: Vec::new(),
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
                 reason: "test".to_string(),
             },
             None,

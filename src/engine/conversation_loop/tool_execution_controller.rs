@@ -1,4 +1,4 @@
-use super::permission_controller::PermissionController;
+use super::permission_controller::{PermissionController, PermissionRequestRuntime};
 use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, ToolCallStatus};
 use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
 use super::tool_execution::{read_only_tool_concurrency, tool_call_is_concurrency_safe};
@@ -14,6 +14,7 @@ use super::turn_recording::{
 };
 use super::ConversationLoop;
 use crate::engine::action_decision::{ActionDecision, ActionDecisionInput};
+use crate::engine::action_review::{ActionReview, ActionReviewInput};
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::hooks::HookDecision;
 use crate::engine::intent_router::{IntentRoute, RiskLevel, WorkflowKind};
@@ -222,8 +223,18 @@ impl ToolExecutionContext {
 }
 
 enum ToolExecutionGateOutcome {
-    Allow,
+    Allow(Box<ActionReview>),
     Deny(ToolResult),
+}
+
+struct ReadOnlyJobInput<'a> {
+    trace: &'a Option<TraceCollector>,
+    runtime_context: &'a ToolRuntimeContext,
+    retained_context: &'a ToolContextRetainedContext,
+    tool_call: &'a ToolCall,
+    action_review: ActionReview,
+    parent_tool_calls: Vec<ToolCall>,
+    parent_assistant_content: String,
 }
 
 #[derive(Debug, Clone)]
@@ -408,6 +419,7 @@ impl ToolRuntimeContext {
         if let Ok(value) = serde_json::to_value(&decision) {
             merge_tool_result_metadata(result, "action_decision", value);
         }
+        ToolResultNormalizer::attach_observation_metadata(tool_call, result);
     }
 }
 
@@ -452,6 +464,110 @@ fn record_action_decision_if_needed(
     }
 }
 
+fn attach_action_review_metadata(result: &mut ToolResult, review: &ActionReview) {
+    let observed_checkpoint_id = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("checkpoint"))
+        .and_then(|checkpoint| checkpoint.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let mut metadata = review.metadata();
+    if let Some(checkpoint_id) = observed_checkpoint_id {
+        if let Some(checkpoint) = metadata
+            .get_mut("checkpoint")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            checkpoint.insert(
+                "status".to_string(),
+                serde_json::Value::String("required_and_present".to_string()),
+            );
+            checkpoint.insert(
+                "checkpoint_id".to_string(),
+                serde_json::Value::String(checkpoint_id),
+            );
+            checkpoint.insert(
+                "observed_result_checkpoint".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+    }
+    merge_tool_result_metadata(result, "action_review", metadata);
+}
+
+fn record_action_review(trace: &Option<TraceCollector>, review: &ActionReview) {
+    if let Some(trace) = trace {
+        let network = serde_json::to_value(review.side_effects.network.class)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{:?}", review.side_effects.network.class));
+        let external_effect = serde_json::to_value(review.side_effects.external_side_effect)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{:?}", review.side_effects.external_side_effect));
+        trace.record(TraceEvent::ActionReviewed {
+            tool: review.tool.clone(),
+            call_id: review.call_id.clone(),
+            decision: review.decision.as_str().to_string(),
+            reason: review.primary_reason.as_str().to_string(),
+            permission: review.permission.decision.clone(),
+            scope_allowed: review.scope.allowed,
+            budget_allowed: review.budget.allowed,
+            checkpoint: review.checkpoint.status.clone(),
+            network,
+            external_effect,
+            recovery: review.model_recovery.clone(),
+        });
+    }
+}
+
+fn record_tool_observation(
+    trace: &Option<TraceCollector>,
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) {
+    let Some(trace) = trace else {
+        return;
+    };
+    let Some(observation) = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_observation"))
+    else {
+        return;
+    };
+    let files_read = observation
+        .get("files_read")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let files_changed = observation
+        .get("files_changed")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    trace.record(TraceEvent::ToolObservationRecorded {
+        tool: tool_call.name.clone(),
+        call_id: tool_call.id.clone(),
+        status: observation
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(if result.success { "success" } else { "failed" })
+            .to_string(),
+        files_read,
+        files_changed,
+        checkpoint_id: observation
+            .get("checkpoint_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        summary: observation
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    });
+}
+
 struct ToolExecutionGate<'a> {
     tool_registry: &'a ToolRegistry,
     active_goal: Option<&'a crate::engine::session_goal::SessionGoal>,
@@ -466,14 +582,41 @@ struct ToolExecutionGate<'a> {
     working_dir: &'a Path,
     trace: &'a Option<TraceCollector>,
     runtime_context: &'a ToolRuntimeContext,
+    permission_context: &'a crate::permissions::PermissionContext,
 }
 
 impl<'a> ToolExecutionGate<'a> {
     fn evaluate(&self, tool_call: &ToolCall, scheduled_count: usize) -> ToolExecutionGateOutcome {
         let decision = self.runtime_context.action_decision(tool_call);
         record_action_decision_if_needed(self.trace, tool_call, &decision);
+        let tool = self.tool_registry.get(&tool_call.name);
+        let context_allows_tool = tool_allowed_by_context(self.allowed_tools, &tool_call.name);
+        let destructive_check = self
+            .destructive_scope
+            .check_tool_call(tool_call, self.working_dir);
+        let action_checkpoint_rejection = self.action_checkpoint_rejection(tool_call);
+        let review = ActionReview::build(ActionReviewInput {
+            tool_call,
+            tool,
+            exposed_tool_names: self.exposed_tool_names,
+            scheduled_count,
+            max_tool_calls: self.resource_policy.max_tool_calls,
+            action_decision: decision,
+            permission_context: Some(self.permission_context),
+            task_state: self.task_state,
+            working_dir: Some(self.working_dir),
+            tool_allowed_by_context: context_allows_tool,
+            destructive_scope_check: Some(destructive_check.clone()),
+            action_checkpoint_rejection: action_checkpoint_rejection.clone(),
+        });
+        record_action_review(self.trace, &review);
 
-        if !self.exposed_tool_names.contains(&tool_call.name) {
+        if !review.tool_contract.available {
+            let result = ToolResult::error(format!("Tool '{}' not found", tool_call.name));
+            return self.deny_with_trace(tool_call, result, &review);
+        }
+
+        if !review.tool_contract.exposed {
             let error = if self.action_checkpoint_active {
                 ConversationLoop::action_checkpoint_unexposed_tool_message(
                     &tool_call.name,
@@ -486,33 +629,31 @@ impl<'a> ToolExecutionGate<'a> {
                     tool_call.name
                 )
             };
-            return self.deny_with_trace(tool_call, ToolResult::error(error));
+            return self.deny_with_trace(tool_call, ToolResult::error(error), &review);
         }
 
-        if let Some(tool) = self.tool_registry.get(&tool_call.name) {
-            if let Some(error) = tool.validate_params(&tool_call.arguments) {
-                return self
-                    .deny_with_trace(tool_call, invalid_tool_params_result(tool_call, error));
-            }
+        if let Some(error) = review.tool_contract.validation_error.clone() {
+            return self.deny_with_trace(
+                tool_call,
+                invalid_tool_params_result(tool_call, error),
+                &review,
+            );
         }
 
-        if scheduled_count >= self.resource_policy.max_tool_calls {
+        if !review.budget.allowed {
             let result = ToolResult::error(format!(
                 "Resource policy blocked tool '{}': max tool calls ({}) reached.",
                 tool_call.name, self.resource_policy.max_tool_calls
             ));
-            return self.deny_with_trace(tool_call, result);
+            return self.deny_with_trace(tool_call, result, &review);
         }
 
         record_goal_drift_if_needed(self.trace, self.active_goal, self.task_state, tool_call);
 
-        if !tool_allowed_by_context(self.allowed_tools, &tool_call.name) {
-            return ToolExecutionGateOutcome::Deny(tool_not_allowed_result(tool_call));
+        if !context_allows_tool {
+            return self.deny_with_trace(tool_call, tool_not_allowed_result(tool_call), &review);
         }
 
-        let destructive_check = self
-            .destructive_scope
-            .check_tool_call(tool_call, self.working_dir);
         if destructive_check.applies {
             if let Some(ref trace) = self.trace {
                 trace.record(TraceEvent::DestructiveScopeChecked {
@@ -529,47 +670,68 @@ impl<'a> ToolExecutionGate<'a> {
                     "Destructive scope blocked: {}",
                     destructive_check.reason
                 ));
-                return self.deny_with_trace(tool_call, result);
+                return self.deny_with_trace(tool_call, result, &review);
             }
         }
 
-        if self.action_checkpoint_active
-            && tool_call.name == "bash"
+        if let Some(reason) = action_checkpoint_rejection {
+            let result = if tool_call.name == "file_edit" {
+                ToolResult::error(format!("Action checkpoint file_edit rejected: {reason}"))
+            } else {
+                ToolResult::error(reason)
+            };
+            return self.deny_with_trace(tool_call, result, &review);
+        }
+
+        if review.decision.blocks_execution() {
+            let result = ToolResult::error(format!(
+                "{}\nRecovery: {}",
+                review.user_reason, review.model_recovery
+            ));
+            return self.deny_with_trace(tool_call, result, &review);
+        }
+
+        ToolExecutionGateOutcome::Allow(Box::new(review))
+    }
+
+    fn action_checkpoint_rejection(&self, tool_call: &ToolCall) -> Option<String> {
+        if !self.action_checkpoint_active {
+            return None;
+        }
+
+        if tool_call.name == "bash"
             && !ConversationLoop::bash_allowed_at_action_checkpoint(
                 &tool_call.arguments,
                 self.has_changes_before_tools,
             )
         {
-            let result = ToolResult::error(
+            return Some(
                 "Bash is restricted during the action checkpoint: use file_edit/file_write/file_patch for patches so permission, stale-read, diff, and rollback checks stay active. Bash is allowed only for validation after files have changed."
                     .to_string(),
             );
-            return self.deny_with_trace(tool_call, result);
         }
 
-        if self.action_checkpoint_active && tool_call.name == "file_edit" {
-            if let Some(reason) = ConversationLoop::action_checkpoint_file_edit_rejection(
+        if tool_call.name == "file_edit" {
+            return ConversationLoop::action_checkpoint_file_edit_rejection(
                 &tool_call.arguments,
                 &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            ) {
-                let result =
-                    ToolResult::error(format!("Action checkpoint file_edit rejected: {reason}"));
-                return self.deny_with_trace(tool_call, result);
-            }
+            );
         }
 
-        ToolExecutionGateOutcome::Allow
+        None
     }
 
     fn deny_with_trace(
         &self,
         tool_call: &ToolCall,
         mut result: ToolResult,
+        review: &ActionReview,
     ) -> ToolExecutionGateOutcome {
         attach_tool_execution_metadata(tool_call, &mut result);
         if let Some(tool) = self.tool_registry.get(&tool_call.name) {
             attach_tool_contract_metadata(tool, tool_call, &mut result);
         }
+        attach_action_review_metadata(&mut result, review);
         self.runtime_context.attach(
             &mut result,
             false,
@@ -578,6 +740,7 @@ impl<'a> ToolExecutionGate<'a> {
         );
         self.runtime_context
             .attach_action_decision(tool_call, &mut result);
+        record_tool_observation(self.trace, tool_call, &result);
         if let Some(ref trace) = self.trace {
             trace.record(TraceEvent::ToolStarted {
                 tool: tool_call.name.clone(),
@@ -608,25 +771,24 @@ impl ToolExecutionController {
 
     fn read_only_job(
         &self,
-        trace: &Option<TraceCollector>,
-        runtime_context: &ToolRuntimeContext,
-        retained_context: &ToolContextRetainedContext,
-        tool_call: &ToolCall,
-        parent_tool_calls: Vec<ToolCall>,
-        parent_assistant_content: String,
+        input: ReadOnlyJobInput<'_>,
     ) -> impl Future<Output = (ToolCall, ToolResult)> + 'static {
         let execution = &self.context;
         let registry = execution.tool_registry.clone();
-        let tc_clone = tool_call.clone();
-        let tool_name = tool_call.name.clone();
+        let tc_clone = input.tool_call.clone();
+        let tool_name = input.tool_call.name.clone();
         let context = execution
-            .tool_context(trace, retained_context)
+            .tool_context(input.trace, input.retained_context)
             .with_tool_call_metadata(tool_name.clone(), tc_clone.id.clone())
-            .with_parent_assistant_tool_calls(parent_tool_calls, parent_assistant_content);
+            .with_parent_assistant_tool_calls(
+                input.parent_tool_calls,
+                input.parent_assistant_content,
+            );
         let cost_tracker = execution.cost_tracker.clone();
         let hook_manager = execution.hook_manager.clone();
-        let trace = trace.clone();
-        let runtime_context = runtime_context.clone();
+        let trace = input.trace.clone();
+        let runtime_context = input.runtime_context.clone();
+        let action_review = input.action_review;
         async move {
             let started_at = std::time::Instant::now();
             let started_at_unix_ms = unix_time_millis();
@@ -678,6 +840,7 @@ impl ToolExecutionController {
             if let Some(tool) = registry.get(&tc_clone.name) {
                 attach_tool_contract_metadata(tool, &tc_clone, &mut result);
             }
+            attach_action_review_metadata(&mut result, &action_review);
             runtime_context.attach(
                 &mut result,
                 true,
@@ -685,6 +848,7 @@ impl ToolExecutionController {
                 Some(ToolRuntimeTiming::finished(started_at_unix_ms)),
             );
             runtime_context.attach_action_decision(&tc_clone, &mut result);
+            record_tool_observation(&trace, &tc_clone, &result);
             {
                 let mut tracker = cost_tracker.lock().await;
                 tracker.record_tool_execution(
@@ -758,18 +922,19 @@ impl ToolExecutionController {
 
     async fn execute_read_write_calls(
         &self,
-        read_write_calls: Vec<ToolCall>,
+        read_write_calls: Vec<(ToolCall, ActionReview)>,
         exec_context: ReadWriteExecutionContext<'_>,
         lifecycle: &mut ToolCallLifecycle,
     ) -> Vec<(ToolCall, ToolResult)> {
         let execution = &self.context;
         let mut results = Vec::new();
 
-        for tc in read_write_calls {
+        for (tc, action_review) in read_write_calls {
             let tool_id = tc.id.clone();
             let tool_name = tc.name.clone();
             if !tool_allowed_by_context(&execution.allowed_tools, &tool_name) {
                 let mut result = tool_not_allowed_result(&tc);
+                attach_action_review_metadata(&mut result, &action_review);
                 exec_context.runtime_context.attach(
                     &mut result,
                     false,
@@ -779,6 +944,7 @@ impl ToolExecutionController {
                 exec_context
                     .runtime_context
                     .attach_action_decision(&tc, &mut result);
+                record_tool_observation(exec_context.trace, &tc, &result);
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -857,11 +1023,14 @@ impl ToolExecutionController {
                     let approved = PermissionController::request_user_permission(
                         &tc,
                         &permission_evaluation,
-                        execution.approval_channel.as_ref(),
-                        exec_context.tx,
-                        exec_context.trace,
-                        execution.hook_manager.as_ref(),
-                        &context,
+                        PermissionRequestRuntime {
+                            approval_channel: execution.approval_channel.as_ref(),
+                            tx: exec_context.tx,
+                            trace: exec_context.trace,
+                            hook_manager: execution.hook_manager.as_ref(),
+                            context: &context,
+                            action_review: Some(&action_review),
+                        },
                     )
                     .await;
                     if approved {
@@ -912,6 +1081,7 @@ impl ToolExecutionController {
                 }
                 attach_tool_execution_metadata(&tc, &mut result);
                 attach_tool_contract_metadata(tool, &tc, &mut result);
+                attach_action_review_metadata(&mut result, &action_review);
                 exec_context.runtime_context.attach(
                     &mut result,
                     false,
@@ -921,6 +1091,7 @@ impl ToolExecutionController {
                 exec_context
                     .runtime_context
                     .attach_action_decision(&tc, &mut result);
+                record_tool_observation(exec_context.trace, &tc, &result);
 
                 // ── Security Audit & Denial Tracking ──────────────────────
                 let params_summary = if let Some(tool) = execution.tool_registry.get(&tool_name) {
@@ -979,6 +1150,7 @@ impl ToolExecutionController {
                 if let Some(tool) = execution.tool_registry.get(&tc.name) {
                     attach_tool_contract_metadata(tool, &tc, &mut result);
                 }
+                attach_action_review_metadata(&mut result, &action_review);
                 exec_context.runtime_context.attach(
                     &mut result,
                     false,
@@ -988,6 +1160,7 @@ impl ToolExecutionController {
                 exec_context
                     .runtime_context
                     .attach_action_decision(&tc, &mut result);
+                record_tool_observation(exec_context.trace, &tc, &result);
                 (result, None)
             };
 
@@ -1092,6 +1265,7 @@ impl ToolExecutionController {
             working_dir: execution.base_tool_context.working_dir.as_path(),
             trace: &trace,
             runtime_context: &runtime_context,
+            permission_context: &execution.base_tool_context.permission_context,
         };
         let concurrency =
             read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
@@ -1118,30 +1292,33 @@ impl ToolExecutionController {
                 results.extend(read_only_results);
             }
 
-            if let ToolExecutionGateOutcome::Deny(result) = gate.evaluate(tc, scheduled_count) {
-                if !read_only_jobs.is_empty() {
-                    let read_only_results = self
-                        .collect_read_only_results(
-                            std::mem::take(&mut read_only_jobs),
-                            concurrency,
-                            tx,
-                            lifecycle,
-                        )
-                        .await;
-                    results.extend(read_only_results);
+            let action_review = match gate.evaluate(tc, scheduled_count) {
+                ToolExecutionGateOutcome::Allow(review) => *review,
+                ToolExecutionGateOutcome::Deny(result) => {
+                    if !read_only_jobs.is_empty() {
+                        let read_only_results = self
+                            .collect_read_only_results(
+                                std::mem::take(&mut read_only_jobs),
+                                concurrency,
+                                tx,
+                                lifecycle,
+                            )
+                            .await;
+                        results.extend(read_only_results);
+                    }
+                    persist_tool_outcome_learning_event(
+                        execution.session_store.as_ref(),
+                        &execution.session_id,
+                        tc,
+                        &result,
+                    );
+                    lifecycle.denied(tc);
+                    results.push((tc.clone(), result));
+                    scheduled_count += 1;
+                    serial_boundary_seen = true;
+                    continue;
                 }
-                persist_tool_outcome_learning_event(
-                    execution.session_store.as_ref(),
-                    &execution.session_id,
-                    tc,
-                    &result,
-                );
-                lifecycle.denied(tc);
-                results.push((tc.clone(), result));
-                scheduled_count += 1;
-                serial_boundary_seen = true;
-                continue;
-            }
+            };
 
             if let Some(pre_result) = pre_executed.get(&i).filter(|_| !serial_boundary_seen) {
                 if !read_only_jobs.is_empty() {
@@ -1160,8 +1337,10 @@ impl ToolExecutionController {
                 if let Some(tool) = execution.tool_registry.get(&tc.name) {
                     attach_tool_contract_metadata(tool, tc, &mut pre_result);
                 }
+                attach_action_review_metadata(&mut pre_result, &action_review);
                 runtime_context.attach(&mut pre_result, true, true, None);
                 runtime_context.attach_action_decision(tc, &mut pre_result);
+                record_tool_observation(&trace, tc, &pre_result);
                 persist_tool_outcome_learning_event(
                     execution.session_store.as_ref(),
                     &execution.session_id,
@@ -1221,20 +1400,21 @@ impl ToolExecutionController {
                 }
                 read_only_jobs.push((
                     i,
-                    self.read_only_job(
-                        &trace,
-                        &runtime_context,
+                    self.read_only_job(ReadOnlyJobInput {
+                        trace: &trace,
+                        runtime_context: &runtime_context,
                         retained_context,
-                        tc,
-                        tool_calls.to_vec(),
-                        parent_assistant_content.to_string(),
-                    ),
+                        tool_call: tc,
+                        action_review,
+                        parent_tool_calls: tool_calls.to_vec(),
+                        parent_assistant_content: parent_assistant_content.to_string(),
+                    }),
                 ));
                 scheduled_count += 1;
             } else {
                 let read_write_results = self
                     .execute_read_write_calls(
-                        vec![tc.clone()],
+                        vec![(tc.clone(), action_review)],
                         ReadWriteExecutionContext {
                             tx,
                             trace: &trace,
@@ -1286,11 +1466,17 @@ impl ToolExecutionController {
 }
 
 fn tool_completion_metadata(result: &ToolResult) -> Option<serde_json::Value> {
-    result
-        .data
-        .as_ref()
-        .and_then(|data| data.get("tool_summary"))
+    let data = result.data.as_ref()?;
+    let mut metadata = data
+        .get("tool_summary")
         .cloned()
+        .or_else(|| data.get("tool_observation").cloned())?;
+    if let (Some(object), Some(observation)) =
+        (metadata.as_object_mut(), data.get("tool_observation"))
+    {
+        object.insert("tool_observation".to_string(), observation.clone());
+    }
+    Some(metadata)
 }
 
 #[cfg(test)]
@@ -1402,6 +1588,37 @@ mod tests {
         }
     }
 
+    struct PrematureEditProbeTool {
+        executions: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for PrematureEditProbeTool {
+        fn name(&self) -> &str {
+            "file_edit"
+        }
+
+        fn description(&self) -> &str {
+            "Probe premature file edits"
+        }
+
+        fn parameters(&self) -> Value {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "new_string": { "type": "string" }
+                },
+                "required": ["path", "new_string"]
+            })
+        }
+
+        async fn execute(&self, _params: Value, _context: ToolContext) -> ToolResult {
+            self.executions.fetch_add(1, Ordering::SeqCst);
+            ToolResult::success("edit executed")
+        }
+    }
+
     fn probe_loop(writes: Arc<AtomicUsize>) -> ConversationLoop {
         let mut registry = ToolRegistry::new();
         registry.register(ProbeReadTool {
@@ -1421,6 +1638,15 @@ mod tests {
         tool_calls: &[ToolCall],
         pre_executed: HashMap<usize, ToolResult>,
     ) -> ToolExecutionBatch {
+        execute_probe_tools_with_trace(loop_instance, tool_calls, pre_executed, None).await
+    }
+
+    async fn execute_probe_tools_with_trace(
+        loop_instance: &ConversationLoop,
+        tool_calls: &[ToolCall],
+        pre_executed: HashMap<usize, ToolResult>,
+        trace: Option<TraceCollector>,
+    ) -> ToolExecutionBatch {
         let route = IntentRouter::new().route("probe ordered tools");
         let mut policy = ResourcePolicy::from_route(&route);
         policy.max_tool_calls = 20;
@@ -1439,7 +1665,7 @@ mod tests {
                 parent_assistant_content: "",
                 tx: None,
                 pre_executed,
-                trace: None,
+                trace,
                 route: Some(&route),
                 resource_policy: &policy,
                 exposed_tool_names: &exposed_tool_names,
@@ -1559,6 +1785,163 @@ mod tests {
             "probe_read"
         );
         assert!(metadata["action_decision"]["scores"]["value"].is_u64());
+        assert_eq!(metadata["action_review"]["decision"], "allow");
+        assert_eq!(
+            metadata["action_review"]["primary_reason"],
+            "safe_to_execute"
+        );
+    }
+
+    #[test]
+    fn action_review_metadata_includes_observed_checkpoint_id() {
+        let tool = PrematureEditProbeTool {
+            executions: Arc::new(AtomicUsize::new(0)),
+        };
+        let tool_call = ToolCall {
+            id: "call_edit".to_string(),
+            name: "file_edit".to_string(),
+            arguments: json!({"path": "src/lib.rs", "new_string": "updated"}),
+        };
+        let exposed = HashSet::from(["file_edit".to_string()]);
+        let permission_context = crate::permissions::PermissionContext::new(".");
+        let review = ActionReview::build(ActionReviewInput {
+            tool_call: &tool_call,
+            tool: Some(&tool),
+            exposed_tool_names: &exposed,
+            scheduled_count: 0,
+            max_tool_calls: 4,
+            action_decision: ActionDecision::for_tool_call(
+                &tool_call,
+                ActionDecisionInput {
+                    task_stage: AgentTaskStage::Edit,
+                    route_workflow: Some(WorkflowKind::CodeChange),
+                    route_risk: Some(RiskLevel::Medium),
+                    action_checkpoint_active: false,
+                    has_changes_before_tools: false,
+                    no_progress_rounds: 0,
+                },
+            ),
+            permission_context: Some(&permission_context),
+            task_state: None,
+            working_dir: Some(std::path::Path::new(".")),
+            tool_allowed_by_context: true,
+            destructive_scope_check: None,
+            action_checkpoint_rejection: None,
+        });
+        let mut result = ToolResult::success_with_data(
+            "edit executed",
+            json!({"checkpoint": {"id": "cp_test_1"}}),
+        );
+
+        attach_action_review_metadata(&mut result, &review);
+
+        let checkpoint = &result.data.as_ref().unwrap()["action_review"]["checkpoint"];
+        assert_eq!(checkpoint["status"], "required_and_present");
+        assert_eq!(checkpoint["checkpoint_id"], "cp_test_1");
+        assert_eq!(checkpoint["observed_result_checkpoint"], true);
+    }
+
+    #[tokio::test]
+    async fn tool_execution_records_action_review_trace() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let tool_calls = vec![tool_call("call_read", "probe_read")];
+        let trace =
+            TraceCollector::new(crate::engine::trace::TurnTrace::new("session", 1, "probe"));
+
+        let _batch = execute_probe_tools_with_trace(
+            &loop_instance,
+            &tool_calls,
+            HashMap::new(),
+            Some(trace.clone()),
+        )
+        .await;
+        let snapshot = trace.snapshot();
+
+        assert!(snapshot.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ActionReviewed {
+                tool,
+                decision,
+                reason,
+                ..
+            } if tool == "probe_read" && decision == "allow" && reason == "safe_to_execute"
+        )));
+    }
+
+    #[tokio::test]
+    async fn premature_edit_in_understand_stage_revises_before_execution() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let mut registry = ToolRegistry::new();
+        registry.register(PrematureEditProbeTool {
+            executions: executions.clone(),
+        });
+        let loop_instance = ConversationLoop::new(
+            Arc::new(NoopProvider),
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let route = IntentRouter::new().route("edit src/lib.rs");
+        let mut policy = ResourcePolicy::from_route(&route);
+        policy.max_tool_calls = 4;
+        let destructive_scope = DestructiveScopeContract::from_user_request(
+            "edit src/lib.rs",
+            &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        );
+        let exposed_tool_names = HashSet::from(["file_edit".to_string(), "file_read".to_string()]);
+        let mut lifecycle = ToolCallLifecycle::default();
+        let task_state = AgentTaskState::from_initial_context(
+            "edit src/lib.rs",
+            std::path::Path::new("."),
+            &route,
+            None,
+        );
+        let tool_calls = vec![ToolCall {
+            id: "call_edit".to_string(),
+            name: "file_edit".to_string(),
+            arguments: json!({"path": "src/lib.rs", "new_string": "updated"}),
+        }];
+
+        let batch =
+            ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
+                .execute_tools_parallel(ToolExecutionRequest {
+                    tool_calls: &tool_calls,
+                    parent_assistant_content: "",
+                    tx: None,
+                    pre_executed: HashMap::new(),
+                    trace: None,
+                    route: Some(&route),
+                    resource_policy: &policy,
+                    exposed_tool_names: &exposed_tool_names,
+                    retained_context: &crate::tools::ToolContextRetainedContext::default(),
+                    task_stage: AgentTaskStage::Understand,
+                    task_state: Some(&task_state),
+                    action_checkpoint_active: false,
+                    action_checkpoint_lookup_count: 0,
+                    no_progress_rounds: 0,
+                    has_changes_before_tools: false,
+                    destructive_scope: &destructive_scope,
+                    lifecycle: &mut lifecycle,
+                })
+                .await;
+        let result = &batch.results()[0].1;
+
+        assert!(!result.success);
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            result.data.as_ref().unwrap()["action_review"]["decision"],
+            "revise"
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["action_review"]["primary_reason"],
+            "low_value_action"
+        );
+        assert!(
+            result.data.as_ref().unwrap()["action_review"]["worth"]["premature_mutation"]
+                .as_bool()
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1613,7 +1996,15 @@ mod tests {
         );
         assert_eq!(results[0].1.content, "writes_seen=0");
         assert!(!results[1].1.success);
-        assert!(results[1].1.content.contains("was not exposed"));
+        assert!(results[1].1.content.contains("not found"));
+        assert_eq!(
+            results[1].1.data.as_ref().unwrap()["action_review"]["decision"],
+            "revise"
+        );
+        assert_eq!(
+            results[1].1.data.as_ref().unwrap()["action_review"]["primary_reason"],
+            "tool_not_available"
+        );
         assert_eq!(results[2].1.content, "writes_seen=0");
         assert_eq!(batch.denied_count(), 1);
     }

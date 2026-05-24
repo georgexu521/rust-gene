@@ -36,6 +36,7 @@ RUNTIME_SPINE_PHASE_EVENT_TYPES = {
         "risk_signal_assessed",
         "adaptive_workflow_triggered",
         "action_decision_evaluated",
+        "action_reviewed",
         "workflow_routed",
     },
     "permission": {
@@ -60,6 +61,7 @@ RUNTIME_SPINE_PHASE_EVENT_TYPES = {
         "workflow_fallback",
         "recovery_applied",
         "recovery_plan",
+        "tool_observation_recorded",
     },
     "verification": {
         "stage_validation_completed",
@@ -99,6 +101,19 @@ RUNTIME_SPINE_ASSERTION_ALIASES = {
     "implementation_intent_recorded": "event:implementation_intent_recorded",
     "action_decision": "event:action_decision_evaluated",
     "action_decision_evaluated": "event:action_decision_evaluated",
+    "action_review": "event:action_reviewed",
+    "action_reviewed": "event:action_reviewed",
+    "tool_observation": "special:tool_observation",
+    "tool_observation_recorded": "event:tool_observation_recorded",
+    "checkpoint_metadata": "special:checkpoint_metadata",
+    "checkpoint_present": "special:checkpoint_metadata",
+    "action_review_revise": "special:action_review_revise",
+    "action_review_deny": "special:action_review_deny",
+    "risky_tool_action_review": "special:risky_tool_action_review",
+    "risky_tools_action_review": "special:risky_tool_action_review",
+    "risky_tool_reviews": "special:risky_tool_action_review",
+    "review_risky_tools": "special:risky_tool_action_review",
+    "action_review_for_risky_tools": "special:risky_tool_action_review",
     "stop_check": "event:stop_check_evaluated",
     "stop_check_evaluated": "event:stop_check_evaluated",
     "closeout_prepared": "event:final_closeout_prepared",
@@ -106,6 +121,79 @@ RUNTIME_SPINE_ASSERTION_ALIASES = {
     "verification_proof": "special:verification_proof",
     "verification_proof_present": "special:verification_proof",
     "verification_proof_verified": "special:verification_proof_verified",
+}
+
+LOW_RISK_TOOL_NAMES = {
+    "ask_user",
+    "bash_output",
+    "bash_tasks",
+    "brief",
+    "calculate",
+    "clear",
+    "context",
+    "context_vis",
+    "cost",
+    "datetime",
+    "diff",
+    "encode",
+    "file_read",
+    "git_diff",
+    "git_status",
+    "glob",
+    "grep",
+    "list_mcp_resources",
+    "memory_load",
+    "read_mcp_resource",
+    "resume",
+    "run_tests",
+    "sleep",
+    "symbol_query",
+    "task_get",
+    "task_list",
+    "tool_search",
+}
+
+RISKY_TOOL_NAMES = {
+    "agent",
+    "bash",
+    "bash_cancel",
+    "browser",
+    "config",
+    "copy",
+    "desktop",
+    "file_edit",
+    "file_patch",
+    "file_write",
+    "format",
+    "git",
+    "github",
+    "install_dependencies",
+    "lsp",
+    "mcp_auth",
+    "mcp_tool",
+    "memory_clear",
+    "memory_save",
+    "notebook",
+    "plugin_manage",
+    "plugin_runtime",
+    "powershell",
+    "refactor",
+    "remote_dev",
+    "remote_trigger",
+    "rewind",
+    "send_message",
+    "share",
+    "start_dev_server",
+    "task_create",
+    "task_stop",
+    "task_update",
+    "team",
+    "todo_write",
+    "voice",
+    "web_fetch",
+    "web_search",
+    "workbench",
+    "worktree",
 }
 
 
@@ -206,6 +294,91 @@ def int_value(value, default=0):
         return default
 
 
+def short_identifier(value, max_chars=12):
+    text = str(value or "").strip()
+    if not text:
+        return "missing"
+    return text if len(text) <= max_chars else text[:max_chars]
+
+
+def event_tool_name(event):
+    return str(event.get("tool") or event.get("name") or "").strip()
+
+
+def event_call_id(event):
+    return str(event.get("call_id") or event.get("id") or "").strip()
+
+
+def is_risky_tool_name(name):
+    normalized = token(name)
+    if not normalized or normalized in LOW_RISK_TOOL_NAMES:
+        return False
+    if normalized in RISKY_TOOL_NAMES:
+        return True
+    return normalized.startswith(("remote_", "plugin_", "memory_save", "memory_clear"))
+
+
+def risky_tool_action_review_gaps(events):
+    trace_items = trace_events(events)
+    action_review_events = [
+        event for event in trace_items if token(event.get("type", "")) == "action_reviewed"
+    ]
+    reviewed_call_ids = {
+        event_call_id(event) for event in action_review_events if event_call_id(event)
+    }
+    reviewed_pairs = {
+        (token(event_tool_name(event)), event_call_id(event))
+        for event in action_review_events
+        if event_call_id(event)
+    }
+
+    candidates = []
+    seen = set()
+
+    def add_candidate(event, source, kind, index):
+        tool = event_tool_name(event)
+        if not is_risky_tool_name(tool):
+            return
+        call_id = event_call_id(event)
+        normalized_tool = token(tool) or "unknown"
+        key = call_id or f"{source}:{kind}:{index}:{normalized_tool}"
+        if key in seen:
+            return
+        seen.add(key)
+        identity = f"{normalized_tool}:{short_identifier(call_id or index)}"
+        candidates.append(
+            {
+                "tool": normalized_tool,
+                "call_id": call_id,
+                "identity": identity,
+            }
+        )
+
+    for index, event in enumerate(trace_items, start=1):
+        event_type = token(event.get("type", ""))
+        if event_type in {"tool_started", "tool_completed"}:
+            add_candidate(event, "trace", event_type, index)
+
+    for index, event in enumerate(events, start=1):
+        event_type = token(event.get("event", ""))
+        if event_type in {"tool_execution_start", "tool_execution_complete"}:
+            add_candidate(event, "agent", event_type, index)
+
+    missing = [
+        candidate
+        for candidate in candidates
+        if not (
+            candidate["call_id"] in reviewed_call_ids
+            or (candidate["tool"], candidate["call_id"]) in reviewed_pairs
+        )
+    ]
+    return {
+        "runs": candidates,
+        "missing": missing,
+        "reviewed": len(candidates) - len(missing),
+    }
+
+
 def report_run_status(tool_boundary, quality_status, test_status, plan_quality):
     if quality_status == "failed" or test_status == "failed" or plan_quality == "failed":
         return "failed"
@@ -232,7 +405,15 @@ def normalize_runtime_spine_assertion(value):
             return f"phase:{name}"
         if prefix in {"event", "trace", "trace_event"}:
             return f"event:{RUNTIME_SPINE_ASSERTION_ALIASES.get(name, 'event:' + name).split(':', 1)[1]}"
-        if prefix == "special" and name in {"verification_proof", "verification_proof_verified"}:
+        if prefix == "special" and name in {
+            "verification_proof",
+            "verification_proof_verified",
+            "action_review_revise",
+            "action_review_deny",
+            "risky_tool_action_review",
+            "checkpoint_metadata",
+            "tool_observation",
+        }:
             return f"special:{name}"
     normalized = token(raw.removeprefix("runtime_spine_"))
     return RUNTIME_SPINE_ASSERTION_ALIASES.get(normalized, f"unknown:{normalized}")
@@ -261,6 +442,13 @@ def normalized_runtime_spine_assertions(sample):
             values.append("action_decision")
         if raw.get("stop_check") is True:
             values.append("stop_check")
+        if (
+            raw.get("risky_tool_action_review") is True
+            or raw.get("require_risky_tool_action_review") is True
+            or raw.get("require_action_review_for_risky_tools") is True
+            or raw.get("action_review_for_risky_tools") is True
+        ):
+            values.append("risky_tool_action_review")
     elif isinstance(raw, str):
         values = [item.strip() for item in raw.split(",")]
     elif isinstance(raw, list):
@@ -303,6 +491,21 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         phase_counts[phase] += 1
         phase_latest[phase] = event_type
 
+    action_review_events = [
+        event for event in trace_items if token(event.get("type", "")) == "action_reviewed"
+    ]
+    tool_observation_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "tool_observation_recorded"
+    ]
+    risky_review_gaps = risky_tool_action_review_gaps(events)
+    risky_tool_runs = len(risky_review_gaps["runs"])
+    risky_tool_reviewed = risky_review_gaps["reviewed"]
+    risky_tool_missing_reviews = [
+        candidate["identity"] for candidate in risky_review_gaps["missing"]
+    ]
+
     latest_closeout = next(
         (
             event
@@ -333,6 +536,32 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         elif kind == "special" and name == "verification_proof_verified":
             if token(proof_status) != "verified":
                 missing.append(assertion)
+        elif kind == "special" and name == "action_review_revise":
+            if not any(token(event.get("decision", "")) == "revise" for event in action_review_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "action_review_deny":
+            if not any(token(event.get("decision", "")) == "deny" for event in action_review_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "checkpoint_metadata":
+            checkpoint_statuses = {
+                token(event.get("checkpoint", "")) for event in action_review_events
+            }
+            if (
+                "required_and_present" not in checkpoint_statuses
+                and "tool_managed" not in checkpoint_statuses
+                and "checkpoint_id" not in report_text.lower()
+            ):
+                missing.append(assertion)
+        elif kind == "special" and name == "tool_observation":
+            if (
+                not tool_observation_events
+                and "tool_observation" not in report_text.lower()
+                and "context_ledger.tool_observation" not in report_text.lower()
+            ):
+                missing.append(assertion)
+        elif kind == "special" and name == "risky_tool_action_review":
+            if risky_tool_missing_reviews:
+                missing.append(assertion)
         else:
             missing.append(assertion)
 
@@ -350,6 +579,14 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         f"{phase}={phase_counts[phase]} latest={phase_latest[phase]}"
         for phase in RUNTIME_SPINE_PHASES
     )
+    risky_tool_missing_text = (
+        ",".join(risky_tool_missing_reviews) if risky_tool_missing_reviews else "none"
+    )
+    detail = (
+        f"{detail} risky_tool_runs={risky_tool_runs} "
+        f"risky_tool_reviewed={risky_tool_reviewed} "
+        f"risky_tool_missing_action_review={risky_tool_missing_text}"
+    )
     missing_text = ",".join(missing) if missing else "none"
     assertions_text = ",".join(assertions) if assertions else "none"
     summary = (
@@ -365,6 +602,9 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         "runtime_spine_assertions": assertions_text,
         "runtime_spine_status": runtime_spine_status,
         "runtime_spine_missing": missing_text,
+        "risky_tool_runs": str(risky_tool_runs),
+        "risky_tool_reviewed": str(risky_tool_reviewed),
+        "risky_tool_missing_action_review": risky_tool_missing_text,
         "verification_proof_status": proof_status,
         "verification_proof_summary": proof_summary,
     }
@@ -388,6 +628,9 @@ def runtime_spine_metrics(task_dir, report_text):
         "runtime_spine_assertions",
         "runtime_spine_status",
         "runtime_spine_missing",
+        "risky_tool_runs",
+        "risky_tool_reviewed",
+        "risky_tool_missing_action_review",
         "verification_proof_status",
         "verification_proof_summary",
     ]:

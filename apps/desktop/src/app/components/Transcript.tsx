@@ -479,11 +479,20 @@ function TimelineSummaryView({
           <strong>{permissionHeadline(summary)}</strong>
           <div className="timeline-summary-meta">
             {compactSummaryMeta([
+              summary.actionDecision ? `review ${summary.actionDecision}` : null,
+              summary.actionReason ? summary.actionReason.replaceAll("_", " ") : null,
               summary.risk ? `risk ${summary.risk}` : null,
               summary.requestKind ? summary.requestKind.replaceAll("_", " ") : null,
+              summary.sideEffect ? `effect ${summary.sideEffect.replaceAll("_", " ")}` : null,
+              summary.network ? `network ${summary.network.replaceAll("_", " ")}` : null,
+              summary.checkpoint ? `checkpoint ${summary.checkpoint.replaceAll("_", " ")}` : null,
+              summary.checkpointApproval ? "approval required" : null,
+              summary.scopeAllowed === false ? "scope blocked" : null,
+              summary.budgetAllowed === false ? "budget blocked" : null,
               summary.commandCategory ? summary.commandCategory.replaceAll("_", " ") : null,
               summary.parserStatus ? `parser ${summary.parserStatus}` : null,
               summary.mutation ? "mutates workspace" : null,
+              summary.allowedRule ? `allow rule ${summary.allowedRule}` : null,
             ]).join(" · ")}
           </div>
           {summary.reason ? <div className="timeline-detail">{summary.reason}</div> : null}

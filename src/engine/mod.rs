@@ -4,6 +4,8 @@
 //! 对应 Claude Code 中的 QueryEngine.ts
 
 pub mod action_decision;
+pub mod action_policy;
+pub mod action_review;
 pub mod agent_mode;
 pub mod auto_verify;
 pub mod batch_refactor;

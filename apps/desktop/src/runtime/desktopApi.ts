@@ -916,6 +916,58 @@ export function sendMessage(message: string, contexts: DesktopRunContext[] = [])
             mutation: true,
           },
         },
+        action_review: {
+          schema: "action_review.v1",
+          tool: "bash",
+          call_id: permissionId,
+          decision: "ask_user",
+          primary_reason: "network_requires_confirmation",
+          permission: {
+            allowed_by_context: true,
+            requires_confirmation: true,
+            decision: "Ask",
+            risk_level: "Medium",
+            confidence: 0.86,
+            warnings: ["REMOTE_SIDE_EFFECT"],
+          },
+          scope: {
+            allowed: true,
+            reason: "command stays within the active repository task",
+          },
+          budget: {
+            allowed: true,
+            scheduled_count: 1,
+            max_tool_calls: 4,
+            reason: "tool-call budget still has room",
+          },
+          checkpoint: {
+            required: true,
+            status: "unavailable",
+            enforcement: "user_approval",
+            rollback_scope: "remote",
+            requires_user_approval: true,
+            reason: "git push mutates remote state and cannot be rolled back locally",
+          },
+          side_effects: {
+            schema: "action_side_effect_profile.v1",
+            external_side_effect: "git_remote_publication",
+            network: {
+              class: "remote_service",
+              target: "git push origin claude",
+              trusted: false,
+              reason: "git push publishes to a remote service",
+            },
+            mutates_local_workspace: true,
+            mutates_local_machine: false,
+            remote_side_effect: true,
+            paths: [],
+            summary: "external_effect=GitRemotePublication network=RemoteService paths=0",
+          },
+          user_reason:
+            "Action requires user confirmation before execution: network_requires_confirmation.",
+          model_recovery:
+            "Wait for the permission result and do not claim the tool ran until it succeeds.",
+        },
       },
     });
     emitWebPreview({ type: "run_completed" });

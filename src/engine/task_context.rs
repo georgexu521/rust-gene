@@ -462,6 +462,20 @@ impl AgentTaskState {
                     }
                 }
             }
+            ContextLedgerEntry::ToolObservation(entry) => {
+                for path in entry.files_read.iter().chain(entry.files_changed.iter()) {
+                    self.add_active_file(path);
+                }
+                self.record_observation(
+                    "tool_observation",
+                    format!(
+                        "{} {}: {}",
+                        entry.tool,
+                        entry.status,
+                        preview(&entry.summary, 160)
+                    ),
+                );
+            }
         }
     }
 
@@ -1102,6 +1116,54 @@ mod tests {
 
         assert_eq!(bundle.agent_state.edit_snapshots.len(), MAX_EDIT_SNAPSHOTS);
         assert_eq!(bundle.agent_state.edit_snapshots[0].label, "snapshot 4");
+    }
+
+    #[test]
+    fn agent_task_state_records_tool_observation_metadata() {
+        let route = IntentRouter::new().route("查看 src/lib.rs");
+        let mut bundle = TaskContextBundle::new("查看 src/lib.rs", ".", route, None);
+        let call = ToolCall {
+            id: "call_read".to_string(),
+            name: "file_read".to_string(),
+            arguments: json!({"path": "src/lib.rs"}),
+        };
+        let result = ToolResult::success_with_data(
+            "read file",
+            json!({
+                "tool_observation": {
+                    "schema": "tool_observation.v1",
+                    "tool": "file_read",
+                    "call_id": "call_read",
+                    "status": "success",
+                    "summary": "file_read succeeded: read src/lib.rs",
+                    "files_read": ["src/lib.rs"],
+                    "files_changed": [],
+                    "command_run": null,
+                    "validation_result": null,
+                    "permission_decision": null,
+                    "checkpoint_id": null,
+                    "artifact_path": null,
+                    "state_updates": ["files_read"],
+                    "recommended_next_action": null
+                }
+            }),
+        );
+
+        let observed = bundle
+            .agent_state
+            .observe_tool_context_evidence(&call, &result);
+
+        assert_eq!(observed, 1);
+        assert!(bundle
+            .agent_state
+            .active_files
+            .contains(&PathBuf::from("src/lib.rs")));
+        assert!(bundle
+            .agent_state
+            .observations
+            .iter()
+            .any(|observation| observation.source == "tool_observation"
+                && observation.summary.contains("file_read success")));
     }
 
     #[test]

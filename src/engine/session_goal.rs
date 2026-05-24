@@ -119,6 +119,8 @@ impl SessionGoalManager {
             reasoning: crate::engine::intent_router::ReasoningPolicy::High,
             risk: crate::engine::intent_router::RiskLevel::Medium,
             recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
             reason: "manual goal".to_string(),
         };
         let goal = SessionGoal::new(title.clone(), &route, &title);

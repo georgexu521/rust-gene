@@ -311,6 +311,19 @@ pub enum TraceEvent {
         requires_confirmation: bool,
         reason: String,
     },
+    ActionReviewed {
+        tool: String,
+        call_id: String,
+        decision: String,
+        reason: String,
+        permission: Option<String>,
+        scope_allowed: bool,
+        budget_allowed: bool,
+        checkpoint: String,
+        network: String,
+        external_effect: String,
+        recovery: String,
+    },
     PermissionRequested {
         tool: String,
         call_id: String,
@@ -339,6 +352,15 @@ pub enum TraceEvent {
         success: bool,
         duration_ms: Option<u64>,
         output_chars: usize,
+    },
+    ToolObservationRecorded {
+        tool: String,
+        call_id: String,
+        status: String,
+        files_read: usize,
+        files_changed: usize,
+        checkpoint_id: Option<String>,
+        summary: String,
     },
     HookCompleted {
         event: String,
@@ -481,9 +503,11 @@ impl TraceEvent {
             TraceEvent::ApiRequestCompleted { .. } => "api.done",
             TraceEvent::ToolStarted { .. } => "tool.start",
             TraceEvent::ActionDecisionEvaluated { .. } => "action.decision",
+            TraceEvent::ActionReviewed { .. } => "action.review",
             TraceEvent::PermissionRequested { .. } => "permission.request",
             TraceEvent::PermissionResolved { .. } => "permission.resolve",
             TraceEvent::ToolCompleted { .. } => "tool.done",
+            TraceEvent::ToolObservationRecorded { .. } => "tool.observation",
             TraceEvent::HookCompleted { .. } => "hook.done",
             TraceEvent::SubagentStarted { .. } => "subagent.start",
             TraceEvent::SubagentCompleted { .. } => "subagent.done",
@@ -976,6 +1000,32 @@ impl TraceEvent {
                 requires_confirmation,
                 preview(reason)
             ),
+            TraceEvent::ActionReviewed {
+                tool,
+                call_id,
+                decision,
+                reason,
+                permission,
+                scope_allowed,
+                budget_allowed,
+                checkpoint,
+                network,
+                external_effect,
+                recovery,
+            } => format!(
+                "{} {} action review: decision={} reason={} permission={} scope_allowed={} budget_allowed={} checkpoint={} network={} external_effect={} recovery={}",
+                tool,
+                short_id(call_id),
+                decision,
+                reason,
+                permission.as_deref().unwrap_or("none"),
+                scope_allowed,
+                budget_allowed,
+                checkpoint,
+                network,
+                external_effect,
+                preview(recovery)
+            ),
             TraceEvent::PermissionRequested {
                 tool,
                 call_id,
@@ -1051,6 +1101,24 @@ impl TraceEvent {
                 if *success { "ok" } else { "failed" },
                 duration_ms.unwrap_or_default(),
                 output_chars
+            ),
+            TraceEvent::ToolObservationRecorded {
+                tool,
+                call_id,
+                status,
+                files_read,
+                files_changed,
+                checkpoint_id,
+                summary,
+            } => format!(
+                "{} {} observation: status={} files_read={} files_changed={} checkpoint={} ({})",
+                tool,
+                short_id(call_id),
+                status,
+                files_read,
+                files_changed,
+                checkpoint_id.as_deref().unwrap_or("none"),
+                preview(summary)
             ),
             TraceEvent::HookCompleted {
                 event,
@@ -1341,6 +1409,12 @@ pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
         "\nControl Loop: {}",
         control_loop_diagnostic(trace).compact_summary()
     ));
+    if let Some(action_reviews) = action_review_trace_summary(trace) {
+        lines.push(format!(
+            "\nAction Reviews: {}",
+            action_reviews.compact_summary()
+        ));
+    }
 
     lines.push("\nEvents:".to_string());
     for (idx, event) in trace.events.iter().take(max_events).enumerate() {
@@ -1362,13 +1436,17 @@ pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
 }
 
 pub fn format_trace_recent_line(trace: &TurnTrace) -> String {
+    let action_review_summary = action_review_trace_summary(trace)
+        .map(|summary| format!(" action_reviews={}", summary.compact_summary()))
+        .unwrap_or_default();
     format!(
-        "- {} turn {} {:?} events={} tool_records={} prompt={}",
+        "- {} turn {} {:?} events={} tool_records={}{} prompt={}",
         short_id(&trace.trace_id),
         trace.turn_index,
         trace.status,
         trace.events.len(),
         latest_tool_record_count(trace).unwrap_or(0),
+        action_review_summary,
         trace.user_message_preview
     )
 }
@@ -1386,6 +1464,19 @@ pub struct ControlLoopPhaseDiagnostic {
     pub latest_summary: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionReviewTraceSummary {
+    pub total: usize,
+    pub allowed: usize,
+    pub ask_user: usize,
+    pub denied: usize,
+    pub revised: usize,
+    pub checkpoint_required: usize,
+    pub latest_tool: Option<String>,
+    pub latest_decision: Option<String>,
+    pub latest_reason: Option<String>,
+}
+
 impl ControlLoopDiagnostic {
     pub fn compact_summary(&self) -> String {
         self.phases
@@ -1400,6 +1491,31 @@ impl ControlLoopDiagnostic {
             })
             .collect::<Vec<_>>()
             .join(" -> ")
+    }
+}
+
+impl ActionReviewTraceSummary {
+    pub fn compact_summary(&self) -> String {
+        let latest = match (
+            self.latest_tool.as_deref(),
+            self.latest_decision.as_deref(),
+            self.latest_reason.as_deref(),
+        ) {
+            (Some(tool), Some(decision), Some(reason)) => {
+                format!("{tool}:{decision}/{reason}")
+            }
+            _ => "none".to_string(),
+        };
+        format!(
+            "total={} allow={} ask_user={} denied={} revised={} checkpoint_required={} latest={}",
+            self.total,
+            self.allowed,
+            self.ask_user,
+            self.denied,
+            self.revised,
+            self.checkpoint_required,
+            latest
+        )
     }
 }
 
@@ -1427,6 +1543,45 @@ pub fn control_loop_diagnostic(trace: &TurnTrace) -> ControlLoopDiagnostic {
     }
 
     ControlLoopDiagnostic { phases }
+}
+
+pub fn action_review_trace_summary(trace: &TurnTrace) -> Option<ActionReviewTraceSummary> {
+    let mut summary = ActionReviewTraceSummary::default();
+    for event in &trace.events {
+        let TraceEvent::ActionReviewed {
+            tool,
+            decision,
+            reason,
+            checkpoint,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        summary.total += 1;
+        match decision.as_str() {
+            "allow" => summary.allowed += 1,
+            "ask_user" => summary.ask_user += 1,
+            "deny" => summary.denied += 1,
+            "revise" => summary.revised += 1,
+            _ => {}
+        }
+        if action_review_checkpoint_required(checkpoint, reason) {
+            summary.checkpoint_required += 1;
+        }
+        summary.latest_tool = Some(tool.clone());
+        summary.latest_decision = Some(decision.clone());
+        summary.latest_reason = Some(reason.clone());
+    }
+    (summary.total > 0).then_some(summary)
+}
+
+fn action_review_checkpoint_required(checkpoint: &str, reason: &str) -> bool {
+    reason == "checkpoint_required"
+        || matches!(
+            checkpoint,
+            "required_and_present" | "required_but_missing" | "unavailable"
+        )
 }
 
 const CONTROL_LOOP_PHASES: [&str; 7] = [
@@ -1460,6 +1615,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::RiskSignalAssessed { .. }
         | TraceEvent::AdaptiveWorkflowTriggered { .. }
         | TraceEvent::ActionDecisionEvaluated { .. }
+        | TraceEvent::ActionReviewed { .. }
         | TraceEvent::WorkflowRouted { .. } => Some("decision"),
         TraceEvent::GoalDriftDetected { .. }
         | TraceEvent::DestructiveScopeChecked { .. }
@@ -1476,6 +1632,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         TraceEvent::SessionGoalUpdated { .. }
         | TraceEvent::StopCheckEvaluated { .. }
         | TraceEvent::WorkflowFallback { .. }
+        | TraceEvent::ToolObservationRecorded { .. }
         | TraceEvent::RecoveryApplied { .. }
         | TraceEvent::RecoveryPlan { .. } => Some("state_update"),
         TraceEvent::StageValidationCompleted { .. }
@@ -1692,6 +1849,83 @@ mod tests {
     }
 
     #[test]
+    fn trace_summary_includes_action_review_counts() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "review actions"));
+        collector.record(TraceEvent::ActionReviewed {
+            tool: "file_read".to_string(),
+            call_id: "call_read".to_string(),
+            decision: "allow".to_string(),
+            reason: "safe_to_execute".to_string(),
+            permission: Some("Allow".to_string()),
+            scope_allowed: true,
+            budget_allowed: true,
+            checkpoint: "not_needed".to_string(),
+            network: "none".to_string(),
+            external_effect: "none".to_string(),
+            recovery: "use observation".to_string(),
+        });
+        collector.record(TraceEvent::ActionReviewed {
+            tool: "file_edit".to_string(),
+            call_id: "call_edit".to_string(),
+            decision: "revise".to_string(),
+            reason: "checkpoint_required".to_string(),
+            permission: Some("Allow".to_string()),
+            scope_allowed: true,
+            budget_allowed: true,
+            checkpoint: "required_but_missing".to_string(),
+            network: "none".to_string(),
+            external_effect: "local_workspace_mutation".to_string(),
+            recovery: "inspect first".to_string(),
+        });
+        collector.record(TraceEvent::ActionReviewed {
+            tool: "git".to_string(),
+            call_id: "call_git".to_string(),
+            decision: "deny".to_string(),
+            reason: "permission_denied".to_string(),
+            permission: Some("Deny".to_string()),
+            scope_allowed: true,
+            budget_allowed: true,
+            checkpoint: "unavailable".to_string(),
+            network: "remote_service".to_string(),
+            external_effect: "git_remote_publication".to_string(),
+            recovery: "choose a safer action".to_string(),
+        });
+        collector.record(TraceEvent::ActionReviewed {
+            tool: "bash".to_string(),
+            call_id: "call_bash".to_string(),
+            decision: "ask_user".to_string(),
+            reason: "permission_required".to_string(),
+            permission: Some("Ask".to_string()),
+            scope_allowed: true,
+            budget_allowed: true,
+            checkpoint: "not_needed".to_string(),
+            network: "none".to_string(),
+            external_effect: "none".to_string(),
+            recovery: "wait for approval".to_string(),
+        });
+
+        let trace = collector.finish(TurnStatus::Completed);
+        let review_summary = action_review_trace_summary(&trace).expect("reviews present");
+
+        assert_eq!(review_summary.total, 4);
+        assert_eq!(review_summary.allowed, 1);
+        assert_eq!(review_summary.ask_user, 1);
+        assert_eq!(review_summary.denied, 1);
+        assert_eq!(review_summary.revised, 1);
+        assert_eq!(review_summary.checkpoint_required, 2);
+
+        let summary = format_trace_summary(&trace, 20);
+        assert!(summary.contains("Action Reviews: total=4"));
+        assert!(summary.contains("allow=1 ask_user=1 denied=1 revised=1"));
+        assert!(summary.contains("checkpoint_required=2"));
+        assert!(summary.contains("latest=bash:ask_user/permission_required"));
+
+        let recent_line = format_trace_recent_line(&trace);
+        assert!(recent_line.contains("action_reviews=total=4"));
+        assert!(recent_line.contains("latest=bash:ask_user/permission_required"));
+    }
+
+    #[test]
     fn trace_summary_includes_mcp_resource_access() {
         let collector = TraceCollector::new(TurnTrace::new("s1", 1, "read mcp resource"));
         collector.record(TraceEvent::McpResourceAccessed {
@@ -1784,6 +2018,7 @@ mod tests {
         assert_eq!(latest_tool_record_count(&trace), None);
         assert_eq!(latest_tool_record_evidence_summary(&trace), None);
         assert!(format_trace_recent_line(&trace).contains("tool_records=0"));
+        assert!(!format_trace_recent_line(&trace).contains("action_reviews="));
     }
 
     #[test]
