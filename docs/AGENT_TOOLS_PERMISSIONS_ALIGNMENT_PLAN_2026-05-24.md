@@ -1504,8 +1504,8 @@ Plan completion audit:
 | P0 Canonical Action Review Contract | Complete for v1 | Batch 1 added `ActionReview`, typed decisions, trace events, and result metadata. | Further product polish can add more policy inputs, but the shared contract exists. |
 | P1 Explicit Revise Path | Complete for v1 | Batch 1/2 classify unknown, unexposed, and invalid arguments as `revise`; schema validation is deeper. | More specialized revise hints can be added per tool family. |
 | P2 Worth-Doing Gate | Complete for conservative v1 | Batch 3 blocks premature high-risk mutation before relevant read evidence. | The gate is intentionally narrow to avoid over-control. |
-| P3 Shared Boundary And Side-Effect Policy | Complete as shared vocabulary; partial as total consolidation | Batch 4 added path/network/external side-effect labels and wired them into action review and traces. | Some specialized file/bash/MCP/plugin checks still own local details; full deduplication is future cleanup, not required for v1. |
-| P4 Checkpoint Policy Before Mutation | Complete as review policy; partial as tool-managed rollback coverage | Batch 5 records `not_needed`, `required_and_present`, `required_but_missing`, and `unavailable`. | `format` and raw bash workspace mutation still report `required_but_missing`; actual tool-managed checkpoints for those paths remain future work. |
+| P3 Shared Boundary And Side-Effect Policy | Complete for the planned shared boundary layer | Batch 4 added path/network/external side-effect labels; Batch 26 moved file/bash/MCP/plugin permission explanations onto the shared `action_policy` boundary profile. | Some tool-specific execution checks still live at the tool boundary by design, but path/network vocabulary is no longer duplicated for the core permission surface. |
+| P4 Checkpoint Policy Before Mutation | Complete for local file mutation coverage | Batch 5 records `not_needed`, `required_and_present`, `required_but_missing`, and `unavailable`; Batch 26 added real format checkpoints and blocks raw bash workspace mutation until a checkpoint-managed wrapper is used. | Git/remote/local-machine side effects remain outside local file checkpoint rollback and stay classified as `unavailable`. |
 | P5 Unified Observation Object | Complete for v1 | Batch 6 added `ToolObservation` metadata, context-ledger integration, and task-state recent observations. | More per-tool adapters can improve summaries over time. |
 | P6 Runtime Trace And Eval Assertions | Complete for v1 | Batch 7 and Batch 15 added trace/runtime-spine events and live-eval/report assertions, including risky-tool action-review coverage. | More real eval fixtures should be added as product regression coverage grows. |
 | P7 Tool Granularity Cleanup | Complete for the planned common facades | Batches 8-11 added `run_tests`, `git_status`, `git_diff`, `start_dev_server`, and `install_dependencies`; Batches 16-24 synced risk, route exposure, and parameter-sensitive contracts. | Bash remains intentionally available for flexible work; additional facades are optional product expansion. |
@@ -1559,9 +1559,43 @@ Current conclusion:
 
 Optional future hardening after commit:
 
-- Add tool-managed checkpoints for `format action=format`.
-- Decide whether bash workspace mutation should be blocked until a checkpoint
-  wrapper exists, instead of only surfacing `required_but_missing`.
-- Continue consolidating specialized file/bash/MCP/plugin boundary checks into
-  the shared `action_policy` vocabulary where that reduces duplication.
 - Add dedicated live-eval fixtures for permission/revise/checkpoint regressions.
+
+### Batch 26 - Checkpoint And Boundary Hardening
+
+Status: implemented on 2026-05-24.
+
+Implemented:
+
+- `format action=format` now creates a real local file checkpoint before running
+  the formatter, records `file_change` history after successful rewrites, and
+  returns checkpoint/diff metadata in the tool result.
+- Action review now classifies `format action=format` as
+  `required_and_present` with `tool_managed_before_mutation` enforcement.
+- Raw bash workspace mutation now keeps the `required_but_missing` checkpoint
+  signal but uses a stricter `checkpoint_wrapper_required` enforcement, causing
+  action review to return `revise` before execution with recovery guidance to
+  use `file_write`, `file_edit`, `file_patch`, `format`, or another
+  checkpoint-managed wrapper.
+- `ActionSideEffectProfile` now carries a shared `tool_family` and boundary
+  warning vocabulary for file, bash, MCP, plugin, git, network, and local
+  runtime tools.
+- Permission risk and explanation logic now reuse the shared action boundary
+  profile for file/bash path classification and MCP/plugin boundary warnings,
+  including legacy-compatible `HIGH_RISK_PATH` warnings for sensitive paths.
+
+Validation completed:
+
+```bash
+cargo fmt
+cargo fmt --check
+cargo check -q
+cargo test -q action_review
+cargo test -q action_policy
+cargo test -q format_tool
+cargo test -q permissions
+cargo test -q tool_execution_controller
+cargo clippy --all-features -- -D warnings
+cargo test -q
+git diff --check
+```

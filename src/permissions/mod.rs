@@ -5,6 +5,8 @@
 
 pub mod llm_classifier;
 
+use crate::engine::action_policy::{ActionSideEffectProfile, WorkspacePathClass};
+use crate::services::api::ToolCall;
 use serde::{Deserialize, Serialize};
 
 /// Once 模式授权有效期（秒）
@@ -553,6 +555,7 @@ impl PermissionContext {
     }
 
     fn risk_level(&self, tool_name: &str, params: &serde_json::Value) -> RiskLevel {
+        let boundary = self.boundary_profile(tool_name, params);
         match tool_name {
             "file_read" | "glob" | "grep" | "bash_output" | "bash_tasks" | "project_list"
             | "memory_load" | "run_tests" | "git_status" | "git_diff" | "list_mcp_resources"
@@ -575,13 +578,12 @@ impl PermissionContext {
                     .as_str()
                     .or_else(|| params["cmd"].as_str())
                     .unwrap_or_default();
-                let lower = cmd.to_lowercase();
                 let classification =
                     crate::tools::bash_tool::command_classifier::classify_command(cmd);
                 if Self::is_high_risk_command(cmd)
                     || classification.network_access
                     || classification.command_plan.fail_closed
-                    || self.bash_references_outside_workspace_path(&lower)
+                    || Self::boundary_has_high_risk_path(&boundary)
                 {
                     RiskLevel::High
                 } else {
@@ -607,10 +609,8 @@ impl PermissionContext {
                     }
                 }
             }
-            "file_write" | "file_edit" => {
-                let path = params["path"].as_str().unwrap_or_default();
-                if Self::is_high_risk_path(path)
-                    || !self.path_is_in_trusted_workspace(path)
+            "file_write" | "file_edit" | "file_patch" => {
+                if Self::boundary_has_high_risk_path(&boundary)
                     || Self::is_large_content_write(params)
                 {
                     RiskLevel::High
@@ -697,75 +697,33 @@ impl PermissionContext {
         self.risk_level(tool_name, params) >= RiskLevel::High
     }
 
-    fn path_is_in_trusted_workspace(&self, path: &str) -> bool {
-        if path.trim().is_empty() {
-            return false;
-        }
-        let input = std::path::Path::new(path);
-        let candidate = if input.is_absolute() {
-            Self::normalize_path(input)
-        } else {
-            Self::normalize_path(&self.working_dir.join(input))
+    fn boundary_profile(
+        &self,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> ActionSideEffectProfile {
+        let tool_call = ToolCall {
+            id: "permission_review".to_string(),
+            name: tool_name.to_string(),
+            arguments: params.clone(),
         };
-        self.trusted_workspace_roots()
-            .into_iter()
-            .any(|root| candidate.starts_with(root))
+        ActionSideEffectProfile::from_tool_call(&tool_call, None, &self.working_dir)
     }
 
-    fn bash_references_outside_workspace_path(&self, cmd: &str) -> bool {
-        Self::extract_absolute_paths_from_shell(cmd)
-            .into_iter()
-            .any(|path| !self.path_is_in_trusted_workspace(&path))
-    }
-
-    fn extract_absolute_paths_from_shell(cmd: &str) -> Vec<String> {
-        let mut paths = Vec::new();
-        for raw in cmd.split(|ch: char| {
-            ch.is_whitespace()
-                || matches!(
-                    ch,
-                    '"' | '\'' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ';' | '|' | '&'
+    fn boundary_has_high_risk_path(boundary: &ActionSideEffectProfile) -> bool {
+        boundary.has_external_or_sensitive_path()
+            || boundary.paths.iter().any(|path| {
+                matches!(
+                    path.class,
+                    WorkspacePathClass::Dependency | WorkspacePathClass::Generated
                 )
-        }) {
-            let token = raw.trim_matches(|ch: char| matches!(ch, '<' | '>' | ',' | ':' | '='));
-            if token.is_empty() {
-                continue;
-            }
-
-            let candidate = if token.starts_with('/') {
-                Some(token.to_string())
-            } else if let Some((_, path)) = token.split_once("=/") {
-                Some(format!("/{}", path))
-            } else if let Some((_, path)) = token.split_once(":/") {
-                Some(format!("/{}", path))
-            } else {
-                None
-            };
-
-            if let Some(path) = candidate {
-                let trimmed = path.as_str().trim_matches(|ch: char| {
-                    matches!(ch, '<' | '>' | ',' | ':' | ')' | ']' | '}' | '.')
-                });
-                if trimmed.starts_with('/') {
-                    paths.push(trimmed.to_string());
-                }
-            }
-        }
-        paths
+            })
     }
 
-    fn trusted_workspace_roots(&self) -> Vec<std::path::PathBuf> {
-        let mut roots = vec![Self::normalize_path(&self.working_dir)];
-        if let Ok(extra) = std::env::var("PRIORITY_AGENT_TRUSTED_WORKSPACES") {
-            roots.extend(
-                extra
-                    .split(':')
-                    .map(str::trim)
-                    .filter(|part| !part.is_empty())
-                    .map(|part| Self::normalize_path(std::path::Path::new(part))),
-            );
+    fn push_warning(warnings: &mut Vec<String>, warning: String) {
+        if !warnings.iter().any(|existing| existing == &warning) {
+            warnings.push(warning);
         }
-        roots
     }
 
     fn url_is_trusted(&self, url: &str) -> bool {
@@ -803,20 +761,6 @@ impl PermissionContext {
         (!host.is_empty()).then_some(host)
     }
 
-    fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
-        let mut normalized = std::path::PathBuf::new();
-        for component in path.components() {
-            match component {
-                std::path::Component::CurDir => {}
-                std::path::Component::ParentDir => {
-                    normalized.pop();
-                }
-                other => normalized.push(other.as_os_str()),
-            }
-        }
-        normalized
-    }
-
     fn is_high_risk_command(cmd: &str) -> bool {
         if cmd.is_empty() {
             return true;
@@ -839,27 +783,6 @@ impl PermissionContext {
         dangerous_patterns.iter().any(|p| cmd.contains(p))
     }
 
-    fn is_high_risk_path(path: &str) -> bool {
-        if path.is_empty() {
-            return true;
-        }
-        let lower = path.to_lowercase();
-        let sensitive_markers = [
-            "/etc/",
-            "/usr/",
-            "/bin/",
-            "/sbin/",
-            "/.ssh/",
-            ".env",
-            "id_rsa",
-            "authorized_keys",
-            "/dev/sda",
-            "/dev/sdb",
-            "/dev/hda",
-        ];
-        sensitive_markers.iter().any(|m| lower.contains(m))
-    }
-
     fn is_large_content_write(params: &serde_json::Value) -> bool {
         let content_len = params["content"]
             .as_str()
@@ -880,6 +803,7 @@ impl PermissionContext {
         let matching_rules = self.matching_rules_for_keys(&match_keys);
         let risk = self.risk_level(tool_name, params);
         let confidence = self.calculate_confidence(tool_name, params, &matching_rules);
+        let boundary = self.boundary_profile(tool_name, params);
 
         // Build explanation
         let mut reasons = Vec::new();
@@ -895,6 +819,7 @@ impl PermissionContext {
 
         // Risk-specific warnings
         let mut warnings = Vec::new();
+        reasons.push(format!("Boundary profile: {}", boundary.summary));
         if tool_name == "bash" {
             let cmd = params["command"].as_str().unwrap_or_default();
             let classification = crate::tools::bash_tool::command_classifier::classify_command(cmd);
@@ -926,29 +851,20 @@ impl PermissionContext {
                         .to_string(),
                 );
             }
-            if self.bash_references_outside_workspace_path(cmd) {
-                warnings.push(
-                    "OUTSIDE_WORKSPACE: shell command references a path outside the trusted workspace"
-                        .to_string(),
-                );
-            }
             if crate::security::is_dangerous_command(cmd) {
                 warnings
                     .push("COMMAND_INJECTION: potentially malicious pattern detected".to_string());
             }
         }
-        if tool_name == "file_write" || tool_name == "file_edit" {
+        if tool_name == "file_write" || tool_name == "file_edit" || tool_name == "file_patch" {
             let path = params["path"].as_str().unwrap_or_default();
-            if Self::is_high_risk_path(path) {
-                warnings.push("HIGH_RISK_PATH: sensitive system path detected".to_string());
-            }
-            if !self.path_is_in_trusted_workspace(path) {
-                warnings.push("OUTSIDE_WORKSPACE: path is outside trusted workspace".to_string());
-            }
             // Check for path traversal
             if path.contains("..") {
                 warnings.push("PATH_TRAVERSAL: parent directory reference detected".to_string());
             }
+        }
+        for warning in boundary.boundary_warnings() {
+            Self::push_warning(&mut warnings, warning);
         }
         if tool_name == "web_fetch" {
             let url = params["url"].as_str().unwrap_or_default();

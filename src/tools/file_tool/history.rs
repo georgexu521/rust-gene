@@ -5,18 +5,18 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
-pub(super) struct FileChangeRequest<'a> {
-    pub(super) checkpoint: Option<&'a Checkpoint>,
-    pub(super) tool_name: &'a str,
-    pub(super) path: &'a Path,
-    pub(super) existed_before: bool,
-    pub(super) before_content: Option<&'a str>,
-    pub(super) after_content: &'a str,
-    pub(super) diff: &'a EditDiffSummary,
-    pub(super) bytes_written: u64,
+pub(crate) struct FileChangeRequest<'a> {
+    pub(crate) checkpoint: Option<&'a Checkpoint>,
+    pub(crate) tool_name: &'a str,
+    pub(crate) path: &'a Path,
+    pub(crate) existed_before: bool,
+    pub(crate) before_content: Option<&'a str>,
+    pub(crate) after_content: &'a str,
+    pub(crate) diff: &'a EditDiffSummary,
+    pub(crate) bytes_written: u64,
 }
 
-pub(super) async fn create_file_checkpoint(
+pub(crate) async fn create_file_checkpoint(
     context: &ToolContext,
     tool_name: &str,
     path: &Path,
@@ -24,7 +24,7 @@ pub(super) async fn create_file_checkpoint(
     create_files_checkpoint(context, tool_name, &[path.to_path_buf()]).await
 }
 
-pub(super) async fn create_files_checkpoint(
+pub(crate) async fn create_files_checkpoint(
     context: &ToolContext,
     tool_name: &str,
     paths: &[PathBuf],
@@ -58,7 +58,7 @@ pub(super) async fn create_files_checkpoint(
     }
 }
 
-pub(super) async fn record_file_change(
+pub(crate) async fn record_file_change(
     context: &ToolContext,
     request: FileChangeRequest<'_>,
 ) -> Option<Value> {
@@ -95,7 +95,7 @@ pub(super) async fn record_file_change(
     }
 }
 
-pub(super) fn checkpoint_metadata_json(checkpoint: Option<&Checkpoint>) -> Value {
+pub(crate) fn checkpoint_metadata_json(checkpoint: Option<&Checkpoint>) -> Value {
     checkpoint
         .map(|checkpoint| {
             json!({

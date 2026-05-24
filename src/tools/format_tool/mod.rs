@@ -3,6 +3,10 @@
 //! 调用项目配置的格式化器来格式化代码。
 //! 支持：Rust (rustfmt)、JS/TS (prettier)、Python (black)、Go (gofmt)
 
+use crate::tools::file_tool::history::{
+    checkpoint_metadata_json, create_file_checkpoint, record_file_change, FileChangeRequest,
+};
+use crate::tools::file_tool::{edit_diff_summary, edit_diff_summary_json};
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -120,7 +124,7 @@ impl Tool for FormatTool {
         };
 
         match action {
-            "format" => self.format_file(&path, &detected_formatter).await,
+            "format" => self.format_file(&path, &detected_formatter, &context).await,
             "check" => self.check_format(&path, &detected_formatter).await,
             _ => ToolResult::error(format!("Unknown format action: {}", action)),
         }
@@ -129,7 +133,26 @@ impl Tool for FormatTool {
 
 impl FormatTool {
     /// 格式化文件
-    async fn format_file(&self, path: &Path, formatter: &str) -> ToolResult {
+    async fn format_file(&self, path: &Path, formatter: &str, context: &ToolContext) -> ToolResult {
+        let before_content = match tokio::fs::read_to_string(path).await {
+            Ok(content) => content,
+            Err(e) => {
+                return ToolResult::error(format!(
+                    "Failed to read {} before formatting: {}",
+                    path.display(),
+                    e
+                ));
+            }
+        };
+        let checkpoint = match create_file_checkpoint(context, "format", path).await {
+            Some(checkpoint) => checkpoint,
+            None => {
+                return ToolResult::error(format!(
+                    "Failed to create checkpoint before formatting {}",
+                    path.display()
+                ));
+            }
+        };
         let (command, args) = build_format_command(formatter, path);
 
         match Command::new(&command)
@@ -141,30 +164,162 @@ impl FormatTool {
         {
             Ok(output) => {
                 if output.status.success() {
+                    let after_content = match tokio::fs::read_to_string(path).await {
+                        Ok(content) => content,
+                        Err(e) => {
+                            let checkpoint_json = checkpoint_metadata_json(Some(&checkpoint));
+                            let data = json!({
+                                "file": path.to_string_lossy(),
+                                "formatter": formatter,
+                                "success": false,
+                                "checkpoint": checkpoint_json,
+                                "read_after_format_error": e.to_string(),
+                            });
+                            let mut result = ToolResult::error(format!(
+                                "Formatted {} using {}, but failed to read the result for checkpoint history: {}",
+                                path.display(),
+                                formatter,
+                                e
+                            ));
+                            result.data = Some(data);
+                            return result;
+                        }
+                    };
+                    if let Some(ref cache) = context.file_cache {
+                        cache.invalidate_content(path);
+                        cache.invalidate_metadata(path);
+                    }
+                    let diff_summary =
+                        edit_diff_summary(&path.to_string_lossy(), &before_content, &after_content);
+                    let file_change = record_file_change(
+                        context,
+                        FileChangeRequest {
+                            checkpoint: Some(&checkpoint),
+                            tool_name: "format",
+                            path,
+                            existed_before: true,
+                            before_content: Some(&before_content),
+                            after_content: &after_content,
+                            diff: &diff_summary,
+                            bytes_written: after_content.len() as u64,
+                        },
+                    )
+                    .await;
                     ToolResult::success_with_data(
                         format!("Formatted {} using {}", path.display(), formatter),
                         json!({
                             "file": path.to_string_lossy(),
                             "formatter": formatter,
-                            "success": true
+                            "success": true,
+                            "changed": before_content != after_content,
+                            "bytes_written": after_content.len(),
+                            "checkpoint": checkpoint_metadata_json(Some(&checkpoint)),
+                            "file_change": file_change.unwrap_or(serde_json::Value::Null),
+                            "diff": edit_diff_summary_json(&diff_summary)
                         }),
                     )
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    ToolResult::error(format!("Formatter {} failed: {}", formatter, stderr.trim()))
+                    self.format_error_with_checkpoint(
+                        path,
+                        formatter,
+                        &before_content,
+                        &checkpoint,
+                        context,
+                        format!("Formatter {} failed: {}", formatter, stderr.trim()),
+                    )
+                    .await
                 }
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    ToolResult::error(format!(
-                        "Formatter '{}' not found. Please install it first.",
-                        formatter
-                    ))
+                    self.format_error_with_checkpoint(
+                        path,
+                        formatter,
+                        &before_content,
+                        &checkpoint,
+                        context,
+                        format!(
+                            "Formatter '{}' not found. Please install it first.",
+                            formatter
+                        ),
+                    )
+                    .await
                 } else {
-                    ToolResult::error(format!("Failed to run {}: {}", formatter, e))
+                    self.format_error_with_checkpoint(
+                        path,
+                        formatter,
+                        &before_content,
+                        &checkpoint,
+                        context,
+                        format!("Failed to run {}: {}", formatter, e),
+                    )
+                    .await
                 }
             }
         }
+    }
+
+    async fn format_error_with_checkpoint(
+        &self,
+        path: &Path,
+        formatter: &str,
+        before_content: &str,
+        checkpoint: &crate::engine::checkpoint::Checkpoint,
+        context: &ToolContext,
+        message: String,
+    ) -> ToolResult {
+        let after_content = tokio::fs::read_to_string(path).await.ok();
+        let (changed, file_change, diff_json) = if let Some(after_content) = after_content.as_ref()
+        {
+            let diff_summary =
+                edit_diff_summary(&path.to_string_lossy(), before_content, after_content);
+            let file_change = if before_content != after_content {
+                record_file_change(
+                    context,
+                    FileChangeRequest {
+                        checkpoint: Some(checkpoint),
+                        tool_name: "format",
+                        path,
+                        existed_before: true,
+                        before_content: Some(before_content),
+                        after_content,
+                        diff: &diff_summary,
+                        bytes_written: after_content.len() as u64,
+                    },
+                )
+                .await
+            } else {
+                None
+            };
+            (
+                before_content != after_content,
+                file_change.unwrap_or(serde_json::Value::Null),
+                edit_diff_summary_json(&diff_summary),
+            )
+        } else {
+            (false, serde_json::Value::Null, serde_json::Value::Null)
+        };
+
+        if changed {
+            if let Some(ref cache) = context.file_cache {
+                cache.invalidate_content(path);
+                cache.invalidate_metadata(path);
+            }
+        }
+
+        let data = json!({
+            "file": path.to_string_lossy(),
+            "formatter": formatter,
+            "success": false,
+            "changed_after_failure": changed,
+            "checkpoint": checkpoint_metadata_json(Some(checkpoint)),
+            "file_change": file_change,
+            "diff": diff_json,
+        });
+        let mut result = ToolResult::error(message);
+        result.data = Some(data);
+        result
     }
 
     /// 检查格式
@@ -310,5 +465,56 @@ mod tests {
         assert!(!tool.is_concurrency_safe(&format));
         assert_eq!(tool.permission_level(), ToolPermissionLevel::HighRisk);
         assert!(tool.strict_schema());
+    }
+
+    #[tokio::test]
+    async fn format_action_creates_checkpoint_and_file_change() {
+        if Command::new("rustfmt")
+            .arg("--version")
+            .output()
+            .await
+            .is_err()
+        {
+            return;
+        }
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("main.rs");
+        let original = "fn main(){println!(\"hi\");}\n";
+        tokio::fs::write(&path, original).await.unwrap();
+
+        let session_id = "test-format-checkpoint";
+        let manager = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+        manager.lock().await.clear_all().await.unwrap();
+        let context =
+            ToolContext::new(temp.path(), session_id).with_checkpoint_manager(manager.clone());
+        let result = FormatTool
+            .execute(
+                json!({"action": "format", "file_path": "main.rs", "formatter": "rustfmt"}),
+                context,
+            )
+            .await;
+
+        assert!(result.success, "format failed: {:?}", result.error);
+        let data = result.data.as_ref().expect("format metadata");
+        assert!(data["checkpoint"]["id"].as_str().is_some());
+        assert_eq!(data["file_change"]["tool_name"], "format");
+        assert_eq!(data["changed"], true);
+
+        let checkpoint_id = data["checkpoint"]["id"].as_str().unwrap().to_string();
+        {
+            let checkpoint_manager = manager.lock().await;
+            assert!(checkpoint_manager
+                .list_file_changes()
+                .iter()
+                .any(|change| change.tool_name == "format"));
+            checkpoint_manager
+                .restore_checkpoint(&checkpoint_id)
+                .await
+                .unwrap();
+        }
+        let restored = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(restored, original);
+        manager.lock().await.clear_all().await.unwrap();
     }
 }

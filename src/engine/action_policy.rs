@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionSideEffectProfile {
     pub schema: String,
+    pub tool_family: ToolBoundaryFamily,
     pub paths: Vec<WorkspacePathVerdict>,
     pub network: NetworkPolicyVerdict,
     pub external_side_effect: ExternalSideEffect,
@@ -26,6 +27,7 @@ impl ActionSideEffectProfile {
         tool: Option<&dyn Tool>,
         working_dir: &Path,
     ) -> Self {
+        let tool_family = ToolBoundaryFamily::from_tool_name(&tool_call.name);
         let path_inputs = path_inputs(tool_call, tool);
         let paths = path_inputs
             .iter()
@@ -54,7 +56,8 @@ impl ActionSideEffectProfile {
                 | ExternalSideEffect::PluginOrMcpUnknown
         );
         let summary = format!(
-            "external_effect={:?} network={:?} paths={}",
+            "family={:?} external_effect={:?} network={:?} paths={}",
+            tool_family,
             external_side_effect,
             network.class,
             paths.len()
@@ -62,6 +65,7 @@ impl ActionSideEffectProfile {
 
         Self {
             schema: "action_side_effect_profile.v1".to_string(),
+            tool_family,
             paths,
             network,
             external_side_effect,
@@ -69,6 +73,152 @@ impl ActionSideEffectProfile {
             mutates_local_machine,
             remote_side_effect,
             summary,
+        }
+    }
+
+    pub fn has_external_or_sensitive_path(&self) -> bool {
+        self.paths.iter().any(|path| {
+            !path.inside_workspace
+                || matches!(
+                    path.class,
+                    WorkspacePathClass::System
+                        | WorkspacePathClass::HomePrivate
+                        | WorkspacePathClass::Credential
+                        | WorkspacePathClass::RepoMetadata
+                )
+        })
+    }
+
+    pub fn boundary_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if matches!(
+            self.network.class,
+            NetworkAccessClass::PackageInstall
+                | NetworkAccessClass::UnknownNetworkCommand
+                | NetworkAccessClass::RemoteService
+                | NetworkAccessClass::UntrustedDomain
+        ) {
+            push_unique(
+                &mut warnings,
+                format!("NETWORK_BOUNDARY: {}", self.network.reason),
+            );
+        }
+
+        for path in &self.paths {
+            let warning = match path.class {
+                WorkspacePathClass::External => Some(format!(
+                    "OUTSIDE_WORKSPACE: {} ({})",
+                    path.normalized, path.reason
+                )),
+                WorkspacePathClass::System => Some(format!(
+                    "SYSTEM_PATH: {} ({})",
+                    path.normalized, path.reason
+                )),
+                WorkspacePathClass::HomePrivate => Some(format!(
+                    "HOME_PRIVATE_PATH: {} ({})",
+                    path.normalized, path.reason
+                )),
+                WorkspacePathClass::RepoMetadata => Some(format!(
+                    "REPO_METADATA_PATH: {} ({})",
+                    path.normalized, path.reason
+                )),
+                WorkspacePathClass::Dependency => Some(format!(
+                    "DEPENDENCY_PATH: {} ({})",
+                    path.normalized, path.reason
+                )),
+                WorkspacePathClass::Generated => Some(format!(
+                    "GENERATED_PATH: {} ({})",
+                    path.normalized, path.reason
+                )),
+                WorkspacePathClass::Credential => Some(format!(
+                    "CREDENTIAL_PATH: {} ({})",
+                    path.normalized, path.reason
+                )),
+                WorkspacePathClass::Workspace | WorkspacePathClass::Unknown => None,
+            };
+            if let Some(warning) = warning {
+                push_unique(&mut warnings, warning);
+            }
+            if matches!(
+                path.class,
+                WorkspacePathClass::System
+                    | WorkspacePathClass::HomePrivate
+                    | WorkspacePathClass::Credential
+            ) {
+                push_unique(
+                    &mut warnings,
+                    format!("HIGH_RISK_PATH: {} ({})", path.normalized, path.reason),
+                );
+            }
+        }
+
+        match self.external_side_effect {
+            ExternalSideEffect::PluginOrMcpUnknown => push_unique(
+                &mut warnings,
+                "PLUGIN_OR_MCP_BOUNDARY: plugin/MCP execution has unknown external side effects"
+                    .to_string(),
+            ),
+            ExternalSideEffect::CredentialOrAuth => push_unique(
+                &mut warnings,
+                "AUTH_BOUNDARY: action can grant or mutate credential/auth state".to_string(),
+            ),
+            ExternalSideEffect::GitRemotePublication => push_unique(
+                &mut warnings,
+                "REMOTE_PUBLICATION: git action can publish to a remote".to_string(),
+            ),
+            ExternalSideEffect::DatabaseOrDeploy => push_unique(
+                &mut warnings,
+                "EXTERNAL_SERVICE_BOUNDARY: database/deploy action has external effects"
+                    .to_string(),
+            ),
+            ExternalSideEffect::LocalMachineMutation => push_unique(
+                &mut warnings,
+                "LOCAL_MACHINE_MUTATION: action can mutate local machine state".to_string(),
+            ),
+            ExternalSideEffect::LocalWorkspaceMutation => push_unique(
+                &mut warnings,
+                "LOCAL_WORKSPACE_MUTATION: action can mutate workspace files".to_string(),
+            ),
+            ExternalSideEffect::NetworkWrite => push_unique(
+                &mut warnings,
+                "NETWORK_WRITE: action can mutate remote network state".to_string(),
+            ),
+            ExternalSideEffect::NetworkRead | ExternalSideEffect::None => {}
+        }
+
+        warnings
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolBoundaryFamily {
+    File,
+    Bash,
+    Mcp,
+    Plugin,
+    Git,
+    Network,
+    LocalRuntime,
+    Other,
+}
+
+impl ToolBoundaryFamily {
+    fn from_tool_name(tool_name: &str) -> Self {
+        match tool_name {
+            "file_read" | "file_write" | "file_edit" | "file_patch" | "format" => Self::File,
+            "bash" | "bash_output" | "bash_tasks" | "bash_cancel" | "powershell" => Self::Bash,
+            "mcp_tool" | "mcp_auth" | "list_mcp_resources" | "read_mcp_resource" => Self::Mcp,
+            "plugin" | "plugin_list" | "plugin_manage" | "plugin_runtime" => Self::Plugin,
+            name if name.starts_with("plugin_") => Self::Plugin,
+            "git" | "git_status" | "git_diff" => Self::Git,
+            "web_fetch" | "web_search" | "github" | "remote_trigger" | "remote_dev" => {
+                Self::Network
+            }
+            "install_dependencies" | "start_dev_server" | "config" | "memory_clear" => {
+                Self::LocalRuntime
+            }
+            _ => Self::Other,
         }
     }
 }
@@ -102,8 +252,9 @@ impl WorkspaceBoundaryPolicy {
     pub fn classify_path(path: &str, working_dir: &Path) -> WorkspacePathVerdict {
         let normalized = normalize_path(path, working_dir);
         let lower = normalized.to_string_lossy().to_ascii_lowercase();
-        let workspace = normalize_existing_or_logical(working_dir);
-        let inside_workspace = normalized.starts_with(&workspace);
+        let inside_workspace = trusted_workspace_roots(working_dir)
+            .into_iter()
+            .any(|root| normalized.starts_with(root));
         let class = if path.trim().is_empty() {
             WorkspacePathClass::Unknown
         } else if lower.contains("/.git/") || lower.ends_with("/.git") {
@@ -127,6 +278,7 @@ impl WorkspaceBoundaryPolicy {
             || lower.starts_with("/bin/")
             || lower.starts_with("/sbin/")
             || lower.starts_with("/var/")
+            || lower.starts_with("/dev/")
         {
             WorkspacePathClass::System
         } else if lower.contains("/.ssh/") || lower.contains("/.gnupg/") {
@@ -138,7 +290,7 @@ impl WorkspaceBoundaryPolicy {
         };
 
         let reason = match class {
-            WorkspacePathClass::Workspace => "path is inside the working directory",
+            WorkspacePathClass::Workspace => "path is inside a trusted workspace root",
             WorkspacePathClass::External => "path is outside the working directory",
             WorkspacePathClass::System => "path is under a system directory",
             WorkspacePathClass::HomePrivate => "path is in a private home credential area",
@@ -157,6 +309,12 @@ impl WorkspaceBoundaryPolicy {
             inside_workspace,
             reason,
         }
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
     }
 }
 
@@ -227,13 +385,13 @@ impl NetworkPolicyVerdict {
                 trusted: false,
                 reason: "remote tool can contact or mutate remote state".to_string(),
             },
-            "mcp_tool" => Self {
+            "mcp_tool" | "mcp_auth" | "list_mcp_resources" | "read_mcp_resource" => Self {
                 class: NetworkAccessClass::RemoteService,
                 target: tool_call.arguments["server_name"]
                     .as_str()
                     .map(str::to_string),
                 trusted: false,
-                reason: "MCP tool may execute outside the local runtime".to_string(),
+                reason: "MCP access may execute or read outside the local runtime".to_string(),
             },
             _ => Self::none(),
         }
@@ -300,7 +458,20 @@ impl ExternalSideEffect {
                 _ => Self::NetworkRead,
             },
             "remote_trigger" | "remote_dev" => Self::NetworkWrite,
-            "plugin" | "mcp_tool" => Self::PluginOrMcpUnknown,
+            "mcp_tool" => Self::PluginOrMcpUnknown,
+            "mcp_auth" => Self::CredentialOrAuth,
+            "list_mcp_resources" | "read_mcp_resource" => Self::NetworkRead,
+            "plugin" | "plugin_runtime" => Self::PluginOrMcpUnknown,
+            "plugin_list" => Self::None,
+            "plugin_manage" => match tool_call.arguments["action"].as_str() {
+                Some("list" | "status" | "validate") => Self::None,
+                Some("run") => Self::PluginOrMcpUnknown,
+                Some("enable" | "disable" | "reload" | "sign" | "generate_key") => {
+                    Self::LocalMachineMutation
+                }
+                _ => Self::PluginOrMcpUnknown,
+            },
+            name if name.starts_with("plugin_") => Self::PluginOrMcpUnknown,
             "memory_clear" | "config" => Self::LocalMachineMutation,
             _ => match tool.map(|tool| tool.operation_kind(&tool_call.arguments)) {
                 Some(
@@ -318,6 +489,8 @@ fn path_inputs(tool_call: &ToolCall, tool: Option<&dyn Tool>) -> Vec<String> {
         .map(|tool| tool.input_paths(&tool_call.arguments))
         .unwrap_or_default();
 
+    paths.extend(common_path_inputs(&tool_call.arguments));
+
     if tool_call.name == "bash" {
         if let Some(command) = tool_call.arguments["command"].as_str() {
             let classification =
@@ -325,11 +498,66 @@ fn path_inputs(tool_call: &ToolCall, tool: Option<&dyn Tool>) -> Vec<String> {
             paths.extend(classification.absolute_path_patterns);
             paths.extend(classification.mutation_paths);
             paths.extend(classification.path_patterns);
+            paths.extend(shell_absolute_path_tokens(command));
         }
     }
 
     paths.sort();
     paths.dedup();
+    paths
+}
+
+fn common_path_inputs(arguments: &serde_json::Value) -> Vec<String> {
+    [
+        "path",
+        "file_path",
+        "directory",
+        "working_dir",
+        "manifest_path",
+    ]
+    .iter()
+    .filter_map(|key| arguments.get(*key).and_then(serde_json::Value::as_str))
+    .filter(|value| !value.trim().is_empty())
+    .map(str::to_string)
+    .collect()
+}
+
+fn shell_absolute_path_tokens(command: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for raw in command.split(|ch: char| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                '"' | '\'' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ';' | '|' | '&'
+            )
+    }) {
+        let token = raw.trim_matches(|ch: char| matches!(ch, '<' | '>' | ',' | ':' | '='));
+        if token.is_empty() {
+            continue;
+        }
+        if token.contains("://") {
+            continue;
+        }
+
+        let candidate = if token.starts_with('/') {
+            Some(token.to_string())
+        } else if let Some((_, path)) = token.split_once("=/") {
+            Some(format!("/{path}"))
+        } else if let Some((_, path)) = token.split_once(":/") {
+            Some(format!("/{path}"))
+        } else {
+            None
+        };
+
+        if let Some(path) = candidate {
+            let trimmed = path.as_str().trim_matches(|ch: char| {
+                matches!(ch, '<' | '>' | ',' | ':' | ')' | ']' | '}' | '.')
+            });
+            if trimmed.starts_with('/') {
+                paths.push(trimmed.to_string());
+            }
+        }
+    }
     paths
 }
 
@@ -464,6 +692,20 @@ fn normalize_existing_or_logical(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+fn trusted_workspace_roots(working_dir: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![normalize_existing_or_logical(working_dir)];
+    if let Ok(extra) = std::env::var("PRIORITY_AGENT_TRUSTED_WORKSPACES") {
+        roots.extend(
+            extra
+                .split(':')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(|part| normalize_existing_or_logical(Path::new(part))),
+        );
+    }
+    roots
 }
 
 fn contains_credential_marker(path: &str) -> bool {
@@ -629,5 +871,61 @@ mod tests {
             ExternalSideEffect::LocalMachineMutation
         );
         assert!(profile.mutates_local_machine);
+    }
+
+    #[test]
+    fn classifies_common_paths_without_tool_contract() {
+        let profile = ActionSideEffectProfile::from_tool_call(
+            &call(
+                "file_write",
+                json!({"path": "../outside.rs", "content": ""}),
+            ),
+            None,
+            Path::new("/repo/project"),
+        );
+
+        assert_eq!(profile.tool_family, ToolBoundaryFamily::File);
+        assert_eq!(profile.paths[0].class, WorkspacePathClass::External);
+        assert!(profile.has_external_or_sensitive_path());
+        assert!(profile
+            .boundary_warnings()
+            .iter()
+            .any(|warning| warning.contains("OUTSIDE_WORKSPACE")));
+    }
+
+    #[test]
+    fn classifies_mcp_and_plugin_boundaries_with_shared_vocabulary() {
+        let mcp = ActionSideEffectProfile::from_tool_call(
+            &call(
+                "mcp_tool",
+                json!({"server_name": "github", "tool_name": "create_issue"}),
+            ),
+            None,
+            Path::new("/repo"),
+        );
+        assert_eq!(mcp.tool_family, ToolBoundaryFamily::Mcp);
+        assert_eq!(mcp.network.class, NetworkAccessClass::RemoteService);
+        assert_eq!(
+            mcp.external_side_effect,
+            ExternalSideEffect::PluginOrMcpUnknown
+        );
+
+        let plugin = ActionSideEffectProfile::from_tool_call(
+            &call(
+                "plugin_manage",
+                json!({"action": "run", "plugin_id": "demo"}),
+            ),
+            None,
+            Path::new("/repo"),
+        );
+        assert_eq!(plugin.tool_family, ToolBoundaryFamily::Plugin);
+        assert_eq!(
+            plugin.external_side_effect,
+            ExternalSideEffect::PluginOrMcpUnknown
+        );
+        assert!(plugin
+            .boundary_warnings()
+            .iter()
+            .any(|warning| warning.contains("PLUGIN_OR_MCP_BOUNDARY")));
     }
 }

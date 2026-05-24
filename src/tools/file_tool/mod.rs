@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 mod diagnostics;
-mod history;
+pub(crate) mod history;
 mod patch;
 mod text_codec;
 
@@ -285,13 +285,13 @@ struct FilePathIdentity {
 }
 
 #[derive(Clone, Debug)]
-struct EditDiffSummary {
-    additions: usize,
-    deletions: usize,
-    changed_line_start: usize,
-    changed_line_end: usize,
-    unified_diff: String,
-    preview_truncated: bool,
+pub(crate) struct EditDiffSummary {
+    pub(crate) additions: usize,
+    pub(crate) deletions: usize,
+    pub(crate) changed_line_start: usize,
+    pub(crate) changed_line_end: usize,
+    pub(crate) unified_diff: String,
+    pub(crate) preview_truncated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -606,7 +606,11 @@ fn content_hash_hex(content: &str) -> String {
     format!("{:016x}", compute_content_hash(content))
 }
 
-fn edit_diff_summary(path: &str, old_content: &str, new_content: &str) -> EditDiffSummary {
+pub(crate) fn edit_diff_summary(
+    path: &str,
+    old_content: &str,
+    new_content: &str,
+) -> EditDiffSummary {
     const CONTEXT_LINES: usize = 3;
     const MAX_DIFF_LINES: usize = 80;
 
@@ -694,7 +698,7 @@ fn edit_diff_summary(path: &str, old_content: &str, new_content: &str) -> EditDi
     }
 }
 
-fn edit_diff_summary_json(diff: &EditDiffSummary) -> serde_json::Value {
+pub(crate) fn edit_diff_summary_json(diff: &EditDiffSummary) -> serde_json::Value {
     json!({
         "additions": diff.additions,
         "deletions": diff.deletions,

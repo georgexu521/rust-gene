@@ -137,6 +137,7 @@ impl ActionReview {
             &permission,
             &scope,
             &budget,
+            &checkpoint,
             input.action_checkpoint_rejection.as_deref(),
         );
         if !reasons.contains(&primary_reason) {
@@ -450,12 +451,20 @@ impl CheckpointReviewVerdict {
             "format" => {
                 return match tool_call.arguments["action"].as_str() {
                     Some("check") => Self::not_needed("format check is observational"),
-                    _ => Self::required_but_missing(
+                    _ => Self::required_and_present(
                         "local_files",
-                        true,
-                        "format can rewrite files but does not yet publish a checkpoint contract",
+                        "format creates rollback checkpoints before rewriting files",
                     ),
                 };
+            }
+            "bash"
+                if side_effects.external_side_effect
+                    == ExternalSideEffect::LocalWorkspaceMutation =>
+            {
+                return Self::checkpoint_wrapper_required(
+                    "local_files",
+                    "raw bash workspace mutation must use a checkpoint-managed wrapper",
+                );
             }
             "git" => {
                 return match tool_call.arguments["action"].as_str() {
@@ -575,6 +584,18 @@ impl CheckpointReviewVerdict {
         }
     }
 
+    fn checkpoint_wrapper_required(rollback_scope: &str, reason: &str) -> Self {
+        Self {
+            required: true,
+            status: "required_but_missing".to_string(),
+            enforcement: "checkpoint_wrapper_required".to_string(),
+            rollback_scope: rollback_scope.to_string(),
+            checkpoint_id: None,
+            requires_user_approval: true,
+            reason: reason.to_string(),
+        }
+    }
+
     fn unavailable(rollback_scope: &str, requires_user_approval: bool, reason: &str) -> Self {
         Self {
             required: true,
@@ -605,6 +626,7 @@ fn final_decision(
     permission: &PermissionReviewVerdict,
     scope: &ScopeReviewVerdict,
     budget: &BudgetReviewVerdict,
+    checkpoint: &CheckpointReviewVerdict,
     action_checkpoint_rejection: Option<&str>,
 ) -> (
     ActionReviewDecision,
@@ -654,6 +676,13 @@ fn final_decision(
         );
     }
     if action_checkpoint_rejection.is_some() {
+        return (
+            ActionReviewDecision::Revise,
+            ActionReviewReason::CheckpointRequired,
+            vec![ActionReviewReason::CheckpointRequired],
+        );
+    }
+    if checkpoint.enforcement == "checkpoint_wrapper_required" {
         return (
             ActionReviewDecision::Revise,
             ActionReviewReason::CheckpointRequired,
@@ -727,6 +756,9 @@ fn user_reason(
             if reason == ActionReviewReason::LowValueAction {
                 return "Action rejected before execution: mutation is premature for the current understanding stage.".to_string();
             }
+            if reason == ActionReviewReason::CheckpointRequired {
+                return "Action rejected before execution: workspace mutation requires a checkpoint-managed tool.".to_string();
+            }
             if let Some(error) = contract.validation_error.as_deref() {
                 format!(
                     "Action rejected before execution: {} ({error}).",
@@ -767,6 +799,9 @@ fn model_recovery(
         ActionReviewDecision::Revise => {
             if reason == ActionReviewReason::LowValueAction {
                 return "Action rejected before execution: low_value_action. Inspect the target with file_read or grep first, then retry the smallest safe mutation if the evidence supports it.".to_string();
+            }
+            if reason == ActionReviewReason::CheckpointRequired {
+                return "Action rejected before execution: checkpoint_required. Use file_write/file_edit/file_patch, format, or another checkpoint-managed wrapper; do not mutate workspace files through raw bash.".to_string();
             }
             let alternatives = if contract.available_alternatives.is_empty() {
                 "the exposed tools".to_string()
@@ -1312,7 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn format_mutation_checkpoint_is_required_but_missing() {
+    fn format_mutation_checkpoint_is_required_and_tool_managed() {
         let tool = FormatTool;
         let tool_call = call(
             "format",
@@ -1325,9 +1360,13 @@ mod tests {
         );
 
         assert!(review.checkpoint.required);
-        assert_eq!(review.checkpoint.status, "required_but_missing");
+        assert_eq!(review.checkpoint.status, "required_and_present");
+        assert_eq!(
+            review.checkpoint.enforcement,
+            "tool_managed_before_mutation"
+        );
         assert_eq!(review.checkpoint.rollback_scope, "local_files");
-        assert!(review.checkpoint.requires_user_approval);
+        assert!(!review.checkpoint.requires_user_approval);
         assert_eq!(review.tool_contract.operation_kind.as_deref(), Some("edit"));
         assert_eq!(review.tool_contract.requires_confirmation, Some(true));
         assert_eq!(review.tool_contract.destructive, Some(true));
@@ -1348,8 +1387,16 @@ mod tests {
         );
         assert!(review.checkpoint.required);
         assert_eq!(review.checkpoint.status, "required_but_missing");
+        assert_eq!(review.checkpoint.enforcement, "checkpoint_wrapper_required");
         assert_eq!(review.checkpoint.rollback_scope, "local_files");
         assert!(review.checkpoint.requires_user_approval);
+        assert_eq!(review.decision, ActionReviewDecision::Revise);
+        assert_eq!(
+            review.primary_reason,
+            ActionReviewReason::CheckpointRequired
+        );
+        assert!(review.model_recovery.contains("checkpoint-managed"));
+        assert!(review.model_recovery.contains("raw bash"));
     }
 
     #[test]
