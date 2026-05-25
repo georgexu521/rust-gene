@@ -303,23 +303,47 @@ fn format_file_change_rollback_result(result: RestoreResult) -> String {
     lines.join("\n")
 }
 
+fn current_project_dir() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+fn current_git_branch() -> String {
+    std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "(none)".to_string())
+}
+
+fn project_name(dir: &std::path::Path) -> String {
+    dir.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+}
+
+fn format_project_soul(name: &str, dir: &std::path::Path, branch: &str) -> String {
+    format!(
+        "Project Soul\n\nScope:\n- Project: {}\n- Path: {}\n- Git branch: {}\n\nPartner layer:\n- Act as a long-term project partner, not a separate execution agent.\n- Keep the user/project relationship warm, direct, and grounded in current project state.\n- Ask clarifying questions only when missing information blocks safe progress.\n- Default to the smallest useful MVP scope, and state assumptions when requirements are vague.\n- Route state-changing work through TaskContract, ContextPack, and the verified executor.\n\nBoundaries:\n- Soul does not grant filesystem, shell, network, or memory-write permission.\n- Execution context must receive only the typed task contract and execution-safe context pack, not full persona or chat history.\n- Memory, skill, and behavior changes start as reviewable proposals unless runtime policy or eval evidence allows promotion.\n- Hard constraints belong in permissions, tool contracts, validation, and closeout gates.\n\nReview surfaces:\n- /quick shows current contract and memory-proposal state.\n- /memory review shows accepted, proposed, rejected, stale, and lifecycle memory records.\n- /project soul shows this compact constitution without injecting it into executor context.",
+        name,
+        dir.display(),
+        branch
+    )
+}
+
 /// /project - Project management
 pub fn handle_project(_app: &TuiApp, args: &str) -> String {
     if args.is_empty() || args == "info" {
-        let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        let dir = current_project_dir();
+        let name = project_name(&dir);
         let entries = std::fs::read_dir(&dir)
             .map(|it| it.flatten().count())
             .unwrap_or(0);
-        let branch = std::process::Command::new("git")
-            .args(["branch", "--show-current"])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| "(none)".to_string());
+        let branch = current_git_branch();
         return format!(
-            "Project: {}\nPath: {}\nEntries: {}\nGit branch: {}",
+            "Project: {}\nPath: {}\nEntries: {}\nGit branch: {}\nSoul: /project soul",
             name,
             dir.display(),
             entries,
@@ -329,8 +353,14 @@ pub fn handle_project(_app: &TuiApp, args: &str) -> String {
 
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts[0] {
+        "soul" => {
+            let dir = current_project_dir();
+            let name = project_name(&dir);
+            let branch = current_git_branch();
+            format_project_soul(&name, &dir, &branch)
+        }
         "list" => {
-            let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let dir = current_project_dir();
             match std::fs::read_dir(&dir) {
                 Ok(entries) => {
                     let mut names: Vec<String> = entries
@@ -357,7 +387,7 @@ pub fn handle_project(_app: &TuiApp, args: &str) -> String {
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(2)
                 .clamp(1, 5);
-            let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let root = current_project_dir();
             let mut lines = Vec::new();
             build_tree_lines(&root, 0, depth, &mut lines, 200);
             if lines.is_empty() {
@@ -370,7 +400,7 @@ pub fn handle_project(_app: &TuiApp, args: &str) -> String {
             if parts.len() < 2 {
                 "Usage: /project init <name>".to_string()
             } else {
-                let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let dir = current_project_dir();
                 let path = dir.join(parts[1]);
                 if path.exists() {
                     return format!("Target already exists: {}", path.display());
@@ -381,7 +411,7 @@ pub fn handle_project(_app: &TuiApp, args: &str) -> String {
                 }
             }
         }
-        _ => "Usage: /project [info|list|tree [depth]|init <name>]".to_string(),
+        _ => "Usage: /project [info|soul|list|tree [depth]|init <name>]".to_string(),
     }
 }
 
@@ -621,5 +651,22 @@ pub async fn handle_test(app: &mut TuiApp, args: &str) -> String {
         result.content
     } else {
         result.error.unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_project_soul_keeps_partner_and_execution_boundaries_separate() {
+        let soul = format_project_soul("demo", std::path::Path::new("/tmp/demo"), "main");
+
+        assert!(soul.contains("Project Soul"));
+        assert!(soul.contains("long-term project partner"));
+        assert!(soul.contains("TaskContract, ContextPack, and the verified executor"));
+        assert!(soul.contains("Soul does not grant filesystem"));
+        assert!(soul.contains("not full persona or chat history"));
+        assert!(soul.contains("/memory review"));
     }
 }

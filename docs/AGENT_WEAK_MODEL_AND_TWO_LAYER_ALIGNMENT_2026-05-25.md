@@ -911,10 +911,14 @@ Implementation progress on 2026-05-25:
 - Added a typed `/memory review` record report that groups accepted, proposed,
   rejected, stale, and lifecycle memory records with scope, evidence,
   freshness, and projection status.
+- Added a compact `/project soul` surface that states partner-layer behavior,
+  MVP-scope defaults, TaskContract routing, and hard execution boundaries
+  without injecting persona or full chat history into executor context.
 - Added focused tests for assumptions, scope, validation commands, context
   budgets, executor context injection, weak-model profiles, profile-scoped tool
   exposure, execution report status mapping, review-only memory proposals,
-  memory-proposal visibility, and typed memory review grouping.
+  memory-proposal visibility, typed memory review grouping, and Project Soul
+  boundary text.
 
 ### Phase 0: Document the contract shape
 
