@@ -953,6 +953,11 @@ Implementation progress on 2026-05-25:
   `docs/benchmarks/live-project-partner-vague-fix6-20260525-233041/project-partner-vague-local-tool/report.md`
   shows `diff_files_changed=1`, required commands passing, runtime spine
   passed, verified closeout, `failure_owner=none`, and `agent_score=100`.
+- Replayed the full `project-partner-demo` suite on commit `de9619e7`:
+  `docs/benchmarks/live-project-partner-demo-latest-20260525-233509/` reports
+  `status=ok` and `failure_owner=none` for all three demo cases; latest scores
+  were vague-local-MVP `98`, resume-with-memory `100`, and
+  failure-memory-proposal `100`.
 - Added focused tests for assumptions, scope, validation commands, context
   budgets, executor context injection, weak-model profiles, profile-scoped tool
   exposure, execution report status mapping, review-only memory proposals,
