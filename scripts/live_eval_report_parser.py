@@ -716,6 +716,18 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
     memory_boundary_events = [
         event for event in trace_items if token(event.get("type", "")) == "memory_boundary_evaluated"
     ]
+    task_contract_events = [
+        event for event in trace_items if token(event.get("type", "")) == "task_contract_materialized"
+    ]
+    context_pack_events = [
+        event for event in trace_items if token(event.get("type", "")) == "context_pack_materialized"
+    ]
+    execution_report_events = [
+        event for event in trace_items if token(event.get("type", "")) == "execution_report_prepared"
+    ]
+    memory_proposal_events = [
+        event for event in trace_items if token(event.get("type", "")) == "memory_proposal_prepared"
+    ]
     completion_contract_events = [
         event
         for event in trace_items
@@ -1143,6 +1155,10 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         f"streaming_tool_shadow_events={len(streaming_shadow_events)} "
         f"streaming_tool_shadow_eligible={streaming_shadow_eligible} "
         f"memory_boundary_recorded={bool_text(bool(memory_boundary_events))} "
+        f"task_contract_recorded={bool_text(bool(task_contract_events))} "
+        f"context_pack_recorded={bool_text(bool(context_pack_events))} "
+        f"execution_report_recorded={bool_text(bool(execution_report_events))} "
+        f"memory_proposal_recorded={bool_text(bool(memory_proposal_events))} "
         f"agent_loop_steps={len(agent_loop_events)} "
         f"context_zones={len(context_zone_events)} "
         f"completion_contract={token(latest_completion_contract.get('status', 'missing'))}"
@@ -1210,6 +1226,10 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         "observer_outcome_latest_findings": str((tool_observation_events[-1] if tool_observation_events else {}).get("key_findings", "missing")),
         "observer_outcome_latest_evidence": str((tool_observation_events[-1] if tool_observation_events else {}).get("evidence_items", "missing")),
         "memory_boundary_recorded": bool_text(bool(memory_boundary_events)),
+        "task_contract_recorded": bool_text(bool(task_contract_events)),
+        "context_pack_recorded": bool_text(bool(context_pack_events)),
+        "execution_report_recorded": bool_text(bool(execution_report_events)),
+        "memory_proposal_recorded": bool_text(bool(memory_proposal_events)),
         "memory_boundary_read_status": str(latest_memory_boundary.get("read_status", "missing")),
         "memory_boundary_closeout_write_candidate_status": str(latest_memory_boundary.get("closeout_write_candidate_status", "missing")),
         "completion_contract_status": str(latest_completion_contract.get("status", "missing")),
@@ -1286,6 +1306,10 @@ def runtime_spine_metrics(task_dir, report_text):
         "observer_outcome_latest_findings",
         "observer_outcome_latest_evidence",
         "memory_boundary_recorded",
+        "task_contract_recorded",
+        "context_pack_recorded",
+        "execution_report_recorded",
+        "memory_proposal_recorded",
         "memory_boundary_read_status",
         "memory_boundary_closeout_write_candidate_status",
         "completion_contract_status",
@@ -1410,6 +1434,77 @@ def evaluate_output_assertions(sample, output):
         "output_assertions": ",".join(labels) if labels else "configured",
         "output_assertion_status": "failed" if missing else "passed",
         "output_assertion_missing": ";".join(missing) if missing else "none",
+    }
+
+
+def product_differentiation_assertions_from_sample(sample):
+    raw = sample.get("product_differentiation_assertions")
+    if raw is None:
+        raw = (sample.get("quality_assertions") or {}).get("product_differentiation")
+    if raw is None:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def evaluate_product_differentiation_assertions(sample, output, report_text, runtime_spine):
+    assertions = product_differentiation_assertions_from_sample(sample)
+    if not assertions:
+        return {
+            "product_assertions": "none",
+            "product_assertion_status": "none",
+            "product_assertion_missing": "none",
+        }
+
+    combined = f"{output or ''}\n{report_text or ''}"
+    combined_lower = combined.lower()
+    missing = []
+
+    def require(flag, condition):
+        if assertions.get(flag) is True and not condition:
+            missing.append(flag)
+
+    require("requires_task_contract", runtime_spine.get("task_contract_recorded") == "true")
+    require("requires_context_pack", runtime_spine.get("context_pack_recorded") == "true")
+    require("requires_execution_report", runtime_spine.get("execution_report_recorded") == "true")
+    require("requires_memory_proposal", runtime_spine.get("memory_proposal_recorded") == "true")
+    require("requires_assumptions", "assumption" in combined_lower)
+    require(
+        "requires_prior_memory_citation",
+        "project memory" in combined_lower or "memory/project.md" in combined_lower,
+    )
+    require(
+        "requires_prior_execution_report_citation",
+        "execution report" in combined_lower or "previous_execution_report" in combined_lower,
+    )
+    require(
+        "requires_proposal_evidence",
+        runtime_spine.get("memory_proposal_recorded") == "true" and "evidence" in combined_lower,
+    )
+    require(
+        "requires_proposal_scope",
+        runtime_spine.get("memory_proposal_recorded") == "true" and "scope" in combined_lower,
+    )
+
+    if assertions.get("forbids_auto_memory_write") is True and "write_performed=true" in combined_lower:
+        missing.append("forbids_auto_memory_write")
+    if assertions.get("forbids_cloud_scope") is True and any(
+        term in combined_lower
+        for term in ("oauth", "cloud deployment", "database server")
+    ):
+        missing.append("forbids_cloud_scope")
+    if assertions.get("forbids_scope_expansion") is True and any(
+        term in combined_lower
+        for term in ("add login", "cloud sync is next", "deployment is next")
+    ):
+        missing.append("forbids_scope_expansion")
+    if assertions.get("forbids_invented_state") is True and "implemented and verified" in combined_lower:
+        missing.append("forbids_invented_state")
+
+    labels = sorted(key for key, value in assertions.items() if value is True)
+    return {
+        "product_assertions": ",".join(labels) if labels else "configured",
+        "product_assertion_status": "failed" if missing else "passed",
+        "product_assertion_missing": ";".join(unique_items(missing)) if missing else "none",
     }
 
 
@@ -1669,6 +1764,7 @@ def score_live_eval_record(record):
     behavior_status = token(record.get("behavior_assertion_status", "none"))
     output_status = token(record.get("output_assertion_status", "none"))
     trajectory_status = token(record.get("trajectory_assertion_status", "none"))
+    product_status = token(record.get("product_assertion_status", "none"))
     runtime_status = token(record.get("runtime_spine_status", "none"))
     required = token(record.get("required", record.get("required_command_status", "missing")))
     closeout = token(record.get("closeout", record.get("closeout_status", "missing")))
@@ -1708,6 +1804,8 @@ def score_live_eval_record(record):
         penalize_outcome(10, "output_assertions_failed")
     if trajectory_status == "failed":
         penalize_outcome(10, "trajectory_assertions_failed")
+    if product_status == "failed":
+        penalize_outcome(10, "product_assertions_failed")
     if "forbidden_tool_used" in failures or "forbidden_tool_used" in warnings:
         penalize_outcome(30, "forbidden_tool_used")
     if eval_intent == "seeded_code_change" and diff == "no":
@@ -2206,6 +2304,12 @@ def report_rows(run_dir):
             {**trajectory, **runtime_spine},
             runtime_spine=runtime_spine,
         )
+        product_assertions = evaluate_product_differentiation_assertions(
+            sample,
+            agent_output,
+            report_text,
+            runtime_spine,
+        )
         tool_executions = int_value(report_value(report_text, "tool_executions", 0))
         diff_files_changed = int_value(report_value(report_text, "diff_files_changed", 0))
         validation_events = int_value(report_value(report_text, "validation_events", 0))
@@ -2272,6 +2376,7 @@ def report_rows(run_dir):
             **trajectory,
             **output_assertions,
             **trajectory_assertions,
+            **product_assertions,
             "triggers": adaptive_triggers,
             "first_write": first_write,
             "diff": "yes" if diff_stat else "no",
